@@ -1,6 +1,8 @@
+// @perf-budget-skip: this single integration assertion includes a cold Vite build setup.
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { gltfImporter } from '@forgeax/engine-gltf';
 import { build as viteBuild } from 'vite';
 import { afterEach, describe, expect, it } from 'vitest';
 import { pluginPack } from '../index.js';
@@ -24,8 +26,8 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-describe('procedural source aliases', () => {
-  it('builds without an importer and omits the buildless alias from the production catalog', async () => {
+describe('unregistered source providers', () => {
+  it('fails closed instead of publishing an unproduced source alias', async () => {
     const root = await mkdtemp(join(tmpdir(), 'forgeax-vpp-procedural-alias-'));
     roots.push(root);
     const assets = join(root, 'assets');
@@ -33,6 +35,31 @@ describe('procedural source aliases', () => {
     await mkdir(assets, { recursive: true });
     await writeFile(join(root, 'main.js'), 'console.log("procedural alias");\n');
     await writeFile(join(assets, 'cube-mesh.stub'), '');
+    await writeFile(join(assets, 'cube-mesh.stub.meta.json'), PROCEDURAL_META);
+
+    await expect(
+      viteBuild({
+        root,
+        configFile: false,
+        logLevel: 'silent',
+        build: {
+          outDir: dist,
+          emptyOutDir: true,
+          rollupOptions: { input: { main: 'main.js' } },
+        },
+        plugins: [pluginPack({ roots: [assets] })],
+      }),
+    ).rejects.toThrow(/source-package-guid-closure-mismatch/);
+  });
+
+  it('lets the registered producer omit a buildless alias from the Catalog', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-vpp-procedural-alias-'));
+    roots.push(root);
+    const assets = join(root, 'assets');
+    const dist = join(root, 'dist');
+    await mkdir(assets, { recursive: true });
+    await writeFile(join(root, 'main.js'), 'console.log("procedural alias");\n');
+    await writeFile(join(assets, 'cube-mesh.stub'), 'builtin cube mesh stub');
     await writeFile(join(assets, 'cube-mesh.stub.meta.json'), PROCEDURAL_META);
 
     await viteBuild({
@@ -44,7 +71,7 @@ describe('procedural source aliases', () => {
         emptyOutDir: true,
         rollupOptions: { input: { main: 'main.js' } },
       },
-      plugins: [pluginPack({ roots: [assets] })],
+      plugins: [pluginPack({ roots: [assets], importers: [gltfImporter] })],
     });
 
     const catalog = JSON.parse(await readFile(join(dist, 'pack-index.json'), 'utf8')) as Array<{

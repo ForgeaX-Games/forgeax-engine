@@ -30,10 +30,7 @@ describe('createApp presentation surface handoff', () => {
         drawSawReleasedSurface = surfaceReleased;
         return ok(undefined);
       },
-      onError(): () => void {
-        return () => {};
-      },
-      onLost(): () => void {
+      subscribe(): () => void {
         return () => {};
       },
       releaseSurface(): { ok: true; value: undefined } {

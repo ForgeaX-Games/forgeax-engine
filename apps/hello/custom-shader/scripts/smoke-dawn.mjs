@@ -35,20 +35,31 @@ async function assertRuntimeReadiness(fixture) {
     fixture.assets.map((entry) => [entry.guid.toLowerCase(), entry.payload?.cooked]),
   );
   const loader = createMaterialLoader({
-    loadRecord: async (guid) => cookedByGuid.get(guid.toLowerCase()),
+    loadPublication: async (guid) => {
+      const record = cookedByGuid.get(guid.toLowerCase());
+      if (record === undefined) return undefined;
+      return {
+        guid,
+        record,
+        artifact: { bytes: record.artifact.bytes },
+      };
+    },
     loadReference: async () => true,
   });
-  const root = await loader.load({
-    guid: '01935b00-7d8c-7c4e-9f12-345678abcd02',
-    specializationKey: 'my-game::pulse-material',
-  });
-  const derived = await loader.load({
-    guid: '01935b00-7d8c-7c4e-9f12-345678abcd03',
-    specializationKey: 'my-game::pulse-material',
-  });
+  const loadPublication = async (guid) => {
+    const record = cookedByGuid.get(guid.toLowerCase());
+    assert(record !== undefined, `missing cooked publication for ${guid}`);
+    assert(
+      typeof record.specializationKey === 'string',
+      `cooked publication ${guid} has no specializationKey`,
+    );
+    return loader.load({ guid, specializationKey: record.specializationKey });
+  };
+  const root = await loadPublication('01935b00-7d8c-7c4e-9f12-345678abcd02');
+  const derived = await loadPublication('01935b00-7d8c-7c4e-9f12-345678abcd03');
   assert(root.status === 'Ready' && derived.status === 'Ready', 'runtime cooked records are not ready');
   assert(root.artifact.digest === derived.artifact.digest, 'root and derived cooked artifacts differ');
-  assert(root.record.receipt.inputDigest === derived.record.receipt.inputDigest, 'specialization inputs differ');
+  assert(root.record.receipt.identity.cookIdentity === derived.record.receipt.identity.cookIdentity, 'specialization inputs differ');
   assert(
     JSON.stringify(stableJson(root.record.resolved.values)) === JSON.stringify(stableJson(derived.record.resolved.values)),
     'runtime-resolved material values differ',
@@ -114,6 +125,16 @@ console.log(
     pixel,
     rootArtifactDigest: parity.root.artifact.digest,
     derivedArtifactDigest: parity.derived.artifact.digest,
+    materialIdentity: {
+      materialGuid: parity.root.materialGuid,
+      layoutIdentity: parity.root.record.receipt.identity.layoutIdentity,
+      programIdentity: parity.root.record.receipt.identity.programIdentity,
+      pipelineIdentity: parity.root.record.receipt.identity.pipelineIdentity,
+      cookIdentity: parity.root.record.receipt.identity.cookIdentity,
+      compilerFingerprint: parity.root.record.receipt.identity.compilerFingerprint,
+      artifactDigest: parity.root.record.receipt.identity.artifactDigest,
+      publicationGeneration: parity.root.record.receipt.identity.cookGeneration,
+    },
     values: parity.root.record.resolved.values,
   }),
 );

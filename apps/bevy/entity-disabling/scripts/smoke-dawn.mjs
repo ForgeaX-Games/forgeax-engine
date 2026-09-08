@@ -1,3 +1,4 @@
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -51,22 +52,20 @@ gpu.requestAdapter = async (options) => {
 
 const { createRenderer } = await import('@forgeax/engine-runtime');
 const { World } = await import('@forgeax/engine-ecs');
-const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: manifestUrl });
-if (renderer.backend !== 'webgpu') throw new Error(`[smoke] backend=${renderer.backend}`);
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`[smoke] renderer.ready=${ready.error.code}`);
+const renderer = await createSmokeRenderer(createRenderer, canvas, {}, { shaderManifestUrl: manifestUrl });
+if (rendererBackend(renderer) !== 'webgpu') throw new Error(`[smoke] backend=${rendererBackend(renderer)}`);
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const example = await import(resolve(here, '..', 'src', 'entity-disabling.ts'));
 const state = example.buildEntityDisablingWorld(world);
 const errors = [];
-renderer.onError((error) => errors.push(error.code));
+subscribeSmokeErrors(renderer, (error) => errors.push(error.code));
 let disabledSnapshot;
 for (let frame = 0; frame < 180; frame += 1) {
   world.update(0.016).unwrap();
   if (frame === 40) disabledSnapshot = example.readEntityDisablingState(world, state);
-  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const draw = drawSmokeFrame(renderer, world);
   if (!draw.ok) throw new Error(`[smoke] draw=${draw.error.code}`);
 }
 const snapshot = example.readEntityDisablingState(world, state);

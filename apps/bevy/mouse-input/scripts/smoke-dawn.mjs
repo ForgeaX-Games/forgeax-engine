@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -86,10 +87,8 @@ globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 if (!appResult.ok) { console.error(`[smoke] createApp failed: ${appResult.error.code}`); process.exit(1); }
 const app = appResult.value;
 const errors = [];
-app.renderer.onError((error) => errors.push(error));
+subscribeSmokeErrors(app.renderer, (error) => errors.push(error));
 app.onError((error) => errors.push(error));
-const ready = await app.renderer.ready;
-if (!ready.ok) { console.error(`[smoke] renderer.ready failed: ${ready.error.code}`); process.exit(1); }
 buildMouseInputWorld(app.world);
 app.world.addSystem(Update, {
   name: 'bevy-mouse-input-read',

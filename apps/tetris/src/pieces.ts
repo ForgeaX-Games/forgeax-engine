@@ -4,7 +4,9 @@
 // coordinates. Rotation states are pre-baked so the runtime never recomputes
 // matrices; rotating is a `(rot + 1) & 3` index step.
 
-export type PieceKind = 'I' | 'O' | 'T' | 'S' | 'Z' | 'J' | 'L';
+export const PIECE_KINDS = ['I', 'O', 'T', 'S', 'Z', 'J', 'L'] as const;
+
+export type PieceKind = (typeof PIECE_KINDS)[number];
 
 export type Cell = readonly [number, number];
 
@@ -226,5 +228,3 @@ export const PIECES: Readonly<Record<PieceKind, PieceSpec>> = {
     color: [0.98, 0.55, 0.15],
   },
 };
-
-export const PIECE_KINDS: readonly PieceKind[] = ['I', 'O', 'T', 'S', 'Z', 'J', 'L'];

@@ -26,7 +26,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[bevy-touch-input] app.start failed:', started.error.code, started.error.hint);
     return;
   }
-  console.warn(`[bevy-touch-input] backend=${app.renderer.backend}`);
+  console.warn(`[bevy-touch-input] state=${app.renderer.inspect().state}`);
   Object.assign(globalThis, { __bevyTouchInputReady: true, __bevyTouchInputState: state });
 }
 

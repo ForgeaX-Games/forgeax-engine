@@ -131,7 +131,7 @@ describe('ImageErrorCode + ImageErrorDetail closed union compile contract', () =
       bytes: Uint8Array;
       width: number;
       height: number;
-      mime: 'image/jpeg' | 'image/png';
+      mime: 'image/jpeg' | 'image/png' | 'image/x-tga';
       colorSpace: 'srgb' | 'linear';
       mipmap: boolean;
     }>();

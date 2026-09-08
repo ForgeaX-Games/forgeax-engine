@@ -1,321 +1,753 @@
-// frame-model.ts — buildFrameModel: pure whole-frame analysis (zero React, zero GPU, node-free).
-//
-// SSOT for "what a tape contains, structurally": pass/draw tree, per-draw pipeline state,
-// bindings, draw call, resources, and the full command stream. Both consumers share it:
-//   - apps/rhi-debug-viewer re-exports FrameModel/buildFrameModel as its ViewModel (UI panels).
-//   - packages/rhi-debug/src/cli.ts `summary` subcommand emits buildFrameModel(tape) as JSON.
-// inspect-core.ts attaches the same per-draw pipelineState to InspectReport via the shared
-// scanPassStates + makePipelineState atoms it owns. One analysis, two surfaces (charter F1:
-// the AI inspects with the same operations the UI exposes).
-//
-// Layering (no import cycle): frame-model -> inspect-core (atoms) -> types (shapes).
-// Browser-safe: imports only node-free atoms; no node:/pngjs/inspector imports.
-// tree-shake.unit.test.ts locks this in.
+// @forgeax/engine-rhi-debug/src/frame-model -- v7 structural tape projection.
 
 /// <reference types="@webgpu/types" />
 
 import {
-  buildResources,
-  extractDrawInfos,
-  makePipelineState,
-  scanPassStates,
-} from './inspect-core';
-import type { ResourceLifecycleSummary } from './resource-lifecycle';
-import { buildResourceLifecycle } from './resource-lifecycle';
-import type { PassOffset } from './tape-format';
-import { computePassOffsets, DRAW_KINDS } from './tape-format';
-import type {
-  CreateDescriptor,
-  DrawPipelineState,
-  HandleId,
-  InspectBindingEntry,
-  InspectDrawCall,
-  RhiCallEvent,
-  Tape,
-} from './types';
+  EVENT_SEMANTICS,
+  type EventCategory,
+  isWorkEvent,
+  resourceKindForEvent,
+} from './protocol/event-semantics';
+import type { TapeWorkEntry } from './protocol/tape-index';
+import { buildTapeIndex } from './protocol/tape-index';
+import type { Tape as V7Tape } from './protocol/types';
+import { computeTextureLayout } from './texel-layout';
+import type { HandleId, RhiCallEvent } from './types';
 
-// Re-export the shared pipeline/resource shapes so consumers that import them
-// "from the frame model" (the viewer's ../viewer-model shim) resolve here too.
-export type { CreateDescriptor, DrawPipelineState } from './types';
+type JsonPrimitive = string | number | boolean | null;
+export type JsonValue =
+  | JsonPrimitive
+  | readonly JsonValue[]
+  | { readonly [key: string]: JsonValue };
 
-// ============================================================================
-// FrameModel types
-// ============================================================================
-
-/** A single draw/dispatch sub-item within a pass node. */
-export interface PassDrawItem {
-  readonly drawIdx: number;
-  readonly eventKind:
-    | 'draw'
-    | 'drawIndexed'
-    | 'dispatchWorkgroups'
-    | 'dispatchWorkgroupsIndirect'
-    | 'drawIndirect'
-    | 'drawIndexedIndirect';
-}
-
-/** A pass node in the tree -- render or compute pass. */
-export interface PassNode {
-  readonly kind: 'render' | 'compute';
-  readonly passIdx: number;
-  readonly draws: readonly PassDrawItem[];
-}
-
-/** Full information for a single draw/dispatch call. */
-export interface DrawEntry {
-  readonly frameIdx: number;
-  readonly passIdx: number;
-  readonly bindings: readonly InspectBindingEntry[];
-  readonly drawCall: InspectDrawCall;
-  readonly colorAttachmentHandleId: string | undefined;
-  readonly pipelineState: DrawPipelineState;
-  /**
-   * Bound vertex buffers keyed by slot. Each entry carries `handleId` +
-   * `offset` + `size` from the raw `setVertexBuffer` event (offset defaults
-   * to 0; size 0 keeps the WebGPU "to end of buffer" convention verbatim).
-   * AI users read offset / size directly here without re-scanning tape events.
-   */
-  readonly vertexBuffers: ReadonlyMap<
-    number,
-    { readonly handleId: HandleId; readonly offset: number; readonly size: number }
-  >;
-  /**
-   * Bound index buffer at this draw (mirrors `setIndexBuffer` event); absent
-   * when the pass never issued one. Only meaningful for `drawIndexed` /
-   * `drawIndexedIndirect` — non-indexed draws leave it dangling; consumers
-   * cross-reference `drawCall.kind` if they need it. Truly optional so viewer
-   * fixtures can omit it entirely.
-   */
-  readonly indexBuffer?: { handleId: HandleId; format: GPUIndexFormat; offset: number } | undefined;
-  readonly depthStencil: DrawDepthStencil;
-}
-
-/** Depth-stencil attachment reference for a draw call. */
-export interface DrawDepthStencil {
-  readonly depthStencilViewHandleId: HandleId | undefined;
-  readonly depthStencilAttachment: GPURenderPassDepthStencilAttachment | undefined;
-}
-
-/** A command entry in the full command stream (includes non-draw events). */
 export interface CommandEntry {
-  readonly passIdx: number;
-  readonly eventIdx: number;
-  readonly isDraw: boolean;
+  readonly eventIndex: number;
+  readonly passIndex: number;
   readonly kind: string;
-  /** Group label for pushDebugGroup/passPushDebugGroup events (for collapsible nesting). */
-  readonly groupLabel: string | undefined;
-  /** Marker label for insertDebugMarker/passInsertDebugMarker events. */
-  readonly markerLabel: string | undefined;
+  readonly category: EventCategory;
+  readonly isWork: boolean;
+  readonly params: JsonValue;
+  readonly group: readonly string[];
+  readonly marker?: string;
 }
 
-/** Summary metadata about the tape. */
-export interface FrameModelMeta {
-  readonly totalDraws: number;
-  readonly totalPasses: number;
-  readonly hasCompute: boolean;
+export interface FramePass {
+  readonly passIndex: number;
+  readonly kind: 'render' | 'compute';
+  readonly beginEventIndex: number;
+  readonly endEventIndex: number | null;
+  readonly workIndices: readonly number[];
+  readonly commandIndices: readonly number[];
+  colorAttachmentViewHandleIds: readonly string[];
+  depthStencilViewHandleId: string | null;
 }
 
-/** The complete frame model. The viewer exposes it as window.__forgeaxViewer. */
+export interface ResourceConsumer {
+  readonly eventIndex: number;
+  readonly workIndex: number | null;
+  readonly access: 'read' | 'write';
+}
+
+export interface ResourceEntry {
+  readonly resourceId: string;
+  readonly kind: string;
+  readonly origin: 'bootstrap' | 'frame';
+  readonly createEventIndex: number | null;
+  readonly destroyEventIndex: number | null;
+  readonly descriptor: JsonValue | null;
+  consumers: readonly ResourceConsumer[];
+  readonly lifecycle: {
+    readonly state: 'live' | 'destroyed' | 'unavailable';
+    readonly byteEstimate: ResourceByteEstimate | null;
+  };
+}
+
+export interface WorkBinding {
+  readonly groupIndex: number;
+  readonly binding: number;
+  readonly bindGroupId: string;
+  readonly resourceId: string | null;
+  readonly resourceKind: string | null;
+  readonly bufferOffset: number | null;
+  readonly bufferSize: number | null;
+}
+
+export interface WorkPipeline {
+  readonly status: 'available' | 'unavailable';
+  readonly pipelineHandleId?: string;
+  readonly kind?: 'render' | 'compute';
+  readonly descriptor?: JsonValue;
+  readonly shaders: readonly {
+    readonly stage: 'vertex' | 'fragment' | 'compute';
+    readonly moduleHandleId: string;
+    readonly entryPoint: string | null;
+    readonly source: string | null;
+  }[];
+  readonly reason?: 'pipeline-not-bound' | 'descriptor-unavailable';
+}
+
+export interface WorkEntry extends TapeWorkEntry {
+  readonly commandIndex: number;
+  readonly drawCall: JsonValue;
+  readonly pipeline: WorkPipeline;
+  readonly bindings: readonly WorkBinding[];
+  readonly vertexBuffers: readonly {
+    readonly slot: number;
+    readonly bufferHandleId: string;
+    readonly offset: number;
+    readonly size: number | null;
+  }[];
+  readonly indexBuffer: {
+    readonly bufferHandleId: string;
+    readonly format: string;
+    readonly offset: number;
+    readonly size: number | null;
+  } | null;
+  readonly attachments: {
+    readonly colorViewHandleIds: readonly string[];
+    readonly depthStencilViewHandleId: string | null;
+  } | null;
+}
+
 export interface FrameModel {
-  readonly tree: readonly PassNode[];
-  readonly draws: readonly DrawEntry[];
-  readonly meta: FrameModelMeta;
-  /** Full command stream in tape order (includes non-draw events). */
   readonly commands: readonly CommandEntry[];
-  /** handleId to parsed create descriptor. */
-  readonly resources: ReadonlyMap<HandleId, CreateDescriptor>;
-  /** Ordered create/destroy attribution and descriptor-byte estimates. */
+  readonly passes: readonly FramePass[];
+  readonly resources: readonly ResourceEntry[];
   readonly resourceLifecycle: ResourceLifecycleSummary;
+  readonly works: readonly WorkEntry[];
 }
 
-// ============================================================================
-// Event-kind extraction
-// ============================================================================
-
-const META_KINDS = new Set(['frameMark', 'submit', 'finish', 'createCommandEncoder']);
-
-/**
- * Project draw kinds once so tree construction stays linear in tape size.
- *
- * A previous implementation called `eventKindAt` once per tree item and
- * rescanned the complete event list from the beginning. A real editor frame
- * has tens of thousands of draws, so that turned the otherwise pure summary
- * into an accidental quadratic pass over the tape.
- */
-function collectDrawKinds(events: readonly RhiCallEvent[]): PassDrawItem['eventKind'][] {
-  const drawKinds: PassDrawItem['eventKind'][] = [];
-  for (const event of events) {
-    if (DRAW_KINDS.has(event.kind)) {
-      drawKinds.push(event.kind as PassDrawItem['eventKind']);
+function jsonValue(value: unknown): JsonValue {
+  if (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean'
+  )
+    return value;
+  if (value === undefined) return null;
+  if (Array.isArray(value)) return value.map(jsonValue);
+  if (ArrayBuffer.isView(value))
+    return Array.from(value as unknown as ArrayLike<unknown>, jsonValue);
+  if (typeof value === 'object') {
+    const output: Record<string, JsonValue> = {};
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      if (child !== undefined) output[key] = jsonValue(child);
     }
+    return output;
   }
-  return drawKinds;
+  return String(value);
 }
 
-/** Map each global draw index to its containing pass in one linear pass. */
-function collectPassIdxByDraw(offsets: readonly PassOffset[]): number[] {
-  const passIdxByDraw: number[] = [];
-  for (const offset of offsets) {
-    for (let drawIdx = offset.startDrawIdx; drawIdx <= offset.endDrawIdx; drawIdx++) {
-      passIdxByDraw[drawIdx] = offset.passIdx;
-    }
-  }
-  return passIdxByDraw;
+function eventDescriptor(event: RhiCallEvent): JsonValue {
+  return jsonValue(event);
 }
 
-/** Count total draw/dispatch events. */
-function countDrawEvents(events: readonly RhiCallEvent[]): number {
-  let count = 0;
-  for (const event of events) {
-    if (DRAW_KINDS.has(event.kind)) count++;
-  }
-  return count;
-}
-
-/** Build the full command stream (all events in tape order, minus meta events). */
-function buildCommands(events: readonly RhiCallEvent[]): readonly CommandEntry[] {
-  const commands: CommandEntry[] = [];
-  let currentPassIdx = -1;
-
-  for (let i = 0; i < events.length; i++) {
-    const event = events[i];
-    if (!event) continue;
-
-    // Track pass boundaries
-    if (event.kind === 'beginRenderPass' || event.kind === 'beginComputePass') {
-      currentPassIdx++;
-    }
-
-    // Skip meta events
-    if (META_KINDS.has(event.kind)) continue;
-
-    // Extract debug group / marker labels
-    let groupLabel: string | undefined;
-    let markerLabel: string | undefined;
-    if (event.kind === 'pushDebugGroup' || event.kind === 'passPushDebugGroup') {
-      groupLabel = event.groupLabel;
-    } else if (event.kind === 'insertDebugMarker' || event.kind === 'passInsertDebugMarker') {
-      markerLabel = event.markerLabel;
-    }
-
-    commands.push({
-      passIdx: currentPassIdx,
-      eventIdx: i,
-      isDraw: DRAW_KINDS.has(event.kind),
-      kind: event.kind,
-      groupLabel,
-      markerLabel,
+function workPipeline(
+  pipelineId: string | undefined,
+  pipelineEvents: ReadonlyMap<string, RhiCallEvent>,
+  shaderEvents: ReadonlyMap<string, RhiCallEvent>,
+): WorkPipeline {
+  if (pipelineId === undefined)
+    return { status: 'unavailable', shaders: [], reason: 'pipeline-not-bound' };
+  const event = pipelineEvents.get(pipelineId);
+  if (event === undefined)
+    return { status: 'unavailable', shaders: [], reason: 'descriptor-unavailable' };
+  const shaders: WorkPipeline['shaders'][number][] = [];
+  const shaderRefs =
+    event.kind === 'createRenderPipeline'
+      ? [
+          ['vertex', event.vertexShaderModuleHandleId, event.desc.vertex?.entryPoint],
+          ['fragment', event.fragmentShaderModuleHandleId, event.desc.fragment?.entryPoint],
+        ]
+      : event.kind === 'createComputePipeline'
+        ? [['compute', event.computeShaderModuleHandleId, event.desc.compute.entryPoint]]
+        : [];
+  for (const [stage, moduleId, entryPoint] of shaderRefs) {
+    if (typeof moduleId !== 'string') continue;
+    const shader = shaderEvents.get(moduleId);
+    shaders.push({
+      stage: stage as 'vertex' | 'fragment' | 'compute',
+      moduleHandleId: moduleId,
+      entryPoint: typeof entryPoint === 'string' ? entryPoint : null,
+      source: shader?.kind === 'createShaderModule' ? shader.wgslCode : null,
     });
   }
-
-  return commands;
+  return {
+    status: 'available',
+    pipelineHandleId: pipelineId,
+    kind: event.kind === 'createRenderPipeline' ? 'render' : 'compute',
+    descriptor: eventDescriptor(event),
+    shaders,
+  };
 }
 
-// ============================================================================
-// buildFrameModel
-// ============================================================================
-
-const EMPTY_PASS_STATE = {
-  handleId: '',
-  pipelineHandleId: undefined,
-  vertexBuffers: new Map<number, { handleId: HandleId; offset: number; size: number }>(),
-  indexBuffer: undefined,
-  blendConstant: undefined,
-  stencilReference: 0,
-  depthStencilViewHandleId: undefined,
-  depthStencilAttachment: undefined,
-};
-
-/**
- * Compute the FrameModel from a Tape (pure, no GPU).
- *
- * Produces the full tree structure, per-draw bindings/drawCall/pipelineState,
- * the resources map, and the full command stream from pure event traversal,
- * reusing the computePassOffsets / extractDrawInfo / findPassIdx primitives and
- * the inspect-core scanPassStates / makePipelineState / buildResources atoms.
- */
-export function buildFrameModel(tape: Tape): FrameModel {
+export function buildFrameModel(tape: V7Tape): FrameModel {
+  const index = buildTapeIndex(tape);
   const events = tape.events;
+  const passCommandIndices = index.passes.map(() => [] as number[]);
+  const commands: CommandEntry[] = [];
+  const groupPath: string[] = [];
+  const currentPassByEvent = index.passIndexByEvent;
+  const passAttachmentByIndex = new Map<number, FramePass>();
 
-  // Step 1: pass offsets
-  const offsets = computePassOffsets(events);
-  const drawKinds = collectDrawKinds(events);
-  const passIdxByDraw = collectPassIdxByDraw(offsets);
+  for (const pass of index.passes) {
+    passAttachmentByIndex.set(pass.passIndex, {
+      passIndex: pass.passIndex,
+      kind: pass.kind,
+      beginEventIndex: pass.beginEventIndex,
+      endEventIndex: pass.endEventIndex ?? null,
+      workIndices: pass.workIndices,
+      commandIndices: [],
+      colorAttachmentViewHandleIds: [],
+      depthStencilViewHandleId: null,
+    });
+    const begin = events[pass.beginEventIndex];
+    if (begin?.kind === 'beginRenderPass') {
+      const attachment = passAttachmentByIndex.get(pass.passIndex);
+      if (attachment !== undefined) {
+        attachment.colorAttachmentViewHandleIds = begin.colorAttachmentViewHandleIds.filter(
+          (id): id is string => typeof id === 'string',
+        );
+        attachment.depthStencilViewHandleId = begin.depthStencilViewHandleId ?? null;
+      }
+    }
+  }
 
-  // Step 2: tree from offsets
-  const tree: PassNode[] = offsets.map((offset: PassOffset) => {
-    const draws: PassDrawItem[] = [];
-    for (let di = offset.startDrawIdx; di <= offset.endDrawIdx; di++) {
-      draws.push({
-        drawIdx: di,
-        eventKind: drawKinds[di] ?? 'draw',
+  for (const [eventIndex, event] of events.entries()) {
+    const passIndex = currentPassByEvent[eventIndex] ?? -1;
+    const isPush = event.kind === 'pushDebugGroup' || event.kind === 'passPushDebugGroup';
+    const isPop = event.kind === 'popDebugGroup' || event.kind === 'passPopDebugGroup';
+    const group = isPush ? [...groupPath, event.groupLabel] : [...groupPath];
+    const marker =
+      event.kind === 'insertDebugMarker' || event.kind === 'passInsertDebugMarker'
+        ? event.markerLabel
+        : undefined;
+    const commandIndex = commands.length;
+    commands.push({
+      eventIndex,
+      passIndex,
+      kind: event.kind,
+      category: EVENT_SEMANTICS[event.kind].category,
+      isWork: isWorkEvent(event.kind),
+      params: eventDescriptor(event),
+      group,
+      ...(marker === undefined ? {} : { marker }),
+    });
+    if (passIndex >= 0) passCommandIndices[passIndex]?.push(commandIndex);
+    if (isPush) groupPath.push(event.groupLabel);
+    if (isPop) groupPath.pop();
+  }
+
+  const pipelineEvents = new Map<string, RhiCallEvent>();
+  const shaderEvents = new Map<string, RhiCallEvent>();
+  const bindGroups = new Map<string, Extract<RhiCallEvent, { kind: 'createBindGroup' }>>();
+  const resourceRecords = new Map<string, ResourceEntry>();
+  const workByEvent = new Map<number, number>();
+  for (const work of index.works) workByEvent.set(work.eventIndex, work.workIndex);
+
+  for (const bootstrap of tape.bootstrap) {
+    // Strict v7 decoding validates each bootstrap create record against the same
+    // RhiCallEvent union before FrameModel construction.
+    const create = bootstrap.create as unknown as RhiCallEvent;
+    if (create.kind === 'createRenderPipeline' || create.kind === 'createComputePipeline')
+      pipelineEvents.set(create.handleId, create);
+    if (create.kind === 'createShaderModule') shaderEvents.set(create.handleId, create);
+    if (create.kind === 'createBindGroup') bindGroups.set(create.handleId, create);
+    resourceRecords.set(bootstrap.handleId, {
+      resourceId: bootstrap.handleId,
+      kind: bootstrap.kind,
+      origin: 'bootstrap',
+      createEventIndex: null,
+      destroyEventIndex: null,
+      descriptor: jsonValue(bootstrap.create),
+      consumers: [],
+      lifecycle: { state: 'unavailable', byteEstimate: null },
+    });
+  }
+  for (const [eventIndex, event] of events.entries()) {
+    if (event.kind === 'createRenderPipeline' || event.kind === 'createComputePipeline')
+      pipelineEvents.set(event.handleId, event);
+    if (event.kind === 'createShaderModule') shaderEvents.set(event.handleId, event);
+    if (event.kind === 'createBindGroup') bindGroups.set(event.handleId, event);
+    const kind = resourceKindForEvent(event.kind);
+    const handleId =
+      kind === undefined
+        ? undefined
+        : event.kind === 'createTextureView'
+          ? event.resultHandleId
+          : event.kind === 'createCommandEncoder'
+            ? event.cmdHandleId
+            : 'handleId' in event
+              ? event.handleId
+              : undefined;
+    if (kind !== undefined && handleId !== undefined) {
+      resourceRecords.set(handleId, {
+        resourceId: handleId,
+        kind,
+        origin: 'frame',
+        createEventIndex: eventIndex,
+        destroyEventIndex: null,
+        descriptor: eventDescriptor(event),
+        consumers: [],
+        lifecycle: { state: 'unavailable', byteEstimate: null },
       });
     }
-    return {
-      kind: offset.kind,
-      passIdx: offset.passIdx,
-      draws,
-    };
-  });
+  }
 
-  // Step 3: pre-scan resources + pass states
-  const resources = buildResources(events);
-  const passStates = scanPassStates(events);
-  const drawInfos = extractDrawInfos(events);
-
-  // Step 4: per-draw entries
-  const totalDraws = countDrawEvents(events);
-  const draws: DrawEntry[] = [];
-  let hasCompute = false;
-
-  for (let i = 0; i < totalDraws; i++) {
-    const info = drawInfos[i];
-    if (info === undefined) continue;
-    const passIdx = passIdxByDraw[i] ?? -1;
-
-    const passState = passStates[passIdx];
-    const pipelineState = makePipelineState(
-      passState?.pipelineHandleId,
-      resources,
-      passState ?? EMPTY_PASS_STATE,
-    );
-    const vertexBuffers = passState?.vertexBuffers ?? new Map();
-    const indexBuffer = passState?.indexBuffer;
-    const depthStencil: DrawDepthStencil = {
-      depthStencilViewHandleId: passState?.depthStencilViewHandleId,
-      depthStencilAttachment: passState?.depthStencilAttachment,
-    };
-
-    draws.push({
-      frameIdx: info.frameIdx,
-      passIdx,
-      bindings: info.bindings,
-      drawCall: info.drawCall,
-      colorAttachmentHandleId: info.colorAttachmentHandleId,
-      pipelineState,
-      vertexBuffers,
-      indexBuffer,
-      depthStencil,
+  const lifecycle = buildResourceLifecycle(events);
+  for (const record of lifecycle.resources) {
+    const resource = resourceRecords.get(record.handleId);
+    if (resource === undefined) continue;
+    resourceRecords.set(record.handleId, {
+      ...resource,
+      destroyEventIndex: record.destroyedEventIndex ?? null,
+      lifecycle: { state: record.state, byteEstimate: record.byteEstimate },
     });
-
-    if (info.drawCall.pipelineKind === 'compute') {
-      hasCompute = true;
+  }
+  for (const [eventIndex, event] of events.entries()) {
+    const workIndex = workByEvent.get(eventIndex) ?? null;
+    for (const resourceId of EVENT_SEMANTICS[event.kind].read(event)) {
+      const resource = resourceRecords.get(resourceId);
+      if (resource !== undefined)
+        resource.consumers = [...resource.consumers, { eventIndex, workIndex, access: 'read' }];
+    }
+    for (const resourceId of EVENT_SEMANTICS[event.kind].written(event)) {
+      const resource = resourceRecords.get(resourceId);
+      if (resource !== undefined)
+        resource.consumers = [...resource.consumers, { eventIndex, workIndex, access: 'write' }];
     }
   }
 
-  // Step 5: command stream
-  const commands = buildCommands(events);
+  const works: WorkEntry[] = [];
+  const currentPipeline = new Map<string, string>();
+  const currentVertexBuffers = new Map<
+    string,
+    Map<number, { bufferHandleId: string; offset: number; size: number | null }>
+  >();
+  const currentIndexBuffers = new Map<string, WorkEntry['indexBuffer']>();
+  const currentBindGroups = new Map<string, Map<number, string>>();
+  const workByEventEntry = new Map(index.works.map((work) => [work.eventIndex, work]));
+  for (const [eventIndex, event] of events.entries()) {
+    if (event === undefined) continue;
+    const passHandleId = 'passHandleId' in event ? event.passHandleId : '';
+    if (event.kind === 'setPipeline' || event.kind === 'setComputePipeline')
+      currentPipeline.set(passHandleId, event.pipelineHandleId);
+    if (event.kind === 'setVertexBuffer') {
+      const buffers = currentVertexBuffers.get(passHandleId) ?? new Map();
+      buffers.set(event.slot, {
+        bufferHandleId: event.bufferHandleId,
+        offset: event.offset ?? 0,
+        size: event.size ?? null,
+      });
+      currentVertexBuffers.set(passHandleId, buffers);
+    }
+    if (event.kind === 'setIndexBuffer')
+      currentIndexBuffers.set(passHandleId, {
+        bufferHandleId: event.bufferHandleId,
+        format: event.format,
+        offset: event.offset ?? 0,
+        size: event.size ?? null,
+      });
+    if (event.kind === 'setBindGroup') {
+      const groups = currentBindGroups.get(passHandleId) ?? new Map();
+      groups.set(event.index, event.bindGroupHandleId);
+      currentBindGroups.set(passHandleId, groups);
+    }
+    if (!isWorkEvent(event.kind)) continue;
+    const work = workByEventEntry.get(eventIndex);
+    if (work === undefined) continue;
+    const pipelineId = currentPipeline.get(passHandleId);
+    const groups = currentBindGroups.get(passHandleId) ?? new Map();
+    const bindings: WorkBinding[] = [];
+    for (const [groupIndex, bindGroupId] of groups) {
+      const bindGroup = bindGroups.get(bindGroupId);
+      for (const [entryIndex, resourceId] of bindGroup?.resourceHandleIds.entries() ?? []) {
+        const entry = bindGroup?.entries[entryIndex];
+        bindings.push({
+          groupIndex,
+          binding: entry?.binding ?? entryIndex,
+          bindGroupId,
+          resourceId: resourceId ?? null,
+          resourceKind: entry?.resourceKind ?? null,
+          bufferOffset: entry?.bufferOffset ?? null,
+          bufferSize: entry?.bufferSize ?? null,
+        });
+      }
+    }
+    const attachment = passAttachmentByIndex.get(work.passIndex);
+    works.push({
+      ...work,
+      commandIndex: commands.findIndex((command) => command.eventIndex === work.eventIndex),
+      drawCall: eventDescriptor(event),
+      pipeline: workPipeline(pipelineId, pipelineEvents, shaderEvents),
+      bindings,
+      vertexBuffers: [...(currentVertexBuffers.get(passHandleId)?.entries() ?? [])].map(
+        ([slot, buffer]) => ({ slot, ...buffer }),
+      ),
+      indexBuffer: currentIndexBuffers.get(passHandleId) ?? null,
+      attachments:
+        attachment === undefined
+          ? null
+          : {
+              colorViewHandleIds: attachment.colorAttachmentViewHandleIds,
+              depthStencilViewHandleId: attachment.depthStencilViewHandleId,
+            },
+    });
+  }
+
+  const passes = index.passes.map((pass) => ({
+    ...pass,
+    endEventIndex: pass.endEventIndex ?? null,
+    commandIndices: passCommandIndices[pass.passIndex] ?? [],
+    colorAttachmentViewHandleIds:
+      passAttachmentByIndex.get(pass.passIndex)?.colorAttachmentViewHandleIds ?? [],
+    depthStencilViewHandleId:
+      passAttachmentByIndex.get(pass.passIndex)?.depthStencilViewHandleId ?? null,
+  }));
+  return {
+    commands,
+    passes,
+    resources: [...resourceRecords.values()],
+    resourceLifecycle: lifecycle,
+    works,
+  };
+}
+
+/** A byte estimate that distinguishes known descriptor size from unavailable GPU facts. */
+export type ResourceByteEstimate =
+  | {
+      readonly status: 'known';
+      readonly bytes: number;
+      readonly basis: 'buffer-descriptor' | 'texture-tight-layout';
+    }
+  | {
+      readonly status: 'unavailable';
+      readonly reason:
+        | 'non-memory-resource'
+        | 'unsupported-texture-dimension'
+        | 'unsupported-texture-format'
+        | 'invalid-texture-size';
+    };
+
+export type ResourceKind =
+  | 'buffer'
+  | 'texture'
+  | 'texture-view'
+  | 'sampler'
+  | 'bind-group-layout'
+  | 'bind-group'
+  | 'pipeline-layout'
+  | 'render-pipeline'
+  | 'compute-pipeline'
+  | 'shader-module';
+
+export type ResourceOrigin = 'engine' | 'swapchain';
+
+export interface ResourceLifecycleEntry {
+  readonly handleId: HandleId;
+  readonly kind: ResourceKind;
+  readonly origin: ResourceOrigin;
+  readonly state: 'live' | 'destroyed';
+  readonly createdEventIndex: number;
+  readonly destroyedEventIndex?: number;
+  readonly byteEstimate: ResourceByteEstimate;
+}
+
+export interface ResourceLifecycleSummary {
+  /** This is the resource closure represented by the tape, not the whole device heap. */
+  readonly scope: 'captured-tape-resource-closure';
+  readonly counts: {
+    readonly created: number;
+    readonly destroyed: number;
+    readonly live: number;
+    readonly destroyEvents: number;
+    readonly unknownDestroyEvents: number;
+  };
+  readonly bytes: {
+    readonly knownCreated: number;
+    readonly knownDestroyed: number;
+    readonly knownLive: number;
+    readonly unavailableCreated: number;
+    readonly unavailableDestroyed: number;
+    readonly unavailableLive: number;
+  };
+  readonly originBreakdown: Readonly<
+    Record<
+      ResourceOrigin,
+      {
+        readonly created: number;
+        readonly destroyed: number;
+        readonly live: number;
+        readonly knownCreated: number;
+        readonly knownDestroyed: number;
+        readonly knownLive: number;
+        readonly unavailableCreated: number;
+        readonly unavailableDestroyed: number;
+        readonly unavailableLive: number;
+      }
+    >
+  >;
+  readonly availability: {
+    readonly destroy: 'observed-buffer-texture';
+    readonly retire: 'unavailable';
+    readonly driverAllocation: 'unavailable';
+  };
+  readonly resources: readonly ResourceLifecycleEntry[];
+}
+
+function asPositiveInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function normalizeTextureSize(
+  size: unknown,
+):
+  | { readonly width: number; readonly height: number; readonly depthOrArrayLayers: number }
+  | undefined {
+  if (typeof size === 'number') {
+    const width = asPositiveInteger(size);
+    return width === undefined ? undefined : { width, height: 1, depthOrArrayLayers: 1 };
+  }
+  if (Array.isArray(size)) {
+    const width = asPositiveInteger(size[0]);
+    const height = asPositiveInteger(size[1] ?? 1);
+    const depthOrArrayLayers = asPositiveInteger(size[2] ?? 1);
+    return width === undefined || height === undefined || depthOrArrayLayers === undefined
+      ? undefined
+      : { width, height, depthOrArrayLayers };
+  }
+  if (size !== null && typeof size === 'object') {
+    const raw = size as {
+      readonly width?: unknown;
+      readonly height?: unknown;
+      readonly depthOrArrayLayers?: unknown;
+    };
+    const width = asPositiveInteger(raw.width);
+    const height = asPositiveInteger(raw.height ?? 1);
+    const depthOrArrayLayers = asPositiveInteger(raw.depthOrArrayLayers ?? 1);
+    return width === undefined || height === undefined || depthOrArrayLayers === undefined
+      ? undefined
+      : { width, height, depthOrArrayLayers };
+  }
+  return undefined;
+}
+
+function estimateBytes(event: RhiCallEvent): ResourceByteEstimate {
+  if (event.kind === 'createBuffer') {
+    return { status: 'known', bytes: event.desc.size, basis: 'buffer-descriptor' };
+  }
+  if (event.kind !== 'createTexture') {
+    return { status: 'unavailable', reason: 'non-memory-resource' };
+  }
+
+  const dimension = event.desc.dimension ?? '2d';
+  if (dimension === '3d') {
+    return { status: 'unavailable', reason: 'unsupported-texture-dimension' };
+  }
+  const size = normalizeTextureSize(event.desc.size);
+  if (size === undefined) return { status: 'unavailable', reason: 'invalid-texture-size' };
+  const layers = dimension === '1d' ? 1 : size.depthOrArrayLayers;
+  const layout = computeTextureLayout(
+    event.desc.format,
+    size.width,
+    size.height,
+    layers,
+    event.desc.mipLevelCount ?? 1,
+  );
+  if (layout === undefined) return { status: 'unavailable', reason: 'unsupported-texture-format' };
+  return {
+    status: 'known',
+    bytes: layout.totalBytes * (event.desc.sampleCount ?? 1),
+    basis: 'texture-tight-layout',
+  };
+}
+
+function resourceIdentity(
+  event: RhiCallEvent,
+): { readonly kind: ResourceKind; readonly handleId: HandleId } | undefined {
+  switch (event.kind) {
+    case 'createBuffer':
+      return { kind: 'buffer', handleId: event.handleId };
+    case 'createTexture':
+      return { kind: 'texture', handleId: event.handleId };
+    case 'createTextureView':
+      return { kind: 'texture-view', handleId: event.resultHandleId };
+    case 'createSampler':
+      return { kind: 'sampler', handleId: event.handleId };
+    case 'createBindGroupLayout':
+      return { kind: 'bind-group-layout', handleId: event.handleId };
+    case 'createBindGroup':
+      return { kind: 'bind-group', handleId: event.handleId };
+    case 'createPipelineLayout':
+      return { kind: 'pipeline-layout', handleId: event.handleId };
+    case 'createRenderPipeline':
+      return { kind: 'render-pipeline', handleId: event.handleId };
+    case 'createComputePipeline':
+      return { kind: 'compute-pipeline', handleId: event.handleId };
+    case 'createShaderModule':
+      return { kind: 'shader-module', handleId: event.handleId };
+    default:
+      return undefined;
+  }
+}
+
+function addBytes(
+  bytes: { known: number; unavailable: number },
+  estimate: ResourceByteEstimate,
+): void {
+  if (estimate.status === 'known') bytes.known += estimate.bytes;
+  else bytes.unavailable++;
+}
+
+/** Build a pure lifecycle ledger from the ordered tape events. */
+export function buildResourceLifecycle(events: readonly RhiCallEvent[]): ResourceLifecycleSummary {
+  const records = new Map<
+    HandleId,
+    {
+      readonly kind: ResourceKind;
+      readonly origin: ResourceOrigin;
+      readonly createdEventIndex: number;
+      readonly byteEstimate: ResourceByteEstimate;
+      destroyedEventIndex?: number;
+    }
+  >();
+  const origins = new Map<HandleId, ResourceOrigin>();
+  let destroyEvents = 0;
+  let unknownDestroyEvents = 0;
+
+  for (let eventIndex = 0; eventIndex < events.length; eventIndex++) {
+    const event = events[eventIndex];
+    if (event === undefined) continue;
+    const identity = resourceIdentity(event);
+    if (identity !== undefined) {
+      const origin: ResourceOrigin =
+        event.kind === 'createTexture' && event.origin === 'swapchain'
+          ? 'swapchain'
+          : event.kind === 'createTextureView'
+            ? (origins.get(event.sourceHandleId) ?? 'engine')
+            : 'engine';
+      origins.set(identity.handleId, origin);
+      records.set(identity.handleId, {
+        kind: identity.kind,
+        origin,
+        createdEventIndex: eventIndex,
+        byteEstimate: estimateBytes(event),
+      });
+      continue;
+    }
+    if (event.kind !== 'destroyBuffer' && event.kind !== 'destroyTexture') continue;
+    destroyEvents++;
+    const record = records.get(event.handleId);
+    const expectedKind = event.kind === 'destroyBuffer' ? 'buffer' : 'texture';
+    if (
+      record === undefined ||
+      record.kind !== expectedKind ||
+      record.destroyedEventIndex !== undefined
+    ) {
+      unknownDestroyEvents++;
+      continue;
+    }
+    record.destroyedEventIndex = eventIndex;
+  }
+
+  const resources: ResourceLifecycleEntry[] = [];
+  const createdBytes = { known: 0, unavailable: 0 };
+  const destroyedBytes = { known: 0, unavailable: 0 };
+  const liveBytes = { known: 0, unavailable: 0 };
+  const originBreakdown: Record<
+    ResourceOrigin,
+    {
+      created: number;
+      destroyed: number;
+      live: number;
+      knownCreated: number;
+      knownDestroyed: number;
+      knownLive: number;
+      unavailableCreated: number;
+      unavailableDestroyed: number;
+      unavailableLive: number;
+    }
+  > = {
+    engine: {
+      created: 0,
+      destroyed: 0,
+      live: 0,
+      knownCreated: 0,
+      knownDestroyed: 0,
+      knownLive: 0,
+      unavailableCreated: 0,
+      unavailableDestroyed: 0,
+      unavailableLive: 0,
+    },
+    swapchain: {
+      created: 0,
+      destroyed: 0,
+      live: 0,
+      knownCreated: 0,
+      knownDestroyed: 0,
+      knownLive: 0,
+      unavailableCreated: 0,
+      unavailableDestroyed: 0,
+      unavailableLive: 0,
+    },
+  };
+  let destroyed = 0;
+
+  for (const [handleId, record] of records) {
+    const state = record.destroyedEventIndex === undefined ? 'live' : 'destroyed';
+    if (state === 'destroyed') destroyed++;
+    addBytes(createdBytes, record.byteEstimate);
+    addBytes(state === 'live' ? liveBytes : destroyedBytes, record.byteEstimate);
+    const byOrigin = originBreakdown[record.origin];
+    byOrigin.created++;
+    if (state === 'destroyed') byOrigin.destroyed++;
+    else byOrigin.live++;
+    if (record.byteEstimate.status === 'known') {
+      byOrigin.knownCreated += record.byteEstimate.bytes;
+      if (state === 'destroyed') byOrigin.knownDestroyed += record.byteEstimate.bytes;
+      else byOrigin.knownLive += record.byteEstimate.bytes;
+    } else {
+      byOrigin.unavailableCreated++;
+      if (state === 'destroyed') byOrigin.unavailableDestroyed++;
+      else byOrigin.unavailableLive++;
+    }
+    resources.push({
+      handleId,
+      kind: record.kind,
+      origin: record.origin,
+      state,
+      createdEventIndex: record.createdEventIndex,
+      ...(record.destroyedEventIndex === undefined
+        ? {}
+        : { destroyedEventIndex: record.destroyedEventIndex }),
+      byteEstimate: record.byteEstimate,
+    });
+  }
 
   return {
-    tree,
-    draws,
-    meta: {
-      totalDraws,
-      totalPasses: offsets.length,
-      hasCompute,
+    scope: 'captured-tape-resource-closure',
+    counts: {
+      created: resources.length,
+      destroyed,
+      live: resources.length - destroyed,
+      destroyEvents,
+      unknownDestroyEvents,
     },
-    commands,
+    bytes: {
+      knownCreated: createdBytes.known,
+      knownDestroyed: destroyedBytes.known,
+      knownLive: liveBytes.known,
+      unavailableCreated: createdBytes.unavailable,
+      unavailableDestroyed: destroyedBytes.unavailable,
+      unavailableLive: liveBytes.unavailable,
+    },
+    originBreakdown,
+    availability: {
+      destroy: 'observed-buffer-texture',
+      retire: 'unavailable',
+      driverAllocation: 'unavailable',
+    },
     resources,
-    resourceLifecycle: buildResourceLifecycle(events),
   };
 }

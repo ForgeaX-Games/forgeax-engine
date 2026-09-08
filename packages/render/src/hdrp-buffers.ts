@@ -39,42 +39,27 @@ import {
   type Buffer,
   RhiError,
   type Sampler,
-  type Texture,
   type TextureView,
 } from '@forgeax/engine-rhi';
-import {
-  GPU_SHADER_STAGE_COMPUTE,
-  GPU_SHADER_STAGE_FRAGMENT,
-  GPU_SHADER_STAGE_VERTEX,
-} from './gpu-stage';
-import { GPU_TEXTURE_USAGE_COPY_DST, GPU_TEXTURE_USAGE_TEXTURE_BINDING } from './gpu-texture-usage';
+import { GPU_SHADER_STAGE_COMPUTE } from './gpu-stage';
 import {
   GPU_BUFFER_USAGE_COPY_DST,
-  GPU_BUFFER_USAGE_COPY_SRC,
   GPU_BUFFER_USAGE_STORAGE,
   GPU_BUFFER_USAGE_UNIFORM,
 } from './gpu-usage';
+import { BYTES_PER_LIGHT_SLOT } from './light-buffer-layout';
 import {
   CLUSTER_GRID_STRIDE_U32,
   DEFAULT_CLUSTER_GRID,
   LIGHT_INDEX_LIST_CAPACITY,
   MAX_LIGHTS,
-} from './hdrp-pipeline';
-import { BYTES_PER_LIGHT_SLOT } from './light-buffer-layout';
-import { buildBindGroupLayoutDescriptor, type PipelineSpec } from './pipeline-spec';
+} from './pipeline/standard-profile';
+import { createHdrpBindGroupLayoutDescriptor } from './pipeline-spec';
 import { MESH_PER_ENTITY_STRIDE, MESH_UBO_FULL_ARRAY_BYTES } from './record/mesh-ssbo';
-import type { RenderSystemRuntime } from './render-system';
+import type { RenderSystemRuntime } from './record/render-context';
+import { getOrCreateSsaoFallbackTexture } from './ssao-buffers';
 
-// Stub PipelineSpec for the HDRP BGL site. The dispatcher's 'hdrp-7-slot'
-// arm reads only options.caps; spec content is unused without a registry
-// (D-13 round-2: HDRP unified BGL is caps-driven, with the cluster-buffer
-// fallback toggled by RhiCaps.storageBuffer).
-const HDRP_BGL_SPEC_STUB: PipelineSpec = Object.freeze({
-  shader: { id: '', passKind: 'forward', variantSet: 'CLUSTER_FORWARD_AVAILABLE=true' },
-  attachments: { colorFormats: [], depthFormat: undefined, sampleCount: 1 },
-  geometry: { topology: 'triangle-list', vertexLayout: {} },
-  renderState: undefined,
-}) as PipelineSpec;
+export { getOrCreateSsaoFallbackTexture } from './ssao-buffers';
 
 /**
  * WebGL2 HDRP downlevel light-list capacity. 128 x 64 B = 8 KiB, below the
@@ -83,89 +68,6 @@ const HDRP_BGL_SPEC_STUB: PipelineSpec = Object.freeze({
  * POD and only changes the transport.
  */
 export const HDRP_UNIFORM_LIGHT_CAPACITY = 128;
-
-/**
- * Build the unified BGL descriptor for HDRP group(2). Round-2 (M7) extends
- * the original 5-entry layout (binding 0 + 3..6) with 2 SSAO-specific slots
- * at binding 7..8, giving 7 total entries.
- *
- * Entries:
- *   binding 0 — mesh SSBO (vertex stage, dynamic offset)
- *   binding 1 — absent (URP isolation gap)
- *   binding 2 — absent (URP isolation gap)
- *   binding 3 — light_data SSBO (fragment stage)
- *   binding 4 — cluster_grid SSBO (fragment stage)
- *   binding 5 — light_index_list SSBO (fragment stage)
- *   binding 6 — cluster_uniform UBO (fragment stage; .near_far_log.w
- *               carries SSAO intensity — scope-amend-webgl2-ubo fold)
- *   binding 7 — ssaoBlurred texture_2d<f32> (fragment stage; plan D-B)
- *   binding 8 — ssaoSampler (fragment stage; plan D-B)
- *
- * Single PSO, dual behavior: when SSAO is disabled the bind group at
- * binding 7 binds a 1x1 white fallback texture (AO = 1.0) and the host
- * writes intensity=0 into cluster_uniform.near_far_log.w, so the lighting
- * blend `mix(1.0, ssao*ao, 0) = 1.0` collapses to the round-1 baseline
- * (plan-strategy §D-B; charter P4 one consistent abstraction). Material
- * PSOs never recompile across enable / disable.
- *
- * scope-amend-webgl2-ubo: a dedicated intensity UBO would push
- * fragment-stage UBO count to 12, exceeding WebGL2's
- * `max_uniform_buffers_per_shader_stage = 11` budget on rhi-wgpu's
- * fallback path. Folding intensity into the existing cluster UBO pad
- * lane keeps the count at 11.
- *
- * When `storageBuffer=false` (no storage-buffer caps), bindings 0,3,4,5 fall
- * back to 'uniform' (same pattern as `buildPbrViewBglEntries` in pbr-pipeline.ts).
- *
- * Exported for unit-test access.
- */
-export function createHdrpBindGroupLayoutDescriptor(
-  storageBuffer: boolean = true,
-): BindGroupLayoutDescriptor {
-  const meshBufType: GPUBufferBindingType = storageBuffer ? 'read-only-storage' : 'uniform';
-  const clusterBufType: GPUBufferBindingType = storageBuffer ? 'read-only-storage' : 'uniform';
-  return {
-    label: 'hdrp-unified-bgl-group2',
-    entries: [
-      {
-        binding: 0,
-        visibility: GPU_SHADER_STAGE_VERTEX,
-        buffer: { type: meshBufType, hasDynamicOffset: true },
-      },
-      // binding 1, 2: absent (URP physical isolation gap; plan D-6)
-      {
-        binding: 3,
-        visibility: GPU_SHADER_STAGE_FRAGMENT,
-        buffer: { type: clusterBufType, hasDynamicOffset: false },
-      },
-      {
-        binding: 4,
-        visibility: GPU_SHADER_STAGE_FRAGMENT,
-        buffer: { type: clusterBufType, hasDynamicOffset: false },
-      },
-      {
-        binding: 5,
-        visibility: GPU_SHADER_STAGE_FRAGMENT,
-        buffer: { type: clusterBufType, hasDynamicOffset: false },
-      },
-      {
-        binding: 6,
-        visibility: GPU_SHADER_STAGE_FRAGMENT,
-        buffer: { type: 'uniform', hasDynamicOffset: false },
-      },
-      {
-        binding: 7,
-        visibility: GPU_SHADER_STAGE_FRAGMENT,
-        texture: { sampleType: 'float', viewDimension: '2d', multisampled: false },
-      },
-      {
-        binding: 8,
-        visibility: GPU_SHADER_STAGE_FRAGMENT,
-        sampler: { type: 'filtering' },
-      },
-    ],
-  };
-}
 
 /** Bind-group layout used only by the WebGPU cluster membership producer. */
 export function createHdrpClusterMembershipBindGroupLayoutDescriptor(): BindGroupLayoutDescriptor {
@@ -194,110 +96,6 @@ export function createHdrpClusterMembershipBindGroupLayoutDescriptor(): BindGrou
       },
     ],
   };
-}
-
-// ── 1x1 white fallback texture (plan-strategy §D-B) ───────────────────────
-//
-// Single-PSO invariant: the HDRP unified BGL always declares a binding 7
-// texture_2d<f32>. When SSAO is disabled (or its resources are not yet
-// allocated), the bind group binds this 1x1 r8unorm texture filled with
-// 0xFF. r8unorm normalizes 255 -> 1.0, so the lighting shader reads
-// `ssaoFactor = 1.0`, and `mix(1.0, ssao*ao, intensity) = ao` collapses
-// back to the round-1 baseline (ambient = baked-AO only). No shader
-// recompile across enable/disable.
-
-interface SsaoFallbackResources {
-  readonly texture: Texture;
-  readonly view: TextureView;
-  readonly sampler: Sampler;
-}
-
-const fallbackCache = new WeakMap<RenderSystemRuntime, SsaoFallbackResources>();
-
-/**
- * Lazily allocate the 1x1 r8unorm white fallback texture + a sampler for
- * SSAO disabled / resource-missing path. Cached per RenderSystemRuntime so
- * subsequent calls reuse the same resources (charter P5 one-owner).
- *
- * Returns `null` if `device.createTexture` / `createTextureView` /
- * `createSampler` / `queue.writeTexture` fails; the caller (createBindGroup)
- * propagates the structured RhiError that landed on `runtime.errorRegistry`.
- */
-export function getOrCreateSsaoFallbackTexture(
-  runtime: RenderSystemRuntime,
-): SsaoFallbackResources | null {
-  const cached = fallbackCache.get(runtime);
-  if (cached !== undefined) return cached;
-
-  const device = runtime.device;
-  const texRes = device.createTexture({
-    label: 'hdrp-ssao-fallback-white',
-    size: { width: 1, height: 1, depthOrArrayLayers: 1 },
-    mipLevelCount: 1,
-    sampleCount: 1,
-    dimension: '2d',
-    format: 'r8unorm',
-    usage: GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST,
-    textureBindingViewDimension: undefined,
-  });
-  if (!texRes.ok) {
-    runtime.errorRegistry.fire(texRes.error);
-    return null;
-  }
-
-  // r8unorm: a single byte 0xFF normalizes to 1.0 (white => AO = 1.0).
-  const whitePixel = new Uint8Array([255]);
-  const writeRes = device.queue.writeTexture(
-    {
-      texture: texRes.value as unknown as GPUTexture,
-      mipLevel: 0,
-      origin: { x: 0, y: 0, z: 0 },
-    },
-    whitePixel,
-    { offset: 0, bytesPerRow: 256, rowsPerImage: 1 },
-    { width: 1, height: 1, depthOrArrayLayers: 1 },
-  );
-  if (!writeRes.ok) {
-    runtime.errorRegistry.fire(writeRes.error);
-    return null;
-  }
-
-  const viewRes = device.createTextureView(texRes.value, {
-    label: 'hdrp-ssao-fallback-white-view',
-    format: 'r8unorm',
-    dimension: '2d',
-    aspect: 'all',
-    baseMipLevel: 0,
-    mipLevelCount: 1,
-    baseArrayLayer: 0,
-    arrayLayerCount: 1,
-  });
-  if (!viewRes.ok) {
-    runtime.errorRegistry.fire(viewRes.error);
-    return null;
-  }
-
-  const samplerRes = device.createSampler({
-    label: 'hdrp-ssao-fallback-sampler',
-    magFilter: 'linear',
-    minFilter: 'linear',
-    mipmapFilter: 'linear',
-    addressModeU: 'clamp-to-edge',
-    addressModeV: 'clamp-to-edge',
-    addressModeW: 'clamp-to-edge',
-  });
-  if (!samplerRes.ok) {
-    runtime.errorRegistry.fire(samplerRes.error);
-    return null;
-  }
-
-  const resources: SsaoFallbackResources = {
-    texture: texRes.value,
-    view: viewRes.value,
-    sampler: samplerRes.value,
-  };
-  fallbackCache.set(runtime, resources);
-  return resources;
 }
 
 /**
@@ -370,8 +168,6 @@ export function getOrCreateHdrpBuffers(
     : clusterUniformBytes;
   const lightIndexListBytes = storageBuffer ? LIGHT_INDEX_LIST_CAPACITY * 4 : clusterUniformBytes;
   const lightBoundsBytes = MAX_LIGHTS * 6 * 4;
-  const membershipReadbackUsage =
-    runtime.membershipTiming?.mode === 'gpu' ? GPU_BUFFER_USAGE_COPY_SRC : 0;
 
   const lightData = device.createBuffer({
     label: 'hdrp-light-data',
@@ -390,8 +186,7 @@ export function getOrCreateHdrpBuffers(
     size: clusterGridBytes,
     usage:
       (storageBuffer ? GPU_BUFFER_USAGE_STORAGE : GPU_BUFFER_USAGE_UNIFORM) |
-      GPU_BUFFER_USAGE_COPY_DST |
-      membershipReadbackUsage,
+      GPU_BUFFER_USAGE_COPY_DST,
     mappedAtCreation: false,
   });
   if (!clusterGrid.ok) {
@@ -403,8 +198,7 @@ export function getOrCreateHdrpBuffers(
     size: lightIndexListBytes,
     usage:
       (storageBuffer ? GPU_BUFFER_USAGE_STORAGE : GPU_BUFFER_USAGE_UNIFORM) |
-      GPU_BUFFER_USAGE_COPY_DST |
-      membershipReadbackUsage,
+      GPU_BUFFER_USAGE_COPY_DST,
     mappedAtCreation: false,
   });
   if (!lightIndexList.ok) {
@@ -436,14 +230,11 @@ export function getOrCreateHdrpBuffers(
 
   // Create the unified 7-entry BGL layout for group(2)
   // (plan D-6, feat-20260609-hdrp-cluster-fragment-ggx M3).
-  // D-13 round-2: route through buildBindGroupLayoutDescriptor (the
-  // 'hdrp-7-slot' arm delegates to createHdrpBindGroupLayoutDescriptor).
+  // The HDRP BGL descriptor is owned by pipeline-spec and shared with the
+  // pipeline dispatcher and its byte-identical tests.
   const storageBufferCap = runtime.device.caps?.storageBuffer === true;
   const unifiedBglRes = device.createBindGroupLayout(
-    buildBindGroupLayoutDescriptor(HDRP_BGL_SPEC_STUB, {
-      kind: 'hdrp-7-slot',
-      caps: { storageBuffer: storageBufferCap },
-    }),
+    createHdrpBindGroupLayoutDescriptor(storageBufferCap),
   );
   if (!unifiedBglRes.ok) {
     runtime.errorRegistry.fire(unifiedBglRes.error);

@@ -11,59 +11,11 @@ import type { RenderFeature } from '../features/types';
 
 const caps = { backendKind: 'null' } as unknown as Readonly<RhiCaps>;
 
-function preparedFeature(recoverCalls: number[]): RenderFeature<{ readonly ready: true }> {
-  let pipeline: { readonly kind: 'pipeline'; readonly generation: number } | undefined;
-  let bindings: { readonly kind: 'bindings'; readonly generation: number } | undefined;
-  let vertices: { readonly kind: 'vertex-data'; readonly generation: number } | undefined;
+function preparedFeature(): RenderFeature<{ readonly ready: true }> {
   return {
     identity: 'synthetic.lifecycle',
     extract: () => ok({ ready: true }),
-    prepare: (_data, context) => {
-      const result = context.graphics.preparePipeline('pipeline', {
-        shader: 'synthetic.shader',
-        vertexLayout: 'position',
-        colorFormats: ['rgba8unorm'],
-      });
-      if (!result.ok) return result;
-      pipeline = result.value;
-      const bindingsResult = context.graphics.prepareBindings('bindings', {
-        pipeline: result.value,
-        values: {},
-      });
-      if (!bindingsResult.ok) return bindingsResult;
-      bindings = bindingsResult.value;
-      const verticesResult = context.graphics.prepareVertexData('vertices', {
-        layout: 'position',
-        data: [0, 0, 0],
-      });
-      if (!verticesResult.ok) return verticesResult;
-      vertices = verticesResult.value;
-      return ok(undefined);
-    },
-    contribute: (_data, context) => {
-      if (pipeline === undefined || bindings === undefined || vertices === undefined) {
-        return err(new Error('prepared state missing') as never);
-      }
-      context.staging.addResource('color', { kind: 'texture', lifetime: 'transient' });
-      return context.staging.addGraphicsPass('prepared', {
-        attachments: {
-          colors: [{ resource: 'color', format: 'rgba8unorm', loadOp: 'load', storeOp: 'store' }],
-        },
-        draws: [
-          {
-            kind: 'draw',
-            pipeline,
-            bindings: [bindings],
-            vertexData: [{ slot: 0, resource: vertices }],
-            command: { vertexCount: 3, instanceCount: 1 },
-          },
-        ],
-      });
-    },
-    recover: () => {
-      recoverCalls.push(1);
-      return ok(undefined);
-    },
+    plan: () => ok({ resources: [], passes: [] }),
   };
 }
 
@@ -86,8 +38,7 @@ describe('prepared graphics lifecycle ownership', () => {
   });
 
   it('re-prepares after recovery and makes repeated recovery idempotent', () => {
-    const recoverCalls: number[] = [];
-    const host = createRenderFeatureHost([preparedFeature(recoverCalls)]).unwrap();
+    const host = createRenderFeatureHost([preparedFeature()]).unwrap();
     const first = runRenderFeatureFrame(host, {
       worlds: [],
       owner: 0,
@@ -107,32 +58,13 @@ describe('prepared graphics lifecycle ownership', () => {
       caps,
     });
 
-    expect(recoverCalls).toHaveLength(1);
     expect(recovered.errors).toEqual([]);
     expect(host.features[0]?.identity).toBe('synthetic.lifecycle');
     expect(host.diagnostics()[0]?.status).toBe('active');
   });
 
-  it('releases registered resources once and keeps dispose terminal', () => {
-    const host = createRenderFeatureHost([preparedFeature([])]).unwrap();
-    let releases = 0;
-    host.registerResource('synthetic.lifecycle', {
-      handle: {} as never,
-      release: () => {
-        releases += 1;
-        return ok(undefined);
-      },
-    });
-
-    expect(host.dispose()).toEqual(ok(undefined));
-    expect(host.dispose()).toEqual(ok(undefined));
-    expect(releases).toBe(1);
-    expect(host.recover({ frameNumber: 4, caps }).ok).toBe(false);
-    expect(host.diagnostics()[0]?.status).toBe('disposed');
-  });
-
   it('releases a prepared batch that never reached queue submission during recovery', () => {
-    const host = createRenderFeatureHost([preparedFeature([])]).unwrap();
+    const host = createRenderFeatureHost([preparedFeature()]).unwrap();
     let releases = 0;
     const lease = {
       release: () => {
@@ -149,7 +81,7 @@ describe('prepared graphics lifecycle ownership', () => {
   });
 
   it('keeps submitted batches alive through recovery and dispose until late completion', () => {
-    const host = createRenderFeatureHost([preparedFeature([])]).unwrap();
+    const host = createRenderFeatureHost([preparedFeature()]).unwrap();
     let releases = 0;
     const lease = {
       release: () => {
@@ -171,7 +103,7 @@ describe('prepared graphics lifecycle ownership', () => {
   });
 
   it('recovers submitted batches when queue completion rejects and reports release errors', async () => {
-    const host = createRenderFeatureHost([preparedFeature([])]).unwrap();
+    const host = createRenderFeatureHost([preparedFeature()]).unwrap();
     let releases = 0;
     const releaseError = new Error('prepared release failed');
     const firstLease = {

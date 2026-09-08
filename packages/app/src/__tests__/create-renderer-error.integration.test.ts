@@ -3,8 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { createApp } from '../create-app';
 
 describe('app renderer construction boundary', () => {
-  it('keeps construction failures catchable', async () => {
-    await expect(createRenderer(null as never)).rejects.toBeDefined();
+  it('returns construction failures through the Runtime Result boundary', async () => {
+    const result = await createRenderer(null as never);
+    expect(result.ok).toBe(false);
   });
 
   it('returns EngineEnvironmentError through the canvas Result path', async () => {

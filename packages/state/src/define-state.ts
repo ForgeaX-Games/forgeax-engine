@@ -9,7 +9,7 @@
 // - plan-strategy D-1: variants vocabulary lives in StateToken, not in ECS types
 // - plan-strategy D-4: defineState throws on programmer errors (duplicate name / empty variants)
 // - plan-strategy sec 8.1: as const + readonly tuple for compile-time variant narrowing
-// - requirements C-2: defineState registers at module level; Resource injection deferred to registerStatesPlugin M2
+// - defineState registers schemas at module level; active state plugins project them into Worlds
 
 import { throwStateError } from './errors';
 
@@ -63,10 +63,11 @@ export type StateTokenName<T extends StateToken> =
 /**
  * Global registry of all state tokens, keyed by token name.
  *
- * `defineState` writes here; `registerStatesPlugin` (M2) iterates it;
- * cli-state (M6) reflection also reads it.
+ * `defineState` writes here; active state plugins project it into Worlds;
+ * cli-state reflection also reads it.
  */
 const STATE_REGISTRY = new Map<string, StateToken>();
+const STATE_DEFINED_LISTENERS = new Set<(token: StateToken) => void>();
 
 /**
  * Internal: get the read-only snapshot of all registered tokens.
@@ -74,6 +75,12 @@ const STATE_REGISTRY = new Map<string, StateToken>();
  */
 export function getRegisteredTokens(): ReadonlyMap<string, StateToken> {
   return STATE_REGISTRY;
+}
+
+/** @internal Subscribe one active World adapter to future module-level tokens. */
+export function onStateDefined(listener: (token: StateToken) => void): () => void {
+  STATE_DEFINED_LISTENERS.add(listener);
+  return () => STATE_DEFINED_LISTENERS.delete(listener);
 }
 
 /**
@@ -146,5 +153,6 @@ export function defineState<Name extends string, const Variants extends readonly
   } as StateToken<Name, Variants[number]>;
 
   STATE_REGISTRY.set(name, token as unknown as StateToken);
+  for (const listener of STATE_DEFINED_LISTENERS) listener(token as unknown as StateToken);
   return token;
 }

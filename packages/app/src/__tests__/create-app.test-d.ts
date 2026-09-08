@@ -2,14 +2,14 @@
 //
 // Anchors:
 // - createApp(canvas, opts?) returns
-//   Promise<Result<App, AppError | RhiError | PluginError | EngineEnvironmentError>>
+//   Promise<Result<App, AppError | RhiError | EngineEnvironmentError>>
 //   per AC-01 (canvas thin wrapper widens the error union with
 //   EngineEnvironmentError; M2 plugin-system-unify D-7 widens it with
-//   PluginError now that runPlugins drives the wiring).
+//   AppError for Cordis activation failures).
 // - createApp({ renderer, world }) returns
-//   Promise<Result<App, AppError | RhiError | PluginError>>
+//   Promise<Result<App, AppError | RhiError>>
 //   per AC-02 (assemble form excludes EngineEnvironmentError -- renderer
-//   host-managed -- but includes PluginError; D-7).
+//   host-managed).
 // - 'tagName' in arg dispatch lands the right overload at the call site
 //   (HTMLCanvasElement -> canvas form; AppAssembleArgs -> assemble form).
 //
@@ -17,32 +17,28 @@
 // - P3 explicit failure: Result envelope shape is type-level (no message strings).
 // - P4 consistent abstraction: both routes return the same App handle.
 
-import type { Result, SimulationError, World } from '@forgeax/engine-ecs';
-import type { PluginError } from '@forgeax/engine-plugin';
-import type { Renderer, RendererOptions } from '@forgeax/engine-render';
+import type { World } from '@forgeax/engine-ecs';
+import type { RenderError, Renderer, RendererOptions } from '@forgeax/engine-render';
 import type { RhiError } from '@forgeax/engine-rhi/errors';
-import type { EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { createRenderer, type EngineEnvironmentError } from '@forgeax/engine-runtime';
+import type { Result } from '@forgeax/engine-types';
 import { describe, expectTypeOf, it } from 'vitest';
 import { type App, type AppError, createApp } from '../index';
 
 describe('createApp double-SSOT entry signatures (w2 acceptanceCheck)', () => {
-  it('canvas form returns Promise<Result<App, AppError | RhiError | PluginError | EngineEnvironmentError>> (AC-01)', () => {
+  it('canvas form returns the App boundary error union', () => {
     const canvas = null as unknown as HTMLCanvasElement;
     const ret = createApp(canvas);
     expectTypeOf(ret).toEqualTypeOf<
-      Promise<
-        Result<App, AppError | RhiError | PluginError | SimulationError | EngineEnvironmentError>
-      >
+      Promise<Result<App, AppError | RhiError | EngineEnvironmentError>>
     >();
   });
 
-  it('assemble form returns Promise<Result<App, AppError | RhiError | PluginError>> (AC-02)', () => {
+  it('assemble form returns the App boundary error union', () => {
     const renderer = null as unknown as Renderer;
     const world = null as unknown as World;
     const ret = createApp({ renderer, world });
-    expectTypeOf(ret).toEqualTypeOf<
-      Promise<Result<App, AppError | RhiError | PluginError | SimulationError>>
-    >();
+    expectTypeOf(ret).toEqualTypeOf<Promise<Result<App, AppError | RhiError>>>();
   });
 
   it('app.renderer / app.world are reference-equal types at the call site (AC-09)', async () => {
@@ -53,6 +49,16 @@ describe('createApp double-SSOT entry signatures (w2 acceptanceCheck)', () => {
       expectTypeOf(result.value.renderer).toEqualTypeOf<Renderer>();
       expectTypeOf(result.value.world).toEqualTypeOf<World>();
     }
+  });
+});
+
+describe('Runtime createRenderer Result boundary (AC-11)', () => {
+  it('requires callers to narrow the construction Result', () => {
+    const canvas = null as unknown as HTMLCanvasElement;
+    const expected = null as unknown as Promise<
+      Result<Renderer, EngineEnvironmentError | RenderError>
+    >;
+    expectTypeOf(createRenderer(canvas)).toEqualTypeOf(expected);
   });
 });
 

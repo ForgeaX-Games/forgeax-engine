@@ -13,24 +13,10 @@ import { createRenderFeatureTarget } from '../features/targets';
 import type { RenderFeature } from '../features/types';
 
 function feature(): RenderFeature<{ readonly ready: true }> {
-  let pipeline: { readonly kind: 'pipeline'; readonly generation: number } | undefined;
   return {
     identity: 'synthetic.generation',
     extract: () => ok({ ready: true }),
-    prepare: (_data, context) => {
-      const result = context.graphics.preparePipeline('pipeline', {
-        shader: 'synthetic.shader',
-        vertexLayout: 'position',
-        colorFormats: ['rgba8unorm'],
-      });
-      if (!result.ok) return result;
-      pipeline = result.value;
-      return ok(undefined);
-    },
-    contribute: () => {
-      expect(pipeline?.kind).toBe('pipeline');
-      return ok(undefined);
-    },
+    plan: () => ok({ resources: [], passes: [] }),
   };
 }
 
@@ -45,13 +31,11 @@ const noVertexPipeline = ref('pipeline');
 const noVertexBindings = ref('bindings');
 const noVertexColor = createRenderFeatureTarget({
   kind: 'scene-color',
-  resource: 'scene-color',
   format: 'rgba8unorm',
   sampleCount: 1,
 });
 const noVertexDepth = createRenderFeatureTarget({
   kind: 'scene-depth',
-  resource: 'scene-depth',
   format: 'depth24plus',
   sampleCount: 1,
 });
@@ -168,8 +152,8 @@ describe('prepared graphics generation ownership', () => {
 
     expect(before.errors).toEqual([]);
     expect(after.errors).toEqual([]);
-    expect(before.contributions).toEqual([]);
-    expect(after.contributions).toEqual([]);
+    expect(before.plans[0]?.plan).toEqual({ resources: [], passes: [] });
+    expect(after.plans[0]?.plan).toEqual({ resources: [], passes: [] });
     expect(host.features).toHaveLength(1);
     expect(host.features[0]?.identity).toBe('synthetic.generation');
     expect(host.diagnostics()[0]?.status).toBe('active');

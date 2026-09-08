@@ -8,8 +8,8 @@ describe('prepared graphics operation snapshots', () => {
     const pipeline: {
       shader: string;
       vertexLayout: string;
-      colorFormats: string[];
-      depthFormat: string;
+      colorFormats: GPUTextureFormat[];
+      depthFormat: GPUTextureFormat;
       topology: 'triangle-strip';
       indexFormat: 'uint32';
       renderState: {

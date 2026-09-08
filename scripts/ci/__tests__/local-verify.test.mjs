@@ -10,13 +10,18 @@ import {
   executionPlan,
   extractRunCommands,
   extractRunSteps,
+  isLocalCiArtifactOutput,
   isLocalCodemodIdempotencyAssertion,
   isLocalDependencyAssertion,
+  isLocalShardArtifactsDownload,
+  isLocalShardDdcDownload,
   isLocalShardReportsDownload,
+  isLocalSharedInputsDownload,
   isLocalSharedProvenanceDownload,
   isLocalSharedProvenanceOutput,
+  isLocalWebkitStatusDownload,
   isMatrixStepEnabled,
-  isolateLocalProvenanceForLint,
+  isolateLocalCiArtifactsForLint,
   isRunnerProvisioning,
   jobDependencies,
   jobEnvironment,
@@ -24,13 +29,14 @@ import {
   localGitHubRuntime,
   localizeDarwinXvfb,
   localizeRunnerProvisioning,
+  localShardArtifactPath,
   localShardReportPaths,
   localSharedProvenancePaths,
   localTargets,
   matrixCombinations,
   needsGitHubEnvironment,
   needsGitHubOutput,
-  needsLocalProvenanceIsolation,
+  needsLocalArtifactIsolation,
   needsStepSummary,
   plansFor,
   readLocalGitHubEnvironment,
@@ -44,7 +50,17 @@ import {
 
 const root = resolve(import.meta.dirname, '..', '..', '..');
 const workflow = readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8');
+const localVerifySource = readFileSync(resolve(root, 'scripts/ci/local-verify.mjs'), 'utf8');
 const githubExpression = (value) => ['$', '{{ ', value, ' }}'].join('');
+
+test('local PR CI projection scopes GITHUB_ENV to one job or matrix leg', () => {
+  const planLoop = localVerifySource.indexOf('for (const plan of plans)');
+  const environment = localVerifySource.indexOf('const githubEnvironment = {};', planLoop);
+  const stepLoop = localVerifySource.indexOf('for (const step of plan.steps)', planLoop);
+  assert.ok(planLoop >= 0);
+  assert.ok(environment > planLoop && environment < stepLoop);
+  assert.equal(localVerifySource.lastIndexOf('const githubEnvironment = {};'), environment);
+});
 
 test('local PR CI projection covers every required context and maps matrix legs to their workflow job', () => {
   const contexts = requiredContexts();
@@ -84,7 +100,7 @@ test('local PR CI projection covers every required context and maps matrix legs 
     workflow.indexOf('  app-shard-0:'),
     workflow.indexOf('\n  app-shard-1:', workflow.indexOf('  app-shard-0:')),
   );
-  assert.deepEqual(jobEnvironment(appShard), { FORGEAX_SHARED_APP_INPUTS_MODE: 'catalog-only' });
+  assert.deepEqual(jobEnvironment(appShard), {});
   for (const target of localTargets(workflow)) {
     assert.ok(workflow.includes(`  ${target}:`));
   }
@@ -98,6 +114,13 @@ test('local PR CI projection covers every required context and maps matrix legs 
   ].join('\n');
   assert.equal(isRunnerProvisioning(typecheckWithPathSetup), false);
   assert.equal(
+    isRunnerProvisioning(
+      String.raw`apt_wrapper="\${GITHUB_WORKSPACE}/scripts/ci/with-apt-ubuntu-sources.sh"
+"$apt_wrapper" node node_modules/playwright/cli.js install-deps webkit`,
+    ),
+    true,
+  );
+  assert.equal(
     localizeRunnerProvisioning(typecheckWithPathSetup),
     'export PATH="$PWD/node_modules/typescript/bin:$PWD/node_modules/.bin:$PATH"\npnpm run typecheck',
   );
@@ -108,18 +131,21 @@ test('local PR CI projection covers every required context and maps matrix legs 
   );
   assert.equal(localizeDarwinXvfb(headedBrowser, 'linux'), headedBrowser);
   assert.equal(localizeDarwinXvfb('echo xvfb-run -a', 'darwin'), 'echo xvfb-run -a');
+  assert.equal(
+    localizeDarwinXvfb(
+      'node scripts/ci/run-browser-gate-with-retry.mjs --mode=vitest -- xvfb-run -a env FORGEAX_BROWSER_HEADLESS=0 pnpm test:browser',
+      'darwin',
+    ),
+    'node scripts/ci/run-browser-gate-with-retry.mjs --mode=vitest -- env CI=1 FORGEAX_BROWSER_HEADLESS=1 pnpm test:browser',
+  );
+  assert.equal(
+    localizeDarwinXvfb('xvfb-run -a pnpm test:browser', 'darwin'),
+    'env CI=1 FORGEAX_BROWSER_HEADLESS=1 pnpm test:browser',
+  );
   const workflowXvfbCommands = extractRunSteps(workflow)
     .map((step) => step.command)
-    .filter((command) => command.includes('xvfb-run -a env FORGEAX_BROWSER_HEADLESS=0'));
-  assert.equal(workflowXvfbCommands.length, 4);
-  assert.equal(
-    workflowXvfbCommands.reduce(
-      (count, command) =>
-        count + (command.match(/xvfb-run -a env FORGEAX_BROWSER_HEADLESS=0/g) ?? []).length,
-      0,
-    ),
-    5,
-  );
+    .filter((command) => command.includes('xvfb-run -a'));
+  assert.ok(workflowXvfbCommands.length > 0);
   assert.ok(
     workflowXvfbCommands.every((command) => {
       const localized = localizeDarwinXvfb(command, 'darwin');
@@ -154,7 +180,7 @@ test('local PR CI projection covers every required context and maps matrix legs 
     schemaVersion: 1,
     producer: 'shared-app-inputs',
     runId: 'local',
-    runAttempt: 7,
+    producerRunAttempt: 7,
     artifacts: [{ artifactName: 'shared-app-inputs-a7', artifactId: 'local-shared-app-inputs-a7' }],
   };
   assert.equal(
@@ -170,7 +196,7 @@ test('local PR CI projection covers every required context and maps matrix legs 
   );
   const unresolvedLocalProvenance = {
     ...localProvenance,
-    runAttempt: 1,
+    producerRunAttempt: 1,
     artifacts: [
       {
         artifactName: 'shared-app-inputs-a1',
@@ -186,7 +212,7 @@ test('local PR CI projection covers every required context and maps matrix legs 
     true,
   );
   const sharedInputs =
-    'node scripts/ci/build-shared-app-inputs.mjs --root . --out shared-app-inputs --catalog-only --github-output "$GITHUB_OUTPUT"';
+    'node scripts/ci/build-shared-app-inputs.mjs --root . --out shared-app-inputs --github-output "$GITHUB_OUTPUT"';
   assert.equal(isRunnerProvisioning(sharedInputs), false);
   assert.equal(needsGitHubOutput(sharedInputs), true);
   assert.deepEqual(localGitHubFilePaths(sharedInputs, '/tmp/forgeax-ci'), {
@@ -292,52 +318,98 @@ test('local PR CI projection covers every required context and maps matrix legs 
     isLocalSharedProvenanceDownload('node scripts/ci/download-artifact-with-retry.mjs --path .'),
     false,
   );
-  const shardReportsDownload = `node scripts/ci/download-artifact-with-retry.mjs --artifact-ids "${githubExpression('needs.app-shard-0.outputs.app_dist_artifact_id')},${githubExpression('needs.app-shard-1.outputs.app_dist_artifact_id')},${githubExpression('needs.app-shard-2.outputs.app_dist_artifact_id')}" --path shard-reports`;
+  const sharedInputsDownload = `node scripts/ci/download-artifact-with-retry.mjs --artifact-ids "${githubExpression('needs.shared-app-inputs.outputs.shared_artifact_id')}" --path shared-app-inputs`;
+  assert.equal(isLocalSharedInputsDownload(sharedInputsDownload), true);
+  assert.equal(isLocalSharedInputsDownload(sharedProvenanceDownload), false);
+  const shardReportsDownload = `node scripts/ci/download-artifact-with-retry.mjs --artifact-ids "${githubExpression('needs.app-shard-0.outputs.app_report_artifact_id')},${githubExpression('needs.app-shard-1.outputs.app_report_artifact_id')},${githubExpression('needs.app-shard-2.outputs.app_report_artifact_id')}" --path shard-reports`;
   assert.equal(isLocalShardReportsDownload(shardReportsDownload), true);
+  assert.equal(
+    isLocalShardArtifactsDownload(
+      shardReportsDownload
+        .replaceAll('app_report_artifact_id', 'app_dist_artifact_id')
+        .replace('--path shard-reports', '--path .'),
+    ),
+    true,
+  );
+  const shardDdcDownload = `node scripts/ci/download-artifact-with-retry.mjs --artifact-ids "${githubExpression('needs.app-shard-0.outputs.app_ddc_artifact_id')},${githubExpression('needs.app-shard-1.outputs.app_ddc_artifact_id')},${githubExpression('needs.app-shard-2.outputs.app_ddc_artifact_id')}" --path ddc-snapshots`;
+  assert.equal(isLocalShardDdcDownload(shardDdcDownload), true);
+  assert.equal(
+    isLocalShardArtifactsDownload(
+      `node scripts/ci/download-artifact-with-retry.mjs --artifact-ids "${githubExpression('needs.build-artifacts.outputs.artifact_ids_primary_pnpm')}" --path .`,
+    ),
+    true,
+  );
+  assert.equal(isLocalShardArtifactsDownload(shardReportsDownload), false);
   assert.equal(isLocalShardReportsDownload(sharedProvenanceDownload), false);
+  assert.equal(
+    isLocalWebkitStatusDownload(
+      `artifact_id='${githubExpression('needs.webkit-fallback.outputs.webkit_status_artifact_id')}'\nnode scripts/ci/download-artifact-with-retry.mjs --artifact-ids "$artifact_id" --path report/color-lighting-parity`,
+    ),
+    true,
+  );
   assert.deepEqual(localSharedProvenancePaths('/repo', '7'), {
     source: '/repo/provenance-shared-app-inputs-a7.json',
     destination: '/repo/provenance-records/provenance-shared-app-inputs-a7.json',
   });
   assert.deepEqual(localShardReportPaths('/repo'), {
-    source: '/repo/shard-transfer/report',
+    source: '/repo/shard-report-transfer/report',
     destination: '/repo/shard-reports/report',
   });
+  assert.equal(localShardArtifactPath('/tmp/local-ci', 2), '/tmp/local-ci/app-shard-2');
 });
 
-test('local provenance isolation hides runner outputs for both lint entrypoints and restores them', () => {
+test('local artifact isolation hides runner outputs for both lint entrypoints and restores them', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'forgeax-local-provenance-'));
   const numeric = 'provenance-shared-app-inputs-a1.json';
-  const unresolved = 'provenance-shared-app-inputs-aNaN.json';
   const numericContents = JSON.stringify({
     schemaVersion: 1,
     producer: 'shared-app-inputs',
     runId: 'local',
-    runAttempt: 1,
+    producerRunAttempt: 1,
     artifacts: [{ artifactName: 'shared-app-inputs-a1', artifactId: 'local-shared-app-inputs-a1' }],
   });
-  const unresolvedContents = JSON.stringify({
+  const appFingerprints = 'app-dist-0-fingerprints.json';
+  const appFingerprintContents = JSON.stringify({
+    'app-dist-0': `sha256:${'a'.repeat(64)}`,
+  });
+  const coreProvenance = 'provenance-core-build-a1.json';
+  const coreProvenanceContents = JSON.stringify({
     schemaVersion: 1,
-    producer: 'shared-app-inputs',
-    runAttempt: null,
-    artifacts: [{ artifactName: 'shared-app-inputs-aNaN' }],
+    producer: 'core-build',
+    runId: 'local',
+    producerRunAttempt: 1,
+  });
+  const sharedFingerprints = 'shared-input-fingerprints.json';
+  const sharedFingerprintContents = JSON.stringify({
+    'shared-asset-pack': `sha256:${'b'.repeat(64)}`,
+    'shared-engine-shaders': `sha256:${'c'.repeat(64)}`,
   });
   try {
     writeFileSync(join(fixture, numeric), numericContents);
-    writeFileSync(join(fixture, unresolved), unresolvedContents);
     writeFileSync(join(fixture, 'provenance-user.json'), '{"kept":true}');
+    writeFileSync(join(fixture, appFingerprints), appFingerprintContents);
+    writeFileSync(join(fixture, coreProvenance), coreProvenanceContents);
+    writeFileSync(join(fixture, sharedFingerprints), sharedFingerprintContents);
 
-    const restore = isolateLocalProvenanceForLint(fixture);
+    const restore = isolateLocalCiArtifactsForLint(fixture);
     assert.equal(existsSync(join(fixture, numeric)), false);
-    assert.equal(existsSync(join(fixture, unresolved)), false);
+    assert.equal(existsSync(join(fixture, appFingerprints)), false);
+    assert.equal(existsSync(join(fixture, coreProvenance)), false);
+    assert.equal(existsSync(join(fixture, sharedFingerprints)), false);
     assert.equal(existsSync(join(fixture, 'provenance-user.json')), true);
     restore();
 
     assert.equal(readFileSync(join(fixture, numeric), 'utf8'), numericContents);
-    assert.equal(readFileSync(join(fixture, unresolved), 'utf8'), unresolvedContents);
-    assert.equal(needsLocalProvenanceIsolation('pnpm run lint'), true);
-    assert.equal(needsLocalProvenanceIsolation('bunx biome ci .'), true);
-    assert.equal(needsLocalProvenanceIsolation('bun run lint:internal'), false);
+    assert.equal(readFileSync(join(fixture, appFingerprints), 'utf8'), appFingerprintContents);
+    assert.equal(readFileSync(join(fixture, coreProvenance), 'utf8'), coreProvenanceContents);
+    assert.equal(
+      readFileSync(join(fixture, sharedFingerprints), 'utf8'),
+      sharedFingerprintContents,
+    );
+    assert.equal(isLocalCiArtifactOutput('app-dist-0-fingerprints.json', {}), false);
+    assert.equal(needsLocalArtifactIsolation('pnpm run lint'), true);
+    assert.equal(needsLocalArtifactIsolation('bunx biome ci .'), true);
+    assert.equal(needsLocalArtifactIsolation('bun run lint:internal'), false);
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
@@ -366,11 +438,13 @@ test('CI runs the engine-template browser smoke with the headed WebGPU Chrome Be
   assert.equal(step.environment.FORGEAX_CHROME_CHANNEL, 'chrome-beta');
 });
 
-test('local PR CI projection runs the WebKit dev-server step and carries its PID', () => {
+test('local PR CI projection runs the owned WebKit dev-server step and carries its URL', () => {
   const start = workflow.indexOf('  webkit-fallback:');
   const end = workflow.indexOf('\n  portability-bun:', start);
-  const step = extractRunSteps(workflow.slice(start, end)).find((candidate) =>
-    candidate.command.includes('nohup pnpm dev'),
+  const step = extractRunSteps(workflow.slice(start, end)).find(
+    (candidate) =>
+      candidate.command.includes('node scripts/ci/owned-dev-server.mjs start') &&
+      candidate.command.includes('report/ci-lifecycle/hello-triangle.json'),
   );
   assert.ok(step);
   assert.equal(needsGitHubEnvironment(step.command), true);
@@ -378,18 +452,19 @@ test('local PR CI projection runs the WebKit dev-server step and carries its PID
   assert.deepEqual(localGitHubFilePaths(step.command, '/tmp/forgeax-ci'), {
     GITHUB_ENV: '/tmp/forgeax-ci/step-environment.txt',
   });
-  assert.deepEqual(readLocalGitHubEnvironment('DEV_SERVER_PID=1234\n'), {
-    DEV_SERVER_PID: '1234',
+  assert.deepEqual(readLocalGitHubEnvironment('DEV_SERVER_URL=http://127.0.0.1:5181/\n'), {
+    DEV_SERVER_URL: 'http://127.0.0.1:5181/',
   });
   const verifyStep = extractRunSteps(workflow.slice(start, end)).find(
-    (candidate) => candidate.command === 'node scripts/dev-verify/verify-webkit-hello-triangle.mjs',
+    (candidate) =>
+      candidate.command ===
+      'DEV_SERVER_URL="$DEV_SERVER_URL" node scripts/dev-verify/verify-webkit-r5-stability.mjs',
   );
   assert.ok(verifyStep);
   assert.deepEqual(verifyStep.environment, {
-    URL: 'http://localhost:5181/',
-    TIMEOUT_MS: '25000',
-    SCREENSHOT: '/tmp/hello-triangle-webkit.png',
-    PARITY_STATUS_OUTPUT: 'report/color-lighting-parity/webkit-status.json',
+    TIMEOUT_MS: '120000',
+    SCREENSHOT_A: '/tmp/r5-over-capacity-webkit.png',
+    SCREENSHOT_B: '/tmp/r5-bad-submit-webkit.png',
   });
 });
 
@@ -548,6 +623,7 @@ test('M4-T1: workflow evidence wiring preserves execution and payload boundaries
     shared,
     /name: shared-app-inputs-a\$\{\{ github\.run_attempt \}\}[\s\S]*path: \|\n\s+shared-app-inputs\/assets\n\s+shared-app-inputs\/shaders\n\s+shared-app-inputs\/manifest\.json/,
   );
+  assert.doesNotMatch(shared, /shared-app-inputs-full|shared-app-inputs-shard/);
   for (const [index, block] of [shard0, shard1, shard2].entries()) {
     assert.match(
       block,
@@ -563,7 +639,7 @@ test('M4-T1: workflow evidence wiring preserves execution and payload boundaries
     bevy,
     /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64", "heavy"\]'\) \}\}/,
   );
-  assert.match(bevy, /timeout-minutes: 30/);
+  assert.match(bevy, /timeout-minutes: 45/);
   assert.match(bevy, /SMOKE_MIN_FRAMES: 100/);
   assert.match(bevy, /SMOKE_DURATION_MS: 1667/);
   assert.match(

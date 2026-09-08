@@ -1,4 +1,4 @@
-import { World } from '@forgeax/engine-ecs';
+import { createWorldContext, World } from '@forgeax/engine-ecs';
 import {
   createMemoryEndpointPair,
   createReplicaCoordinator,
@@ -9,23 +9,47 @@ import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 import { gridToWorldPosition, registerReplicaDerivation } from '../client';
+import clientSource from '../client.ts?raw';
 import { createServerWorld } from '../server';
+import serverSource from '../server.ts?raw';
 import { encodeCommand } from '../shared/commands';
 import { GridPosition, Snake, SnakeSegment, snakeProfile } from '../shared/components';
 
 describe('Snake replica write contract', () => {
+  it('uses NetSession snapshots and SessionId rather than transport identity for consumers', () => {
+    expect(clientSource).toContain('getRecoverySnapshot');
+    expect(clientSource).toContain('SessionId');
+    expect(clientSource).toContain('sendToAuthority');
+    expect(clientSource).toContain('ownedResources');
+    expect(clientSource).not.toContain('endpoint.send(1 as PeerId');
+    expect(clientSource).not.toContain('installKeyboardInput(endpoint');
+    expect(serverSource).toContain('getRecoverySnapshot');
+    expect(serverSource).toContain('SessionId');
+    expect(serverSource).not.toContain('Map<number, SnakeEntities>');
+  });
+
+  it('branches every public lifecycle and structured failure outcome', () => {
+    expect(clientSource).toContain("case 'connecting'");
+    expect(clientSource).toContain("case 'resyncing'");
+    expect(clientSource).toContain("case 'active'");
+    expect(clientSource).toContain("case 'recovering'");
+    expect(clientSource).toContain("case 'failed'");
+    expect(clientSource).toContain("case 'retired'");
+    expect(clientSource).toContain('lastError');
+    expect(clientSource).toContain('ownedResources');
+  });
+
   it('maps grid up to visual up', () => {
     expect(gridToWorldPosition(12, 8)).toEqual([0, 0, 0]);
     expect(gridToWorldPosition(12, 7)).toEqual([0, 1, 0]);
     expect(gridToWorldPosition(12, 9)).toEqual([0, -1, 0]);
   });
 
-  it('applies a real batch then derives only local render components', () => {
+  it('applies a real batch then derives only local render components', async () => {
     const [authorityEndpoint, replicaEndpoint] = createMemoryEndpointPair();
-    const authority = createServerWorld(authorityEndpoint);
+    const authority = await createServerWorld(authorityEndpoint);
     const world = new World();
-    const built = netPlugin({ endpoint: replicaEndpoint }).build(world);
-    if (built instanceof Promise || !built.ok) throw new Error('replica plugin failed');
+    await createWorldContext(world, [netPlugin({ endpoint: replicaEndpoint })]);
     const replica = createReplicaCoordinator(world, snakeProfile, replicaEndpoint);
     world.getResource<NetSession>('net-session').attachReplica(replica, snakeProfile.limits);
     const stateTarget = { dataset: {}, textContent: '' } as unknown as HTMLElement;
@@ -79,12 +103,11 @@ describe('Snake replica write contract', () => {
     expect(countRenderEntities(world)).toBe(0);
   });
 
-  it('projects stable player identity separately from the network incarnation id', () => {
+  it('projects stable player identity separately from the network incarnation id', async () => {
     const [authorityEndpoint, replicaEndpoint] = createMemoryEndpointPair();
-    const authority = createServerWorld(authorityEndpoint);
+    const authority = await createServerWorld(authorityEndpoint);
     const world = new World();
-    const built = netPlugin({ endpoint: replicaEndpoint }).build(world);
-    if (built instanceof Promise || !built.ok) throw new Error('replica plugin failed');
+    await createWorldContext(world, [netPlugin({ endpoint: replicaEndpoint })]);
     const replica = createReplicaCoordinator(world, snakeProfile, replicaEndpoint);
     world.getResource<NetSession>('net-session').attachReplica(replica, snakeProfile.limits);
     sendJoin(replicaEndpoint);

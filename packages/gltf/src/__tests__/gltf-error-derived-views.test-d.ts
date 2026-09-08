@@ -4,6 +4,8 @@ import {
   type GltfAnimationCubicsplineUnsupportedDetail,
   type GltfAnimationTargetInvalidDetail,
   type GltfBufferOutOfBoundsDetail,
+  type GltfColorAccessorMalformedDetail,
+  type GltfColorAccessorUnsupportedDetail,
   type GltfError,
   type GltfErrorCode,
   type GltfErrorDetail,
@@ -12,7 +14,11 @@ import {
   type GltfImageMimeUnsupportedDetail,
   type GltfInstancingCountMismatchDetail,
   type GltfMalformedHeaderDetail,
+  type GltfMeshBridgeInvalidDetail,
+  type GltfMeshoptDecodeFailedDetail,
+  type GltfMeshoptDecoderRequiredDetail,
   type GltfMetaMissingDetail,
+  type GltfMorphInvalidDetail,
   type GltfMorphUnsupportedDetail,
   type GltfSkinAttrAsymmetricDetail,
   type GltfSkinJointCountExceededDetail,
@@ -39,6 +45,12 @@ type ExpectedDetails = {
   readonly 'gltf-image-extract-failed': GltfImageExtractFailedDetail;
   readonly 'gltf-skin-attr-asymmetric': GltfSkinAttrAsymmetricDetail;
   readonly 'gltf-animation-target-invalid': GltfAnimationTargetInvalidDetail;
+  readonly 'gltf-meshopt-decoder-required': GltfMeshoptDecoderRequiredDetail;
+  readonly 'gltf-meshopt-decode-failed': GltfMeshoptDecodeFailedDetail;
+  readonly 'gltf-morph-invalid': GltfMorphInvalidDetail;
+  readonly 'gltf-color-accessor-unsupported': GltfColorAccessorUnsupportedDetail;
+  readonly 'gltf-color-accessor-malformed': GltfColorAccessorMalformedDetail;
+  readonly 'gltf-mesh-bridge-invalid': GltfMeshBridgeInvalidDetail;
 };
 
 type ExpectedCodes = keyof ExpectedDetails;
@@ -85,12 +97,24 @@ function exhaustive(error: GltfError): string {
       return `${error.detail.meshIndex}:${error.detail.primitiveIndex}`;
     case 'gltf-animation-target-invalid':
       return error.detail.reason;
+    case 'gltf-meshopt-decoder-required':
+      return `${error.detail.bufferView}:${error.detail.actual}`;
+    case 'gltf-meshopt-decode-failed':
+      return `${error.detail.bufferView}:${error.detail.mode}`;
+    case 'gltf-morph-invalid':
+      return `${error.detail.meshIndex}:${error.detail.primitiveIndex}:${error.detail.reason}`;
+    case 'gltf-color-accessor-unsupported':
+      return `${error.detail.semantic}:${error.detail.accessorIndex}:${error.detail.reason}`;
+    case 'gltf-color-accessor-malformed':
+      return `${error.detail.semantic}:${error.detail.accessorIndex}:${error.detail.reason}`;
+    case 'gltf-mesh-bridge-invalid':
+      return error.detail.reason;
   }
   return error;
 }
 
 describe('GltfError derived public views', () => {
-  it('keeps the exact sixteen-code vocabulary and correlated union', () => {
+  it('keeps the exact twenty-two-code vocabulary and correlated union', () => {
     expectTypeOf<GltfErrorCode>().toEqualTypeOf<ExpectedCodes>();
     expectTypeOf<GltfError>().toEqualTypeOf<ExpectedError>();
     expectTypeOf<GltfErrorCode>().toEqualTypeOf<GltfError['code']>();

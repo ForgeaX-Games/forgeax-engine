@@ -1,8 +1,11 @@
 import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { imageImporter } from '@forgeax/engine-image/image-importer';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
+import { optionalAssetPack } from '../../shared/src/optional-asset-pack.js';
 
 // hello-sprite vite config (feat-20260520-2d-sprite-layer-mvp / M-4 / w28).
 //
@@ -10,7 +13,7 @@ import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 //   - forgeaxShader -- compile sprite.wgsl + tonemap.wgsl + pbr.wgsl +
 //     unlit.wgsl into the engine shader manifest (build-time naga_oil
 //     composer ; same registration path as every other demo).
-//   - pluginPack    -- emit /pack-index.json (dev configureServer +
+//   - pluginPack    -- emit a scoped dev catalog (and /pack-index.json for
 //     build generateBundle) so AssetRegistry.loadByGuid<TextureAsset>()
 //     resolves the wood-container handle uniformly across dev / prod.
 //
@@ -25,11 +28,15 @@ import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
 const demoAssets = resolve(monorepoRoot, 'forgeax-engine-assets', 'demo-assets', 'hello-sprite');
+const assetRoots = [demoAssets];
+const runtimeBinding = createStandaloneRuntimeAssetBinding('hello-sprite');
 
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
-    pluginPack({ roots: [demoAssets] , refresh: reloadAssetHost() }),
+    ...optionalAssetPack(assetRoots, () =>
+      pluginPack({ runtimeBinding, roots: assetRoots, importers: [imageImporter], refresh: reloadAssetHost() }),
+    ),
   ],
   server: {
     port: 5193,

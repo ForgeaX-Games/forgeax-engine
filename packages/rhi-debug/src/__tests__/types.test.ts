@@ -1,8 +1,8 @@
-// Unit — RhiCallEvent + Tape + InspectReport + RhiCapsRecorded type validation.
+// Unit — RhiCallEvent + Tape + work inspection type validation.
 //
 // Verifies that ~5 RhiCallEvent kinds can be constructed at the type level,
 // that they are JSON-serializable (no native GPU objects in the shape),
-// and that Tape / InspectReport / RhiCapsRecorded types compile.
+// and that Tape / work inspection / RhiCapsRecorded types compile.
 
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type {
@@ -80,7 +80,7 @@ describe('RhiCallEvent — closed union constructibility', () => {
       firstVertex: 0,
       firstInstance: 0,
     };
-    const drawIdx: RhiCallEventDrawIndexed = {
+    const indexedDraw: RhiCallEventDrawIndexed = {
       kind: 'drawIndexed',
       passHandleId: 'pass:1',
       indexCount: 36,
@@ -91,7 +91,7 @@ describe('RhiCallEvent — closed union constructibility', () => {
     };
     expectTypeOf(setP).toMatchTypeOf<RhiCallEvent>();
     expectTypeOf(draw).toMatchTypeOf<RhiCallEvent>();
-    expectTypeOf(drawIdx).toMatchTypeOf<RhiCallEvent>();
+    expectTypeOf(indexedDraw).toMatchTypeOf<RhiCallEvent>();
   });
 
   it('setBindGroup event shape', () => {
@@ -198,7 +198,7 @@ describe('InspectReport — constructibility', () => {
   it('full report without rt compiles', () => {
     const report: InspectReport = {
       frameIdx: 0,
-      drawIdx: 5,
+      workIndex: 5,
       passIdx: 0,
       bindings: [],
       drawCall: {
@@ -208,14 +208,14 @@ describe('InspectReport — constructibility', () => {
     };
     expectTypeOf(report).toMatchTypeOf<InspectReport>();
     expect(report.frameIdx).toBe(0);
-    expect(report.drawIdx).toBe(5);
+    expect(report.workIndex).toBe(5);
     expect(report.rt).toBeUndefined();
   });
 
   it('report with rt path as string (not base64)', () => {
     const report: InspectReport = {
       frameIdx: 0,
-      drawIdx: 42,
+      workIndex: 42,
       passIdx: 1,
       bindings: [],
       drawCall: {

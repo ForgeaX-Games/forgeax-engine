@@ -1,12 +1,12 @@
 // Shared scene and time-driven atlas animation for Bevy `sprite_animation`.
 
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
-import { defineComponent, Time, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { defineComponent, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { Camera, MeshFilter, MeshRenderer, orthographic } from '@forgeax/engine-render';
 import {
   SpriteAnimation,
   SpriteRegionOverride,
-  SPRITE_PLAYBACK_MODE_LOOP,
+  SpritePlayback,
   SPRITE_PREMULTIPLIED_ALPHA_BLEND,
 } from '@forgeax/engine-render/authoring';
 import { spriteAnimationTickSystem } from '@forgeax/engine-runtime';
@@ -82,7 +82,7 @@ export function buildSpriteAnimationWorld(world: World, texture: number): void {
       { component: Transform, data: { pos: [x, 0, 0], quat: [0, 0, 0, 1], scale: [3, 3, 1] } },
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
       { component: MeshRenderer, data: { materials: [material] } },
-      { component: SpriteAnimation, data: { frameCount: FRAME_COUNT, frameDuration: duration, currentFrame: 0, accumDt: 0, regions: new Float32Array(regions), playbackMode: SPRITE_PLAYBACK_MODE_LOOP } },
+      { component: SpriteAnimation, data: { frameCount: FRAME_COUNT, frameDuration: duration, currentFrame: 0, accumDt: 0, regions: new Float32Array(regions), playbackMode: SpritePlayback.loop } },
       { component: SpriteRegionOverride, data: { region: new Float32Array([0, 0, 1 / FRAME_COUNT, 1]) } },
       { component: SpriteAnimationMarker, data: { side } },
     );
@@ -93,8 +93,7 @@ export function buildSpriteAnimationWorld(world: World, texture: number): void {
   );
 }
 
-export function tickSpriteAnimation(world: World, dt: number): void {
-  world.getResource(Time).delta = dt;
+export function tickSpriteAnimation(world: World): void {
   const result = spriteAnimationTickSystem(world);
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.hint}`);
 }

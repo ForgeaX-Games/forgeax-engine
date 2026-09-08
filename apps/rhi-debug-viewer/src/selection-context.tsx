@@ -1,40 +1,35 @@
-// selection-context.tsx — React Context for shared selection state (w22).
-//
-// Lightweight React Context (not zustand, per charter P4 dependency count control).
-// Drives all four panel components: selectedDrawIdx or selectedCommandIdx
-// determines what panels 2/3/4 display.
-//
-// When selectedDrawIdx is set (>= 0):
-//   - PipelineState shows the draw's pipeline state (7 stages).
-//   - TextureViewer shows the draw's attachments (color RTs + depth + bound).
-//   - ResourceInspector highlights resources referenced by the draw.
-//
-// When selectedCommandIdx is set (non-draw command selected, AC-26):
-//   - PipelineState shows default text (no pipeline state for non-draw command).
-//   - TextureViewer shows default text (no texture state for non-draw command).
-//   - ResourceInspector still shows src/dst resource handles.
-//
-// Related: requirements AC-25/AC-26; plan-strategy D-5.
-
+import type { ReadbackSubresource } from '@forgeax/engine-rhi-debug';
 import type { ReactNode } from 'react';
 import { createContext, useContext, useMemo, useState } from 'react';
 
 export interface SelectionState {
-  /** Selected draw index (-1 = none). */
-  readonly selectedDrawIdx: number;
-  /** Selected command index (-1 = none). */
-  readonly selectedCommandIdx: number;
-  /** Set the selected draw index (clears selectedCommandIdx). */
-  setSelectedDrawIdx: (idx: number) => void;
-  /** Set the selected command index (clears selectedDrawIdx, for non-draw commands). */
-  setSelectedCommandIdx: (idx: number) => void;
+  readonly selectedWorkIndex: number;
+  readonly selectedCommandIndex: number;
+  readonly selectedEventIndex: number;
+  readonly selectedPassIndex: number;
+  readonly selectedResourceId: string | null;
+  readonly selectedSubresource: ReadbackSubresource | null;
+  setSelectedWorkIndex: (index: number) => void;
+  setSelectedCommandIndex: (index: number) => void;
+  selectWork: (workIndex: number, eventIndex?: number, passIndex?: number) => void;
+  selectCommand: (eventIndex: number, passIndex?: number, workIndex?: number) => void;
+  selectResource: (resourceId: string, subresource?: ReadbackSubresource) => void;
+  clearSelection: () => void;
 }
 
 export const SelectionContext = createContext<SelectionState>({
-  selectedDrawIdx: -1,
-  selectedCommandIdx: -1,
-  setSelectedDrawIdx: () => {},
-  setSelectedCommandIdx: () => {},
+  selectedWorkIndex: -1,
+  selectedCommandIndex: -1,
+  selectedEventIndex: -1,
+  selectedPassIndex: -1,
+  selectedResourceId: null,
+  selectedSubresource: null,
+  setSelectedWorkIndex: () => {},
+  setSelectedCommandIndex: () => {},
+  selectWork: () => {},
+  selectCommand: () => {},
+  selectResource: () => {},
+  clearSelection: () => {},
 });
 
 export function useSelection(): SelectionState {
@@ -42,24 +37,70 @@ export function useSelection(): SelectionState {
 }
 
 export function SelectionProvider({ children }: { readonly children: ReactNode }) {
-  const [selectedDrawIdx, setSelectedDrawIdxRaw] = useState(-1);
-  const [selectedCommandIdx, setSelectedCommandIdxRaw] = useState(-1);
-
-  const value: SelectionState = useMemo(
+  const [selectedWorkIndex, setSelectedWorkIndexRaw] = useState(-1);
+  const [selectedCommandIndex, setSelectedCommandIndexRaw] = useState(-1);
+  const [selectedEventIndex, setSelectedEventIndex] = useState(-1);
+  const [selectedPassIndex, setSelectedPassIndex] = useState(-1);
+  const [selectedResourceId, setSelectedResourceId] = useState<string | null>(null);
+  const [selectedSubresource, setSelectedSubresource] = useState<ReadbackSubresource | null>(null);
+  const value = useMemo<SelectionState>(
     () => ({
-      selectedDrawIdx,
-      selectedCommandIdx,
-      setSelectedDrawIdx: (idx: number) => {
-        setSelectedDrawIdxRaw(idx);
-        setSelectedCommandIdxRaw(-1);
+      selectedWorkIndex,
+      selectedCommandIndex,
+      selectedEventIndex,
+      selectedPassIndex,
+      selectedResourceId,
+      selectedSubresource,
+      setSelectedWorkIndex: (index) => {
+        setSelectedWorkIndexRaw(index);
+        setSelectedCommandIndexRaw(-1);
+        setSelectedResourceId(null);
+        setSelectedSubresource(null);
       },
-      setSelectedCommandIdx: (idx: number) => {
-        setSelectedCommandIdxRaw(idx);
-        setSelectedDrawIdxRaw(-1);
+      setSelectedCommandIndex: (index) => {
+        setSelectedCommandIndexRaw(index);
+        setSelectedEventIndex(index);
+        setSelectedWorkIndexRaw(-1);
+        setSelectedResourceId(null);
+        setSelectedSubresource(null);
+      },
+      selectWork: (workIndex, eventIndex = -1, passIndex = -1) => {
+        setSelectedWorkIndexRaw(workIndex);
+        setSelectedCommandIndexRaw(-1);
+        setSelectedEventIndex(eventIndex);
+        setSelectedPassIndex(passIndex);
+        setSelectedResourceId(null);
+        setSelectedSubresource(null);
+      },
+      selectCommand: (eventIndex, passIndex = -1, workIndex = -1) => {
+        setSelectedCommandIndexRaw(eventIndex);
+        setSelectedEventIndex(eventIndex);
+        setSelectedPassIndex(passIndex);
+        setSelectedWorkIndexRaw(workIndex);
+        setSelectedResourceId(null);
+        setSelectedSubresource(null);
+      },
+      selectResource: (resourceId, subresource) => {
+        setSelectedResourceId(resourceId);
+        setSelectedSubresource(subresource ?? null);
+      },
+      clearSelection: () => {
+        setSelectedWorkIndexRaw(-1);
+        setSelectedCommandIndexRaw(-1);
+        setSelectedEventIndex(-1);
+        setSelectedPassIndex(-1);
+        setSelectedResourceId(null);
+        setSelectedSubresource(null);
       },
     }),
-    [selectedDrawIdx, selectedCommandIdx],
+    [
+      selectedCommandIndex,
+      selectedEventIndex,
+      selectedPassIndex,
+      selectedResourceId,
+      selectedSubresource,
+      selectedWorkIndex,
+    ],
   );
-
   return <SelectionContext.Provider value={value}>{children}</SelectionContext.Provider>;
 }

@@ -15,6 +15,7 @@
 
 import type { EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
 import { defineSystem } from '@forgeax/engine-ecs';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import type { Mat4Like, Vec3 } from '@forgeax/engine-math';
 import { mat4, quat, vec3 } from '@forgeax/engine-math';
 import type { PhysicsWorld } from '@forgeax/engine-physics';
@@ -126,12 +127,6 @@ export function integrateVertical(state: VerticalState, params: VerticalParams):
   return v;
 }
 
-// App surface the system closure needs: per-frame input snapshot + the World.
-interface MoveSystemApp {
-  readonly renderer: { input: { snapshot(world: World): KeyboardLike | undefined } };
-  readonly world: World;
-}
-
 /**
  * One-way movement signal produced by player-move and consumed by player-anim.
  *
@@ -162,7 +157,6 @@ export function createPlayerMoveSignal(): PlayerMoveSignal {
  * idiom of closing over known entity handles rather than re-querying).
  */
 export function createMoveSystem(
-  app: MoveSystemApp,
   player: EntityHandle,
   camera: EntityHandle,
   signal: PlayerMoveSignal,
@@ -189,7 +183,7 @@ export function createMoveSystem(
       if (!pw.hasBody(player)) return;
 
       const dt = readDt(world);
-      const snap = app.renderer.input.snapshot(world);
+      const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       const intent = snap ? planarIntent(snap) : { dx: 0, dz: 0 };
 
       // Rotate the planar intent into the camera's world XZ basis so W always

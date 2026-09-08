@@ -1,9 +1,9 @@
 // feat-20260623-world-space-video-asset M4 / w15 — DynamicTextureStore unit.
 //
 // D-3 / AC-08: the transient video texture path is fully independent of
-// GpuResourceStore.ensureResident (the static "upload once / cache forever"
+// GpuResidencyCache.ensureResident (the static "upload once / cache forever"
 // cache). This test pins the three load-bearing properties:
-//   1. isolation — the module does NOT import GpuResourceStore (source scan).
+//   1. isolation — the module does NOT import GpuResidencyCache (source scan).
 //   2. allocate-once — a steady-size clip creates exactly one GPU texture; each
 //      subsequent frame is a copyExternalImageToTexture write, not a new create.
 //   3. resize-on-change — a dimension change destroys the old texture and
@@ -72,14 +72,14 @@ function clip(id: number): Handle<'VideoAsset', 'shared'> {
 }
 
 describe('DynamicTextureStore isolation (M4 / w15)', () => {
-  it('does NOT import GpuResourceStore (AC-08 / D-3 independence)', () => {
+  it('does NOT import GpuResidencyCache (AC-08 / D-3 independence)', () => {
     const src = readFileSync(STORE_SRC, 'utf8');
     // Scan import statements only — the file's prose comments reference the
     // store/ensureResident to explain WHY they are kept separate (D-3); the
     // load-bearing invariant is the absence of an actual import edge.
     const importLines = src.split('\n').filter((l) => /^\s*import\b/.test(l));
     for (const line of importLines) {
-      expect(line.includes('gpu-resource-store'), `unexpected import: ${line}`).toBe(false);
+      expect(line.includes('device/gpu-residency'), `unexpected import: ${line}`).toBe(false);
     }
     // No call to the static residency cache method anywhere in executable code
     // (strip comments first so the explanatory prose does not trip the gate).

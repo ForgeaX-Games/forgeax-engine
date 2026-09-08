@@ -5,7 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Declarative render-graph abstraction: resource/pass declaration + compile() + execute(). RHI-pure package (depends on @forgeax/engine-rhi + @forgeax/engine-math only; never imports @forgeax/engine-runtime).",
+  "description": "RHI-pure typed GPU work graph: resource access declaration, immutable compilation, execution, and retirement.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -27,9 +27,11 @@
   },
   "dependencies": {
     "@forgeax/engine-rhi": "workspace:*",
-    "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@webgpu/types": "^0.1.71"
+  },
+  "devDependencies": {
+    "@forgeax/engine-rhi-null": "workspace:*"
   },
   "forgeax": {
     "metrics": {

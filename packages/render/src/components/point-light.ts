@@ -25,7 +25,7 @@
 // proposition 5 (consistent abstraction: shared payload shape with
 // SpotLight; `range` semantics aligned with KHR_lights_punctual).
 
-import { defineComponent, SpawnLightInvalidBoundsError } from '@forgeax/engine-ecs';
+import { defineComponent } from '@forgeax/engine-ecs';
 
 /**
  * Omnidirectional point light (KHR_lights_punctual `point` type).
@@ -56,22 +56,10 @@ import { defineComponent, SpawnLightInvalidBoundsError } from '@forgeax/engine-e
  *   );
  *   // resolves to color=[1, 1, 1], intensity=1, range=10.0.
  */
-export const PointLight = defineComponent(
-  'PointLight',
-  {
-    // color carries an explicit layer-2 default [1,1,1] (white); the array
-    // layer-3 fallback is all-zero, so the default MUST be explicit (D-5).
-    color: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
-    intensity: { type: 'f32', default: 1 },
-    range: { type: 'f32', default: 10.0 },
-  },
-  {
-    validate: (data) => {
-      const range = data.range as number;
-      if (typeof range !== 'number' || Number.isNaN(range) || range < 0) {
-        return new SpawnLightInvalidBoundsError('PointLight', 'range', range);
-      }
-      return null;
-    },
-  },
-);
+export const PointLight = defineComponent('PointLight', {
+  // color carries an explicit layer-2 default [1,1,1] (white); the array
+  // layer-3 fallback is all-zero, so the default MUST be explicit (D-5).
+  color: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
+  intensity: { type: 'f32', default: 1 },
+  range: { type: 'f32', default: 10.0 },
+});

@@ -39,12 +39,13 @@ import { World } from '@forgeax/engine-ecs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createRenderer } from '../src/createRenderer';
+import type { Renderer } from '@forgeax/engine-render';
 
 const CHROMIUM_FORMAT_MISMATCH_WARNING = 'different format than is preferred';
 
 describe('swap-chain-format.browser - AC-01 + AC-02 integration guards', () => {
   let canvas: HTMLCanvasElement | undefined;
-  let renderer: Awaited<ReturnType<typeof createRenderer>> | undefined;
+  let renderer: Renderer | undefined;
   let warnSpy: ReturnType<typeof vi.spyOn> | undefined;
 
   beforeEach(() => {
@@ -72,14 +73,23 @@ describe('swap-chain-format.browser - AC-01 + AC-02 integration guards', () => {
       );
     }
 
-    renderer = await createRenderer(canvas, {}, {
+    const created = await createRenderer(canvas, {}, {
       shaderManifestUrl: 'data:application/json,{"entries":[]}',
     });
-    await renderer.ready;
+    if (!created.ok) throw created.error;
+    renderer = created.value;
     const world = new World();
-    expect(renderer.attachWorld(world).ok).toBe(true);
+    const attached = renderer.attach(world);
+    expect(attached.ok).toBe(true);
+    if (!attached.ok) return;
     world.update(1 / 60).unwrap();
-    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
+    expect(
+      renderer.draw({
+        leases: [attached.value],
+        camera: { lease: attached.value },
+        environment: { lease: attached.value },
+      }).ok,
+    ).toBe(true);
 
     // Inspect every recorded console.warn call: none of them should
     // contain the chromium format-mismatch substring.
@@ -106,14 +116,23 @@ describe('swap-chain-format.browser - AC-01 + AC-02 integration guards', () => {
     // Channel 2 path returns this value when storageBufferCapable=true).
     const expectedFormat = navigator.gpu.getPreferredCanvasFormat();
 
-    renderer = await createRenderer(canvas, {}, {
+    const created = await createRenderer(canvas, {}, {
       shaderManifestUrl: 'data:application/json,{"entries":[]}',
     });
-    await renderer.ready;
+    if (!created.ok) throw created.error;
+    renderer = created.value;
     const world = new World();
-    expect(renderer.attachWorld(world).ok).toBe(true);
+    const attached = renderer.attach(world);
+    expect(attached.ok).toBe(true);
+    if (!attached.ok) return;
     world.update(1 / 60).unwrap();
-    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
+    expect(
+      renderer.draw({
+        leases: [attached.value],
+        camera: { lease: attached.value },
+        environment: { lease: attached.value },
+      }).ok,
+    ).toBe(true);
 
     // The probe is set by ensureContextConfigured in createRenderer.ts after
     // the helper chooses the format and after `context.configure({...})` runs.

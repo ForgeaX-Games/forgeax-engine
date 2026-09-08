@@ -1,3 +1,4 @@
+import type { ParticleEffectAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { createVfxEffectContract } from '../effect-contract.js';
 
@@ -17,6 +18,21 @@ const reflection = {
 } as const;
 
 describe('VfxEffectContract', () => {
+  it('models the executable program on the ordinary particle asset', () => {
+    const asset: ParticleEffectAsset = {
+      kind: 'particle-effect',
+      schemaVersion: 2,
+      programFingerprint: 'sha256:program',
+      emitters: [{ id: 'sparks', capacity: 8 }],
+      program: {
+        format: 'forgeax-vfx-program-2',
+        fingerprint: 'sha256:program',
+        emitters: [],
+      },
+    };
+    expect(asset.program.fingerprint).toBe(asset.programFingerprint);
+  });
+
   it('derives defaults and packed values from the same reflection result', () => {
     const contract = createVfxEffectContract(reflection);
     const values = contract.createValues({ speed: 2.5, direction: [0, 1, 0] });

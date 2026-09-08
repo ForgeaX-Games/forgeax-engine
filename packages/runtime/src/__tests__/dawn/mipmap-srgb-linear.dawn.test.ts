@@ -22,11 +22,11 @@
 
 import { numMipLevels } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
-import { GpuResourceStore } from '@forgeax/engine-render/internal';
 import type { DecodedImage, TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { GpuResidencyCache } from '../../../../render/src/device/gpu-residency';
 
-// feat-20260601-gpu-resource-store-extraction M1: uploadTexture moved to the
+// feat-20260601-device/gpu-residency-extraction M1: uploadTexture moved to the
 // store (POD carries format + mipmap flag, decoded carries pixel bytes; D-2).
 // These cases wire no GPU device, so the upload short-circuits to ok after the
 // consistency assertion (the actual mipmap blit needs a wired + prewarmed
@@ -82,7 +82,7 @@ describe('T-M3-02 dawn mipmap chain on rgba8unorm-srgb (sRGB physics)', () => {
       bytes[i * 4 + 2] = 188;
       bytes[i * 4 + 3] = 255;
     }
-    const store = new GpuResourceStore();
+    const store = new GpuResidencyCache();
     const pod = makeTexture('rgba8unorm-srgb', 2, 2, 'srgb', true);
     const handle = world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', pod);
     const res = await store.uploadTexture(handle, pod, decoded(bytes, 2, 2, 'srgb', true));
@@ -104,7 +104,7 @@ describe('T-M3-02 dawn mipmap chain on rgba8unorm (linear physics)', () => {
       bytes[i * 4 + 2] = 128;
       bytes[i * 4 + 3] = 255;
     }
-    const store = new GpuResourceStore();
+    const store = new GpuResidencyCache();
     const pod = makeTexture('rgba8unorm', 2, 2, 'linear', true);
     const handle = world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', pod);
     const res = await store.uploadTexture(handle, pod, decoded(bytes, 2, 2, 'linear', true));
@@ -115,7 +115,7 @@ describe('T-M3-02 dawn mipmap chain on rgba8unorm (linear physics)', () => {
     expect(numMipLevels({ width: 256, height: 256 })).toBe(9);
     const world = new World();
     const bytes = new Uint8Array(256 * 256 * 4).fill(128);
-    const store = new GpuResourceStore();
+    const store = new GpuResidencyCache();
     const pod = makeTexture('rgba8unorm', 256, 256, 'linear', true);
     const handle = world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', pod);
     const res = await store.uploadTexture(handle, pod, decoded(bytes, 256, 256, 'linear', true));

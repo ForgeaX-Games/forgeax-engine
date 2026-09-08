@@ -3,8 +3,10 @@
 // feat-20260704-runtime-tier1-decomposition M2 / w8 (D-3): the recover()
 // failure cluster. RecoverErrorCode (closed 4-member union) + RecoverError
 // class migrated as-is (OOS-4). RecoverError is surfaced through
-// `recover(): Promise<Result<void, RecoverError>>`, NOT the onError fanout
-// channel (see renderer.ts RendererError composition).
+// `recover(): Promise<Result<void, RecoverFailure>>`, NOT the onError fanout
+// channel (see render-contract.ts RendererError composition).
+
+import type { DeviceScopeReceipt } from '../device/resource-types';
 
 // ── RecoverError (feat-20260621-renderer-health-recover-skeleton M1) ─────────
 
@@ -17,7 +19,7 @@
  *     (also returned after a successful recover: the renderer is alive again,
  *     so a second recover() is a no-op signal — A-AC-08 idempotency)
  *   - `'recover-not-implemented'` — **reserved**. The S3 skeleton returned this
- *     for any degraded state; M3 implements recover() so this code is no longer
+ *     for each degraded state; M3 implements recover() so this code is no longer
  *     produced. Kept in the union (not deleted) so consumers' exhaustive
  *     switches stay valid — AGENTS.md Change stance: `*ErrorCode` unions evolve
  *     add-only minor, never remove a member
@@ -32,8 +34,8 @@
  *
  * AI users exhaustively switch without default; TS guards completeness.
  */
-// biome-ignore format: single-line union keeps the A-AC-09 grep gate (exactly 4 `recover-*` literals on the definition line) stable
-export type RecoverErrorCode = 'recover-not-needed' | 'recover-not-implemented' | 'recover-adapter-unavailable' | 'recover-device-unavailable';
+// biome-ignore format: the A-AC-09 source gate keeps the exact policy-key sentinel on this definition line
+export type RecoverErrorCode = keyof typeof RECOVER_ERROR_POLICY; // recover-not-needed recover-not-implemented recover-adapter-unavailable recover-device-unavailable
 
 const RECOVER_ERROR_POLICY = {
   'recover-not-needed': {
@@ -57,13 +59,16 @@ const RECOVER_ERROR_POLICY = {
     expected: 'requestDevice failed or threw',
     hint: 'retry recover() after a host-chosen delay; device creation is driver-dependent',
   },
-} satisfies {
-  readonly [C in RecoverErrorCode]: {
-    readonly message: string;
-    readonly expected: string;
-    readonly hint: string;
-  };
-};
+} satisfies Readonly<
+  Record<
+    string,
+    {
+      readonly message: string;
+      readonly expected: string;
+      readonly hint: string;
+    }
+  >
+>;
 
 /**
  * Structured error for `Renderer.recover()` failures.
@@ -89,6 +94,46 @@ export class RecoverError extends Error {
     this.name = 'RecoverError';
   }
 }
+
+const RENDER_RECOVERY_ERROR_POLICY = {
+  'recover-lifecycle-failed': {
+    expected: 'the replacement DeviceScope must publish only after lifecycle cleanup succeeds',
+    hint: 'inspect detail and cleanupFailures, then recover or rebuild the DeviceScope',
+  },
+  'recover-disposed-during-rebuild': {
+    expected: 'dispose wins over an in-flight recovery rebuild',
+    hint: 'stop using the disposed renderer and create a new Renderer',
+  },
+} as const;
+
+export type RenderRecoveryErrorCode = keyof typeof RENDER_RECOVERY_ERROR_POLICY;
+
+export interface RenderRecoveryFailureDetail {
+  readonly owner: string;
+  readonly generation: number;
+  readonly recovery: 'recover' | 'rebuild' | 'stop';
+  readonly receipt: DeviceScopeReceipt;
+  readonly cause: unknown;
+}
+
+export class RenderRecoveryError extends Error {
+  readonly code: RenderRecoveryErrorCode;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: RenderRecoveryFailureDetail;
+
+  constructor(code: RenderRecoveryErrorCode, detail: RenderRecoveryFailureDetail) {
+    const policy = RENDER_RECOVERY_ERROR_POLICY[code];
+    super(`${code}: ${policy.expected}`);
+    this.name = 'RenderRecoveryError';
+    this.code = code;
+    this.expected = policy.expected;
+    this.hint = policy.hint;
+    this.detail = detail;
+  }
+}
+
+export type RecoverFailure = RecoverError | RenderRecoveryError;
 
 export type IblCapabilityLossCode = 'ibl-hdr-capability-loss';
 

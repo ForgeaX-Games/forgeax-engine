@@ -55,9 +55,19 @@ async function runAttempt() {
     page.setDefaultTimeout(TIMEOUT_MS);
 
     const logs = [];
-    page.on('console', (msg) => logs.push({ type: msg.type(), text: msg.text() }));
+    let resolveFatalLog;
+    const fatalLog = new Promise((resolve) => {
+      resolveFatalLog = resolve;
+    });
+    const recordLog = (entry) => {
+      logs.push(entry);
+      if (entry.text.includes('panicked at') || entry.text.includes('Validation Error')) {
+        resolveFatalLog('fatal-log');
+      }
+    };
+    page.on('console', (msg) => recordLog({ type: msg.type(), text: msg.text() }));
     page.on('pageerror', (err) =>
-      logs.push({ type: 'pageerror', text: `${err.message}\n${err.stack ?? ''}` }),
+      recordLog({ type: 'pageerror', text: `${err.message}\n${err.stack ?? ''}` }),
     );
 
     let navOk = true;
@@ -90,17 +100,40 @@ async function runAttempt() {
       console.log(`channel probe failed: ${e}`);
     }
 
-    const deadline = Date.now() + TIMEOUT_MS;
-    let panicSeen = false;
-    while (Date.now() < deadline) {
-      await page.waitForTimeout(500);
-      for (const l of logs) {
-        if (l.text.includes('panicked at') || l.text.includes('Validation Error')) {
-          panicSeen = true;
-        }
+    // The demo sets this marker only after renderer.ready, World attachment,
+    // and one successful draw. Await that owner signal instead of sleeping for
+    // the full timeout on every healthy attempt. A fatal wasm/validation log
+    // races the marker so known cold-start crashes also fail immediately.
+    let readiness = 'timeout';
+    try {
+      readiness = await Promise.race([
+        page
+          .waitForFunction(() => window.__learnRenderBootstrapComplete === true, null, {
+            timeout: TIMEOUT_MS,
+          })
+          .then(() => 'ready')
+          .catch(() => 'timeout'),
+        fatalLog,
+      ]);
+      if (readiness === 'ready') {
+        await evaluateWithDeadline(
+          page,
+          () =>
+            new Promise((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(resolve));
+            }),
+          undefined,
+          5000,
+          'hello compositor settle',
+        );
       }
-      if (panicSeen) break;
+    } catch (error) {
+      recordLog({ type: 'readiness', text: String(error) });
     }
+
+    const panicSeen = logs.some(
+      (entry) => entry.text.includes('panicked at') || entry.text.includes('Validation Error'),
+    );
 
     for (const { type, text } of logs) console.log(`[${type}] ${text}`);
 
@@ -273,11 +306,13 @@ async function runAttempt() {
     const crash = detectWasmCrash(logs);
     if (crash) console.log(`wasm crash signature: ${crash}`);
 
-    const fail = !navOk || panicSeen || pixelGateFailed || channelGateFailed;
+    const readinessFailed = readiness !== 'ready';
+    const fail = !navOk || panicSeen || readinessFailed || pixelGateFailed || channelGateFailed;
     const summary = fail
       ? `FAIL (${[
           !navOk ? 'navigation' : null,
           panicSeen ? 'panic' : null,
+          readinessFailed ? `readiness-${readiness}` : null,
           pixelGateFailed ? 'all-black-canvas' : null,
           channelGateFailed ? 'channel-wrong-want-no-gpu' : null,
         ]
@@ -285,7 +320,7 @@ async function runAttempt() {
           .join(' + ')}${crash ? `; crash=${crash}` : ''})`
       : 'PASS (Channel 3 rhi-wgpu wasm GL — wgpu-wasm WebGL2 fallback verified)';
     console.log(`RESULT: ${summary}`);
-    return { ok: !fail, summary };
+    return { ok: !fail, summary, retryable: crash !== null };
   } finally {
     await closeBrowserWithDeadline(browser, 10000, 'hello WebKit browser close');
   }

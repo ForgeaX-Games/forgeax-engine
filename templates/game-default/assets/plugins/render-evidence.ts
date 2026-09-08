@@ -1,6 +1,7 @@
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import type { Renderer } from '@forgeax/engine-render';
 import type { InputSnapshot } from '@forgeax/engine-input';
+import type { Context } from '@forgeax/engine-plugin';
 import { HIT_FLASH_SHADER_ID, HIT_FLASH_SHADER_SOURCE } from './hit-flash-material';
 import { ANIMATED_TARGET_SHADER_ID, ANIMATED_TARGET_SHADER_SOURCE, animatedShaderEnabled, animatedShaderTime, type AnimatedMaterialTarget } from './animated-target-material';
 import type { GameplayStateHandle, GameplayStateWitness } from './gameplay-state';
@@ -126,6 +127,7 @@ function readGamepadEvidence(input?: () => InputSnapshot): GamepadEvidence {
 }
 
 type RenderEvidenceArgs = {
+  readonly context: Context;
   readonly world: World;
   readonly renderer: Renderer | undefined;
   readonly targetQuery: ScoringTargetQuery;
@@ -179,7 +181,6 @@ type RenderEvidenceArgs = {
   readonly reset: () => void;
   readonly state?: GameplayStateHandle;
   readonly changeDetection?: GameplayChangeDetectionHandle;
-  readonly registerCleanup?: (cleanup: () => void) => void;
 };
 
 /** Install a query-gated, disposable browser witness for the render-evidence smoke. */
@@ -277,16 +278,19 @@ export function installRenderEvidence(args: RenderEvidenceArgs): void {
         format: null,
         colorSpace: null,
       },
-      materialShaderIdentifiers: [...args.renderer!.shader.materialShaderIdentifiers()],
+      materialShaderIdentifiers: [HIT_FLASH_SHADER_ID, ANIMATED_TARGET_SHADER_ID],
       ...(args.state ? { state: args.state.snapshot() } : {}),
       ...(args.changeDetection ? { changeDetection: args.changeDetection.snapshot() } : {}),
     }),
   };
   const host = globalThis as unknown as Record<string, unknown>;
   host[GAME_DEFAULT_RENDER_EVIDENCE_KEY] = evidence;
-  args.registerCleanup?.(() => {
-    if (host[GAME_DEFAULT_RENDER_EVIDENCE_KEY] === evidence) {
-      delete host[GAME_DEFAULT_RENDER_EVIDENCE_KEY];
-    }
-  });
+  args.context.effect(
+    () => () => {
+      if (host[GAME_DEFAULT_RENDER_EVIDENCE_KEY] === evidence) {
+        delete host[GAME_DEFAULT_RENDER_EVIDENCE_KEY];
+      }
+    },
+    'game-default/render-evidence',
+  );
 }

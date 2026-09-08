@@ -9,7 +9,12 @@ const monorepoRoot = resolve(here, '..', '..', '..');
 
 export default defineConfig({
   plugins: [
-    forgeaxShader({ materialPackages: [resolve(here, 'src/shader-defs.pack.json')] }) as never,
+    forgeaxShader({
+      materialPackages: [
+        resolve(here, 'src/shader-defs.pack.json'),
+        resolve(here, 'src/shader-defs-red.pack.json'),
+      ],
+    }) as never,
     vitePluginRhiDebug(),
   ],
   server: { fs: { allow: [monorepoRoot] } },

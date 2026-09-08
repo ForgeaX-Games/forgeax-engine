@@ -30,11 +30,10 @@ const constructionThrow = new EngineEnvironmentError(
   { webgpuError: innerWebgpuError as any },
 );
 
-vi.mock('@forgeax/engine-runtime', async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
+vi.mock('@forgeax/engine-runtime/internal/renderer-host', () => {
   return {
-    ...actual,
-    createRenderer: (): Promise<Renderer> => Promise.reject(constructionThrow),
+    constructRuntimeRendererHost: (): Promise<never> => Promise.reject(constructionThrow),
+    loadRhiPack: vi.fn(),
   };
 });
 
@@ -75,20 +74,31 @@ describe('createApp(canvas) thin wrapper -- (A) path createRenderer throw (AC-01
     // mock above is irrelevant; world/renderer reference equality holds.
     const { createApp } = await import('../src/index');
     const renderer = {
-      ready: Promise.resolve({ ok: true, value: undefined }),
-      draw(): void {
-        // no-op
+      attach() {
+        throw new Error('assemble fixture does not start');
       },
-      onError(): () => void {
+      draw() {
+        throw new Error('assemble fixture does not start');
+      },
+      setProfile() {
+        return { ok: true as const, value: undefined };
+      },
+      state: () => 'alive' as const,
+      inspect: () => undefined as never,
+      observe: async () => undefined as never,
+      subscribe(): () => void {
         return () => {
           // no-op
         };
       },
-      onLost(): () => void {
-        return () => {
-          // no-op
-        };
+      releaseSurface() {
+        return { ok: true as const, value: undefined };
       },
+      restoreSurface() {
+        return { ok: true as const, value: undefined };
+      },
+      recover: async () => ({ ok: true as const, value: undefined }),
+      dispose: async () => ({ ok: true as const, value: undefined }),
     } as unknown as Renderer;
     const world = new World();
     const result = await createApp({ renderer, world });

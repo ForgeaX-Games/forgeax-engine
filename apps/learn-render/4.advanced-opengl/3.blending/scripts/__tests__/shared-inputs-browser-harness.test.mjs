@@ -24,7 +24,14 @@ test('shared-inputs browser probe uses catalog-only inputs', async () => {
   assert.match(source, /process\.env\.FORGEAX_SHARED_APP_INPUTS_MODE = ['"]catalog-only['"]/);
 });
 
-test('blending pack roots whitelist only the runtime texture sidecars', async () => {
+test('CI can inject the immutable shared producer manifest without rebuilding it', async () => {
+  const source = await readFile(smokeScript, 'utf8');
+  assert.match(source, /process\.env\.FORGEAX_SHARED_APP_INPUTS_MANIFEST/);
+  assert.match(source, /if \(injected === undefined\) return buildSharedInputs\(sharedRoot\)/);
+  assert.match(source, /parsed\.schemaVersion !== 1/);
+});
+
+test('blending pack roots include local Pack assets and shared texture sidecars', async () => {
   const source = await readFile(viteConfig, 'utf8');
   for (const file of ['metal.png.meta.json', 'marble.jpg.meta.json', 'grass.png.meta.json', 'window.png.meta.json']) {
     assert.match(source, new RegExp(file.replaceAll('.', '\\.'), 'u'));

@@ -154,46 +154,28 @@ describe('[w13] EcsErrorCode union completeness — stale codes present', () => 
     // this test-d proves the code IS in the union.
     const assertExhaustive = (code: EcsErrorCode): string => {
       switch (code) {
-        case 'entity-index-overflow':
-        case 'schema-unsupported-field':
-        case 'sparse-storage-requires-tag':
         case 'stale-entity':
         case 'component-already-present':
         case 'component-not-present':
         case 'cyclic-dependency':
         case 'resource-not-found':
         case 'system-before-unknown':
-        case 'system-name-conflict':
-        case 'cyclic-injection':
         case 'unique-ref-released':
         case 'unique-ref-double-release':
         case 'unique-ref-stale':
         case 'shared-ref-released':
         case 'shared-ref-double-release':
+        case 'shared-ref-payload-invalid':
         case 'shared-ref-stale':
         case 'builtin-slot-not-owned':
         case 'managed-buffer-out-of-bounds':
         case 'managed-buffer-shrink-not-supported':
-        case 'managed-array-element-type-not-allowed':
         case 'fixed-size-mismatch':
-        case 'fixed-array-overflow':
-        case 'array-pop-empty':
-        case 'instance-transforms-stride-mismatch':
-        case 'spawn-light-invalid-bounds':
-        case 'cardinality-exceeded':
-        case 'resource-invalid-value':
-        case 'sprite-animation-invalid':
+        case 'managed-array-invalid-value':
         case 'relationship-self-cycle':
-        case 'relationship-mirror-component-not-registered':
-        case 'relationship-mirror-field-type-mismatch':
         case 'relationship-detach-mismatch':
-        case 'component-not-defined':
         case 'remove-essential-component':
-        case 'scene-override-type-mismatch':
         case 'spawn-data-unknown-field':
-        case 'sprite-instances-count-mismatch':
-        case 'sprite-instances-requires-sprite-shader':
-        case 'sprite-instances-mutually-exclusive-with-instances':
         // feat-20260713-mount-override-component-add-and-shared-ref-round M2 / w9
         case 'shared-field-invalid-value':
         // feat-20260714-bevy-style-system-sets M1 / w3
@@ -201,17 +183,13 @@ describe('[w13] EcsErrorCode union completeness — stale codes present', () => 
         case 'time-delta-invalid':
         case 'time-config-invalid':
         case 'schedule-scope-mismatch':
-        case 'resource-protected':
-        case 'change-epoch-exhausted':
-        case 'query-descriptor-conflict':
-        case 'query-data-requires-fields':
-        case 'query-span-unavailable':
-        case 'query-iteration-invalidated':
-        case 'query-iteration-active':
         case 'component-field-invalid-value':
+        case 'component-numeric-value-invalid':
         case 'shared-kernel-ineligible':
         case 'shared-kernel-failed':
         case 'world-poisoned':
+        case 'command-failed':
+        case 'system-failed':
           return code;
       }
     };

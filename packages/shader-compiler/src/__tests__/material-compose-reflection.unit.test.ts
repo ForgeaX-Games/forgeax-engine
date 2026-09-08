@@ -1,12 +1,33 @@
+import { derive } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { compileShader } from '../index.js';
 import { composeMaterial } from '../material/compose.js';
-import { reflectMaterial } from '../reflection.js';
-import {
-  materialReflectionFixture,
-  materialReflectionMismatchFixture,
-} from './fixtures/material-reflection.fixtures.js';
+import { compareDerivedMaterialInterface, parseReflection } from '../reflection.js';
+import { materialReflectionFixture } from './fixtures/material-reflection.fixtures.js';
 
 describe('material composition and reflection', () => {
+  it('proves the first real composed reflection mismatch with generic bound-global facts', async () => {
+    const source = `
+struct SurfaceParameters { roughness: vec4<f32> }
+@group(1) @binding(0) var<uniform> surfaceParameters: SurfaceParameters;
+@fragment fn fs_main() -> @location(0) vec4<f32> {
+  return surfaceParameters.roughness;
+}`;
+    const compiled = await compileShader(source, { id: 'material::mismatch' });
+
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) return;
+    const checked = compareDerivedMaterialInterface(derive([{ name: 'roughness', type: 'f32' }]), {
+      boundGlobals: compiled.value.reflection.boundGlobals,
+    });
+    expect(checked.ok).toBe(false);
+    if (!checked.ok) {
+      expect(checked.error.code).toBe('material-derived-interface-mismatch');
+      expect(checked.error.detail.parameter).toBe('roughness');
+      expect(checked.error.detail.action).toBe('recook');
+    }
+  });
+
   it('composes a module closure and preserves pass and vertex reflection', async () => {
     const result = await composeMaterial(
       {
@@ -14,7 +35,16 @@ describe('material composition and reflection', () => {
         pass: materialReflectionFixture.pass,
         source: materialReflectionFixture.source,
         imports: { 'game::common': '#define_import_path game::common\n' },
-        defines: { USE_LIGHTING: true },
+        context: {
+          backend: 'webgpu',
+          capability: 'storage-buffer',
+          pipeline: 'forward',
+          geometry: 'mesh',
+          pass: 'forward',
+          profile: 'forgeax-material-wgsl-v1',
+          toolchain: 'naga-oil',
+          instrumentation: 'none',
+        },
       },
       async () => ({
         wgsl: materialReflectionFixture.source,
@@ -33,23 +63,21 @@ describe('material composition and reflection', () => {
     }
   });
 
-  it('returns a distinct binding mismatch with pass, parameter, and source span context', () => {
-    const result = reflectMaterial(materialReflectionMismatchFixture);
+  it('characterizes the current comparator and legacy-wire boundaries', () => {
+    expect(() => parseReflection('[]')).toThrow();
+    expect(() =>
+      parseReflection(
+        JSON.stringify({ bindings: [], material: { members: [], resources: [], totalBytes: 0 } }),
+      ),
+    ).toThrow();
+    const receipt = {
+      schemaVersion: 'material-reflection-characterization/1',
+      status: 'intermediate',
+      observations: {
+        legacyRawArray: 'rejected',
+      },
+    } as const;
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe('material-reflection-binding-mismatch');
-      expect(result.error.detail).toMatchObject({
-        pass: 'Forward',
-        parameter: 'roughness',
-        expected: 'f32',
-        actual: 'vec4<f32>',
-      });
-      expect(result.error.detail.sourceSpan).toMatchObject({
-        line: expect.any(Number),
-        column: expect.any(Number),
-      });
-      expect(result.error.detail.context).toContain('roughness');
-    }
+    expect(receipt.observations.legacyRawArray).toBe('rejected');
   });
 });

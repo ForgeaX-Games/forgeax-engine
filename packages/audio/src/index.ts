@@ -18,9 +18,9 @@ export {
   type AudioErrorCode,
   type AudioErrorDetail,
 } from '@forgeax/engine-types';
+export { audioContribution } from './assets/audio-decoder';
 export type { AudioListenerPose, AudioPlayOptions, AudioState } from './audio-backend';
 export {
-  ASSET_REGISTRY_RESOURCE_KEY,
   AUDIO_ENGINE_RESOURCE_KEY,
   type AudioBackend,
   type BusName,
@@ -32,23 +32,13 @@ export {
   createAudioIntentBackend,
 } from './audio-intent';
 export {
-  type AudioSimulationState,
   audioTickSystem,
-  captureAudioSimulationState,
   createClipResolver,
   detectEdge,
   detectRemovedEntities,
   type EdgeAction,
   listenerPoseFromWorldMatrix,
-  recordAudioBusMute,
-  recordAudioBusVolume,
-  recordAudioIntent,
-  recordAudioListenerPose,
-  restoreAudioSimulationState,
 } from './audio-tick-system';
 export { AudioListener, AudioSource } from './components';
 export { AUDIO_TICK_SYSTEM_NAME, audioPlugin } from './plugin-factory';
-export {
-  type AudioSimulationParticipantOptions,
-  createAudioSimulationParticipant,
-} from './simulation-participant';
+export { audioBackendPlugin } from './plugin-service';

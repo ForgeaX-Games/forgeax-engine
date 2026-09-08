@@ -126,12 +126,18 @@ describe('imageImporter HDR arm produces EquirectAsset (w1)', () => {
     expect(produced[0]?.kind).toBe('equirect');
   });
 
-  it('(e) throws for a corrupt .hdr source (invalid RGBE header)', async () => {
+  it('(e) returns a structured validation error for a corrupt .hdr source (invalid RGBE header)', async () => {
     const corrupt = new Uint8Array([0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
     const ctx = makeHdrCtx('bad.hdr', corrupt, [
       { guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' },
     ]);
-    await expect(imageImporter.import(ctx)).rejects.toThrow();
+    const result = await imageImporter.import(ctx);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe('source-validation-failed');
+    expect(result.error.detail).toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'image-conversion-decode-hdr' })],
+    });
   });
 });
 

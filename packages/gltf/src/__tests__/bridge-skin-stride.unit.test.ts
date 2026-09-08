@@ -7,8 +7,8 @@
 //   (OOS-9 / AC-04 — learn-render unskinned demos must not regress).
 
 import { describe, expect, it } from 'vitest';
-import { meshIrToMeshAsset } from '../bridge.js';
 import type { GltfMeshIr } from '../parse-gltf.js';
+import { unwrapMeshAsset as meshIrToMeshAsset } from './bridge-test-helpers.js';
 
 function makeUnskinnedPrim(meshIndex: number, vertexCount: number): GltfMeshIr {
   return {
@@ -98,5 +98,18 @@ describe('meshIrToMeshAsset pure-unskinned path (AC-04 / AC-08 / OOS-9)', () => 
     expect(asset.attributes.normal).toBeInstanceOf(Float32Array);
     expect(asset.attributes.uv).toBeInstanceOf(Float32Array);
     expect(asset.attributes.tangent).toBeInstanceOf(Float32Array);
+  });
+});
+
+describe('glTF bridge uses geometry-owned packing', () => {
+  it('does not own a parallel 12F/18F stride or uv count calculation', () => {
+    const asset = meshIrToMeshAsset([makeUnskinnedPrim(0, 4)]);
+    expect(asset.vertices.length / 12).toBe(4);
+    expect(asset.attributes.position).toBeInstanceOf(Float32Array);
+  });
+
+  it('keeps no-color producer output free of a synthetic color stream', () => {
+    const asset = meshIrToMeshAsset([makeUnskinnedPrim(0, 4)]);
+    expect(asset.attributes.color).toBeUndefined();
   });
 });

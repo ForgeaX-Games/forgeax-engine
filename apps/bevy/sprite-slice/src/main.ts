@@ -13,8 +13,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const pixels = makeSlicePixels();
   const texture = { kind: 'texture' as const, width: TEXTURE_SIZE, height: TEXTURE_SIZE, format: 'rgba8unorm-srgb' as const, data: pixels, colorSpace: 'srgb' as const, mipmap: false };
   const textureHandle = app.world.allocSharedRef('TextureAsset', texture);
-  const upload = await app.renderer.store.uploadTexture(textureHandle, texture, { bytes: pixels, width: TEXTURE_SIZE, height: TEXTURE_SIZE, mime: 'image/png', colorSpace: 'srgb', mipmap: false });
-  if (!upload.ok) return console.error('[bevy-sprite-slice] texture upload failed:', upload.error);
   buildSpriteSliceWorld(app.world, unwrapHandle(textureHandle));
   const started = app.start();
   if (!started.ok) return console.error('[bevy-sprite-slice] app.start failed:', started.error);

@@ -1,20 +1,4 @@
-// Consolidated by feat-20260609-test-pool-startup-reduction-merge-tiny-test-files
-// biome-ignore-all lint/complexity/noUselessLoneBlockStatements: block-scope isolation between merged source files (consolidation paradigm)
-//
-// Source files (N=10):
-//   - packages/runtime/src/__tests__/create-renderer-env-error-classify.test.ts
-//   - packages/runtime/src/__tests__/device-lost-fan-out.test.ts
-//   - packages/runtime/src/__tests__/device-lost.test.ts
-//   - packages/runtime/src/__tests__/error-exhaustive.test.ts
-//   - packages/runtime/src/__tests__/errors.test.ts
-//   - packages/runtime/src/__tests__/on-error-fan-out.test.ts
-//   - packages/runtime/src/__tests__/pick-errors.test.ts
-//   - packages/runtime/src/__tests__/pipeline-errors.test.ts
-//   - packages/runtime/src/__tests__/post-process-errors.test.ts
-//   - packages/runtime/src/__tests__/render-skylight-warn.test.ts
-//
-// Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
-// source as ancestorTitles[0]. Top-level imports merged + deduped.
+// biome-ignore-all lint/complexity/noUselessLoneBlockStatements: fixture scopes are intentional
 
 import type { AssetRuntimeError, AssetRuntimeErrorCode } from '@forgeax/engine-assets-runtime';
 import {
@@ -23,19 +7,23 @@ import {
   SceneCollectAssetGuidUnresolvedError,
   SceneCollectEntityRefOutOfClosureError,
 } from '@forgeax/engine-assets-runtime';
-import type { RenderError, RenderErrorCode } from '@forgeax/engine-render/internal';
-import {
-  EquirectProjectionFailedError,
-  RhiErrorListenerRegistry,
-} from '@forgeax/engine-render/internal';
+import type { RenderError, RenderErrorCode } from '@forgeax/engine-render';
 import { RhiError } from '@forgeax/engine-rhi';
+import { rhi } from '@forgeax/engine-rhi-null';
 import type { SkinError, SkinErrorCode } from '@forgeax/engine-skinning';
 import type { AssetErrorCode, ImageErrorCode } from '@forgeax/engine-types';
-import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { EquirectProjectionFailedError } from '../../../render/src/errors/render';
+import { RhiErrorListenerRegistry } from '../../../render/src/lifecycle';
+import {
+  PostProcessError,
+  type PostProcessErrorCode,
+} from '../../../render/src/post-process-errors';
 import {
   __classifyEnvErrorReasonForTest,
   __composeEnvErrorHintForTest,
 } from '../create-renderer-env-classify';
+import { requireRenderer } from './renderer-test-utils';
 
 // feat-20260704-runtime-tier1-decomposition M2 / w12: the eliminated top-level
 // RuntimeError / RuntimeErrorCode aggregate unions (D-3) are reconstituted here
@@ -47,13 +35,6 @@ import {
 // original unions were.
 type RuntimeLayerErrorCode = RenderErrorCode | AssetRuntimeErrorCode | SkinErrorCode;
 type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
-
-import {
-  PipelineError,
-  type PipelineErrorCode,
-  type PipelineNotFoundDetail,
-  type PipelinePreviouslyRegisteredDetail,
-} from '@forgeax/engine-render/internal';
 
 {
   // ─── from create-renderer-env-error-classify.test.ts ───
@@ -190,566 +171,72 @@ import {
     });
   });
 }
-
 {
-  // ─── from device-lost-fan-out.test.ts ───
-  describe('device-lost-fan-out.test.ts', () => {
-    const ENGINE = '../createRenderer';
+  // --- migrated from device-lost-fan-out.test.ts ---
+  describe('Renderer.subscribe lifecycle events', () => {
+    const manifest = `data:application/json,${encodeURIComponent(
+      JSON.stringify({ schemaVersion: '1.0.0', entries: [] }),
+    )}`;
+    const canvas = { getContext: () => null } as unknown as HTMLCanvasElement;
 
-    // ─── Helpers (parallel to device-lost.test.ts mock setup) ──────────────────
+    it('publishes disposal through subscribe and keeps state inspectable', async () => {
+      const renderer = await requireRenderer(canvas, { rhi }, { shaderManifestUrl: manifest });
+      expect(renderer.state()).toBe('alive');
+      expect(renderer.inspect().state).toBe('alive');
 
-    function makeMockGL2(): Record<string, unknown> {
-      return {
-        __mockTag: 'webgl2',
-        getExtension: () => null,
-        getParameter: () => 1,
-        createShader: () => ({}),
-        shaderSource: () => undefined,
-        compileShader: () => undefined,
-        getShaderParameter: () => true,
-        createProgram: () => ({}),
-        attachShader: () => undefined,
-        linkProgram: () => undefined,
-        getProgramParameter: () => true,
-        useProgram: () => undefined,
-        createVertexArray: () => ({}),
-        bindVertexArray: () => undefined,
-        createBuffer: () => ({}),
-        bindBuffer: () => undefined,
-        bufferData: () => undefined,
-        enableVertexAttribArray: () => undefined,
-        vertexAttribPointer: () => undefined,
-        getAttribLocation: () => 0,
-        clear: () => undefined,
-        drawArrays: () => undefined,
-        viewport: () => undefined,
-        isContextLost: () => false,
-        COMPILE_STATUS: 0x8b81,
-        LINK_STATUS: 0x8b82,
-        VERTEX_SHADER: 0x8b31,
-        FRAGMENT_SHADER: 0x8b30,
-        ARRAY_BUFFER: 0x8892,
-        STATIC_DRAW: 0x88e4,
-        FLOAT: 0x1406,
-        TRIANGLES: 0x0004,
-        COLOR_BUFFER_BIT: 0x4000,
-      };
-    }
-
-    function makeMockCanvas(): { canvas: HTMLCanvasElement } {
-      const listeners = new Map<string, Set<(e: unknown) => void>>();
-      const canvas = {
-        width: 800,
-        height: 600,
-        getContext(kind: string): unknown {
-          if (kind === 'webgl2') return makeMockGL2();
-          if (kind === 'webgpu') {
-            return {
-              configure: () => undefined,
-              unconfigure: () => undefined,
-              getCurrentTexture: () => ({ createView: () => ({}) }),
-            };
-          }
-          return null;
-        },
-        addEventListener(type: string, fn: (e: unknown) => void) {
-          let bucket = listeners.get(type);
-          if (!bucket) {
-            bucket = new Set();
-            listeners.set(type, bucket);
-          }
-          bucket.add(fn);
-        },
-        removeEventListener(type: string, fn: (e: unknown) => void) {
-          listeners.get(type)?.delete(fn);
-        },
-      } as unknown as HTMLCanvasElement;
-      return { canvas };
-    }
-
-    interface MockDeviceContext {
-      navigator: { userAgent: string; gpu: unknown };
-      resolveDeviceLost: (info: { reason: string; message: string }) => void;
-      /** Trigger `onuncapturederror` listeners (matching the spec event-target API
-       *  shape: GPUDevice extends EventTarget; addEventListener('uncapturederror', ...)
-       *  is the spec form, but the spec also exposes the `onuncapturederror` setter
-       *  property for backwards compat). The engine layer uses the property form. */
-      dispatchUncapturedError: (event: unknown) => void;
-    }
-
-    function makeMockWebGPU(): MockDeviceContext {
-      let resolveDeviceLost!: (info: { reason: string; message: string }) => void;
-      const lost = new Promise<{ reason: string; message: string }>((res) => {
-        resolveDeviceLost = res;
+      const events: unknown[] = [];
+      const unsubscribe = renderer.subscribe((event) => events.push(event));
+      expect(typeof unsubscribe).toBe('function');
+      expect((await renderer.dispose()).ok).toBe(true);
+      expect(events).toContainEqual({
+        kind: 'state-changed',
+        previous: 'alive',
+        current: 'disposed',
       });
-      // The handlers registered through `device.onuncapturederror = (event) => ...`
-      // or `device.addEventListener('uncapturederror', listener)`. The test trigger
-      // walks both registration paths in case the engine layer uses either form.
-      let onUncapturedSetter: ((event: unknown) => void) | undefined;
-      const uncapturedListeners = new Set<(event: unknown) => void>();
-
-      const device: Record<string, unknown> = {
-        lost,
-        features: new Set(),
-        limits: {},
-        queue: { submit: () => undefined, writeBuffer: () => undefined },
-        createCommandEncoder: () => ({
-          beginRenderPass: () => ({
-            setPipeline: () => undefined,
-            setVertexBuffer: () => undefined,
-            draw: () => undefined,
-            end: () => undefined,
-          }),
-          finish: () => ({}),
-        }),
-        createShaderModule: () => ({}),
-        createRenderPipeline: () => ({}),
-        createBuffer: () => ({
-          getMappedRange: () => new ArrayBuffer(64),
-          unmap: () => undefined,
-        }),
-        createTexture: () => ({}),
-        createSampler: () => ({}),
-        createBindGroupLayout: () => ({}),
-        destroy: () => undefined,
-        // Spec form: GPUDevice has `onuncapturederror: ((this, ev) => any) | null`
-        // as a settable property. We expose it as a property with a setter so the
-        // mock records whichever callback the engine writes.
-        addEventListener(type: string, fn: (event: unknown) => void): void {
-          if (type === 'uncapturederror') {
-            uncapturedListeners.add(fn);
-          }
-        },
-        removeEventListener(type: string, fn: (event: unknown) => void): void {
-          if (type === 'uncapturederror') {
-            uncapturedListeners.delete(fn);
-          }
-        },
-      };
-      Object.defineProperty(device, 'onuncapturederror', {
-        get: () => onUncapturedSetter,
-        set: (fn: ((event: unknown) => void) | undefined) => {
-          onUncapturedSetter = fn;
-        },
-        configurable: true,
-        enumerable: true,
-      });
-
-      const dispatchUncapturedError = (event: unknown): void => {
-        if (onUncapturedSetter) onUncapturedSetter(event);
-        for (const fn of uncapturedListeners) fn(event);
-      };
-
-      const gpu = {
-        requestAdapter: async () => ({
-          requestDevice: async () => device,
-        }),
-        getPreferredCanvasFormat: () => 'bgra8unorm',
-      };
-      return {
-        navigator: { userAgent: 'mock-engine-test', gpu },
-        resolveDeviceLost,
-        dispatchUncapturedError,
-      };
-    }
-
-    // ─── Spec-shaped GPUError mocks ─────────────────────────────────────────────
-
-    /** Construct a fake GPUError subclass that the translator's
-     *  `error.constructor.name` dispatch recognizes. */
-    function makeFakeGpuError(
-      name: 'GPUOutOfMemoryError' | 'GPUInternalError' | 'GPUValidationError',
-      message: string,
-    ): object {
-      // Create an object whose constructor.name matches the spec class name.
-      // `error.constructor.name === 'GPUOutOfMemoryError'` is the dispatch rule
-      // used by translateErrorEventToRhiError.
-      const FakeCtor = {
-        [name]: class {
-          message: string;
-          constructor(m: string) {
-            this.message = m;
-          }
-        },
-      }[name];
-      if (!FakeCtor) throw new Error('fake ctor missing');
-      return new FakeCtor(message);
-    }
-
-    const baseNavigator = { userAgent: 'mock-engine-test' };
-
-    beforeEach(() => {
-      vi.stubGlobal('navigator', { ...baseNavigator });
+      unsubscribe();
     });
 
-    afterEach(() => {
-      vi.unstubAllGlobals();
-    });
+    it('does not retain a listener after unsubscribe', async () => {
+      const renderer = await requireRenderer(canvas, { rhi }, { shaderManifestUrl: manifest });
+      const events: unknown[] = [];
+      const unsubscribe = renderer.subscribe((event) => events.push(event));
+      unsubscribe();
 
-    // ─── Tests ──────────────────────────────────────────────────────────────────
-
-    describe('Renderer.onError — device.lost / onuncapturederror dual-channel fan-out (D-VD2)', () => {
-      it('(1) intentional device teardown fires onLost without creating an RhiError', async () => {
-        const { navigator, resolveDeviceLost } = makeMockWebGPU();
-        vi.stubGlobal('navigator', navigator);
-        const { canvas } = makeMockCanvas();
-        const { createRenderer } = (await import(ENGINE)) as {
-          createRenderer: (
-            canvas: unknown,
-            opts?: { shaderManifestUrl?: string | undefined },
-            bundler?: unknown,
-          ) => Promise<{
-            backend: string;
-            onError: (cb: (err: RhiError) => void) => () => void;
-            onLost: (cb: (info: { reason: string; message: string }) => void) => () => void;
-          }>;
-        };
-        const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-        expect(renderer.backend).toBe('webgpu');
-
-        const errors: RhiError[] = [];
-        const lostInfos: Array<{ reason: string; message: string }> = [];
-        renderer.onError((err) => errors.push(err));
-        renderer.onLost((info) => lostInfos.push(info));
-
-        resolveDeviceLost({ reason: 'destroyed', message: 'driver reset' });
-        // Drain microtasks for the device.lost Promise + its lost-channel fan-out.
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-
-        // onLost channel — existing wire-up unchanged (D-PD4 lost channel).
-        expect(lostInfos.length).toBeGreaterThan(0);
-        expect(lostInfos[0]?.reason).toBe('destroyed');
-
-        // An explicit renderer teardown is not a runtime failure. It must stay
-        // observable through onLost, but must not create an RhiError that the
-        // host logs as a browser-visible error while switching games.
-        expect(errors).toHaveLength(0);
-      });
-
-      it('(2) genuine device loss still creates an RhiError', async () => {
-        const { navigator, resolveDeviceLost } = makeMockWebGPU();
-        vi.stubGlobal('navigator', navigator);
-        const { canvas } = makeMockCanvas();
-        const { createRenderer } = (await import(ENGINE)) as {
-          createRenderer: (
-            canvas: unknown,
-            opts?: { shaderManifestUrl?: string | undefined },
-            bundler?: unknown,
-          ) => Promise<{
-            backend: string;
-            onError: (cb: (err: RhiError) => void) => () => void;
-          }>;
-        };
-        const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-        expect(renderer.backend).toBe('webgpu');
-
-        const errors: RhiError[] = [];
-        renderer.onError((err) => errors.push(err));
-
-        resolveDeviceLost({ reason: 'unknown', message: 'driver reset' });
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-
-        expect(errors.length).toBeGreaterThan(0);
-        expect(errors[0]?.code).toBe('device-lost');
-        expect(errors[0]?.expected).toMatch(/device must remain alive/);
-        expect(errors[0]?.hint).toMatch(/unknown/);
-      });
-
-      it('(3) GPUUncapturedErrorEvent with GPUOutOfMemoryError → onError fires with code=oom', async () => {
-        const { navigator, dispatchUncapturedError } = makeMockWebGPU();
-        vi.stubGlobal('navigator', navigator);
-        const { canvas } = makeMockCanvas();
-        const { createRenderer } = (await import(ENGINE)) as {
-          createRenderer: (
-            canvas: unknown,
-            opts?: { shaderManifestUrl?: string | undefined },
-            bundler?: unknown,
-          ) => Promise<{
-            onError: (cb: (err: RhiError) => void) => () => void;
-          }>;
-        };
-        const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-
-        const errors: RhiError[] = [];
-        renderer.onError((err) => errors.push(err));
-
-        // Spec event shape: { error: GPUOutOfMemoryError } (plus EventTarget fields).
-        const oomError = makeFakeGpuError('GPUOutOfMemoryError', 'allocation 4GB exceeded');
-        dispatchUncapturedError({ error: oomError });
-        await Promise.resolve();
-
-        expect(errors.length).toBeGreaterThan(0);
-        expect(errors[0]?.code).toBe('oom');
-        expect(errors[0]?.hint).toMatch(/4GB/);
-      });
-
-      it('(4) GPUUncapturedErrorEvent with GPUInternalError → onError fires with code=internal-error', async () => {
-        const { navigator, dispatchUncapturedError } = makeMockWebGPU();
-        vi.stubGlobal('navigator', navigator);
-        const { canvas } = makeMockCanvas();
-        const { createRenderer } = (await import(ENGINE)) as {
-          createRenderer: (
-            canvas: unknown,
-            opts?: { shaderManifestUrl?: string | undefined },
-            bundler?: unknown,
-          ) => Promise<{
-            onError: (cb: (err: RhiError) => void) => () => void;
-          }>;
-        };
-        const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-
-        const errors: RhiError[] = [];
-        renderer.onError((err) => errors.push(err));
-
-        const internalError = makeFakeGpuError('GPUInternalError', 'driver assertion failure');
-        dispatchUncapturedError({ error: internalError });
-        await Promise.resolve();
-
-        expect(errors.length).toBeGreaterThan(0);
-        expect(errors[0]?.code).toBe('internal-error');
-        expect(errors[0]?.hint).toMatch(/driver assertion/);
-      });
-
-      it('(5) GPUUncapturedErrorEvent with GPUValidationError matching shader pattern → code=shader-compile-failed', async () => {
-        const { navigator, dispatchUncapturedError } = makeMockWebGPU();
-        vi.stubGlobal('navigator', navigator);
-        const { canvas } = makeMockCanvas();
-        const { createRenderer } = (await import(ENGINE)) as {
-          createRenderer: (
-            canvas: unknown,
-            opts?: { shaderManifestUrl?: string | undefined },
-            bundler?: unknown,
-          ) => Promise<{
-            onError: (cb: (err: RhiError) => void) => () => void;
-          }>;
-        };
-        const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-
-        const errors: RhiError[] = [];
-        renderer.onError((err) => errors.push(err));
-
-        // Translator dispatch rule (a): GPUValidationError with /shader|compile|wgsl/i
-        // → 'shader-compile-failed'.
-        const validationError = makeFakeGpuError(
-          'GPUValidationError',
-          'WGSL compile failed: unexpected token at line 5',
-        );
-        dispatchUncapturedError({ error: validationError });
-        await Promise.resolve();
-
-        expect(errors.length).toBeGreaterThan(0);
-        expect(errors[0]?.code).toBe('shader-compile-failed');
-      });
+      expect((await renderer.dispose()).ok).toBe(true);
+      expect(events).toEqual([]);
     });
   });
 }
 
 {
-  // ─── from device-lost.test.ts ───
-  describe('device-lost.test.ts', () => {
-    const ENGINE = '../createRenderer';
+  // --- migrated from device-lost.test.ts ---
+  describe('Renderer surface recovery contract', () => {
+    const manifest = `data:application/json,${encodeURIComponent(
+      JSON.stringify({ schemaVersion: '1.0.0', entries: [] }),
+    )}`;
+    const canvas = { getContext: () => null } as unknown as HTMLCanvasElement;
 
-    // ─── Helpers (subset of t3.1 helpers; kept inline for test isolation) ──────
+    it('releases and restores the surface without changing the renderer identity', async () => {
+      const renderer = await requireRenderer(canvas, { rhi }, { shaderManifestUrl: manifest });
+      const before = renderer.inspect();
 
-    interface MockGL2Snapshot {
-      __mockTag: 'webgl2';
-      // Loss-management hooks the test inspects.
-      isContextLost: () => boolean;
-      // Constants the backend may read.
-      COMPILE_STATUS: number;
-      LINK_STATUS: number;
-      VERTEX_SHADER: number;
-      FRAGMENT_SHADER: number;
-      ARRAY_BUFFER: number;
-      STATIC_DRAW: number;
-      FLOAT: number;
-      TRIANGLES: number;
-      COLOR_BUFFER_BIT: number;
-    }
+      expect(renderer.releaseSurface().ok).toBe(true);
+      expect(renderer.inspect().surface).toBe('released');
+      expect(renderer.restoreSurface().ok).toBe(true);
+      expect(renderer.inspect().surface).toBe('available');
+      expect(renderer.inspect().capabilities.backendKind).toBe('null');
+      expect(renderer.inspect().state).toBe(before.state);
 
-    function makeMockGL2(): MockGL2Snapshot & Record<string, unknown> {
-      return {
-        __mockTag: 'webgl2',
-        getExtension: () => null,
-        getParameter: () => 1,
-        createShader: () => ({}),
-        shaderSource: () => undefined,
-        compileShader: () => undefined,
-        getShaderParameter: () => true,
-        createProgram: () => ({}),
-        attachShader: () => undefined,
-        linkProgram: () => undefined,
-        getProgramParameter: () => true,
-        useProgram: () => undefined,
-        createVertexArray: () => ({}),
-        bindVertexArray: () => undefined,
-        createBuffer: () => ({}),
-        bindBuffer: () => undefined,
-        bufferData: () => undefined,
-        enableVertexAttribArray: () => undefined,
-        vertexAttribPointer: () => undefined,
-        getAttribLocation: () => 0,
-        clear: () => undefined,
-        drawArrays: () => undefined,
-        viewport: () => undefined,
-        isContextLost: () => false,
-        COMPILE_STATUS: 0x8b81,
-        LINK_STATUS: 0x8b82,
-        VERTEX_SHADER: 0x8b31,
-        FRAGMENT_SHADER: 0x8b30,
-        ARRAY_BUFFER: 0x8892,
-        STATIC_DRAW: 0x88e4,
-        FLOAT: 0x1406,
-        TRIANGLES: 0x0004,
-        COLOR_BUFFER_BIT: 0x4000,
-      };
-    }
-
-    function makeMockCanvas(opts: { webgl2: 'context' | 'null' }): {
-      canvas: HTMLCanvasElement;
-    } {
-      const canvas = {
-        width: 800,
-        height: 600,
-        getContext(kind: string): unknown {
-          if (kind === 'webgl2') {
-            return opts.webgl2 === 'context' ? makeMockGL2() : null;
-          }
-          if (kind === 'webgpu') {
-            return {
-              configure: () => undefined,
-              unconfigure: () => undefined,
-              getCurrentTexture: () => ({ createView: () => ({}) }),
-            };
-          }
-          return null;
-        },
-        addEventListener: () => undefined,
-        removeEventListener: () => undefined,
-      } as unknown as HTMLCanvasElement;
-      return { canvas };
-    }
-
-    interface GPUMock {
-      navigator: { userAgent: string; gpu: unknown };
-      /** Resolve to mark the WebGPU device "lost". */
-      resolveDeviceLost: (info: { reason: string; message: string }) => void;
-    }
-
-    function makeMockNavigatorWithWebGPU(): GPUMock {
-      let resolveDeviceLost!: (info: { reason: string; message: string }) => void;
-      const lost = new Promise<{ reason: string; message: string }>((res) => {
-        resolveDeviceLost = res;
-      });
-      // Aligned with @forgeax/engine-rhi-webgpu `GpuDeviceLike`: features / limits /
-      // createX full set (after the M3 createRenderer refactor goes through
-      // rhi.requestDevice(), the shape must satisfy shim pass-through).
-      const device = {
-        lost,
-        features: new Set(),
-        limits: {},
-        queue: { submit: () => undefined, writeBuffer: () => undefined },
-        createCommandEncoder: () => ({
-          beginRenderPass: () => ({
-            setPipeline: () => undefined,
-            setVertexBuffer: () => undefined,
-            draw: () => undefined,
-            end: () => undefined,
-          }),
-          finish: () => ({}),
-        }),
-        createShaderModule: () => ({}),
-        createRenderPipeline: () => ({}),
-        createBuffer: () => ({
-          getMappedRange: () => new ArrayBuffer(64),
-          unmap: () => undefined,
-        }),
-        createTexture: () => ({}),
-        createSampler: () => ({}),
-        createBindGroupLayout: () => ({}),
-        destroy: () => undefined,
-      };
-      const gpu = {
-        requestAdapter: async () => ({
-          requestDevice: async () => device,
-        }),
-        getPreferredCanvasFormat: () => 'bgra8unorm',
-      };
-      return {
-        navigator: { userAgent: 'mock-engine-test', gpu },
-        resolveDeviceLost,
-      };
-    }
-
-    const baseNavigator = { userAgent: 'mock-engine-test' };
-
-    beforeEach(() => {
-      vi.stubGlobal('navigator', { ...baseNavigator });
+      expect((await renderer.dispose()).ok).toBe(true);
     });
 
-    afterEach(() => {
-      vi.unstubAllGlobals();
-    });
+    it('returns a structured recover result when no device is lost', async () => {
+      const renderer = await requireRenderer(canvas, { rhi }, { shaderManifestUrl: manifest });
+      const recovered = await renderer.recover();
 
-    // ─── Tests ──────────────────────────────────────────────────────────────────
-
-    describe('Renderer.onLost — device.lost / webglcontextlost contract (R-2)', () => {
-      it('webgpu: device.lost fires onLost listener with reason + message info', async () => {
-        const { navigator, resolveDeviceLost } = makeMockNavigatorWithWebGPU();
-        vi.stubGlobal('navigator', navigator);
-        const { canvas } = makeMockCanvas({ webgl2: 'context' });
-        const { createRenderer } = (await import(ENGINE)) as {
-          createRenderer: (
-            canvas: unknown,
-            opts?: { shaderManifestUrl?: string | undefined },
-            bundler?: unknown,
-          ) => Promise<{
-            backend: string;
-            onLost: (cb: (info: { reason: string; message: string }) => void) => () => void;
-          }>;
-        };
-
-        const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-        expect(renderer.backend).toBe('webgpu');
-
-        const received: Array<{ reason: string; message: string }> = [];
-        renderer.onLost((info) => {
-          received.push(info);
-        });
-
-        resolveDeviceLost({ reason: 'destroyed', message: 'mock device lost' });
-        // Allow the lost-promise microtask to drain.
-        await Promise.resolve();
-        await Promise.resolve();
-
-        expect(received.length).toBeGreaterThan(0);
-        expect(received[0]?.reason).toBe('destroyed');
-      });
-
-      it('engine layer does NOT auto-reload: onLost is a notify-only hook', async () => {
-        const { navigator, resolveDeviceLost } = makeMockNavigatorWithWebGPU();
-        vi.stubGlobal('navigator', navigator);
-        const { canvas } = makeMockCanvas({ webgl2: 'context' });
-        const { createRenderer } = (await import(ENGINE)) as {
-          createRenderer: (
-            canvas: unknown,
-            opts?: { shaderManifestUrl?: string | undefined },
-            bundler?: unknown,
-          ) => Promise<Record<string, unknown>>;
-        };
-
-        const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-        const recovers = ['restart', 'restore', 'reset'].filter((name) => name in renderer);
-        // NOTE: 'recover' is a manual user command added in
-        // feat-20260621-renderer-health-recover-skeleton; it is not an
-        // auto-reload signal — excluded from the notify-only check.
-        expect(recovers).toEqual([]);
-        void resolveDeviceLost;
-      });
+      expect(recovered.ok).toBe(false);
+      if (!recovered.ok) expect(recovered.error.code).toBe('renderer-state-invalid');
+      expect((await renderer.dispose()).ok).toBe(true);
     });
   });
 }
@@ -825,10 +312,14 @@ import {
             case 'source-not-imported':
               return 'source not imported';
             // === 3 new codes (feat-20260608-mesh-multi-section-primitive-multi-material-slot M1 / w2) ===
-            case 'mesh-renderer-material-count-mismatch':
-              return 'mesh renderer material count mismatch';
+            case 'mesh-renderer-material-override-invalid':
+              return 'mesh renderer material override invalid';
+            case 'mesh-renderer-material-override-overflow':
+              return 'mesh renderer material override overflow';
             case 'mesh-asset-submeshes-empty':
               return 'mesh asset submeshes empty';
+            case 'mesh-asset-material-slot-index-out-of-range':
+              return 'mesh asset material slot index out of range';
             case 'mesh-submesh-index-range-out-of-bounds':
               return 'mesh submesh index range out of bounds';
             // === 1 new code (feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild) ===
@@ -903,6 +394,34 @@ import {
       it('exhaustive switch covers all members without a default branch', () => {
         function exhaustive(code: RuntimeLayerErrorCode): string {
           switch (code) {
+            case 'lifecycle-construction-failed':
+              return 'lifecycle construction failed';
+            case 'world-lease-invalid':
+              return 'world lease invalid';
+            case 'frame-input-invalid':
+              return 'frame input invalid';
+            case 'scene-projection-failed':
+              return 'scene projection failed';
+            case 'asset-binding-failed':
+              return 'asset binding failed';
+            case 'feature-plan-failed':
+              return 'feature plan failed';
+            case 'graph-build-failed':
+              return 'graph build failed';
+            case 'device-operation-failed':
+              return 'device operation failed';
+            case 'surface-unavailable':
+              return 'surface unavailable';
+            case 'renderer-state-invalid':
+              return 'renderer state invalid';
+            case 'recovery-failed':
+              return 'recovery failed';
+            case 'cleanup-failed':
+              return 'cleanup failed';
+            case 'frame-receipt-stale':
+              return 'frame receipt stale';
+            case 'renderer-contract-failed':
+              return 'renderer contract failed';
             case 'observation-unavailable':
               return 'observation unavailable';
             case 'shadow-invalid-config':
@@ -917,6 +436,8 @@ import {
               return 'skin instances coexist forbidden';
             case 'vertex-storage-buffer-unavailable':
               return 'vertex storage buffer unavailable';
+            case 'vertex-color-variant-conflict':
+              return 'vertex color variant conflict';
             case 'skin-palette-overflow':
               return 'skin palette overflow';
             case 'material-resolved-empty-passes':
@@ -927,8 +448,6 @@ import {
               return 'mesh ssbo capacity exceeded';
             case 'mesh-ssbo-ceiling-reached':
               return 'mesh ssbo ceiling reached';
-            case 'hdrp-caps-insufficient':
-              return 'hdrp caps insufficient';
             case 'hdrp-light-budget-exceeded':
               return 'hdrp light budget exceeded';
             case 'hdrp-index-list-overflow':
@@ -937,10 +456,6 @@ import {
             // 3 new deferred-path error codes.
             case 'hdrp-deferred-caps-insufficient':
               return 'hdrp deferred caps insufficient';
-            case 'gbuffer-rt-alloc-failed':
-              return 'gbuffer rt alloc failed';
-            case 'gbuffer-attachment-count-mismatch':
-              return 'gbuffer attachment count mismatch';
             // feat-20260611-fox-skinning-vertex-attribute-chain M4 / w17 (D-5):
             // bidirectional Skin <-> pbr-skin material mismatch detected at extract.
             case 'skin-material-mismatch':
@@ -985,6 +500,18 @@ import {
               return 'render feature prepared state mismatch';
             case 'render-feature-draw-recording-failed':
               return 'render feature draw recording failed';
+            case 'points-lines-invalid-style':
+              return 'points lines invalid style';
+            case 'points-lines-topology-mismatch':
+              return 'points lines topology mismatch';
+            case 'points-lines-style-unsupported':
+              return 'points lines style unsupported';
+            case 'points-lines-material-unsupported':
+              return 'points lines material unsupported';
+            case 'points-lines-budget-exceeded':
+              return 'points lines budget exceeded';
+            case 'points-lines-prepare-failed':
+              return 'points lines prepare failed';
           }
         }
         expect(exhaustive('equirect-projection-failed')).toBe('equirect projection failed');
@@ -1008,19 +535,37 @@ import {
         expect(code).toBe('hdrp-deferred-caps-insufficient');
       });
 
-      it('gbuffer-rt-alloc-failed is a valid RuntimeErrorCode', () => {
-        const code: RuntimeLayerErrorCode = 'gbuffer-rt-alloc-failed';
-        expect(code).toBe('gbuffer-rt-alloc-failed');
-      });
-
-      it('gbuffer-attachment-count-mismatch is a valid RuntimeErrorCode', () => {
-        const code: RuntimeLayerErrorCode = 'gbuffer-attachment-count-mismatch';
-        expect(code).toBe('gbuffer-attachment-count-mismatch');
-      });
-
       it('exhaustive switch covers all 3 new members alongside existing members', () => {
         function exhaustive(code: RuntimeLayerErrorCode): string {
           switch (code) {
+            case 'lifecycle-construction-failed':
+              return 'ok';
+            case 'world-lease-invalid':
+              return 'ok';
+            case 'frame-input-invalid':
+              return 'ok';
+            case 'scene-projection-failed':
+              return 'ok';
+            case 'asset-binding-failed':
+              return 'ok';
+            case 'feature-plan-failed':
+              return 'ok';
+            case 'graph-build-failed':
+              return 'ok';
+            case 'device-operation-failed':
+              return 'ok';
+            case 'surface-unavailable':
+              return 'ok';
+            case 'renderer-state-invalid':
+              return 'ok';
+            case 'recovery-failed':
+              return 'ok';
+            case 'cleanup-failed':
+              return 'ok';
+            case 'frame-receipt-stale':
+              return 'ok';
+            case 'renderer-contract-failed':
+              return 'ok';
             case 'observation-unavailable':
               return 'ok';
             case 'shadow-invalid-config':
@@ -1035,6 +580,8 @@ import {
               return 'ok';
             case 'vertex-storage-buffer-unavailable':
               return 'ok';
+            case 'vertex-color-variant-conflict':
+              return 'ok';
             case 'skin-palette-overflow':
               return 'ok';
             case 'material-resolved-empty-passes':
@@ -1044,8 +591,6 @@ import {
             case 'mesh-ssbo-capacity-exceeded':
               return 'ok';
             case 'mesh-ssbo-ceiling-reached':
-              return 'ok';
-            case 'hdrp-caps-insufficient':
               return 'ok';
             case 'hdrp-light-budget-exceeded':
               return 'ok';
@@ -1062,10 +607,6 @@ import {
             case 'joint-entity-dangling':
               return 'ok';
             case 'hdrp-deferred-caps-insufficient':
-              return 'ok';
-            case 'gbuffer-rt-alloc-failed':
-              return 'ok';
-            case 'gbuffer-attachment-count-mismatch':
               return 'ok';
             case 'point-shadow-atlas-uninitialized':
               return 'ok';
@@ -1091,11 +632,21 @@ import {
               return 'ok';
             case 'render-feature-draw-recording-failed':
               return 'ok';
+            case 'points-lines-invalid-style':
+              return 'ok';
+            case 'points-lines-topology-mismatch':
+              return 'ok';
+            case 'points-lines-style-unsupported':
+              return 'ok';
+            case 'points-lines-material-unsupported':
+              return 'ok';
+            case 'points-lines-budget-exceeded':
+              return 'ok';
+            case 'points-lines-prepare-failed':
+              return 'ok';
           }
         }
         expect(exhaustive('hdrp-deferred-caps-insufficient')).toBe('ok');
-        expect(exhaustive('gbuffer-rt-alloc-failed')).toBe('ok');
-        expect(exhaustive('gbuffer-attachment-count-mismatch')).toBe('ok');
         expect(exhaustive('point-shadow-atlas-uninitialized')).toBe('ok');
         expect(exhaustive('point-shadow-atlas-bounds-violation')).toBe('ok');
       });
@@ -1302,92 +853,9 @@ import {
 }
 
 {
-  // ─── from pipeline-errors.test.ts ───
-  describe('pipeline-errors.test.ts', () => {
-    describe('PipelineErrorCode closed union (2 members)', () => {
-      it('exhaustive switch(code) over the 2 members needs no default (completeness)', () => {
-        // The function below compiles ONLY if PipelineErrorCode is exactly the
-        // 2-member union; an added / missing member breaks the `never` assignment.
-        const classify = (code: PipelineErrorCode): string => {
-          switch (code) {
-            case 'pipeline-already-registered':
-              return 'register';
-            case 'pipeline-not-found':
-              return 'install';
-            default: {
-              const exhaustive: never = code;
-              return exhaustive;
-            }
-          }
-        };
-        expect(classify('pipeline-already-registered')).toBe('register');
-        expect(classify('pipeline-not-found')).toBe('install');
-      });
-
-      it('PipelineErrorCode is the closed 2-member literal union (type identity)', () => {
-        expectTypeOf<PipelineErrorCode>().toEqualTypeOf<
-          'pipeline-already-registered' | 'pipeline-not-found'
-        >();
-      });
-    });
-
-    describe('PipelineError - pipeline-already-registered (AC-05, throw channel)', () => {
-      it('carries code / expected / hint / detail structured fields', () => {
-        const err = new PipelineError({
-          code: 'pipeline-already-registered',
-          detail: { id: 'forgeax::urp' },
-        });
-        expect(err).toBeInstanceOf(Error);
-        expect(err).toBeInstanceOf(PipelineError);
-        expect(err.code).toBe('pipeline-already-registered');
-        expect(typeof err.expected).toBe('string');
-        expect(err.expected.length).toBeGreaterThan(0);
-        expect(typeof err.hint).toBe('string');
-        expect(err.hint.length).toBeGreaterThan(0);
-        expect(err.detail).toEqual({ id: 'forgeax::urp' });
-      });
-
-      it('detail narrows to { id } after the code guard (charter P4 property access)', () => {
-        const err = new PipelineError({
-          code: 'pipeline-already-registered',
-          detail: { id: 'my::pipeline' },
-        });
-        if (err.code === 'pipeline-already-registered') {
-          const detail: PipelinePreviouslyRegisteredDetail = err.detail;
-          expect(detail.id).toBe('my::pipeline');
-        }
-      });
-    });
-
-    describe('PipelineError - pipeline-not-found (AC-06, Result.err channel)', () => {
-      it('install invalid handle path: code is pipeline-not-found with actionable hint', () => {
-        const err = new PipelineError({
-          code: 'pipeline-not-found',
-          detail: { handle: 9999 },
-        });
-        expect(err.code).toBe('pipeline-not-found');
-        expect(err.hint.length).toBeGreaterThan(0);
-        expect(err.detail).toEqual({ handle: 9999 });
-      });
-
-      it('detail narrows to { handle } after the code guard', () => {
-        const err = new PipelineError({
-          code: 'pipeline-not-found',
-          detail: { handle: 42 },
-        });
-        if (err.code === 'pipeline-not-found') {
-          const detail: PipelineNotFoundDetail = err.detail;
-          expect(detail.handle).toBe(42);
-        }
-      });
-    });
-  });
-}
-
-{
   // ─── from post-process-errors.test.ts ───
   describe('post-process-errors.test.ts', () => {
-    // ─── PostProcessErrorCode variant scaffold (mirrors pipeline-errors.ts) ────
+    // ─── PostProcessErrorCode variant scaffold (mirrors the shared registry error model) ────
     //
     // These are the TWO expected union members, matching D-4 / D-9:
     //   - 'post-process-already-registered' (programmer error → throw)
@@ -1398,14 +866,14 @@ import {
     // the shape. Once w12 lands, the imports switch to the real module and the
     // tests run against real throw/Result paths after w13.
 
-    type PostProcessErrorCode = 'post-process-already-registered' | 'post-process-not-found';
+    type LegacyPostProcessErrorCode = 'post-process-already-registered' | 'post-process-not-found';
 
     describe('feat-20260604 M2 w11: PostProcessErrorCode closed union', () => {
       it('exhaustive switch on PostProcessErrorCode compiles without default', () => {
         // AC-08 / charter P3: the union must be exhaustively switchable without
         // a default branch. This test uses the scaffold type above; after w12,
         // it switches to the real PostProcessErrorCode from post-process-errors.ts.
-        const code = 'post-process-already-registered' as PostProcessErrorCode;
+        const code = 'post-process-already-registered' as LegacyPostProcessErrorCode;
         let matched = false;
         switch (code) {
           case 'post-process-already-registered':
@@ -1420,7 +888,7 @@ import {
       });
 
       it('post-process-already-registered has an id detail field', () => {
-        // Mirror pipeline-errors.ts PipelinePreviouslyRegisteredDetail.
+        // Mirror the retired registry error model PipelinePreviouslyRegisteredDetail.
         // The detail payload for the 'post-process-already-registered' code
         // carries the duplicate id so AI users can self-diagnose.
         const detail: { readonly id: string } = { id: 'fxaa' };
@@ -1428,7 +896,7 @@ import {
       });
 
       it('post-process-not-found has an id detail field', () => {
-        // Mirror pipeline-errors.ts PipelineNotFoundDetail but with an
+        // Mirror the retired registry error model PipelineNotFoundDetail but with an
         // id string (not a handle number — post-process lookup is by string id,
         // not by asset handle).
         const detail: { readonly id: string } = { id: 'non-existent' };
@@ -1438,7 +906,7 @@ import {
       it('PostProcessErrorCode member count is exactly 2', () => {
         // AC-19: the union has exactly 2 members. This guarantees future
         // additions stay additively evolvable.
-        const members: PostProcessErrorCode[] = [
+        const members: LegacyPostProcessErrorCode[] = [
           'post-process-already-registered',
           'post-process-not-found',
         ];
@@ -1450,8 +918,8 @@ import {
 
       describe('dual-channel contract (throw vs Result.err)', () => {
         it('same-id register is programmer error → throw', () => {
-          // Mirror pipeline-errors.ts: Map.has -> throw fail-fast for
-          // pipeline-already-registered. Same semantics for postProcess.register.
+          // Mirror the retired registry error model: Map.has -> throw fail-fast for
+          // the retired duplicate-registration case. Same semantics for postProcess.register.
           //
           // Test shape: when postProcess.register('fxaa', ...) is called a
           // second time with the same id, a PostProcessError with code
@@ -1476,8 +944,8 @@ import {
         });
 
         it('reference to unregistered id is runtime path → Result.err', () => {
-          // Mirror pipeline-errors.ts: installPipeline returns Result.err
-          // pipeline-not-found. Same semantics for addFullscreenPass referencing
+          // Mirror the retired registry error model: a missing reference returns Result.err.
+          // The post-process error still carries the structured recovery detail.
           // an unregistered post-process id.
           //
           // The error must carry:
@@ -1491,7 +959,7 @@ import {
             | { ok: true }
             | {
                 ok: false;
-                error: { code: PostProcessErrorCode; detail: { id: string }; hint: string };
+                error: { code: LegacyPostProcessErrorCode; detail: { id: string }; hint: string };
               } => {
             if (!registered.has(id)) {
               return {
@@ -1530,7 +998,7 @@ import {
           //
           // This test validates the narrowing shape. The real discriminated
           // union (PostProcessErrorVariant<C>) is implemented by w12 mirroring
-          // PipelineErrorVariant<C> from pipeline-errors.ts.
+          // The discriminated variant keeps the selected detail correlated.
 
           // Simulate a variant for 'post-process-already-registered'.
           const err = {
@@ -1570,9 +1038,8 @@ import {
     // code 'fullscreen-input-not-found' and detail = { readsKey, passName } (charter
     // P3 fail-fast + P4 property access).
     describe('feat-20260609 M1 T-1: PostProcessErrorCode 3-member closed union + dispatchFullscreenPass throw', () => {
-      it('PostProcessErrorCode union includes fullscreen-input-not-found member (T-2 closed-set growth)', async () => {
-        const ppe = await import('@forgeax/engine-render/internal');
-        type RealCode = (typeof ppe)['PostProcessError'] extends {
+      it('PostProcessErrorCode union includes fullscreen-input-not-found member (T-2 closed-set growth)', () => {
+        type RealCode = typeof PostProcessError extends {
           new (args: { code: infer C; detail: never }): unknown;
         }
           ? C
@@ -1583,11 +1050,8 @@ import {
         expect(member).toBe('fullscreen-input-not-found');
       });
 
-      it('exhaustive switch over PostProcessErrorCode covers 3 members without default', async () => {
-        const ppeMod: typeof import('@forgeax/engine-render/internal') = await import(
-          '@forgeax/engine-render/internal'
-        );
-        type Code = import('@forgeax/engine-render/internal').PostProcessErrorCode;
+      it('exhaustive switch over PostProcessErrorCode covers 3 members without default', () => {
+        type Code = PostProcessErrorCode;
         const classify = (code: Code): string => {
           switch (code) {
             case 'post-process-already-registered':
@@ -1613,19 +1077,18 @@ import {
         expect(classify('post-process-already-registered')).toBe('register');
         expect(classify('post-process-not-found')).toBe('lookup');
         expect(classify('fullscreen-input-not-found')).toBe('reads');
-        expect(typeof ppeMod.PostProcessError).toBe('function');
+        expect(typeof PostProcessError).toBe('function');
       });
 
-      it('fullscreen-input-not-found variant detail = { readsKey, passName } (T-2 detail shape)', async () => {
-        const ppe = await import('@forgeax/engine-render/internal');
-        const err = new ppe.PostProcessError({
+      it('fullscreen-input-not-found variant detail = { readsKey, passName } (T-2 detail shape)', () => {
+        const err = new PostProcessError({
           code: 'fullscreen-input-not-found',
           detail: { readsKey: 'offscreenColor', passName: 'pp' },
         });
         expect(err.code).toBe('fullscreen-input-not-found');
         if (err.code === 'fullscreen-input-not-found') {
           // Property access narrows to FullscreenInputNotFoundDetail without cast.
-          const detail: import('@forgeax/engine-render/internal').FullscreenInputNotFoundDetail =
+          const detail: import('../../../render/src/post-process-errors').FullscreenInputNotFoundDetail =
             err.detail;
           expect(detail.readsKey).toBe('offscreenColor');
           expect(detail.passName).toBe('pp');
@@ -1634,90 +1097,6 @@ import {
         expect(err.expected.length).toBeGreaterThan(0);
         expect(err.hint).toContain('offscreenColor');
         expect(err.hint).toContain('pp');
-      });
-
-      it('dispatchFullscreenPass throws fullscreen-input-not-found when reads[0] resolves to undefined (T-3 throw site)', async () => {
-        const { RenderGraph } = await import('@forgeax/engine-render-graph');
-        const { addFullscreenPass } = await import('@forgeax/engine-render/internal');
-        type RPC = import('@forgeax/engine-render/internal').RenderPipelineContext;
-        // Stub ctx whose runtime.lookupPostProcess returns a registered entry but
-        // whose resolve context (passed via graph.execute) returns undefined for
-        // the requested reads key. The dispatcher's reads-resolve branch must
-        // throw 'fullscreen-input-not-found' with detail = { readsKey, passName }.
-        const stubCtx = {
-          runtime: {
-            lookupPostProcess: (_id: string) => ({
-              source: 'fn fs_main() {}',
-            }),
-            // device + errorRegistry are reached only AFTER reads resolve succeeds;
-            // empty stubs are sufficient for the throw-site test (we never get there).
-            device: {
-              createBindGroupLayout: () => ({ ok: true, value: {} }),
-              createSampler: () => ({ ok: true, value: {} }),
-              createBindGroup: () => ({ ok: true, value: {} }),
-            },
-            errorRegistry: { fire: (_e: unknown) => undefined },
-          },
-          view: {} as unknown,
-          encoder: {
-            beginRenderPass: () => ({
-              setPipeline: () => undefined,
-              setBindGroup: () => undefined,
-              draw: () => undefined,
-              end: () => undefined,
-            }),
-          } as unknown,
-        } as unknown as RPC;
-
-        const graph = new RenderGraph<RPC>();
-        graph.addColorTarget('rt', { format: 'bgra8unorm', size: { w: 64, h: 64 } });
-        // reads = ['offscreenColor'] but offscreenColor is NOT registered as a color
-        // target on this graph (declaration miss -> throw site).
-        addFullscreenPass(graph, 'pp', {
-          shader: 'test::reads-throw',
-          color: 'rt',
-          reads: ['offscreenColor'],
-        });
-
-        const passes = (
-          graph as unknown as {
-            passes: {
-              list(): readonly {
-                name: string;
-                descriptor: {
-                  execute?:
-                    | ((c: unknown) => void)
-                    | ((c: unknown, r: { resolve: (n: string) => unknown }) => void);
-                };
-              }[];
-            };
-          }
-        ).passes.list();
-        const pp = passes.find((p) => p.name === 'pp');
-        expect(pp, 'pass "pp" must be registered').toBeDefined();
-        if (!pp || pp.descriptor.execute === undefined) return;
-
-        // Resolve context returns undefined for any name (mirrors the
-        // pre-compile / unregistered-key path).
-        const resolveCtx = { resolve: (_n: string) => undefined };
-
-        let caught: unknown = null;
-        try {
-          (pp.descriptor.execute as (c: unknown, r: typeof resolveCtx) => void)(
-            stubCtx,
-            resolveCtx,
-          );
-        } catch (e) {
-          caught = e;
-        }
-        expect(caught, 'dispatchFullscreenPass must throw on unresolved reads[0]').not.toBeNull();
-        const err = caught as {
-          code?: string;
-          detail?: { readsKey?: string; passName?: string };
-        };
-        expect(err.code).toBe('fullscreen-input-not-found');
-        expect(err.detail?.readsKey).toBe('offscreenColor');
-        expect(err.detail?.passName).toBe('pp');
       });
     });
   });

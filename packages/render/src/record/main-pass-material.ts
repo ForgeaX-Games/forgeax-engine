@@ -12,26 +12,28 @@ import {
   type BindGroupEntry,
   type BindGroupLayout,
   type Buffer,
-  err,
-  ok,
   type RenderPipeline,
-  type Result,
   RhiError,
   type Sampler,
+  type TextureView,
 } from '@forgeax/engine-rhi';
+import {
+  DEFAULT_MSDF_TEXT_PARAM_SCHEMA,
+  DEFAULT_SPRITE_PARAM_SCHEMA,
+  DEFAULT_UNLIT_PARAM_SCHEMA,
+} from '@forgeax/engine-shader';
 import type {
   Handle,
   ImageError,
   MaterialRenderState,
   ParamSchemaEntry,
-  PassKind,
   PrimitiveTopology,
   SamplerAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
-import { derive } from '@forgeax/engine-types';
+import { derive, handleSlot, resolveMaterialTextureCoordinates } from '@forgeax/engine-types';
+import type { GpuResidencyCache } from '../device/gpu-residency';
 import { VideoUploadUnsupportedError } from '../errors/render';
-import type { GpuResourceStore } from '../gpu-resource-store';
 import {
   assembleMaterialWithSkylightEntries,
   type EmissiveAoBindGroupResources,
@@ -39,20 +41,14 @@ import {
 } from '../ibl/skylight-bind-group';
 import { isStandardPbrMaterialShader } from '../pbr-pipeline';
 import { deriveTextureExtent } from '../render-data';
+import type { MaterialSnapshot } from '../render-system-extract';
+import type { BindGroupCounts, MaterialBgAssemblyCacheEntry } from './frame-snapshot';
+import { extractEntryResourceHandle, getOrCreatePerEntity } from './mesh-ssbo';
 import {
   type PipelineState,
   type RenderSystemRuntime,
   STANDARD_PBR_UBO_SIZE,
-} from '../render-system';
-import type { MaterialSnapshot } from '../render-system-extract';
-import type { MaterialRenderProjection } from '../renderer/material/assembly.js';
-import {
-  type MaterialPipelineMiss,
-  type MaterialPipelineReady,
-  routeMaterialPipeline,
-} from '../renderer/material/pipeline-projection.js';
-import type { BindGroupCounts, MaterialBgAssemblyCacheEntry } from './frame-snapshot';
-import { extractEntryResourceHandle, getOrCreatePerEntity } from './mesh-ssbo';
+} from './render-context';
 
 // Param schemas are immutable runtime contracts: the shader registry installs
 // them once and material snapshots only retain the same array reference. Keep
@@ -77,7 +73,7 @@ function derivedParamSchema(schema: readonly ParamSchemaEntry[]): ReturnType<typ
 // `RecordPassContext` (26-field full surface, including the `internals` kitchen-sink and
 // the 0-consumed `skyboxCount` residual) is DELETED. The per-frame shared state injected
 // into the render-graph pass execute closures is now the clean `RenderPipelineContext`
-// (defined in `render-pipeline-context.ts`): `internals` is gone (replaced by the named
+// (defined in `render-system.ts`): `internals` is gone (replaced by the named
 // `assets` / `store` / `pipelineState` / `runtime` surfaces) so a pipeline author cannot
 // reach the runtime kitchen-sink through the public ctx (AC-08). The graph is
 // `RenderGraph<RenderPipelineContext>` so `execute(ctx)` forwards the object to each
@@ -94,6 +90,24 @@ function derivedParamSchema(schema: readonly ParamSchemaEntry[]): ReturnType<typ
 // TextureViews through resolve(name). PerPassResources texture slots still hold
 // the last-used views for bindgroup-invalidation self-checks (D-3 physical texture
 // identity), but the graph owns the create/destroy lifecycle.
+
+/**
+ * Keep line primitives visible when they share a depth plane with filled
+ * geometry. The same topology policy is consumed by the CPU and GPU-driven
+ * raster lanes so a mixed mesh does not change appearance when ownership
+ * moves between them.
+ */
+export function geometryRenderStateForTopology(
+  topology: PrimitiveTopology,
+  renderState: MaterialRenderState | undefined,
+): MaterialRenderState | undefined {
+  if (topology !== 'line-list' && topology !== 'line-strip') return renderState;
+  return {
+    ...renderState,
+    depthWriteEnabled: false,
+    depthCompare: 'less-equal',
+  };
+}
 
 /**
  * feat-20260604-learn-render-4.10-anti-aliasing-msaa M2 / w9: pick the static
@@ -126,22 +140,6 @@ export function selectGeometryPipeline(
     return msaaActive ? pipelineState.unlitPipelineHdrMsaa : pipelineState.unlitPipelineHdr;
   }
   return msaaActive ? pipelineState.unlitPipelineMsaa : pipelineState.unlitPipeline;
-}
-
-/**
- * Resolve a cooked material projection for record. The record stage receives
- * the already-resolved projection and an immutable artifact lookup; it never
- * follows parent GUIDs, reads authored material state, or invokes a compiler.
- * A missing or mismatched artifact is an explicit route miss so callers cannot
- * silently substitute a default shader.
- */
-export function selectCookedMaterialPipelineForRender(args: {
-  readonly projection: MaterialRenderProjection;
-  readonly lookupArtifact: (
-    key: string,
-  ) => import('@forgeax/engine-shader').MaterialRuntimeArtifact | undefined;
-}): MaterialPipelineReady | MaterialPipelineMiss {
-  return routeMaterialPipeline(args);
 }
 
 /**
@@ -191,79 +189,7 @@ export function entityHasTransparentSubmesh(source: {
 }
 
 /**
- * Selects the PSO for a transparent (or any generic materialShaderId) draw
- * via the runtime's per-MaterialShader pipeline cache. Returns a
- * structured RhiError on cache miss / pending build -- the caller MUST
- * surface this via the error registry rather than substituting a silent
- * fallback (charter P3 explicit failure).
- *
- * The `getMaterialShaderPipeline` argument mirrors
- * {@link RenderSystemRuntime.getMaterialShaderPipeline}'s 9-arg signature
- * but is injected so the helper is unit-testable with a plain
- * `() => null` stand-in. The helper threads only the inputs the caller
- * already has on the dispatch entry -- it never reads from
- * MaterialAsset internals (plan-strategy section 5.6 gate R-H).
- *
- * @internal
- */
-export function selectMaterialPipelineForRender(args: {
-  readonly materialShaderId: string;
-  readonly isHdr: boolean;
-  readonly renderState?: MaterialRenderState | undefined;
-  readonly topology?: PrimitiveTopology | undefined;
-  readonly indexFormat?: 'uint16' | 'uint32' | undefined;
-  readonly variantSet?: string | undefined;
-  readonly sampleCount?: number | undefined;
-  readonly getMaterialShaderPipeline:
-    | ((
-        materialShaderId: string,
-        isHdr: boolean,
-        renderState?: MaterialRenderState,
-        topology?: PrimitiveTopology,
-        indexFormat?: 'uint16' | 'uint32',
-        variantSet?: string,
-        passKind?: PassKind,
-        meshAttributes?: import('@forgeax/engine-types').VertexAttributeMap,
-        sampleCount?: number,
-      ) => RenderPipeline | null)
-    | undefined;
-}): Result<RenderPipeline, RhiError> {
-  if (args.getMaterialShaderPipeline === undefined) {
-    return err(
-      new RhiError({
-        code: 'internal-error',
-        expected: `runtime.getMaterialShaderPipeline registered before draw of ${args.materialShaderId}`,
-        hint: `material shader ${args.materialShaderId} has no resolver; the renderer was not initialised with a pipeline cache`,
-      }),
-    );
-  }
-  const pipeline = args.getMaterialShaderPipeline(
-    args.materialShaderId,
-    args.isHdr,
-    args.renderState,
-    args.topology,
-    args.indexFormat,
-    args.variantSet,
-    undefined, // passKind defaults to 'forward'
-    undefined, // meshAttributes -- transparent path uses the default vertex layout
-    args.sampleCount,
-  );
-  if (pipeline === null) {
-    return err(
-      new RhiError({
-        code: 'internal-error',
-        expected: `pipeline cache hit for ${args.materialShaderId} (renderState=${args.renderState ? 'set' : 'unset'}, isHdr=${args.isHdr})`,
-        hint: `material shader pipeline ${args.materialShaderId} missed the runtime cache; the underlying shader-module build may still be pending, or the id is not registered in ShaderRegistry`,
-      }),
-    );
-  }
-  return ok(pipeline);
-}
-
-// === end feat-20260625 M2 / w7 transparent-aware helpers ========================
-
-/**
- * feat-20260601-gpu-resource-store-extraction M1 / D-9: resolve a texture's
+ * feat-20260601-device/gpu-residency-extraction M1 / D-9: resolve a texture's
  * GPU view through the pull-model residency store. The three steps replace the
  * pre-extraction single-call accessor on the registry:
  *   1. fetch the TextureAsset POD off the registry (CPU; registry keeps PODs)
@@ -283,12 +209,11 @@ function isImageError(error: unknown): error is ImageError {
 
 export function residentTextureView(
   world: World,
-  store: GpuResourceStore,
+  store: GpuResidencyCache,
   runtime: RenderSystemRuntime,
   handle: Handle<'TextureAsset', 'shared'>,
-  worldId: number = 0,
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture-view return
-): any | undefined {
+  worldId: World | number = world,
+): TextureView | undefined {
   const podRes = resolveAssetHandle<TextureAsset>(world, handle);
   if (!podRes.ok) return undefined;
   const residentRes = store.ensureResident(handle, podRes.value, worldId);
@@ -306,13 +231,14 @@ export function residentTextureView(
 
 function residentSampler(
   world: World,
-  store: GpuResourceStore,
+  store: GpuResidencyCache,
   runtime: RenderSystemRuntime,
   handle: Handle<'SamplerAsset', 'shared'>,
+  worldId: World | number = world,
 ): Sampler | undefined {
   const podRes = resolveAssetHandle<SamplerAsset>(world, handle);
   if (!podRes.ok) return undefined;
-  const residentRes = store.ensureSamplerResident(handle, podRes.value);
+  const residentRes = store.ensureSamplerResident(handle, podRes.value, worldId);
   if (!residentRes.ok) {
     runtime.errorRegistry.fire(residentRes.error);
     return undefined;
@@ -329,7 +255,7 @@ function residentSampler(
 // D-1) for this entity's HTMLVideoElement, upload its current frame via
 // `store.uploadFrame` (copyExternalImageToTexture), and return the resulting
 // view. When the provider is absent / returns no element / the element has no
-// decodable dimensions yet, fall back to any previously-uploaded view and
+// decodable dimensions yet, fall back to a previously-uploaded view and
 // finally to `undefined` (caller binds the default view this frame — charter
 // P3 graceful, no garbage sampling). A failed GPU upload fires the structured
 // RhiError on the engine channel and degrades to the default view.
@@ -338,20 +264,65 @@ function residentSampler(
 // GPUExternalTexture branch is a reserved hook (OOS-5) — when it ever becomes
 // available the upload would route there. Today it is always false so the
 // general copyExternalImageToTexture path is the only one taken.
+type DynamicTextureStore = import('@forgeax/engine-assets-runtime').DynamicTextureStore;
+
+type VideoUploadFailureEpisodes = Map<number, Set<number>>;
+
+// The store is renderer-owned, so this keeps one failure episode per
+// renderer/entity/clip without creating a second video system or leaking
+// state across a replacement renderer.
+const VIDEO_UPLOAD_FAILURE_EPISODES = new WeakMap<
+  DynamicTextureStore,
+  VideoUploadFailureEpisodes
+>();
+
+function markVideoUploadFailureEpisode(
+  store: DynamicTextureStore,
+  entityKey: number,
+  clip: Handle<'VideoAsset', 'shared'>,
+): boolean {
+  let clips = VIDEO_UPLOAD_FAILURE_EPISODES.get(store);
+  if (clips === undefined) {
+    clips = new Map();
+    VIDEO_UPLOAD_FAILURE_EPISODES.set(store, clips);
+  }
+  let episodes = clips.get(entityKey);
+  if (episodes === undefined) {
+    episodes = new Set();
+    clips.set(entityKey, episodes);
+  }
+  const clipId = handleSlot(clip);
+  if (episodes.has(clipId)) return false;
+  episodes.add(clipId);
+  return true;
+}
+
+function clearVideoUploadFailureEpisode(
+  store: DynamicTextureStore,
+  entityKey: number,
+  clip: Handle<'VideoAsset', 'shared'>,
+): void {
+  const clips = VIDEO_UPLOAD_FAILURE_EPISODES.get(store);
+  const episodes = clips?.get(entityKey);
+  if (episodes === undefined) return;
+  episodes.delete(handleSlot(clip));
+  if (episodes.size === 0) clips?.delete(entityKey);
+  if (clips?.size === 0) VIDEO_UPLOAD_FAILURE_EPISODES.delete(store);
+}
+
 export function videoTextureView(
   world: World,
-  store: import('@forgeax/engine-assets-runtime').DynamicTextureStore | undefined,
+  store: DynamicTextureStore | undefined,
   runtime: RenderSystemRuntime,
   entityKey: number,
   clip: Handle<'VideoAsset', 'shared'>,
   highPerfAvailable: boolean,
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture-view return
-): any | undefined {
+): TextureView | undefined {
   if (store === undefined) return undefined;
   const provider = world.hasResource(VIDEO_ELEMENT_PROVIDER_KEY)
     ? world.getResource<VideoElementProvider>(VIDEO_ELEMENT_PROVIDER_KEY)
     : undefined;
-  const element = provider?.getElement(entityKey as unknown as EntityHandle, clip);
+  const element = provider?.getElement(entityKey as EntityHandle, clip);
   // AC-10 double-miss: a VideoPlayer entity can reach NEITHER upload path this
   // frame — no host HTMLVideoElement (general copyExternalImageToTexture path)
   // AND no high-perf GPUExternalTexture path. This is the genuine "this backend
@@ -364,14 +335,19 @@ export function videoTextureView(
   // orphan system). The default view is still bound this frame so the draw
   // does not crash (graceful degradation), but the failure is no longer silent.
   if (element === undefined && !highPerfAvailable) {
-    runtime.errorRegistry.fire(new VideoUploadUnsupportedError());
+    if (markVideoUploadFailureEpisode(store, entityKey, clip)) {
+      runtime.errorRegistry.fire(new VideoUploadUnsupportedError());
+    }
     return store.getView(clip);
   }
   // D-2 / w17 high-perf reserved hook: a future GPUExternalTexture import path
   // would key off `highPerfAvailable` here. It is always false today
   // (importExternalTexture absent), so the general copyExternalImageToTexture
   // path below is the sole route end-to-end.
-  if (element === undefined) return store.getView(clip);
+  if (element === undefined) {
+    clearVideoUploadFailureEpisode(store, entityKey, clip);
+    return store.getView(clip);
+  }
   const width = element.videoWidth;
   const height = element.videoHeight;
   // Metadata dimensions can be non-zero before the decoder has produced a
@@ -385,6 +361,7 @@ export function videoTextureView(
     runtime.errorRegistry.fire(uploaded.error);
     return store.getView(clip);
   }
+  clearVideoUploadFailureEpisode(store, entityKey, clip);
   return uploaded.value;
 }
 
@@ -397,6 +374,8 @@ export const BUILTIN_USER_REGION_TEXTURE_FIELDS: readonly string[] = [
   'metallicRoughnessTexture',
   'normalTexture',
   'specularTintTexture',
+  'emissiveTexture',
+  'occlusionTexture',
 ];
 
 const LEGACY_MATERIAL_TEXTURE_SCALE_OFFSET = 80;
@@ -434,7 +413,7 @@ export function materialTextureUvScale(
 
 function materialTextureForField(
   material: MaterialSnapshot,
-  field: (typeof MATERIAL_TEXTURE_SCALE_FIELDS)[number],
+  field: string,
 ): Handle<'TextureAsset', 'shared'> | undefined {
   if (field === 'emissiveTexture') return material.emissiveTexture;
   if (field === 'occlusionTexture') return material.occlusionTexture;
@@ -461,6 +440,31 @@ export function applyMaterialTextureUvScales(
   world: World,
 ): void {
   const f32 = materialUboFloatView(payload);
+  const coordinateSchema = materialCoordinateSchema(material);
+  if (coordinateSchema !== undefined) {
+    const coordinateRecords = derivedParamSchema(coordinateSchema).coordinateRecords;
+    for (const record of coordinateRecords) {
+      const field = record.parameter;
+      const handle = materialTextureForField(material, field);
+      const resolvedTexture =
+        handle === undefined ? undefined : resolveAssetHandle<TextureAsset>(world, handle);
+      const texture = resolvedTexture?.ok === true ? resolvedTexture.value : undefined;
+      const [u, v] = materialTextureUvScale(texture);
+      const coordinates = resolveMaterialTextureCoordinates(
+        material.textureCoordinates?.get(field),
+      );
+      const offset = record.offset / 4;
+      f32[offset] = coordinates.transform.offset[0];
+      f32[offset + 1] = coordinates.transform.offset[1];
+      f32[offset + 2] = coordinates.transform.scale[0];
+      f32[offset + 3] = coordinates.transform.scale[1];
+      f32[offset + 4] = coordinates.set;
+      f32[offset + 5] = coordinates.transform.rotation;
+      f32[offset + 6] = u;
+      f32[offset + 7] = v;
+    }
+    return;
+  }
   // Standard PBR grew two authored coat fields before the engine-owned UV
   // tail. Sprite, sprite-lit, unlit, and text keep their own 80-byte tail
   // position because their WGSL layouts do not carry clearcoat.
@@ -516,6 +520,25 @@ export function applyMaterialTextureUvScales(
   }
 }
 
+function materialCoordinateSchema(
+  material: MaterialSnapshot,
+): readonly ParamSchemaEntry[] | undefined {
+  if (material.materialParamSchema !== undefined && material.materialParamSchema.length > 0) {
+    return material.materialParamSchema;
+  }
+  switch (material.materialShaderId) {
+    case 'forgeax::default-unlit':
+      return DEFAULT_UNLIT_PARAM_SCHEMA;
+    case 'forgeax::sprite':
+    case 'forgeax::sprite-lit':
+      return DEFAULT_SPRITE_PARAM_SCHEMA;
+    case 'forgeax::msdf-text':
+      return DEFAULT_MSDF_TEXT_PARAM_SCHEMA;
+    default:
+      return undefined;
+  }
+}
+
 /**
  * feat-20260621-learn-render-5-5-parallax M2 / w8 (D-3): ordered user-region
  * texture field names for a material's bind-group assembly, derived from the
@@ -540,8 +563,7 @@ export function userRegionTextureFieldOrder(
 export function defaultViewForUserRegionField(
   field: string,
   pipelineState: PipelineState,
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture-view
-): any {
+): TextureView {
   if (field === 'normalTexture') return pipelineState.defaultNormalTextureView;
   if (field === 'baseColorTexture') return pipelineState.fallbackTextureView;
   return pipelineState.defaultWhiteTextureView;
@@ -566,7 +588,7 @@ export function defaultViewForUserRegionField(
  *                       (sentinel `bottom < 0` for tile mode is consumed via abs()).
  * @param renderableIndex The entity index into the validated renderables list.
  * @param seenIndices    The per-frame-state guard Set; entries are added on increment.
- * @param metrics        The per-Renderer EngineMetrics counter.
+ * @param metrics        The owner-provided EngineMetrics counter.
  * @internal — exported for unit-test access (w17).
  */
 export function detectNineSliceScaleTooSmall(
@@ -594,7 +616,7 @@ export function detectNineSliceScaleTooSmall(
  * Build the 128-byte Material UBO payload for a PBR / unlit material entry
  * (feat-20260527-sprite-nineslice M2 / w11; D-7 regression-net helper).
  *
- * Byte-for-byte equivalent to the legacy hard-coded PBR write path; any
+ * Byte-for-byte equivalent to the legacy hard-coded PBR write path; each
  * deviation is caught by `render-system-record-pbr-ubo-stable.test.ts`.
  * The schema-driven paramSnapshot overlay (feat-20260523 M9-T05; AC-14)
  * positions vec4 / f32 slots onto std140 [slot0 vec4, slot1 f32 metallic,
@@ -614,7 +636,7 @@ export function buildPbrMaterialUboPayload(material: MaterialSnapshot): Uint8Arr
  * while the frame recorder reuses one scratch slot for all materials. A
  * scene with thousands of submeshes otherwise allocates one 304-byte
  * Uint8Array per material per frame, creating avoidable GC pressure without
- * changing any GPU-visible bytes.
+ * changing GPU-visible bytes.
  */
 export function writePbrMaterialUboPayload(
   buf: Uint8Array | Float32Array,
@@ -742,7 +764,7 @@ export function writePbrMaterialUboPayload(
  * standard-pbr remains byte-identical to `buildPbrMaterialUboPayload`: the
  * engine's stock PBR material ships `paramSnapshot: undefined`, so this
  * writer is a no-op on that path; the explicit field writes in the helper
- * above cover every byte. User shaders (sprite-shaped 4 x vec4 or any other
+ * above cover every byte. User shaders (sprite-shaped 4 x vec4 or another
  * paramSchema) get their fields written at the offsets declared by derive.
  *
  * @internal export-for-test (consumed inside `recordFrame` + render-system-
@@ -808,13 +830,13 @@ export interface PerSubmeshMaterialBgDeps {
   readonly runtime: RenderSystemRuntime;
   readonly pipelineState: PipelineState;
   readonly world: World;
-  readonly store: GpuResourceStore;
+  readonly store: GpuResidencyCache;
   readonly materialSlice: number;
   readonly videoHighPerfAvailable: boolean;
   readonly skylightResources: SkylightBindGroupResources;
   readonly materialBgShared: Map<string, WeakMap<object, unknown>>;
   /** Cross-frame final BG reuse keyed by the stable source material handle. */
-  readonly materialBgAssemblyCache: Map<number, MaterialBgAssemblyCacheEntry>;
+  readonly materialBgAssemblyCache: Map<string, MaterialBgAssemblyCacheEntry>;
   readonly bindGroupCounts: BindGroupCounts;
 }
 
@@ -846,11 +868,11 @@ export function buildPerSubmeshMaterialBg(
   deps: PerSubmeshMaterialBgDeps,
   submeshMaterial: MaterialSnapshot,
   entityKey: number,
+  materialWorld: World = deps.world,
 ): BindGroup {
   const {
     runtime,
     pipelineState,
-    world,
     store,
     materialSlice,
     videoHighPerfAvailable,
@@ -860,13 +882,16 @@ export function buildPerSubmeshMaterialBg(
     bindGroupCounts,
   } = deps;
   const smMaterialHandle = submeshMaterial.materialHandle;
+  const materialCacheKey =
+    smMaterialHandle === undefined ? undefined : `${materialWorld.identity}:${smMaterialHandle}`;
   const smHasVideoFields = (submeshMaterial.videoTextureFields?.size ?? 0) > 0;
   const smShaderId = submeshMaterial.materialShaderId;
   const smPerShaderBgl =
     smShaderId !== undefined ? runtime.getMaterialBindGroupLayout?.(smShaderId) : undefined;
   const smMaterialBgl = smPerShaderBgl ?? pipelineState.materialBindGroupLayout;
   if (smMaterialHandle !== undefined && !smHasVideoFields) {
-    const cached = materialBgAssemblyCache.get(smMaterialHandle);
+    const cached =
+      materialCacheKey === undefined ? undefined : materialBgAssemblyCache.get(materialCacheKey);
     if (
       isMaterialBgAssemblyCacheHit(
         cached,
@@ -883,12 +908,21 @@ export function buildPerSubmeshMaterialBg(
   const smSchema =
     submeshMaterial.materialParamSchema ??
     (smShaderId !== undefined ? runtime.getParamSchema?.(smShaderId) : undefined);
-  const smUserRegionFields = userRegionTextureFieldOrder(smSchema);
+  // The shipped PBR shaders always own the six texture pairs declared by the
+  // standard shader artifact. Authored material snapshots may intentionally
+  // carry a compact four-field schema because emissive/occlusion are engine
+  // injected values, but the runtime PBR BGL still exposes bindings 9..12 for
+  // those pairs. Keep the record projection on the shader-owned layout so IBL
+  // starts at binding 13 rather than colliding with emissiveSampler.
+  const smUserRegionFields =
+    smPerShaderBgl === undefined || isStandardPbrMaterialShader(smShaderId)
+      ? BUILTIN_USER_REGION_TEXTURE_FIELDS
+      : userRegionTextureFieldOrder(smSchema);
   let materialResourcesResident = true;
   const smSamplerForField = (field: string | undefined): Sampler => {
     const handle = field === undefined ? undefined : submeshMaterial.samplerHandles?.get(field);
     if (handle === undefined) return pipelineState.defaultSampler;
-    const sampler = residentSampler(world, store, runtime, handle);
+    const sampler = residentSampler(materialWorld, store, runtime, handle);
     if (sampler === undefined) materialResourcesResident = false;
     return sampler ?? pipelineState.defaultSampler;
   };
@@ -905,15 +939,12 @@ export function buildPerSubmeshMaterialBg(
       },
     },
   ];
-  const smBglPairCount =
-    smPerShaderBgl !== undefined
-      ? smUserRegionFields.length
-      : BUILTIN_USER_REGION_TEXTURE_FIELDS.length;
+  const smBglPairCount = smUserRegionFields.length;
   for (let fi = 0; fi < smBglPairCount; fi++) {
     const field = smUserRegionFields[fi];
     const samplerBinding = 1 + fi * 2;
     const textureBinding = samplerBinding + 1;
-    let smView: unknown =
+    let smView: TextureView =
       field !== undefined
         ? defaultViewForUserRegionField(field, pipelineState)
         : pipelineState.defaultWhiteTextureView;
@@ -921,7 +952,7 @@ export function buildPerSubmeshMaterialBg(
       field !== undefined ? submeshMaterial.videoTextureFields?.get(field) : undefined;
     if (smVideoClip !== undefined) {
       const view = videoTextureView(
-        world,
+        materialWorld,
         runtime.dynamicTextureStore,
         runtime,
         entityKey,
@@ -930,9 +961,16 @@ export function buildPerSubmeshMaterialBg(
       );
       if (view !== undefined) smView = view;
     } else {
-      const smHandle = field !== undefined ? submeshMaterial.textureHandles?.get(field) : undefined;
+      const smHandle =
+        field === 'emissiveTexture'
+          ? submeshMaterial.emissiveTexture
+          : field === 'occlusionTexture'
+            ? submeshMaterial.occlusionTexture
+            : field !== undefined
+              ? submeshMaterial.textureHandles?.get(field)
+              : undefined;
       if (smHandle !== undefined) {
-        const view = residentTextureView(world, store, runtime, smHandle);
+        const view = residentTextureView(materialWorld, store, runtime, smHandle);
         if (view !== undefined) smView = view;
         else materialResourcesResident = false;
       }
@@ -944,29 +982,29 @@ export function buildPerSubmeshMaterialBg(
       },
       {
         binding: textureBinding,
-        resource: { kind: 'textureView' as const, value: smView as never },
+        resource: { kind: 'textureView' as const, value: smView },
       },
     );
   }
-  let smEmissiveView: unknown = pipelineState.defaultWhiteTextureView;
+  let smEmissiveView: TextureView = pipelineState.defaultWhiteTextureView;
   const smEmissiveHandle = submeshMaterial.emissiveTexture;
   if (smEmissiveHandle !== undefined) {
-    const view = residentTextureView(world, store, runtime, smEmissiveHandle);
+    const view = residentTextureView(materialWorld, store, runtime, smEmissiveHandle);
     if (view !== undefined) smEmissiveView = view;
     else materialResourcesResident = false;
   }
-  let smOcclusionView: unknown = pipelineState.defaultWhiteTextureView;
+  let smOcclusionView: TextureView = pipelineState.defaultWhiteTextureView;
   const smOcclusionHandle = submeshMaterial.occlusionTexture;
   if (smOcclusionHandle !== undefined) {
-    const view = residentTextureView(world, store, runtime, smOcclusionHandle);
+    const view = residentTextureView(materialWorld, store, runtime, smOcclusionHandle);
     if (view !== undefined) smOcclusionView = view;
     else materialResourcesResident = false;
   }
   const smEmissiveAo: EmissiveAoBindGroupResources = {
     emissiveSampler: smSamplerForField('emissiveTexture'),
-    emissiveView: smEmissiveView as never,
+    emissiveView: smEmissiveView,
     occlusionSampler: smSamplerForField('occlusionTexture'),
-    occlusionView: smOcclusionView as never,
+    occlusionView: smOcclusionView,
   };
   const smMergedEntries = assembleMaterialWithSkylightEntries(
     smBaseEntries,
@@ -990,14 +1028,16 @@ export function buildPerSubmeshMaterialBg(
     bindGroupCounts,
   );
   if (smMaterialHandle !== undefined && !smHasVideoFields && materialResourcesResident) {
-    materialBgAssemblyCache.set(smMaterialHandle, {
-      material: submeshMaterial,
-      materialResourceEpoch: store.materialResourceEpoch,
-      materialBgl: smMaterialBgl,
-      materialBuffer: pipelineState.materialUniformBuffer.buffer,
-      skylightResources,
-      bindGroup: smBindGroup,
-    });
+    if (materialCacheKey !== undefined) {
+      materialBgAssemblyCache.set(materialCacheKey, {
+        material: submeshMaterial,
+        materialResourceEpoch: store.materialResourceEpoch,
+        materialBgl: smMaterialBgl,
+        materialBuffer: pipelineState.materialUniformBuffer.buffer,
+        skylightResources,
+        bindGroup: smBindGroup,
+      });
+    }
   }
   return smBindGroup;
 }

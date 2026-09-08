@@ -77,7 +77,7 @@ The required WebKit cells are:
 `default-srgb-texture`, `material-alpha-mask-default`, `material-alpha-blend`,
 `tone-aces-filmic-2`, `direct-directional-urp`, and `transparent-ldr-urp`.
 
-Run the same-process headed runner locally with a WebKit browser installation:
+Run the fresh-process headed runner locally with a WebKit browser installation:
 
 ```bash
 xvfb-run -a env FORGEAX_BROWSER_HEADLESS=0 \

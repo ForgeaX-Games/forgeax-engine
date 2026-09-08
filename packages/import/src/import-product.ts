@@ -2,92 +2,58 @@ import type {
   ArtifactDescriptor,
   AssetRef,
   CookProduct,
+  CookReceipt,
   ImportedArtifactBody,
   ImportedAsset,
   ImportProduct,
-  MaterialAsset,
   Result,
 } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
 
-export interface MaterialImportRefs {
-  readonly parent: readonly string[];
-  readonly textures: readonly string[];
-  readonly samplers: readonly string[];
-  readonly modules: readonly string[];
+export interface TerminalImportProduct<P = unknown> extends ImportProduct<P> {
+  readonly refs: readonly AssetRef[];
+  readonly artifacts: Readonly<Record<string, ImportedArtifactBody>>;
+  readonly receipts: readonly CookReceipt[];
+  readonly diagnostics: readonly unknown[];
+  readonly sourceRevision: string;
+  readonly sourceKey?: string;
 }
 
-export interface MaterialSourceEvidence {
-  readonly inputFingerprint: string;
-  readonly importerVersion: string;
+export interface ImportAssetProduct<P = unknown> {
+  readonly payload: P;
+  readonly refs: readonly AssetRef[];
+  readonly artifacts: Readonly<Record<string, ImportedArtifactBody>>;
 }
 
-export interface MaterialImportProductInput {
-  readonly guid: string;
-  readonly sourcePath: string;
-  readonly material: MaterialAsset;
-  readonly refs: MaterialImportRefs;
-  readonly sourceEvidence: MaterialSourceEvidence;
-}
-
-export interface MaterialImportProduct {
-  readonly asset: ImportedAsset<MaterialAsset>;
-  readonly sourcePath: string;
-  readonly sourceEvidence: MaterialSourceEvidence;
-}
-
-export interface MaterialImportProductError {
-  readonly code: 'material-import-product-invalid';
+export interface ImportProductContractError {
+  readonly code: 'import-product-invalid';
   readonly expected: string;
   readonly hint: string;
   readonly detail: { readonly field: string };
 }
 
-function invalid(field: string): Result<never, MaterialImportProductError> {
+function invalidProduct(field: string): Result<never, ImportProductContractError> {
   return err({
-    code: 'material-import-product-invalid',
-    expected: 'an authored MaterialAsset with complete dependency references',
-    hint: 'declare every material dependency before the product enters the cook pipeline',
+    code: 'import-product-invalid',
+    expected: 'a complete terminal import product with source identity',
+    hint: 'preserve refs, artifacts, receipts, diagnostics, and source revision at the product boundary',
     detail: { field },
   });
 }
 
-function distinct(values: readonly string[]): readonly string[] {
-  return [...new Set(values)];
-}
-
-export function createMaterialImportProduct(
-  input: MaterialImportProductInput,
-): Result<MaterialImportProduct, MaterialImportProductError> {
-  if (!input.guid || !input.sourcePath) return invalid('guid/sourcePath');
-  if (input.material.kind !== 'material') return invalid('material.kind');
-  if (!input.sourceEvidence.inputFingerprint || !input.sourceEvidence.importerVersion) {
-    return invalid('sourceEvidence');
+export function createImportProduct<P = unknown>(
+  input: TerminalImportProduct<P>,
+): Result<TerminalImportProduct<P>, ImportProductContractError> {
+  if (!Array.isArray(input.assets)) return invalidProduct('assets');
+  if (!Array.isArray(input.sourceDependencies)) return invalidProduct('sourceDependencies');
+  if (input.sourceRevision.trim().length === 0) return invalidProduct('sourceRevision');
+  if (!Array.isArray(input.refs)) return invalidProduct('refs');
+  if (input.artifacts === null || typeof input.artifacts !== 'object') {
+    return invalidProduct('artifacts');
   }
-  const refs = distinct([
-    ...input.refs.parent,
-    ...input.refs.textures,
-    ...input.refs.samplers,
-    ...input.refs.modules,
-  ]);
-  return ok({
-    sourcePath: input.sourcePath,
-    sourceEvidence: input.sourceEvidence,
-    asset: {
-      guid: input.guid,
-      kind: 'material',
-      payload: input.material,
-      refs: refs.map((guid): AssetRef => ({ guid })),
-      artifacts: {},
-    },
-  });
-}
-
-export function materialImportProductReady(
-  product: MaterialImportProduct,
-  availableRefs: ReadonlySet<string>,
-): boolean {
-  return product.asset.refs.every((reference) => availableRefs.has(reference.guid));
+  if (!Array.isArray(input.receipts)) return invalidProduct('receipts');
+  if (!Array.isArray(input.diagnostics)) return invalidProduct('diagnostics');
+  return ok({ ...input });
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -123,7 +89,7 @@ async function productDigest(
   artifacts: Readonly<Record<string, ArtifactDescriptor>>,
 ): Promise<string> {
   const chunks: (Uint8Array | string)[] = [
-    JSON.stringify(digestPayload(asset)),
+    JSON.stringify(projectImportedAssetPayload(asset)),
     JSON.stringify(asset.refs.map((ref) => ref.guid)),
     JSON.stringify(artifacts),
   ];
@@ -154,15 +120,17 @@ async function artifactDescriptors(
   return Object.fromEntries(entries);
 }
 
-function digestPayload(asset: ImportedAsset<unknown>): unknown {
-  if (Object.keys(asset.artifacts).length === 0) return asset.payload;
+export function projectImportedAssetPayload(
+  asset: ImportedAsset<unknown>,
+): Record<string, unknown> {
+  const payload = asset.payload as Record<string, unknown>;
+  if (Object.keys(asset.artifacts).length === 0) return payload;
   if (asset.kind === 'mesh') return { kind: 'mesh' };
   if (asset.kind === 'texture' || asset.kind === 'equirect') {
-    const payload = asset.payload as Record<string, unknown>;
     const { data: _runtimeBytes, ...metadata } = payload;
     return metadata;
   }
-  return asset.payload;
+  return payload;
 }
 
 /** Convert each importer asset into the shared completed producer product. */

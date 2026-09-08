@@ -71,6 +71,9 @@
     },
     {
       "path": "../types"
+    },
+    {
+      "path": "../tool-runtime"
     }
   ]
 }

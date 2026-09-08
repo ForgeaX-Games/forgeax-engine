@@ -1,51 +1,48 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
   classifyRequiredContextAdmission,
-  pickLatestPullRequestRun,
   REQUIRED_CHECK_NAMES,
   REQUIRED_CONTEXT_ADMISSION_STATUSES,
 } from '../required-ci-checks.mjs';
 
-const scriptPath = fileURLToPath(new URL('../required-ci-checks.mjs', import.meta.url));
-const workflowPath = resolve(
-  fileURLToPath(new URL('../../..', import.meta.url)),
-  '.github/workflows/required-ci-checks.yml',
-);
 const manifest = JSON.parse(
-  readFileSync(
-    resolve(fileURLToPath(new URL('../required-ci-checks.json', import.meta.url))),
-    'utf8',
-  ),
+  readFileSync(fileURLToPath(new URL('../required-ci-checks.json', import.meta.url)), 'utf8'),
 );
 
-const run = (values) => ({
-  event: 'pull_request',
-  createdAt: '2026-07-15T00:00:00Z',
-  ...values,
-});
-
-test('lists the exact direct CI contexts selected for the ruleset', () => {
+test('lists the exact direct CI contexts selected for fallback evidence', () => {
   assert.deepEqual(REQUIRED_CHECK_NAMES, manifest);
   assert.equal(new Set(manifest).size, manifest.length);
 });
 
-test('required-context workflow projects the manifest count instead of a stale list', () => {
-  const workflow = readFileSync(workflowPath, 'utf8');
-  assert.match(workflow, /same 19 contexts/);
-  assert.doesNotMatch(workflow, /same nine contexts/);
-});
-
-test('returns null when ci.yml has no pull request run for the head SHA', () => {
-  assert.equal(pickLatestPullRequestRun([]), null);
-  assert.equal(pickLatestPullRequestRun(undefined), null);
-  assert.equal(pickLatestPullRequestRun([run({ event: 'push' })]), null);
+test('keeps the authoritative required roster at the exact 21 logical contexts', () => {
+  assert.deepEqual(REQUIRED_CHECK_NAMES, [
+    'build-artifacts',
+    'primary-pnpm',
+    'coverage-pnpm',
+    'coverage-perf',
+    'vitest-browser',
+    'shared-inputs-browser',
+    'smoke-fleet',
+    'smoke-fleet-0',
+    'smoke-fleet-1',
+    'smoke-fleet-2',
+    'bevy-smoke-fleet',
+    'bevy-smoke-fleet-0',
+    'bevy-smoke-fleet-1',
+    'bevy-smoke-fleet-2',
+    'vitest-dawn',
+    'webkit-fallback',
+    'portability-bun',
+    'metrics-validate-browser',
+    'metrics-validate-runtime',
+    'metrics-validate',
+    'collectathon-boot-e2e',
+  ]);
+  assert.equal(REQUIRED_CHECK_NAMES.length, 21);
 });
 
 function runFixture(values = {}) {
@@ -110,6 +107,23 @@ test('admits a complete terminal ci.yml roster as normal-ci-run without fallback
   assert.deepEqual(result.observedContexts, REQUIRED_CHECK_NAMES);
 });
 
+test('admits non-required producer jobs alongside a complete required roster', () => {
+  const result = classifyRequiredContextAdmission({
+    run: runFixture(),
+    jobs: [
+      jobFixture('core-build'),
+      jobFixture('shared-app-inputs'),
+      jobFixture('app-shard-0'),
+      ...completeRoster(),
+    ],
+  });
+  assert.equal(result.status, 'normal-ci-run');
+  assert.equal(result.terminal, true);
+  assert.equal(result.complete, true);
+  assert.equal(result.fallbackEligible, false);
+  assert.deepEqual(result.observedContexts, REQUIRED_CHECK_NAMES);
+});
+
 test('keeps an in-progress ci.yml run authoritative without treating its roster as terminal', () => {
   const result = classifyRequiredContextAdmission({
     run: runFixture({ status: 'in_progress' }),
@@ -130,6 +144,30 @@ test('keeps a pending ci.yml run authoritative while GitHub is scheduling it', (
   assert.equal(result.complete, false);
   assert.equal(result.fallbackEligible, false);
   assert.deepEqual(result.reasonCodes, ['run-not-terminal']);
+});
+
+test('keeps every queued API run nonterminal and fail-closed', () => {
+  for (const status of ['queued', 'requested', 'waiting']) {
+    const result = classifyRequiredContextAdmission({
+      run: runFixture({ status }),
+    });
+    assert.equal(result.status, 'normal-ci-run', status);
+    assert.equal(result.terminal, false, status);
+    assert.equal(result.complete, false, status);
+    assert.equal(result.fallbackEligible, false, status);
+    assert.deepEqual(result.reasonCodes, ['run-not-terminal'], status);
+  }
+});
+
+test('keeps an unknown run status out of terminal reconciliation', () => {
+  const result = classifyRequiredContextAdmission({
+    run: runFixture({ status: 'reconciling' }),
+  });
+  assert.equal(result.status, 'api-error');
+  assert.equal(result.terminal, false);
+  assert.equal(result.complete, false);
+  assert.equal(result.fallbackEligible, false);
+  assert.deepEqual(result.reasonCodes, ['run-status-unknown']);
 });
 
 test('keeps ordinary push/main evidence outside PR required-context fallback', () => {
@@ -265,7 +303,7 @@ test('emits a deterministic simultaneous coverage and browser failure packet', (
       )
       .reverse(),
   });
-  assert.equal(REQUIRED_CHECK_NAMES.length, 19);
+  assert.equal(REQUIRED_CHECK_NAMES.length, 21);
   assert.equal(result.status, 'genuine-failure');
   assert.equal(result.actionable, true);
   assert.equal(result.complete, false);
@@ -313,165 +351,6 @@ test('does not convert an API error into a path-filtered success', () => {
   assert.deepEqual(result.reasonCodes, ['api-error']);
 });
 
-test('selects the newest pull request ci.yml run', () => {
-  const newest = run({ createdAt: '2026-07-15T00:01:00Z' });
-  assert.equal(
-    pickLatestPullRequestRun([run({ createdAt: '2026-07-15T00:00:00Z' }), newest]),
-    newest,
-  );
-});
-
-test('selects the newest API-shaped run using created_at', () => {
-  const oldest = run({ createdAt: undefined, created_at: '2026-07-15T00:00:00Z' });
-  const newest = run({ createdAt: undefined, created_at: '2026-07-15T00:01:00Z' });
-  assert.equal(pickLatestPullRequestRun([oldest, newest]), newest);
-});
-
-function runWithFakeGitHub(runs, extraEnvironment = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'required-ci-checks-'));
-  const callLog = join(root, 'calls');
-  const fakeGh = join(root, 'gh');
-  writeFileSync(
-    fakeGh,
-    [
-      '#!/bin/sh',
-      'case " $* " in *" --repo "*) exit 1;; esac',
-      'if [ "$1" = "api" ] && [ "$3" = "GET" ]; then case "$4" in */attempts/*) printf "{\\"jobs\\":%s}" "$GH_JOB_LIST_JSON";; *) printf "{\\"workflow_runs\\":%s}" "$GH_RUN_LIST_JSON";; esac; exit 0; fi',
-      'printf "unexpected GitHub mutation: %s\\n" "$*" >> "$GH_CALL_LOG"; exit 99;',
-      'exit 1',
-      '',
-    ].join('\n'),
-    { mode: 0o755 },
-  );
-
-  try {
-    execFileSync(process.execPath, [scriptPath], {
-      env: {
-        ...process.env,
-        CI_RUN_APPEAR_MS: '0',
-        GH_CALL_LOG: callLog,
-        GH_JOB_LIST_JSON: '[]',
-        GH_RUN_LIST_JSON: JSON.stringify(runs),
-        GITHUB_REPOSITORY: 'ForgeaX-Games/forgeax-engine',
-        PATH: `${root}:${process.env.PATH}`,
-        PR_HEAD_SHA: 'deadbeef',
-        ...extraEnvironment,
-      },
-      stdio: 'pipe',
-    });
-    try {
-      return readFileSync(callLog, 'utf8').trim().split('\n').filter(Boolean);
-    } catch (error) {
-      if (error.code === 'ENOENT') return [];
-      throw error;
-    }
-  } finally {
-    rmSync(root, { force: true, recursive: true });
-  }
-}
-
-test('does not create fallback checks when a run is absent without path-filter proof', () => {
-  assert.throws(
-    () => runWithFakeGitHub([]),
-    (error) => {
-      assert.equal(error.status, 2);
-      assert.match(error.stderr.toString(), /path-filtered-unproven/);
-      return true;
-    },
-  );
-});
-
-test('keeps a complete terminal run as the owner without mutating checks', () => {
-  assert.deepEqual(
-    runWithFakeGitHub([runFixture()], {
-      GH_JOB_LIST_JSON: JSON.stringify(completeRoster()),
-    }),
-    [],
-  );
-});
-
-test('rejects a terminal zero-job run before any fallback mutation', () => {
-  assert.throws(
-    () => runWithFakeGitHub([runFixture()], { GH_JOB_LIST_JSON: '[]' }),
-    (error) => {
-      assert.equal(error.status, 2);
-      assert.match(error.stderr.toString(), /zero-job/);
-      return true;
-    },
-  );
-});
-
-test('rejects an operationally skipped run without requesting or mutating checks', () => {
-  assert.throws(
-    () => runWithFakeGitHub([runFixture({ conclusion: 'skipped' })]),
-    (error) => {
-      assert.equal(error.status, 2);
-      assert.match(error.stderr.toString(), /operational-skip/);
-      return true;
-    },
-  );
-});
-
-test('installs the reporter prerequisites before running the required-context reporter', () => {
-  const workflow = readFileSync(workflowPath, 'utf8');
-  const setupNode = workflow.indexOf('uses: actions/setup-node@v5');
-  const setupPnpm = workflow.indexOf('uses: pnpm/action-setup@v5');
-  const installGh = workflow.indexOf('command -v gh >/dev/null');
-  const reporter = workflow.indexOf('run: node scripts/ci/required-ci-checks.mjs');
-
-  assert.equal(setupPnpm, -1, 'required-ci-checks must not install unused pnpm');
-  assert.ok(setupNode >= 0, 'required-ci-checks must install Node explicitly');
-  assert.ok(installGh >= 0, 'required-ci-checks must ensure gh is available explicitly');
-  assert.ok(reporter >= 0, 'required-ci-checks must run the reporter script');
-  assert.ok(setupNode < reporter, 'Node setup must precede the reporter script');
-  assert.ok(installGh < reporter, 'gh setup must precede the reporter script');
-  assert.match(
-    workflow,
-    /uses: actions\/setup-node@v5\s+with:\s+node-version-file: \.nvmrc\s+package-manager-cache: false/,
-    'the reporter-only Node setup must not save an unused pnpm cache',
-  );
-});
-
-test('validates PR-head workflows with pinned actionlint before synthetic passes', () => {
-  const workflow = readFileSync(workflowPath, 'utf8');
-  const checkoutHead = workflow.indexOf('name: Checkout PR-head workflow definitions');
-  const installActionlint = workflow.indexOf('name: Install pinned actionlint');
-  const runActionlint = workflow.indexOf('name: Validate PR-head workflow definitions');
-  const verifyRuleset = workflow.indexOf('name: Verify required-check ruleset');
-  const reporter = workflow.indexOf('run: node scripts/ci/required-ci-checks.mjs');
-
-  assert.ok(checkoutHead >= 0, 'admission must read workflow definitions from the PR head');
-  assert.match(
-    workflow,
-    /repository: \$\{\{ github\.event\.pull_request\.head\.repo\.full_name \}\}/,
-  );
-  assert.match(workflow, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
-  assert.match(workflow, /path: pr-head/);
-  assert.match(
-    workflow,
-    /sparse-checkout:\s+\|\s+\.github\/workflows\s+\.github\/actionlint\.yaml/,
-  );
-  assert.ok(
-    installActionlint > checkoutHead,
-    'pinned actionlint installs after the isolated checkout',
-  );
-  assert.match(workflow, /rhysd\/actionlint[^\n]*v1\.7\.12/);
-  assert.ok(runActionlint > installActionlint, 'actionlint runs after its pinned install');
-  assert.ok(
-    verifyRuleset > runActionlint,
-    'ruleset drift must be checked after workflow validation',
-  );
-  assert.match(
-    workflow,
-    /name: Verify required-check ruleset[\s\S]*?GH_TOKEN: \$\{\{ github\.token \}\}[\s\S]*?GITHUB_REPOSITORY: \$\{\{ github\.repository \}\}[\s\S]*?run: node scripts\/ci\/audit-required-checks-ruleset\.mjs/,
-  );
-  assert.ok(
-    reporter > verifyRuleset,
-    'synthetic required passes are impossible before workflow and ruleset validation',
-  );
-  assert.match(workflow, /working-directory: pr-head/);
-});
-
 // t7: don't-break — build-artifacts remains a required context name after M2
 test('t7: REQUIRED_CHECK_NAMES includes build-artifacts as required context', () => {
   assert.ok(
@@ -483,7 +362,7 @@ test('t7: REQUIRED_CHECK_NAMES includes build-artifacts as required context', ()
 test('t7: REQUIRED_CHECK_NAMES includes every direct CI gate', () => {
   assert.strictEqual(
     REQUIRED_CHECK_NAMES.length,
-    19,
+    21,
     'REQUIRED_CHECK_NAMES must include the legacy smoke aggregates and matrix gates',
   );
 });

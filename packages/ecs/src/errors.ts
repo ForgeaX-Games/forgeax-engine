@@ -6,14 +6,6 @@
 
 import type { QuerySpanUnavailableReason } from './errors/query-and-component-errors';
 
-export {
-  createSimulationError,
-  type SimulationError,
-  type SimulationErrorCode,
-  type SimulationErrorDetailMap,
-  type SimulationErrorFor,
-} from './errors/simulation-errors';
-
 // ────────────────────────────────────────────────────────────────────────────
 // Re-exports from split error sub-files (w3-b — package cohesion split)
 // ────────────────────────────────────────────────────────────────────────────
@@ -35,6 +27,7 @@ export {
   RelationshipMirrorComponentNotRegisteredError,
   RelationshipMirrorFieldTypeMismatchError,
   RelationshipSelfCycleError,
+  RelationshipTargetReadonlyError,
 } from './errors/relationship-errors';
 export {
   SharedFieldInvalidValueError,
@@ -43,8 +36,9 @@ export {
   SpriteInstancesRequiresSpriteShaderError,
 } from './errors/sprite-and-shared-errors';
 export {
-  CardinalityExceededError,
   ComponentFieldInvalidValueError,
+  ComponentNumericValueInvalidError,
+  ManagedArrayInvalidValueError,
   ResourceInvalidValueError,
   ScheduleScopeMismatchError,
   SpawnLightInvalidBoundsError,
@@ -52,13 +46,14 @@ export {
   TimeConfigInvalidError,
   TimeDeltaInvalidError,
   validateEnumFieldValues,
+  validateNumericFieldValues,
 } from './errors/validation-errors';
 
 export {
   SharedKernelEligibilityError,
   SharedKernelFailureError,
   WorldPoisonedError,
-} from './execution/shared-kernel-errors';
+} from './execution/shared-kernel';
 
 /**
  * Thrown when an attempt is made to encode an entity index that does not fit
@@ -257,6 +252,7 @@ export class ComponentNotPresentError extends Error {
 export class CyclicDependencyError extends Error {
   override readonly name = 'CyclicDependencyError';
   readonly code = 'cyclic-dependency' as const;
+  readonly expected = 'the schedule dependency graph is acyclic';
   readonly hint: string;
   /** Structured cycle path — programmatic consumers read this, not the message. */
   readonly detail: { readonly code: 'cyclic-dependency'; readonly cycle: readonly string[] };
@@ -271,8 +267,8 @@ export class CyclicDependencyError extends Error {
 }
 
 /**
- * Returned via `Result.err` from `world.addSystems` / `world.configureSets`
- * when a SystemSet token fails identity validation against the global registry.
+ * Returned via `Result.err` from `world.addSystems`
+ * when a SystemSet token fails local structural validation.
  *
  * The sole public invalid-token error type (D-2a). Covers all rejection
  * scenarios: plain-object cast, unregistered name, stale token after
@@ -280,9 +276,9 @@ export class CyclicDependencyError extends Error {
  *
  * `.code = 'system-set-not-registered'`
  * `.expected` — the name of the unregistered token.
- * `.hint` — suggests calling `getRegisteredSystemSets()` and re-importing the current token.
+ * `.hint` — suggests passing the current token to the owning World schedule.
  * `.detail` — `{ code, name, registered }` where `registered` is a deterministic snapshot
- *    of the current registry keys.
+ *    of the current World-local schedule keys.
  */
 export class SystemSetNotRegisteredError extends Error {
   override readonly name = 'SystemSetNotRegisteredError';
@@ -290,7 +286,7 @@ export class SystemSetNotRegisteredError extends Error {
   /** The name carried by the rejected token. */
   readonly expected: string;
   readonly hint: string;
-  /** Deterministic snapshot of the current registry for AI-user self-repair. */
+  /** Deterministic snapshot of the current World-local schedule for repair. */
   readonly detail: {
     readonly code: 'system-set-not-registered';
     readonly name: string;
@@ -299,8 +295,8 @@ export class SystemSetNotRegisteredError extends Error {
 
   constructor(name: string, registered: readonly string[]) {
     const hint =
-      `SystemSet "${name}" is not in the current registry. ` +
-      `Call getRegisteredSystemSets() to enumerate valid sets, then re-import or re-define the token.`;
+      `SystemSet "${name}" is not valid for the current World schedule. ` +
+      `Pass a non-empty SystemSet token owned by this World schedule.`;
     const message =
       `SystemSet "${name}" is not registered.\n` +
       `  expected: ${name}\n` +
@@ -338,10 +334,7 @@ export function systemSetNotRegistered(
  * - `cyclic-injection`      — schedule build detected a cycle introduced by
  *   the mutation; carries the cycle path in `.detail.cycle`.
  */
-export type ScheduleMutationErrorCode =
-  | 'system-before-unknown'
-  | 'system-name-conflict'
-  | 'cyclic-injection';
+export type ScheduleMutationErrorCode = 'system-before-unknown';
 
 export interface ScheduleMutationErrorDetail {
   readonly cycle?: readonly string[];
@@ -602,16 +595,31 @@ export class SharedRefDoubleReleaseError extends Error {
   }
 }
 
+/** Raised before SharedRefStore mutates slot state for a nullish payload. */
+export class SharedRefPayloadInvalidError extends Error {
+  override readonly name = 'SharedRefPayloadInvalidError';
+  readonly code = 'shared-ref-payload-invalid' as const;
+  readonly expected = 'a non-null, non-undefined shared payload';
+  readonly hint = 'Allocate a concrete payload and let its owning effect dispose it.';
+  readonly detail: { readonly target: string; readonly actual: 'null' | 'undefined' };
+
+  constructor(target: string, actual: 'null' | 'undefined') {
+    super(`SharedRefStore: ${actual} payload is not a valid shared reference for ${target}.`);
+    this.detail = { target, actual };
+  }
+}
+
 /**
  * Returned via `Result.err` when a builtin-tier slot (`slot < BUILTIN_BASE`)
  * is passed to SharedRefStore.alloc / retain / release / resolve
  * (feat-20260614 M6 D-15). The SharedRefStore manages ONLY user-tier slots
- * (`>= BUILTIN_BASE`); builtin asset payloads are process-static and live in
- * `BuiltinAssetRegistry` (`@forgeax/engine-runtime`), never reference-counted.
+ * (`>= BUILTIN_BASE`); builtin asset payloads are process-static and owned by
+ * the package that authored their builtin handle, never reference-counted by
+ * this World store.
  *
  * `.code = 'builtin-slot-not-owned'`
  * `.detail = { slot }`
- * `.hint` — points the caller at BuiltinAssetRegistry.resolve.
+ * `.hint` — points the caller back to the builtin handle owner.
  */
 export class BuiltinSlotNotOwnedError extends Error {
   override readonly name = 'BuiltinSlotNotOwnedError';
@@ -621,7 +629,7 @@ export class BuiltinSlotNotOwnedError extends Error {
   readonly detail: { readonly slot: number };
 
   constructor(slot: number) {
-    const hint = `Slot ${slot} is a builtin-tier handle (< BUILTIN_BASE). The SharedRefStore manages only user-tier handles (>= BUILTIN_BASE). Resolve builtin payloads through BuiltinAssetRegistry.resolve (@forgeax/engine-runtime); they are process-static and never reference-counted.`;
+    const hint = `Slot ${slot} is a builtin-tier handle (< BUILTIN_BASE). World.sharedRefs manages only user-tier handles (>= BUILTIN_BASE). Obtain the builtin payload from the package that authored the handle; builtin payloads are process-static and never reference-counted by this World.`;
     const expected = 'user-tier slot (>= BUILTIN_BASE)';
     super(
       `SharedRefStore: builtin slot is not owned by this store.\n` +
@@ -810,10 +818,8 @@ export class ManagedBufferShrinkNotSupportedError extends Error {
 // codes below); ManagedArrayElementTypeNotAllowedError preserved (still
 // surfaced from defineComponent's schema parser).
 //
-// 4 new error classes:
+// 2 surviving error classes:
 //   - FixedSizeMismatchError              ('fixed-size-mismatch')
-//   - FixedArrayOverflowError             ('fixed-array-overflow')
-//   - ArrayPopEmptyError                  ('array-pop-empty')
 //   - InstanceTransformsStrideMismatchError ('instance-transforms-stride-mismatch')
 //
 // Naming-prefix orthogonality (plan-strategy §2.5):
@@ -821,7 +827,8 @@ export class ManagedBufferShrinkNotSupportedError extends Error {
 //   array-     operation failures (pop on empty) on the array vocab keyword
 //   instance-  GPU-render component-specific stride contract (Instances.transforms)
 //
-// Net EcsErrorCode count: 23 -> 19 (delete 4) -> 23 (add 4). The
+// The array element-wise facade was removed; only write-shape and render
+// stride errors remain on this boundary. The
 // `instance-transforms-stride-mismatch` member is the plan-strategy §2.4
 // evolution surfaced from `packages/runtime/src/render-system-extract.ts`
 // defensive entry (consumed by w15 in M3, but the error class lives here so
@@ -860,81 +867,6 @@ export class FixedSizeMismatchError extends Error {
     this.hint = hint;
     this.expected = expectedStr;
     this.detail = { expected, actual };
-  }
-}
-
-/**
- * Returned via `Result.err` from `world.push` when an `array<T, N>`
- * (fixed-capacity) field's count has reached the schema-declared `N` and a
- * push would overflow. Fixed-capacity arrays cannot grow; AI users switch to
- * `array<T>` (variable capacity) for runtime growth.
- *
- * `.code = 'fixed-array-overflow'`
- * `.detail = { capacity, attemptedCount }`
- * `.hint` — names the variable-capacity remediation path. Hint text is the
- * SSOT locked at plan-strategy §8.3 (w28); the `{T}` slot is substituted
- * with the schema-declared element type literal so AI users get an
- * actionable copy-paste form (e.g. `'use array<f32> for variable capacity'`).
- */
-export class FixedArrayOverflowError extends RangeError {
-  override readonly name = 'FixedArrayOverflowError';
-  readonly code = 'fixed-array-overflow' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: { readonly capacity: number; readonly attemptedCount: number };
-
-  constructor(
-    fieldName: string,
-    capacity: number,
-    attemptedCount: number,
-    elementType: string = 'T',
-  ) {
-    const hint = `array<${elementType}, ${capacity}> push at count == ${capacity} (capacity == N == ${capacity}); fixed-capacity arrays cannot grow; use array<${elementType}> for variable capacity`;
-    const expectedStr = `attemptedCount < ${capacity}`;
-    super(
-      `array<T, N>: fixed capacity overflow.\n` +
-        `  code: fixed-array-overflow\n` +
-        `  field: ${fieldName}\n` +
-        `  capacity: ${capacity}\n` +
-        `  attemptedCount: ${attemptedCount}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expectedStr;
-    this.detail = { capacity, attemptedCount };
-  }
-}
-
-/**
- * Returned via `Result.err` from `world.pop` when the variable-capacity
- * `array<T>` field's count is 0. AI users guard with
- * `world.get(e, C).unwrap().f.length > 0` (read-only TypedArray snapshot) or
- * `world.capacity(e, C, fieldName)` (max) before popping.
- *
- * `.code = 'array-pop-empty'`
- * `.detail = { count: 0 }`
- * `.hint` — names the read-side guard path.
- */
-export class ArrayPopEmptyError extends Error {
-  override readonly name = 'ArrayPopEmptyError';
-  readonly code = 'array-pop-empty' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: { readonly count: 0 };
-
-  constructor(fieldName: string) {
-    const hint = `cannot pop from empty array; check world.get(e, C).unwrap().f.length > 0 before world.pop, or use world.capacity(e, C, ...) for max`;
-    const expectedStr = 'count >= 1';
-    super(
-      `array<T>: pop on empty array.\n` +
-        `  code: array-pop-empty\n` +
-        `  field: ${fieldName}\n` +
-        `  count: 0\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expectedStr;
-    this.detail = { count: 0 };
   }
 }
 
@@ -1029,26 +961,16 @@ export type EcsErrorCode =
   // Legacy SCREAMING_SNAKE codes (7, carried unchanged; the two
   // registration codes COMPONENT_ALREADY_REGISTERED / COMPONENT_NOT_REGISTERED
   // were dropped by feat-20260602 along with the per-World register concept).
-  | 'entity-index-overflow'
-  | 'schema-unsupported-field'
-  | 'sparse-storage-requires-tag'
   | 'stale-entity'
   | 'component-already-present'
   | 'component-not-present'
   | 'cyclic-dependency'
   | 'resource-not-found'
-  | 'change-epoch-exhausted'
-  | 'query-descriptor-conflict'
-  | 'query-data-requires-fields'
-  | 'query-span-unavailable'
-  | 'query-iteration-invalidated'
-  | 'query-iteration-active'
   // ECS time and schedule-scope errors (M2 w16, approved 43 -> 46 baseline; verify hotfix +1 → 47).
   | 'time-delta-invalid'
   | 'time-config-invalid'
   | 'schedule-scope-mismatch'
-  | 'resource-protected'
-  // ScheduleMutationError closed-set kebab codes (3).
+  // ScheduleMutationError closed-set kebab code.
   | ScheduleMutationErrorCode
   // w5 managed-* kebab codes (4).
   | 'unique-ref-released'
@@ -1058,10 +980,11 @@ export type EcsErrorCode =
   // on rc=0; `'shared-ref-double-release'` covers release on rc=0.
   | 'shared-ref-released'
   | 'shared-ref-double-release'
+  | 'shared-ref-payload-invalid'
   // feat-20260614-ecs-shared-component-and-unique-rename M6 D-15 (+1).
   // SharedRefStore manages ONLY user-tier slots (>= BUILTIN_BASE); a builtin
   // slot (< BUILTIN_BASE) passed to alloc/retain/release/resolve is a caller
-  // error -> `'builtin-slot-not-owned'` (hint points at BuiltinAssetRegistry).
+  // error -> `'builtin-slot-not-owned'` (the authoring package owns the payload).
   | 'builtin-slot-not-owned'
   // feat-20260623-asset-handle-generation M4 — stale error codes (+2).
   // `'shared-ref-stale'` / `'unique-ref-stale'` cover gen mismatch on resolve /
@@ -1078,35 +1001,21 @@ export type EcsErrorCode =
   // feat-20260515-buffer-array-vocab-collapse w11 in favour of the 4 new
   // collapsed-vocab codes below. Kept here because `defineComponent`'s schema
   // parser still surfaces it for illegal `array<...>` element types.
-  | 'managed-array-element-type-not-allowed'
   // feat-20260515-buffer-array-vocab-collapse w11 collapsed-vocab codes (4,
   // plan-strategy §2.4 + §2.5 four-prefix taxonomy).
   | 'fixed-size-mismatch'
-  | 'fixed-array-overflow'
-  | 'array-pop-empty'
-  | 'instance-transforms-stride-mismatch'
   // feat-20260519-light-casters-point-spot-pbr w2 — PointLight / SpotLight
   // spawn-time payload bound violation (plan-strategy D-S3 a). 23 -> 24
   // minor evolution per AGENTS.md Error model evolution contract.
-  | 'spawn-light-invalid-bounds'
-  // feat-20260520-directional-light-shadow-mapping M1 / w1 — singleton
-  // component cardinality violation (plan-strategy D-3). 24 -> 25 minor
-  // evolution per AGENTS.md Error model evolution contract. Surfaced from
-  // ECS spawn / addComponent when more than one entity carries a
-  // cardinality=1 component (canonical first consumer:
-  // PointLightShadow).
-  | 'cardinality-exceeded'
   // feat-20260520-2d-sprite-layer-mvp M-2 w13 — resource-setter bound
   // validation (plan-strategy D-4). 25 -> 26 minor evolution; first
   // consumer is `setTransparentSortConfig` (mode ∈ {0, 1, 2}).
-  | 'resource-invalid-value'
   // feat-20260521-sprite-atlas-animation M1 T-05 — spriteAnimationTickSystem
   // runtime invariant violation (plan-strategy D-1). 26 -> 27 minor evolution
   // per AGENTS.md §Error model evolution contract; same-shape mirror of
   // 'spawn-light-invalid-bounds' (feat-20260519 w2) and 'resource-invalid-
   // value' (feat-20260520 w13) — the `<noun>-invalid-...` kebab series keeps
   // switch (err.code) narrows visually consistent for AI users (charter P4).
-  | 'sprite-animation-invalid'
   // feat-20260531-ecs-relationship-abstraction-bidirectional-sync M2 —
   // relationship bidirectional sync + defineComponent relationship validation +
   // addChild/reparent cycle detection + removeChild detach guard
@@ -1114,8 +1023,6 @@ export type EcsErrorCode =
   // evolution contract. `relationship-exclusive-violation` is NOT a member:
   // exclusive re-add is an automatic reparent (success path), not an error.
   | 'relationship-self-cycle'
-  | 'relationship-mirror-component-not-registered'
-  | 'relationship-mirror-field-type-mismatch'
   | 'relationship-detach-mismatch'
   // feat-20260602-drop-component-registration w16-a — scene instantiate
   // fail-fast when a SceneAsset entity names a component that was never defined
@@ -1125,7 +1032,6 @@ export type EcsErrorCode =
   // the deleted COMPONENT_NOT_REGISTERED code at the scene-instance producer
   // sites (research Finding 5 missed these 3 producers; human escalation-
   // response authorized this scope-amendment).
-  | 'component-not-defined'
   // feat-20260602-archetype-stores-full-packed-entity M1 / w3 — removeComponent
   // rejection when the target is an essential (undeletable) component. The only
   // essential component is the id=0 `Entity` (plan-strategy D-3). Net +1 minor
@@ -1138,7 +1044,6 @@ export type EcsErrorCode =
   // runtime type does not match the per-component schema field type (the
   // override apply path never silently coerces — value writes are typed at the
   // ECS layer; requirements §Edge cases table last row, reviewer Issue 1).
-  | 'scene-override-type-mismatch'
   // bug-20260615-spawn-data-unknown-field-fail-fast — spawn / addComponent /
   // SceneAsset.instantiate / Commands.spawn fail-fast when the caller-supplied
   // payload carries a key that is not declared in the component schema. Pre-
@@ -1156,9 +1061,6 @@ export type EcsErrorCode =
   // AGENTS.md §Error model evolution contract; plan-strategy D-6 keeps the
   // detection in the render domain (not the ECS spawn path) to avoid an
   // ECS -> AssetRegistry reverse dep for the shader-id lookup.
-  | 'sprite-instances-count-mismatch'
-  | 'sprite-instances-requires-sprite-shader'
-  | 'sprite-instances-mutually-exclusive-with-instances'
   // feat-20260713-mount-override-component-add-and-shared-ref-round M2 / w9 —
   // P3 shared-field value gate. A `shared<T>` scalar or `array<shared<T>>`
   // element must be a resolved numeric Handle; a raw GUID string / `{ guid }` /
@@ -1169,19 +1071,25 @@ export type EcsErrorCode =
   // no error. `validateComponentDataKeys` only checks key names, not value
   // types — this code closes the value-type gap at all three write entries
   // (spawn / addComponent / set). AI users resolve a GUID via
-  // `loadByGuid + allocSharedRef` first; passing the raw GUID now fails fast.
+  // `AssetRegistry.load(guid, kind) + allocSharedRef` first; passing the raw GUID now fails fast.
   // Minor evolution +1 per AGENTS.md §Error model evolution contract.
   | 'shared-field-invalid-value'
   // feat-20260714-bevy-style-system-sets M1 / w3 — sole invalid-SystemSet
-  // error code. Surfaced from world.addSystems / world.configureSets when a
+  // error code. Surfaced from world.addSystems when a
   // token fails identity validation (brand bypass + registry identity check).
   // Minor evolution +1 per AGENTS.md §Error model evolution contract.
   | 'system-set-not-registered'
   // Closed enum field writes fail before archetype or column mutation.
   | 'component-field-invalid-value'
+  | 'component-numeric-value-invalid'
+  | 'managed-array-invalid-value'
   | 'shared-kernel-ineligible'
   | 'shared-kernel-failed'
-  | 'world-poisoned';
+  | 'world-poisoned'
+  // World.update terminal failures. These remain in the same closed union as
+  // structural errors so consumers never need a second error discriminator.
+  | 'command-failed'
+  | 'system-failed';
 
 /**
  * Discriminated `.detail` payload per `.code`.
@@ -1234,6 +1142,11 @@ export type EcsErrorDetail =
       readonly target: string;
       readonly rc: number;
     }
+  | {
+      readonly code: 'shared-ref-payload-invalid';
+      readonly target: string;
+      readonly actual: 'null' | 'undefined';
+    }
   // feat-20260614 M6 D-15 — builtin-slot fail-fast detail variant (+1).
   | { readonly code: 'builtin-slot-not-owned'; readonly slot: number }
   // feat-20260623-asset-handle-generation M4 — stale error detail variants (+2).
@@ -1272,15 +1185,6 @@ export type EcsErrorDetail =
       readonly actual: number;
     }
   | {
-      readonly code: 'fixed-array-overflow';
-      readonly capacity: number;
-      readonly attemptedCount: number;
-    }
-  | {
-      readonly code: 'array-pop-empty';
-      readonly count: 0;
-    }
-  | {
       readonly code: 'instance-transforms-stride-mismatch';
       readonly actualLength: number;
       readonly expectedStride: 16;
@@ -1294,17 +1198,6 @@ export type EcsErrorDetail =
       readonly code: 'spawn-light-invalid-bounds';
       readonly field: 'range' | 'innerOuter' | 'outerNinety';
       readonly got: number;
-    }
-  // feat-20260520-directional-light-shadow-mapping M1 / w1 — cardinality=1
-  // component violation (plan-strategy D-3). detail carries the offending
-  // component name + the observed count + the declared max so AI users can
-  // narrow on `.code` then read `.detail.componentName` for the surface
-  // identity of the violation.
-  | {
-      readonly code: 'cardinality-exceeded';
-      readonly componentName: string;
-      readonly count: number;
-      readonly max: number;
     }
   // feat-20260520-2d-sprite-layer-mvp M-2 w13 — resource-setter bound
   // violation (plan-strategy D-4). receivedMode carries the rejected
@@ -1430,7 +1323,7 @@ export type EcsErrorDetail =
   // `{ guid }` / `{ kind }` object is not coerced, the fail-fast surfaces it);
   // `.detail.index` is the array element index for the array form (undefined for
   // the scalar form). AI users read `.detail.field` + `.detail.fieldType` to see
-  // which reference needs `loadByGuid + allocSharedRef` before binding.
+  // which reference needs `AssetRegistry.load(guid, kind) + allocSharedRef` before binding.
   | {
       readonly code: 'shared-field-invalid-value';
       readonly component: string;
@@ -1455,12 +1348,42 @@ export type EcsErrorDetail =
       readonly received: unknown;
       readonly allowedValues: Readonly<Record<string, number>>;
     }
+  | {
+      readonly code: 'component-numeric-value-invalid';
+      readonly entity: number | undefined;
+      readonly component: string;
+      readonly field: string;
+      readonly received: number;
+      readonly index?: number;
+    }
+  | {
+      readonly code: 'managed-array-invalid-value';
+      readonly component: string;
+      readonly field: string;
+      readonly fieldType: string;
+      readonly actualValue: unknown;
+    }
   // feat-20260714-bevy-style-system-sets M2 / w12 — structured cyclic-dependency
   // detail. `.detail.cycle` is the ordered cycle path array; consumers read
   // this instead of parsing the message string.
   | {
       readonly code: 'cyclic-dependency';
       readonly cycle: readonly string[];
+    }
+  | {
+      readonly code: 'command-failed';
+      readonly systemName: string;
+      readonly schedule: string;
+      readonly commandIndex: number;
+      readonly commandKind: CommandKind;
+      readonly cause: unknown;
+    }
+  | {
+      readonly code: 'system-failed';
+      readonly systemName: string;
+      readonly schedule: string;
+      readonly cause: unknown;
+      readonly lastCommittedCommand: CommandCommitEvidence | null;
     };
 
 /**
@@ -1472,4 +1395,70 @@ export interface ManagedArrayErrorEnvelope {
   readonly hint: string;
   readonly expected: string;
   readonly detail: unknown;
+}
+
+export type CommandKind = 'spawn' | 'despawn' | 'addComponent' | 'removeComponent';
+
+export interface CommandCommitEvidence {
+  readonly index: number;
+  readonly kind: CommandKind;
+}
+
+/** Expected command preflight failure, with the exact batch location. */
+export class CommandFailedError extends Error {
+  override readonly name = 'CommandFailedError';
+  readonly code = 'command-failed' as const;
+  readonly expected = 'all deferred commands pass preflight before commit';
+  readonly hint =
+    'Inspect detail.cause, repair the command at detail.commandIndex, and run the World again.';
+  override readonly cause: unknown;
+  readonly detail: {
+    readonly systemName: string;
+    readonly schedule: string;
+    readonly commandIndex: number;
+    readonly commandKind: CommandKind;
+    readonly cause: unknown;
+  };
+
+  constructor(
+    systemName: string,
+    schedule: string,
+    commandIndex: number,
+    commandKind: CommandKind,
+    cause: unknown,
+  ) {
+    super(
+      `Deferred command failed before commit in ${schedule}/${systemName} ` +
+        `at command ${commandIndex} (${commandKind}).`,
+    );
+    this.cause = cause;
+    this.detail = { systemName, schedule, commandIndex, commandKind, cause };
+  }
+}
+
+/** Unknown system failure. The World is poisoned because row writes may exist. */
+export class SystemFailedError extends Error {
+  override readonly name = 'SystemFailedError';
+  readonly code = 'system-failed' as const;
+  readonly expected = 'a system completes without throwing or returning a failed Result';
+  readonly hint =
+    'Inspect detail.cause, stop using this poisoned World, and rebuild it from the owning App.';
+  override readonly cause: unknown;
+  readonly detail: {
+    readonly systemName: string;
+    readonly schedule: string;
+    readonly cause: unknown;
+    readonly lastCommittedCommand: CommandCommitEvidence | null;
+  };
+
+  constructor(
+    systemName: string,
+    schedule: string,
+    cause: unknown,
+    lastCommittedCommand: CommandCommitEvidence | null = null,
+  ) {
+    super(`System ${schedule}/${systemName} failed; World is poisoned.`);
+    this.cause = cause;
+    this.detail = { systemName, schedule, cause, lastCommittedCommand };
+  }
 }

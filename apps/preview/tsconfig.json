@@ -5,6 +5,7 @@
     "rootDir": "../..",
     "noEmit": true,
     "emitDeclarationOnly": false,
+    "allowImportingTsExtensions": true,
     "types": [
       "@webgpu/types",
       "vite/client",
@@ -13,6 +14,8 @@
   },
   "include": [
     "src/**/*",
-    "../../templates/game-default/**/*.ts"
+    "../../templates/game-default/**/*.ts",
+    "../../templates/game-brotato-3d/**/*.ts",
+    "../../templates/game-empty/**/*.ts"
   ]
 }

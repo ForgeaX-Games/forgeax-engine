@@ -23,8 +23,9 @@ function makeQuad(): MeshAsset {
       tangent: new Float32Array([1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1]),
     },
     indices: new Uint32Array([0, 3, 2, 0, 2, 1]),
-    submeshes: [{ indexOffset: 0, indexCount: 6, vertexCount: 4, topology: 'triangle-list' }],
+    submeshes: [{ indexOffset: 0, indexCount: 6, vertexCount: 4, topology: 'triangle-list', materialSlot: 0 }],
     aabb: new Float32Array([-1, -1, 0, 1, 1, 0]),
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 

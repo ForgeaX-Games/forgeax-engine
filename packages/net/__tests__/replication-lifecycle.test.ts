@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { defineComponent, World } from '@forgeax/engine-ecs';
 import { createAuthorityCoordinator } from '../src/replication/authority';
-import { createReplicaCoordinator, applyReplicaBatch } from '../src/replication/replica';
+import { createReplicaCoordinator, applyReplicationPacket } from '../src/replication/replica';
 import { defineReplication } from '../src/replication/profile';
 
 const NetworkedLifecycle = defineComponent('NetworkedLifecycle', { enabled: 'bool' });
@@ -27,7 +27,7 @@ describe('replication lifecycle identity', () => {
     const replica = createReplicaCoordinator(replicaWorld, profile());
 
     const batch = authority.publish().unwrap();
-    expect(applyReplicaBatch(replica, batch).ok).toBe(true);
+    expect(applyReplicationPacket(replica, batch).ok).toBe(true);
     expect(replica.snapshot()).toEqual([{ id: 1, components: ['NetworkedLifecycle'] }]);
   });
 
@@ -39,7 +39,7 @@ describe('replication lifecycle identity', () => {
     const authority = createAuthorityCoordinator(authorityWorld, profile());
     const replica = createReplicaCoordinator(new World(), profile());
     const publication = authority.publish().unwrap();
-    const applied = applyReplicaBatch(replica, publication);
+    const applied = applyReplicationPacket(replica, publication);
     expect(applied.ok).toBe(true);
 
     const secondId = authority.idFor(second);
@@ -59,10 +59,10 @@ describe('replication lifecycle identity', () => {
     const authority = createAuthorityCoordinator(world, profile());
     const replica = createReplicaCoordinator(new World(), profile());
     const first = authority.publish().unwrap();
-    expect(applyReplicaBatch(replica, first).ok).toBe(true);
+    expect(applyReplicationPacket(replica, first).ok).toBe(true);
     world.despawn(entity).unwrap();
     const despawn = authority.publish().unwrap();
-    expect(applyReplicaBatch(replica, despawn).ok).toBe(true);
+    expect(applyReplicationPacket(replica, despawn).ok).toBe(true);
 
     expect(replica.entityFor(first.entities[0]!.id)).toBeUndefined();
     const replacement = world.spawn({ component: NetworkedLifecycle, data: { enabled: true } }).unwrap();
@@ -81,12 +81,12 @@ describe('replication lifecycle identity', () => {
       .unwrap();
     const authority = createAuthorityCoordinator(authorityWorld, profile());
     const replica = createReplicaCoordinator(new World(), profile());
-    expect(applyReplicaBatch(replica, authority.publish().unwrap()).ok).toBe(true);
+    expect(applyReplicationPacket(replica, authority.publish().unwrap()).ok).toBe(true);
 
     authorityWorld.removeComponent(entity, LinkLifecycle).unwrap();
     const delta = authority.publish().unwrap();
     expect(delta.entities[0]!.components).toEqual([{ name: 'LinkLifecycle', operation: 'remove', data: {} }]);
-    expect(applyReplicaBatch(replica, delta).ok).toBe(true);
+    expect(applyReplicationPacket(replica, delta).ok).toBe(true);
     expect(replica.readComponent(delta.entities[0]!.id, LinkLifecycle)).toBeUndefined();
   });
 });

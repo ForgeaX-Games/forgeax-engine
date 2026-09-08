@@ -12,6 +12,7 @@
   "include": ["src/**/*"],
   "references": [
     { "path": "../rhi" },
+    { "path": "../rhi-null" },
     { "path": "../rhi-webgpu" },
     { "path": "../types" }
   ]

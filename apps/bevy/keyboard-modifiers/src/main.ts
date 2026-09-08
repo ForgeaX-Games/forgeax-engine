@@ -26,7 +26,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[bevy-keyboard-modifiers] app.start failed:', started.error.code, started.error.hint);
     return;
   }
-  console.warn(`[bevy-keyboard-modifiers] backend=${app.renderer.backend}`);
+  console.warn(`[bevy-keyboard-modifiers] state=${app.renderer.inspect().state}`);
   Object.assign(globalThis, { __bevyKeyboardModifiersReady: true, __bevyKeyboardModifiersState: state });
 }
 

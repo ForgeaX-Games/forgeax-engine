@@ -1,10 +1,17 @@
 import type { EntityHandle } from '@forgeax/engine-ecs';
-import { createMemoryEndpointPair, type EndpointEvent, type PeerId } from '@forgeax/engine-net';
+import {
+  createMemoryEndpointPair,
+  decodeReplicationPacket,
+  type EndpointEvent,
+  encodeReplicationPacket,
+  type NetEndpoint,
+  type PeerId,
+} from '@forgeax/engine-net';
 import { ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { createServerWorld } from '../server';
 import { encodeCommand } from '../shared/commands';
-import { Networked, Snake, SnakeBody, SnakeSegment } from '../shared/components';
+import { Networked, Snake, SnakeBody, SnakeSegment, snakeProfile } from '../shared/components';
 
 const joinResult = encodeCommand({ kind: 'join' });
 if (!joinResult.ok) throw joinResult.error;
@@ -14,7 +21,7 @@ if (!readyResult.ok) throw readyResult.error;
 const ready = readyResult.value;
 
 describe('assembled Snake authority', () => {
-  it('keeps transport-only connections waiting and starts after two admitted peers are ready', () => {
+  it('keeps transport-only connections waiting and starts after two admitted peers are ready', async () => {
     let pending: EndpointEvent[] = [
       { kind: 'peer-connected', peerId: 1 as PeerId },
       { kind: 'peer-connected', peerId: 2 as PeerId },
@@ -28,7 +35,7 @@ describe('assembled Snake authority', () => {
       send: () => ok(undefined),
       close: () => ok(undefined),
     };
-    const server = createServerWorld(authority);
+    const server = await createServerWorld(authority);
     expect(server.world.update(1 / 60).ok).toBe(true);
     expect(server.game.snakes.size).toBe(0);
     pending = [{ kind: 'message', peerId: 1 as PeerId, data: join }];
@@ -51,16 +58,16 @@ describe('assembled Snake authority', () => {
     expect(server.game.tick).toBe(1);
     expect(server.game.snakes.get(1)?.cells[0]).not.toEqual(before);
   });
-  it('installs deterministic fixed-tick simulation over a memory endpoint', () => {
-    const server = createStartedServer();
+  it('installs deterministic fixed-tick simulation over a memory endpoint', async () => {
+    const server = await createStartedServer();
     expect(server.game.tick).toBe(0);
     expect(server.world.update(1).ok).toBe(true);
     expect(server.game.tick).toBe(4);
   });
 
-  it('rejects malformed and opposite commands at the assembled boundary', () => {
+  it('rejects malformed and opposite commands at the assembled boundary', async () => {
     const [authority, peer] = createMemoryEndpointPair();
-    const server = createServerWorld(authority);
+    const server = await createServerWorld(authority);
     // Consume the initial peer-connected event and spawn the peer snake.
     peer.send(1 as PeerId, join);
     expect(server.world.update(1).ok).toBe(true);
@@ -83,9 +90,9 @@ describe('assembled Snake authority', () => {
     expect(server.game.snakes.get(2)?.direction).toBe('up');
   });
 
-  it('grows on food and respawns exactly 30 fixed ticks after death', () => {
+  it('grows on food and respawns exactly 30 fixed ticks after death', async () => {
     const fixedStep = 1 / 60;
-    const server = createStartedServer();
+    const server = await createStartedServer();
     const snake = server.game.snakes.get(2);
     expect(snake).toBeDefined();
     if (snake === undefined) return;
@@ -104,7 +111,9 @@ describe('assembled Snake authority', () => {
     const respawnTick = snake.respawnAt;
     expect(respawnTick).toBe(server.game.tick + 30);
     while (server.game.tick < (respawnTick as number) - 1) {
-      expect(server.world.update(fixedStep).ok).toBe(true);
+      const update = server.world.update(fixedStep);
+      if (!update.ok) throw new Error(update.error.message);
+      expect(update.ok).toBe(true);
       expect(snake.cells).toHaveLength(0);
     }
     expect(server.game.tick).toBe((respawnTick as number) - 1);
@@ -113,8 +122,8 @@ describe('assembled Snake authority', () => {
     expect(snake.cells).toHaveLength(3);
   });
 
-  it('projects authoritative snakes, segments, and remapped body references into ECS', () => {
-    const server = createStartedServer();
+  it('projects authoritative snakes, segments, and remapped body references into ECS', async () => {
+    const server = await createStartedServer();
     server.game.snakes.delete(1);
     const authoritySnake = server.game.snakes.get(2);
     expect(authoritySnake).toBeDefined();
@@ -135,8 +144,8 @@ describe('assembled Snake authority', () => {
     expect(body.segments[0]).toBe(segments[0]);
   });
 
-  it('despawns the snake and segments after an authority death', () => {
-    const server = createStartedServer();
+  it('despawns the snake and segments after an authority death', async () => {
+    const server = await createStartedServer();
     server.game.snakes.delete(1);
     const snake = server.game.snakes.get(2);
     expect(snake).toBeDefined();
@@ -149,7 +158,7 @@ describe('assembled Snake authority', () => {
     expect(projected.every((entity) => !server.world.get(entity, Snake).ok)).toBe(true);
   });
 
-  it('refuses a fifth peer without creating a fifth snake', () => {
+  it('refuses a fifth peer without creating a fifth snake', async () => {
     let pending = [1, 2, 3, 4, 5].flatMap((peerId) => [
       { kind: 'peer-connected' as const, peerId: peerId as PeerId },
       { kind: 'message' as const, peerId: peerId as PeerId, data: join },
@@ -163,13 +172,13 @@ describe('assembled Snake authority', () => {
       send: () => ok(undefined),
       close: () => ok(undefined),
     };
-    const server = createServerWorld(endpoint);
+    const server = await createServerWorld(endpoint);
     expect(server.world.update(1).ok).toBe(true);
     expect(server.game.snakes.size).toBe(4);
     expect(server.game.snakes.has(5)).toBe(false);
   });
 
-  it('binds commands to endpoint PeerId and ignores an identity-confused event', () => {
+  it('binds commands to endpoint PeerId and ignores an identity-confused event', async () => {
     let pending: Array<
       | { kind: 'peer-connected'; peerId: PeerId }
       | { kind: 'message'; peerId: PeerId; data: Uint8Array }
@@ -186,7 +195,7 @@ describe('assembled Snake authority', () => {
       send: () => ok(undefined),
       close: () => ok(undefined),
     };
-    const server = createServerWorld(endpoint);
+    const server = await createServerWorld(endpoint);
     expect(server.world.update(1).ok).toBe(true);
     expect(server.game.snakes.get(7)?.direction).toBe('right');
 
@@ -207,27 +216,45 @@ describe('assembled Snake authority', () => {
   });
 });
 
-function createStartedServer() {
+async function createStartedServer() {
   let pending: EndpointEvent[] = [
     { kind: 'peer-connected', peerId: 1 as PeerId },
     { kind: 'peer-connected', peerId: 2 as PeerId },
     { kind: 'message', peerId: 1 as PeerId, data: join },
     { kind: 'message', peerId: 2 as PeerId, data: join },
   ];
-  const server = createServerWorld({
+  const endpoint: NetEndpoint = {
     poll: () => {
       const events = pending;
       pending = [];
       return events;
     },
-    send: () => ok(undefined),
+    send: (peerId, data) => {
+      const packet = decodeReplicationPacket(data, snakeProfile.limits);
+      if (packet.ok && (packet.value.kind === 'baseline' || packet.value.kind === 'delta')) {
+        const ack = encodeReplicationPacket(
+          {
+            version: 2,
+            kind: 'ack',
+            sessionId: packet.value.sessionId,
+            epoch: packet.value.epoch,
+            acknowledgedSequence: packet.value.sequence,
+          },
+          snakeProfile.limits,
+        );
+        if (!ack.ok) throw ack.error;
+        pending.push({ kind: 'message', peerId, data: ack.value });
+      }
+      return ok(undefined);
+    },
     close: () => ok(undefined),
-  });
+  };
+  const server = await createServerWorld(endpoint);
   server.world.update(1 / 60).unwrap();
-  pending = [
+  pending.push(
     { kind: 'message', peerId: 1 as PeerId, data: ready },
     { kind: 'message', peerId: 2 as PeerId, data: ready },
-  ];
+  );
   server.world.update(1 / 60).unwrap();
   return server;
 }

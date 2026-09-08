@@ -152,10 +152,7 @@ const mockCanvas = {
 // --- 3. Drive engine ECS path: HANDLE_TRIANGLE + passes-form unlit material -
 
 const { World } = await import('@forgeax/engine-ecs');
-const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  createRenderer,
-} = enginePkg;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Camera, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const {
@@ -167,37 +164,35 @@ const ENGINE_MANIFEST = await buildEngineShaderManifest();
 const EMPTY_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
 
 let renderer;
+let assets;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: EMPTY_MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(
+    mockCanvas,
+    {},
+    { shaderManifestUrl: EMPTY_MANIFEST_URL },
+  );
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  assets = constructed.value.assets;
 } catch (err) {
   console.error(
-    `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
+    `[smoke] FAIL - constructRuntimeRendererHost failed: ${err instanceof Error ? err.message : String(err)}`,
   );
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[learn-render-shaders] backend=${renderer.backend}`);
-
-const assets = renderer.assets;
-if (!assets) {
-  console.error('[smoke] FAIL - AssetRegistry is null (renderer construction did not complete successfully)');
-  process.exit(1);
-}
+console.log('[learn-render-shaders] Standard host constructed');
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => { if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint }); });
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const lease = worldAttachment1.value;
 // LO 1.3 passes-form material (mirrors src/index.ts spawnPulseScene):
 // mint a user-tier column handle from the passes-form MaterialAsset POD
 // (M8 D-17). The shader pass is what the unlit pipeline picks up. The
@@ -245,8 +240,17 @@ const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-  if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  const r = renderer.draw({
+    leases: [lease],
+    camera: { lease },
+    environment: { lease },
+  });
+  if (!r.ok) {
+    console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  } else {
+    const completed = await r.value.completed;
+    if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+  }
   framesObserved++;
 }
 const device = sharedDevice;
@@ -339,8 +343,7 @@ console.log(`[smoke] wallTotalMs=${wallTotalMs} (budget=${SMOKE_WALL_BUDGET_MS})
 void APP_ROOT;
 
 const failures = [];
-if (renderer.backend !== 'webgpu')
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (assets === undefined) failures.push('(a) host asset owner is unavailable');
 if (framesObserved < SMOKE_MIN_FRAMES)
   failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (meshedRenderCount < 1) {

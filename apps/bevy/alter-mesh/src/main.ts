@@ -2,7 +2,7 @@ import { createApp } from '@forgeax/engine-app';
 import { Update } from '@forgeax/engine-ecs';
 import { FRAME_START_SCAN_SYSTEM_NAME, INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
-import { buildAlterMeshWorld, stepAlterMesh, type MeshGpuStore } from './alter-mesh.js';
+import { buildAlterMeshWorld, stepAlterMesh } from './alter-mesh.js';
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appResult = await createApp(target, {}, forgeaxBundlerAdapter());
@@ -19,7 +19,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     fn: (world) => stepAlterMesh(
       world,
       state,
-      app.renderer.store as MeshGpuStore,
       world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY),
     ),
   });

@@ -19,7 +19,7 @@
 // idempotent on a repeated key (last write wins, no throw) so re-wiring a
 // registry across build invocations is safe.
 
-import type { Importer } from '@forgeax/engine-types';
+import type { Importer, ImporterCapabilities, ImportSubAsset } from '@forgeax/engine-types';
 
 /**
  * Injectable `meta.importer` -> {@link Importer} table held by the import
@@ -76,5 +76,28 @@ export class ImporterRegistry {
    */
   registeredImporters(): readonly string[] {
     return [...this.importers.keys()];
+  }
+
+  /** Project the first registered producer capability into the runner context. */
+  contextCapabilities(): ImporterCapabilities {
+    for (const importer of this.importers.values()) {
+      const decoder = importer.capabilities?.decodeImage;
+      if (decoder !== undefined) return { decodeImage: decoder };
+    }
+    return {};
+  }
+
+  /** Ask the registered producer whether a declaration has a Catalog product. */
+  shouldPublishCatalog(input: {
+    readonly importer: string;
+    readonly importSettings: Readonly<Record<string, unknown>>;
+    readonly subAssets: readonly ImportSubAsset[];
+  }): boolean {
+    return (
+      this.get(input.importer)?.capabilities?.catalog?.publish?.({
+        importSettings: input.importSettings,
+        subAssets: input.subAssets,
+      }) ?? true
+    );
   }
 }

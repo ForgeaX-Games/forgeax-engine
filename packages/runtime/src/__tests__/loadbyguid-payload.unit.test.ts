@@ -35,7 +35,16 @@ function mesh(): MeshAsset {
     vertices: new Float32Array(12 * 3),
     indices: new Uint16Array([0, 1, 2]),
     attributes: {},
-    submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 36, topology: 'triangle-list' }],
+    materialSlots: [{ slotName: 'Default' }],
+    submeshes: [
+      {
+        indexOffset: 0,
+        indexCount: 3,
+        vertexCount: 36,
+        materialSlot: 0,
+        topology: 'triangle-list',
+      },
+    ],
   } as unknown as MeshAsset;
 }
 

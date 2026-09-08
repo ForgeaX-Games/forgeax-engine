@@ -3,7 +3,7 @@
 > [!NOTE]
 > **LO original chapter**: [LearnOpenGL 4.1 Depth Testing](https://learnopengl.com/Advanced-OpenGL/Depth-testing)
 >
-> **Engine surface**: `createApp` + `MeshRenderer` with `depthCompare`/`depthWriteEnabled` in `MaterialRenderState` + `configurePackIndex` + `loadByGuid<TextureAsset>` + custom `registerMaterialShader` (depth-viz).
+> **Engine surface**: `createApp` + `MeshRenderer` with `depthCompare`/`depthWriteEnabled` in `MaterialRenderState` + `configureRuntimeAssetCatalog` + `loadByGuid<TextureAsset>` + custom `registerMaterialShader` (depth-viz).
 
 ## Hit-rate index (AI user fast-locate)
 
@@ -11,7 +11,7 @@
 |:--|:--|:--|
 | `depthCompare` / `depthWriteEnabled` pipeline state | `renderState: {` | `src/index.ts` (pass-based `MaterialAsset.renderState`) |
 | `loadByGuid<TextureAsset>` GUID texture loading | `loadByGuid<TextureAsset>` | `src/index.ts` (bootstrap section) |
-| `configurePackIndex` texture catalog wiring | `configurePackIndex` | `src/index.ts` (bootstrap section) |
+| Runtime catalog wiring | `configureRuntimeAssetCatalog` | `src/index.ts` (bootstrap section) |
 | `registerMaterialShader` custom shader | `registerMaterialShader` | `src/index.ts` (depth-viz shader registration) |
 | Custom WGSL material shader (`@builtin(position).z`) | `depth-viz.wgsl` | `src/depth-viz.wgsl` |
 
@@ -25,7 +25,7 @@ In forgeax, this example expresses the same concepts through two rendering paths
 
 2. **Depth-viz path** (`USE_DEPTH_VIZ = true`): Same scene geometry, but all entities use a custom depth-viz material shader registered via `registerMaterialShader`. The fragment shader reads `@builtin(position).z` (clip-space depth), applies the standard `linearizeDepth` formula (near=0.1, far=100.0), and outputs grayscale where near pixels are dark and far pixels are light.
 
-Textures are loaded through the GUID asset pipeline (`configurePackIndex('/pack-index.json')` + `loadByGuid<TextureAsset>`) from the `forgeax-engine-assets/learn-opengl/textures/` submodule.
+Textures are loaded through the GUID asset pipeline (`configureRuntimeAssetCatalog(assets, runtimeBinding)` + `loadByGuid<TextureAsset>`). The helper selects the scoped Vite catalog in development and the emitted `/pack-index.json` in a production build.
 
 ## Run
 
@@ -52,7 +52,7 @@ pnpm --filter "@forgeax/app-learn-render-4-advanced-opengl-1-depth-testing" type
 | Floor plane | Custom 6-vertex plane at Y=-0.5 with texcoord=2.0 | `HANDLE_QUAD` (engine-builtin 1x1 quad) rotated -90 deg around X, scaled 5x5 at Y=-0.5 |
 | Cube geometry | 1x1x1 CCW cube, 36 vertices | `HANDLE_CUBE` (engine-builtin CCW cube) |
 | Cube transforms | `glm::translate((-1,0,-1))` / `glm::translate((2,0,0))` | ECS `Transform` component: `pos=[-1, 0, -1]` / `pos=[2, 0, 0]` |
-| Texture loading | `stb_image.h` + `loadTexture(path)` with `GL_REPEAT` | `configurePackIndex` + `loadByGuid<TextureAsset>` with sidecar `.meta.json` `importSettings.addressMode: 'repeat'` |
+| Texture loading | `stb_image.h` + `loadTexture(path)` with `GL_REPEAT` | `configureRuntimeAssetCatalog` + `loadByGuid<TextureAsset>` with sidecar `.meta.json` `importSettings.addressMode: 'repeat'` |
 | Camera | LO `Camera` class at (0,0,3), Zoom=45 deg | `Transform` (at (0,0,3)) + `Camera` (fov=PI/4, near=0.1, far=100) |
 | Custom shader | Separate GLSL program for depth-viz | `registerMaterialShader('learn_render::depth_viz', entry)` + pass-based MaterialAsset |
 | Window + loop | `glfwCreateWindow` + `while(!glfwWindowShouldClose)` | `createApp(canvas, opts)` from `@forgeax/engine-app` |

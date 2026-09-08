@@ -8,48 +8,43 @@
 // / inversion / grayscale / sharpen / blur / edge-detection); the user
 // switches between them at runtime by pressing keys 1..6 (see T-11).
 //
-// Pipeline shape (one custom RenderPipeline per effect, hot-swapped via
-// `renderer.installPipeline(handle)`):
-//
-//   addColorTarget('offscreenColor', bgra8unorm, swapchain-size)
-//   addColorTarget('offscreenDepth', depth24plus,   swapchain-size)
-//   addScenePass('main', { color: 'offscreenColor', depth: 'offscreenDepth' })
-//   addFullscreenPass('post', { program: { module: 'learn-render-5::<effect>' },
-//                               reads: ['offscreenColor'] })
+// Pipeline shape: the Standard renderer owns the scene and swap-chain graph;
+// this example contributes one declarative fullscreen effect and changes its
+// ECS-owned PostProcessParams payload when the user presses 1..6.
 //
 // GREP anchors for AI users:
 //   - "// 1. engine usage"   public engine API consumed
-//   - "// 2. example glue"   6 RenderPipelineAssets + installPipelineByKey
+//   - "// 2. example glue"   6 fullscreen effects + installPipelineByKey
 //   - "// 3. bootstrap"      entry point wiring (1)+(2) + keydown HUD
 
 // 1. engine usage
 
-import { createApp } from '@forgeax/engine-app';
-import type { App } from '@forgeax/engine-app';
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
+import { createApp, createFullscreenRenderFeature, type App } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { RenderGraph } from '@forgeax/engine-render-graph';
 import { HANDLE_CUBE, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
 import { perspective } from '@forgeax/engine-render';
-import { createDevImportTransport } from '@forgeax/engine-runtime';
-import type { RenderPipeline, RenderPipelineContext, RenderPipelineData } from '@forgeax/engine-render';
-import { addFullscreenPass, addScenePass } from '@forgeax/engine-render';
+
+import type { RenderFeature } from '@forgeax/engine-render';
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { PostProcessParams } from '@forgeax/engine-render';
 
 import type {
   MaterialAsset,
-  RenderPipelineAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
-import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
+import { ok, unwrapHandle } from '@forgeax/engine-types';
+import type { EntityHandle } from '@forgeax/engine-ecs';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
+import { captureCanvasPixels } from '@forgeax/apps-shared/canvas-capture';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
 // Six post-process WGSL effects, imported from ./shaders/*.wgsl. The
 // vite-plugin-shader transforms each `*.wgsl` module into a `{hash, wgsl}`
 // JS module (declared in src/vite-env.d.ts); the `.wgsl` field is the
-// post-naga_oil composed source fed to renderer.postProcess.register(...).
+// post-naga_oil composed source fed to the host-owned fullscreen feature.
 import blurShader from './shaders/blur.wgsl';
 import edgeShader from './shaders/edge-detection.wgsl';
 import grayscaleShader from './shaders/grayscale.wgsl';
@@ -57,9 +52,6 @@ import inversionShader from './shaders/inversion.wgsl';
 import passthroughShader from './shaders/passthrough.wgsl';
 import sharpenShader from './shaders/sharpen.wgsl';
 
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-4-5-framebuffers',
-);
 
 // Texture GUIDs from forgeax-engine-assets/learn-opengl/textures/*.meta.json.
 const CONTAINER_GUID_STR = '019e3969-1d46-773e-988c-a10e305ff2a4';
@@ -131,227 +123,130 @@ const EFFECTS: readonly EffectSpec[] = [
   },
 ];
 
-// Graph resource keys used by every per-effect pipeline. Centralizing them
-// avoids stringly-typed drift between addColorTarget / addScenePass / addFullscreenPass.
-const OFFSCREEN_COLOR_KEY = 'offscreenColor';
-const OFFSCREEN_DEPTH_KEY = 'offscreenDepth';
+const FRAMEBUFFER_EFFECT_ID = 'learn-render-4-5::framebuffer-effect';
+const FRAMEBUFFER_EFFECT_WGSL = `
+struct Output { @builtin(position) position : vec4<f32>, @location(0) uv : vec2<f32>, };
+struct Params { mode : f32, pad0 : f32, pad1 : f32, pad2 : f32, };
+@vertex fn vs_main(@builtin(vertex_index) i : u32) -> Output {
+  var x : f32 = -1.0; var y : f32 = -1.0;
+  if (i == 1u) { x = 3.0; } if (i == 2u) { y = 3.0; }
+  var out : Output; out.position = vec4<f32>(x, y, 0.0, 1.0);
+  out.uv = vec2<f32>((x + 1.0) * 0.5, 1.0 - (y + 1.0) * 0.5); return out;
+}
+@group(1) @binding(0) var sourceTexture : texture_2d<f32>;
+@group(1) @binding(1) var sourceSampler : sampler;
+@group(1) @binding(2) var<uniform> params : Params;
+@fragment fn fs_main(in : Output) -> @location(0) vec4<f32> {
+  let uv = in.uv; let px = 1.0 / vec2<f32>(textureDimensions(sourceTexture));
+  let center = textureSample(sourceTexture, sourceSampler, uv).rgb;
+  let left = textureSample(sourceTexture, sourceSampler, uv - vec2<f32>(px.x, 0.0)).rgb;
+  let right = textureSample(sourceTexture, sourceSampler, uv + vec2<f32>(px.x, 0.0)).rgb;
+  let up = textureSample(sourceTexture, sourceSampler, uv + vec2<f32>(0.0, px.y)).rgb;
+  let down = textureSample(sourceTexture, sourceSampler, uv - vec2<f32>(0.0, px.y)).rgb;
+  if (params.mode < 0.5) { return vec4<f32>(center, 1.0); }
+  if (params.mode < 1.5) { return vec4<f32>(1.0 - center, 1.0); }
+  if (params.mode < 2.5) { let g = dot(center, vec3<f32>(0.299, 0.587, 0.114)); return vec4<f32>(vec3<f32>(g), 1.0); }
+  if (params.mode < 3.5) { return vec4<f32>(center * 5.0 - (left + right + up + down), 1.0); }
+  if (params.mode < 4.5) { return vec4<f32>((left + right + up + down + center) * 0.2, 1.0); }
+  return vec4<f32>(abs(left + right + up + down - 4.0 * center), 1.0);
+}
+`;
+const framebufferEffect = createFullscreenRenderFeature({
+  identity: FRAMEBUFFER_EFFECT_ID,
+  source: FRAMEBUFFER_EFFECT_WGSL,
+  params: { byteSize: 16, defaultValue: new Uint8Array(16) },
+});
+type RecoveryMode = 'idle' | 'cycle' | 'repaired' | 'invalid-format';
+let recoveryMode: RecoveryMode = 'idle';
 const CYCLE_PIPELINE_ID = 'learn-render-5-pipeline::cycle';
 const REPAIRED_PIPELINE_ID = 'learn-render-5-pipeline::repaired';
-const CYCLE_PASS_A = 'cycle-pass-a';
-const CYCLE_PASS_B = 'cycle-pass-b';
-const CYCLE_RESOURCE_A = 'cycle-resource-a';
-const CYCLE_RESOURCE_B = 'cycle-resource-b';
-const REPAIRED_PASS_A = 'repaired-stage-a';
-const REPAIRED_PASS_B = 'repaired-stage-b';
-const REPAIRED_RESOURCE_A = 'repaired-resource-a';
-const REPAIRED_RESOURCE_B = 'repaired-resource-b';
+const INVALID_FORMAT_PIPELINE_ID = 'learn-render-5-pipeline::invalid-format';
 
-type GraphConfigurator = (graph: RenderGraph<RenderPipelineContext>) => void;
-
-interface PipelineCycleDiagnostic {
-  readonly code: string;
+interface FeatureFailureDiagnostic {
+  readonly code: 'render-feature-stage-failed';
+  readonly mode: 'cycle' | 'invalid-format';
   readonly expected: string;
   readonly hint: string;
-  readonly detail: { readonly cycle: readonly string[] } | undefined;
+  readonly detail: unknown;
 }
 
 interface PipelineRecoveryState {
   activePipelineId: string | null;
-  cycleDiagnostic: PipelineCycleDiagnostic | null;
-  cycleDrawSubmitted: boolean | null;
-  repairedDrawSubmitted: boolean | null;
-  repairedPassOrder: string[];
-  lastPassNames: string[];
+  cycleDiagnostic: FeatureFailureDiagnostic | null;
+  invalidFormatDiagnostic: FeatureFailureDiagnostic | null;
+  invalidFormatPreviousPipelineId: string | null;
+  lastFrameStatus: 'healthy' | 'feature-failed' | null;
   frameEndCount: number;
-  lastSubmittedPipelineId: string | null;
   disposed: boolean;
 }
 
 const pipelineRecoveryState: PipelineRecoveryState = {
   activePipelineId: null,
   cycleDiagnostic: null,
-  cycleDrawSubmitted: null,
-  repairedDrawSubmitted: null,
-  repairedPassOrder: [],
-  lastPassNames: [],
+  invalidFormatDiagnostic: null,
+  invalidFormatPreviousPipelineId: null,
+  lastFrameStatus: null,
   frameEndCount: 0,
-  lastSubmittedPipelineId: null,
   disposed: false,
 };
 
-/**
- * Build a single per-effect RenderPipeline.buildGraph closure: declare the
- * offscreen color + depth targets, run addScenePass into them, then sample
- * offscreenColor through addFullscreenPass writing to the swap-chain
- * (color: 'swapchain' is unregistered -> resolveCtx returns undefined ->
- * dispatcher falls back to ctx.view, which is the swap-chain view).
- *
- * One closure per effect (not one parameterised closure) so AI users grep
- * `addFullscreenPass` and find the per-effect call site listed by name.
- */
-function makeEffectPipeline(shaderId: string, configureGraph?: GraphConfigurator): RenderPipeline {
-  return {
-    buildGraph(
-      ctx: RenderPipelineContext,
-      _data: RenderPipelineData,
-    ): RenderGraph<RenderPipelineContext> | null {
-      const graph = new RenderGraph<RenderPipelineContext>();
-      // Offscreen color RT format MUST match the geometry pipeline's
-      // colorAttachmentFormat — the swap-chain view format chosen by
-      // createRenderer (selectSwapChainFormat): 'bgra8unorm-srgb' on
-      // macOS/Windows (the UA-preferred canvas format since
-      // bug-20260612-webgpu-canvas-format-prefer-bgra), 'rgba8unorm-srgb' on
-      // the GLES fallback. Hardcoding 'rgba8unorm-srgb' here mismatched the
-      // geometry PSO on BGRA runners (nightly #385/#391). The hardware sRGB
-      // encoding on store happens here on the offscreen target, then the
-      // fullscreen post sampler reads sRGB-decoded linear values for the effect.
-      const swapChainColorFormat =
-        ctx.pipelineState?.colorAttachmentFormat ?? 'rgba8unorm-srgb';
-      graph.addColorTarget(OFFSCREEN_COLOR_KEY, {
-        format: swapChainColorFormat,
-        size: 'swapchain',
-        sample: 1,
-        usage: 0x10 | 0x04, // RENDER_ATTACHMENT | TEXTURE_BINDING
-      });
-      // Offscreen depth RT format MUST match the engine's per-frame depth
-      // attachment ('depth24plus-stencil8' — the format the geometry pass
-      // pipeline cache keys against; using 'depth24plus' alone causes a
-      // depth-stencil format mismatch validation error inside the pass).
-      graph.addColorTarget(OFFSCREEN_DEPTH_KEY, {
-        format: 'depth24plus-stencil8',
-        size: 'swapchain',
-        sample: 1,
-        usage: 0x10, // RENDER_ATTACHMENT
-      });
-      configureGraph?.(graph);
-      addScenePass(graph, 'main', {
-        color: OFFSCREEN_COLOR_KEY,
-        depth: OFFSCREEN_DEPTH_KEY,
-        ...(configureGraph === undefined ? {} : { reads: [REPAIRED_RESOURCE_B] }),
-        // feat-20260609 T-003: required pipeline-specific selector. URP forward
-        // pass convention; matches the standard PBR / unlit material's
-        // `LightMode: 'Forward'` pass tags so this offscreen render walks the
-        // same dispatch as urp-pipeline's main pass.
-        selector: { LightMode: ['Forward'] },
-        // T-12-a opt-in: route geometry into our offscreen RT, bypassing the
-        // urp-pipeline state-machine that picks geometryColorView from the
-        // tonemap+MSAA gates in recordFrame.
-        _routeFromOpts: true,
-      });
-      addFullscreenPass(graph, 'post', {
-        shader: shaderId,
-        // 'swapchain' is the engine-built-in reserved key (T-12-a /
-        // graph.ts validateNoUnknownResource): graph.compile accepts it
-        // without an addColorTarget declaration; the dispatcher's
-        // resolveCtx.resolve('swapchain') returns undefined and the
-        // writeView falls through to ctx.view (the current swap-chain view).
-        color: 'swapchain',
-        reads: [OFFSCREEN_COLOR_KEY],
-      });
-      const compileResult = graph.compile({
-        backendKind: ctx.runtime.device.caps.backendKind,
-        caps: ctx.runtime.device.caps,
-        device: ctx.runtime.device,
-      });
-      if (!compileResult.ok) {
-        const e = compileResult.error;
-        console.error(
-          '[learn-render 4.5 framebuffers] graph.compile failed:',
-          e.code,
-          'expected:',
-          e.expected,
-          'hint:',
-          e.hint,
-          'detail:',
-          e.detail,
-        );
-        return null;
-      }
-      return graph;
-    },
-    execute(ctx: RenderPipelineContext): void {
-      ctx.frameState.perFrameGraph?.execute(ctx);
-    },
-  };
-}
-
-function makeCyclePipeline(): RenderPipeline {
-  return {
-    buildGraph(ctx: RenderPipelineContext, _data: RenderPipelineData): RenderGraph<RenderPipelineContext> | null {
-      const graph = new RenderGraph<RenderPipelineContext>();
-      graph.addResource(CYCLE_RESOURCE_A, { kind: 'buffer', lifetime: 'transient' });
-      graph.addResource(CYCLE_RESOURCE_B, { kind: 'buffer', lifetime: 'transient' });
-      graph.addPass(CYCLE_PASS_A, {
-        reads: [CYCLE_RESOURCE_B],
-        writes: [CYCLE_RESOURCE_A],
-      });
-      graph.addPass(CYCLE_PASS_B, {
-        reads: [CYCLE_RESOURCE_A],
-        writes: [CYCLE_RESOURCE_B],
-      });
-      const compileResult = graph.compile({
-        backendKind: ctx.runtime.device.caps.backendKind,
-        caps: ctx.runtime.device.caps,
-        device: ctx.runtime.device,
-      });
-      if (!compileResult.ok) {
-        const detail = compileResult.error.detail;
-        pipelineRecoveryState.cycleDiagnostic = {
-          code: compileResult.error.code,
-          expected: compileResult.error.expected,
-          hint: compileResult.error.hint,
-          detail: detail !== undefined && 'cycle' in detail ? { cycle: [...detail.cycle] } : undefined,
-        };
-        return null;
-      }
-      return graph;
-    },
-    execute(ctx: RenderPipelineContext): void {
-      ctx.frameState.perFrameGraph?.execute(ctx);
-    },
-  };
-}
-
-function configureRepairedGraph(graph: RenderGraph<RenderPipelineContext>): void {
-  pipelineRecoveryState.repairedPassOrder = [];
-  graph.addResource(REPAIRED_RESOURCE_A, { kind: 'buffer', lifetime: 'transient' });
-  graph.addResource(REPAIRED_RESOURCE_B, { kind: 'buffer', lifetime: 'transient' });
-  graph.addPass(REPAIRED_PASS_A, {
-    reads: [],
-    writes: [REPAIRED_RESOURCE_A],
-    execute: () => {
-      pipelineRecoveryState.repairedPassOrder.push(REPAIRED_PASS_A);
-    },
-  });
-  graph.addPass(REPAIRED_PASS_B, {
-    reads: [REPAIRED_RESOURCE_A],
-    writes: [REPAIRED_RESOURCE_B],
-    execute: () => {
-      pipelineRecoveryState.repairedPassOrder.push(REPAIRED_PASS_B);
-    },
-  });
-}
-
-function makeRepairedPipeline(): RenderPipeline {
-  return makeEffectPipeline('learn-render-5::passthrough', configureRepairedGraph);
-}
-
-// Module-level mutable closure so the named installPipelineByKey export
-// (called by both M5 dawn smoke and the keydown handler in section 3) can
-// install one of the 6 RenderPipelineAsset PODs registered inside
-// bootstrap. Populated after bootstrap runs registerPipeline.
-let pipelineAssetsByKey: ReadonlyMap<EffectKey, RenderPipelineAsset> | null = null;
-let activeRendererForInstall:
-  | {
-      installPipeline(
-        asset: RenderPipelineAsset,
-      ): { ok: true } | { ok: false; error: { code: string; hint?: string } };
+// Recovery is a feature-stage probe, not a second Renderer/Pipeline API. A
+// fault makes this feature fail during plan; the host isolates that feature,
+// keeps the Standard scene/post graph last-known-good, and retries next frame
+// after the consumer selects the repaired mode.
+const recoveryFeature: RenderFeature<undefined> = {
+  identity: 'learn-render-4-5::feature-recovery',
+  extract: () => ok(undefined),
+  plan: () => {
+    if (recoveryMode === 'cycle' || recoveryMode === 'invalid-format') {
+      throw new Error(`framebuffer recovery probe rejected ${recoveryMode} plan`);
     }
-  | null = null;
+    return ok({ resources: [], passes: [] });
+  },
+};
+
+function captureExpectedPipelineError(error: {
+  readonly code: string;
+  readonly hint: string;
+  readonly expected?: unknown;
+  readonly detail?: unknown;
+}): boolean {
+  if (recoveryMode !== 'cycle' && recoveryMode !== 'invalid-format') return false;
+  const detail =
+    error.detail !== null && typeof error.detail === 'object'
+      ? (error.detail as { readonly cause?: unknown })
+      : undefined;
+  const cause =
+    detail?.cause !== null && typeof detail?.cause === 'object'
+      ? (detail.cause as { readonly name?: unknown })
+      : undefined;
+  const wrappedFeatureFailure =
+    error.code === 'device-operation-failed' && cause?.name === 'RenderFeatureStageFailedError';
+  if (error.code !== 'render-feature-stage-failed' && !wrappedFeatureFailure) {
+    return false;
+  }
+  const diagnostic: FeatureFailureDiagnostic = {
+    code: 'render-feature-stage-failed',
+    mode: recoveryMode,
+    expected:
+      typeof error.expected === 'string'
+        ? error.expected
+        : 'the recovery probe completes its declarative plan without an error',
+    hint: error.hint,
+    detail: wrappedFeatureFailure ? detail?.cause : error.detail,
+  };
+  if (recoveryMode === 'cycle') {
+    pipelineRecoveryState.cycleDiagnostic = diagnostic;
+  } else {
+    pipelineRecoveryState.invalidFormatDiagnostic = diagnostic;
+    pipelineRecoveryState.activePipelineId = pipelineRecoveryState.invalidFormatPreviousPipelineId;
+  }
+  return true;
+}
+
+let activeWorldForEffects: import('@forgeax/engine-ecs').World | null = null;
+let effectParamsEntity: EntityHandle | null = null;
 let activeAppForRecovery: App | null = null;
-let activeRendererForRecovery: App['renderer'] | null = null;
-let unsubscribeRecoveryFrameEnd: (() => void) | null = null;
-const registeredRecoveryPipelines = new Set<string>();
 
 type RecoveryInstallResult =
   | { ok: true }
@@ -367,80 +262,46 @@ function recoveryNotReady(): RecoveryInstallResult {
   };
 }
 
-function installRecoveryPipeline(
-  pipelineId: string,
-  pipeline: RenderPipeline,
-  asset: RenderPipelineAsset,
-): RecoveryInstallResult {
-  const renderer = activeRendererForRecovery;
-  if (renderer === null) return recoveryNotReady();
-  if (!registeredRecoveryPipelines.has(pipelineId)) {
-    try {
-      renderer.registerPipeline(pipelineId, pipeline);
-      registeredRecoveryPipelines.add(pipelineId);
-    } catch (cause) {
-      return {
-        ok: false,
-        error: {
-          code: 'pipeline-register-failed',
-          hint: cause instanceof Error ? cause.message : String(cause),
-        },
-      };
-    }
-  }
-  const installResult = renderer.installPipeline(asset);
-  if (!installResult.ok) {
-    return {
-      ok: false,
-      error: {
-        code: installResult.error.code,
-        hint: installResult.error.hint ?? '',
-      },
-    };
-  }
+function installRecoveryMode(pipelineId: string, mode: RecoveryMode): RecoveryInstallResult {
+  if (activeAppForRecovery === null) return recoveryNotReady();
+  recoveryMode = mode;
   pipelineRecoveryState.activePipelineId = pipelineId;
+  pipelineRecoveryState.lastFrameStatus = null;
+  if (mode === 'cycle') pipelineRecoveryState.cycleDiagnostic = null;
+  if (mode === 'invalid-format') pipelineRecoveryState.invalidFormatDiagnostic = null;
   return { ok: true };
 }
 
 export function installCyclePipeline(): RecoveryInstallResult {
-  return installRecoveryPipeline(
-    CYCLE_PIPELINE_ID,
-    makeCyclePipeline(),
-    { kind: 'render-pipeline', pipelineId: CYCLE_PIPELINE_ID },
-  );
+  return installRecoveryMode(CYCLE_PIPELINE_ID, 'cycle');
 }
 
 export function installRepairedPipeline(): RecoveryInstallResult {
-  return installRecoveryPipeline(
-    REPAIRED_PIPELINE_ID,
-    makeRepairedPipeline(),
-    { kind: 'render-pipeline', pipelineId: REPAIRED_PIPELINE_ID },
-  );
+  return installRecoveryMode(REPAIRED_PIPELINE_ID, 'repaired');
+}
+
+export function installInvalidFormatPipeline(): RecoveryInstallResult {
+  pipelineRecoveryState.invalidFormatPreviousPipelineId = pipelineRecoveryState.activePipelineId;
+  pipelineRecoveryState.invalidFormatDiagnostic = null;
+  return installRecoveryMode(INVALID_FORMAT_PIPELINE_ID, 'invalid-format');
 }
 
 export function pipelineRecoveryStateSnapshot(): PipelineRecoveryState {
   return {
     ...pipelineRecoveryState,
-    cycleDiagnostic:
-      pipelineRecoveryState.cycleDiagnostic === null
-        ? null
-        : {
-            ...pipelineRecoveryState.cycleDiagnostic,
-            detail:
-              pipelineRecoveryState.cycleDiagnostic.detail === undefined
-                ? undefined
-                : { cycle: [...pipelineRecoveryState.cycleDiagnostic.detail.cycle] },
-          },
-    repairedPassOrder: [...pipelineRecoveryState.repairedPassOrder],
-    lastPassNames: [...pipelineRecoveryState.lastPassNames],
+    cycleDiagnostic: pipelineRecoveryState.cycleDiagnostic === null
+      ? null
+      : { ...pipelineRecoveryState.cycleDiagnostic },
+    invalidFormatDiagnostic: pipelineRecoveryState.invalidFormatDiagnostic === null
+      ? null
+      : { ...pipelineRecoveryState.invalidFormatDiagnostic },
   };
 }
 
 export function disposePipelineRecovery(): RecoveryInstallResult {
-  const app = activeAppForRecovery;
-  const renderer = activeRendererForRecovery;
-  if (app === null || renderer === null) return recoveryNotReady();
   if (pipelineRecoveryState.disposed) return { ok: true };
+  const app = activeAppForRecovery;
+  if (app === null) return recoveryNotReady();
   const stopResult = app.stop();
   if (!stopResult.ok && stopResult.error.code !== 'app-not-started') {
     return {
@@ -448,10 +309,8 @@ export function disposePipelineRecovery(): RecoveryInstallResult {
       error: { code: stopResult.error.code, hint: stopResult.error.hint },
     };
   }
-  unsubscribeRecoveryFrameEnd?.();
-  unsubscribeRecoveryFrameEnd = null;
-  renderer.dispose();
-  renderer.dispose();
+  recoveryMode = 'idle';
+  activeAppForRecovery = null;
   pipelineRecoveryState.disposed = true;
   return { ok: true };
 }
@@ -475,7 +334,7 @@ export function resumePipelineRecovery(): RecoveryInstallResult {
 }
 
 /**
- * Install one of the 6 effect pipelines by its keyboard digit ('1' .. '6').
+ * Select one of the 6 fullscreen effects by its keyboard digit ('1' .. '6').
  * Returns a Result-shape (ok / err with a code) so callers (M5 smoke, T-11
  * keydown) check `.ok` per R-9. A call before bootstrap completes returns
  * `'pipelines-not-ready'`; an unknown key returns `'unknown-effect-key'`.
@@ -486,17 +345,17 @@ export function resumePipelineRecovery(): RecoveryInstallResult {
 export function installPipelineByKey(
   key: string,
 ): { ok: true } | { ok: false; error: { code: string; hint: string } } {
-  if (pipelineAssetsByKey === null || activeRendererForInstall === null) {
+  if (activeWorldForEffects === null || effectParamsEntity === null) {
     return {
       ok: false,
       error: {
         code: 'pipelines-not-ready',
-        hint: 'await app.start() resolves before calling installPipelineByKey',
+        hint: 'await app.start() resolves before selecting a framebuffer effect',
       },
     };
   }
-  const asset = pipelineAssetsByKey.get(key as EffectKey);
-  if (asset === undefined) {
+  const effect = EFFECTS.find((entry) => entry.key === key);
+  if (effect === undefined) {
     return {
       ok: false,
       error: {
@@ -505,17 +364,10 @@ export function installPipelineByKey(
       },
     };
   }
-  const installRes = activeRendererForInstall.installPipeline(asset);
-  if (!installRes.ok) {
-    return {
-      ok: false,
-      error: {
-        code: installRes.error.code,
-        hint: installRes.error.hint ?? '',
-      },
-    };
-  }
-  pipelineRecoveryState.activePipelineId = asset.pipelineId;
+  activeWorldForEffects.set(effectParamsEntity, PostProcessParams, {
+    data: new Uint8Array(new Float32Array([Number(effect.key) - 1, 0, 0, 0]).buffer),
+  });
+  pipelineRecoveryState.activePipelineId = effect.id;
   return { ok: true };
 }
 
@@ -523,7 +375,7 @@ export function installPipelineByKey(
  * Public effect-name lookup mirror of installPipelineByKey: returns the
  * display name for HUD updates ('passthrough' / 'inversion' / ...). The HUD
  * keydown handler in section 3 reads this so the DOM text matches whatever
- * pipeline was just installed.
+ * effect was just selected.
  */
 export function effectDisplayNameByKey(key: string): string | null {
   for (const e of EFFECTS) if (e.key === key) return e.displayName;
@@ -542,17 +394,17 @@ void bootstrap(canvas);
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
-    {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
+    { features: [framebufferEffect, recoveryFeature] },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 4.5 framebuffers] createApp failed:', appRes.error);
     return;
   }
   const app = appRes.value;
-  const renderer = app.renderer;
   const world = app.world;
   app.onError((error) => {
+    if (captureExpectedPipelineError(error)) return;
     console.error('[learn-render 4.5 framebuffers] app.onError:', error.code, error.hint);
     const bus = (
       globalThis as unknown as {
@@ -561,10 +413,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     ).__learnRenderErrors;
     if (bus !== undefined) bus.push({ code: error.code, hint: error.hint });
   });
-  const assets = renderer.assets;
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[learn-render 4.5 framebuffers] asset host unavailable');
+    return;
+  }
 
   // Bind the dev catalog and scoped import transport used by pluginPack.
-  assets.configureRuntimeBinding(runtimeBinding);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   // Parse + load the two textures (container.jpg for cubes, metal.png for
   // floor). Both routes return Result<...> -- explicit if (!.ok) checks per
@@ -693,104 +549,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     )
     .unwrap();
 
-  addFirstPersonSystem(app.world, app.renderer, {
+  addFirstPersonSystem(app.world, {
     name: 'learn-render-4.5-first-person',
     overrideBackend: undefined,
   });
 
-  // Register the 6 post-process shader entries + 6 RenderPipeline impls + 6
-  // RenderPipelineAsset handles. The 6 calls per channel are inlined (one
-  // `renderer.postProcess.register('learn-render-5::<effect>', ...)` and one
-  // `renderer.registerPipeline('learn-render-5-pipeline::<effect>', ...)`
-  // per effect) so an AI user grepping for either id literal lands on the
-  // exact registration line. Each effect uses a distinct pipelineId so
-  // installPipeline brand-number compare actually swaps the per-frame graph
-  // (a shared id would dedup the brand and the graph would not rebuild).
-  try {
-    renderer.postProcess.register('learn-render-5::passthrough', {
-      source: passthroughShader.wgsl,
-      reads: [OFFSCREEN_COLOR_KEY],
-    });
-    // biome-ignore format: keep id literal on the same line for AI-user grep gate
-    renderer.registerPipeline('learn-render-5-pipeline::passthrough', makeEffectPipeline('learn-render-5::passthrough'));
-    renderer.postProcess.register('learn-render-5::inversion', {
-      source: inversionShader.wgsl,
-      reads: [OFFSCREEN_COLOR_KEY],
-    });
-    // biome-ignore format: keep id literal on the same line for AI-user grep gate
-    renderer.registerPipeline('learn-render-5-pipeline::inversion', makeEffectPipeline('learn-render-5::inversion'));
-    renderer.postProcess.register('learn-render-5::grayscale', {
-      source: grayscaleShader.wgsl,
-      reads: [OFFSCREEN_COLOR_KEY],
-    });
-    // biome-ignore format: keep id literal on the same line for AI-user grep gate
-    renderer.registerPipeline('learn-render-5-pipeline::grayscale', makeEffectPipeline('learn-render-5::grayscale'));
-    renderer.postProcess.register('learn-render-5::sharpen', {
-      source: sharpenShader.wgsl,
-      reads: [OFFSCREEN_COLOR_KEY],
-    });
-    // biome-ignore format: keep id literal on the same line for AI-user grep gate
-    renderer.registerPipeline('learn-render-5-pipeline::sharpen', makeEffectPipeline('learn-render-5::sharpen'));
-    renderer.postProcess.register('learn-render-5::blur', {
-      source: blurShader.wgsl,
-      reads: [OFFSCREEN_COLOR_KEY],
-    });
-    // biome-ignore format: keep id literal on the same line for AI-user grep gate
-    renderer.registerPipeline('learn-render-5-pipeline::blur', makeEffectPipeline('learn-render-5::blur'));
-    renderer.postProcess.register('learn-render-5::edge-detection', {
-      source: edgeShader.wgsl,
-      reads: [OFFSCREEN_COLOR_KEY],
-    });
-    // biome-ignore format: keep id literal on the same line for AI-user grep gate
-    renderer.registerPipeline('learn-render-5-pipeline::edge-detection', makeEffectPipeline('learn-render-5::edge-detection'));
-  } catch (e) {
-    console.error('[learn-render 4.5 framebuffers] register threw:', e);
-    return;
-  }
-
-  // Six RenderPipelineAsset PODs: each `pipelineId` matches the
-  // `renderer.registerPipeline(...)` id above. installPipeline takes the POD
-  // directly (no shared-ref allocation).
-  const passthroughAsset: RenderPipelineAsset = {
-    kind: 'render-pipeline',
-    pipelineId: 'learn-render-5-pipeline::passthrough',
-  };
-  const inversionAsset: RenderPipelineAsset = {
-    kind: 'render-pipeline',
-    pipelineId: 'learn-render-5-pipeline::inversion',
-  };
-  const grayscaleAsset: RenderPipelineAsset = {
-    kind: 'render-pipeline',
-    pipelineId: 'learn-render-5-pipeline::grayscale',
-  };
-  const sharpenAsset: RenderPipelineAsset = {
-    kind: 'render-pipeline',
-    pipelineId: 'learn-render-5-pipeline::sharpen',
-  };
-  const blurAsset: RenderPipelineAsset = {
-    kind: 'render-pipeline',
-    pipelineId: 'learn-render-5-pipeline::blur',
-  };
-  const edgeAsset: RenderPipelineAsset = {
-    kind: 'render-pipeline',
-    pipelineId: 'learn-render-5-pipeline::edge-detection',
-  };
-
-  pipelineAssetsByKey = new Map<EffectKey, RenderPipelineAsset>([
-    ['1', passthroughAsset],
-    ['2', inversionAsset],
-    ['3', grayscaleAsset],
-    ['4', sharpenAsset],
-    ['5', blurAsset],
-    ['6', edgeAsset],
-  ]);
-  activeRendererForInstall = renderer;
+  const paramsEntity = world.spawn({
+    component: PostProcessParams,
+    data: { shader: FRAMEBUFFER_EFFECT_ID, data: new Uint8Array(16) },
+  }).unwrap();
+  activeWorldForEffects = world;
+  effectParamsEntity = paramsEntity;
   activeAppForRecovery = app;
-  activeRendererForRecovery = renderer;
-  unsubscribeRecoveryFrameEnd = renderer.subscribeFrameEnd(() => {
-    pipelineRecoveryState.frameEndCount += 1;
-    pipelineRecoveryState.lastSubmittedPipelineId = pipelineRecoveryState.activePipelineId;
-  });
 
   const startRes = app.start();
   if (!startRes.ok) {
@@ -798,10 +568,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  installCaptureHook(app, world);
+  installCaptureHook(app, world, target);
   window.__learnRenderFramebuffers = {
     installCyclePipeline,
     installRepairedPipeline,
+    installInvalidFormatPipeline,
     pause: pausePipelineRecovery,
     resume: resumePipelineRecovery,
     getState: pipelineRecoveryStateSnapshot,
@@ -809,8 +580,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   };
 
   // Install effect 1 (passthrough) as the boot default. Subsequent presses of
-  // keys 2..6 (handled in the keydown listener below) hot-swap pipelines via
-  // installPipelineByKey.
+  // keys 2..6 (handled in the keydown listener below) update the Standard
+  // fullscreen effect via installPipelineByKey.
   const initialInstall = installPipelineByKey('1');
   if (!initialInstall.ok) {
     console.error(
@@ -858,35 +629,38 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     });
   }
 
-  console.warn(`[learn-render 4.5 framebuffers] backend=${renderer.backend}`);
 }
 
 // RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives
 // one update + draw + readPixels so the live canvas read is anchored to the same
 // frame the capture records. Only meaningful when the page is served with
 // FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
-function installCaptureHook(app: App, world: App['world']): void {
+function installCaptureHook(app: App, world: App['world'], canvas: HTMLCanvasElement): void {
   type CaptureHook = () => Promise<Uint8Array>;
   const win = window as unknown as { __captureFramebuffers?: CaptureHook };
   const renderer = app.renderer;
-  const worldAttachment1 = renderer.attachWorld(world);
-  if (!worldAttachment1.ok) throw worldAttachment1.error;
+  const attached = renderer.attach(world);
+  if (!attached.ok) throw attached.error;
+  const lease = attached.value;
   win.__captureFramebuffers = async (): Promise<Uint8Array> => {
     world.update(1 / 60).unwrap();
-    const frameEndsBefore = pipelineRecoveryState.frameEndCount;
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    const submitted = pipelineRecoveryState.frameEndCount > frameEndsBefore;
-    pipelineRecoveryState.lastPassNames = [...renderer.perFramePassNames];
-    if (pipelineRecoveryState.activePipelineId === CYCLE_PIPELINE_ID) {
-      pipelineRecoveryState.cycleDrawSubmitted = submitted;
-    }
-    if (pipelineRecoveryState.activePipelineId === REPAIRED_PIPELINE_ID) {
-      pipelineRecoveryState.repairedDrawSubmitted = submitted;
-    }
-    const r = await renderer.readPixels();
+    const frame = renderer.draw({
+      leases: [lease],
+      camera: { lease },
+      environment: { lease },
+    });
+    if (!frame.ok) throw frame.error;
+    pipelineRecoveryState.frameEndCount += 1;
+    pipelineRecoveryState.lastFrameStatus =
+      recoveryMode === 'cycle' || recoveryMode === 'invalid-format'
+        ? 'feature-failed'
+        : 'healthy';
+    const observed = await renderer.observe(frame.value, { include: ['draws'] });
+    if (!observed.ok) throw observed.error;
+    const r = await captureCanvasPixels(canvas);
     if (!r.ok) {
       throw new Error(
-        `[learn-render 4.5 framebuffers] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
+        `[learn-render 4.5 framebuffers] canvas capture failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
       );
     }
     return r.value;
@@ -900,6 +674,7 @@ declare global {
     __learnRenderFramebuffers?: {
       installCyclePipeline: typeof installCyclePipeline;
       installRepairedPipeline: typeof installRepairedPipeline;
+      installInvalidFormatPipeline: typeof installInvalidFormatPipeline;
       pause: typeof pausePipelineRecovery;
       resume: typeof resumePipelineRecovery;
       getState: typeof pipelineRecoveryStateSnapshot;

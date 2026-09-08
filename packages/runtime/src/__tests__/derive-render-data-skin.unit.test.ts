@@ -1,77 +1,90 @@
-// derive-render-data-skin.unit.test.ts -- feat-20260611-fox-skinning-vertex-
-// attribute-chain M3 / w15: AC-09.ii deriveRenderDataMesh layout discrimination.
-//
-// Verifies the 18F discriminator: a MeshAsset whose attributes contain
-// skinIndex (i.e. a glTF primitive carrying JOINTS_0/WEIGHTS_0 went through
-// the parse-gltf -> bridge path) projects to MeshRenderData.layout === '18F';
-// without skinIndex it stays '12F'. Static tsc narrowing is necessary but
-// insufficient -- a fallthrough or implicit default would not be caught at
-// compile time, so the runtime assertion guards the actual switch (R-1).
-//
-// Anchors: requirements AC-09.ii; plan-strategy D-1 (12F/18F float-count
-// naming, no semantic 'skin'); plan-strategy R-1 (single-member -> two-member
-// union evolution); research E-2 (render-data.ts:118 hardcoded layout).
+// derive-render-data-skin.unit.test.ts -- geometry-owned projection contract.
+// The render projection must preserve every authored attribute in canonical
+// order, including skin streams, without a parallel stride discriminator.
 
-import { deriveRenderDataMesh } from '@forgeax/engine-render/internal';
+import { deriveVertexLayoutProjection } from '@forgeax/engine-geometry';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { deriveRenderDataMesh } from '../../../render/src/render-data';
+
+function canonicalAttributes(vertexCount: number): MeshAsset['attributes'] {
+  return {
+    position: new Float32Array(vertexCount * 3),
+    normal: new Float32Array(vertexCount * 3),
+    uv: new Float32Array(vertexCount * 2),
+    tangent: new Float32Array(vertexCount * 4),
+  };
+}
 
 function meshWithoutSkin(): MeshAsset {
   return {
     kind: 'mesh',
     vertices: new Float32Array(4 * 12),
     indices: new Uint16Array([0, 1, 2, 0, 2, 3]),
-    attributes: {},
+    attributes: canonicalAttributes(4),
     aabb: new Float32Array(6),
-    submeshes: [{ indexOffset: 0, indexCount: 6, vertexCount: 4, topology: 'triangle-list' }],
+    submeshes: [
+      { indexOffset: 0, indexCount: 6, vertexCount: 4, topology: 'triangle-list', materialSlot: 0 },
+    ],
+
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 
 function meshWithSkin(): MeshAsset {
-  // 4 verts * 18F = 72 floats. skinIndex is 4 uint16 per vertex; skinWeight
-  // 4 float per vertex. Values are placeholders -- deriveRenderDataMesh only
-  // inspects the *presence* of skinIndex.
+  const attributes = canonicalAttributes(4);
+  attributes.skinIndex = new Uint16Array(4 * 4);
+  attributes.skinWeight = new Float32Array(4 * 4);
   return {
     kind: 'mesh',
     vertices: new Float32Array(4 * 18),
     indices: new Uint16Array([0, 1, 2, 0, 2, 3]),
-    attributes: {
-      skinIndex: new Uint16Array(4 * 4),
-      skinWeight: new Float32Array(4 * 4),
-    },
+    attributes,
     aabb: new Float32Array(6),
-    submeshes: [{ indexOffset: 0, indexCount: 6, vertexCount: 4, topology: 'triangle-list' }],
+    submeshes: [
+      { indexOffset: 0, indexCount: 6, vertexCount: 4, topology: 'triangle-list', materialSlot: 0 },
+    ],
+
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 
-describe('feat-20260611 / M3 / w15 - deriveRenderDataMesh layout 12F/18F discriminator', () => {
-  it("AC-09.ii (a) MeshAsset with attributes.skinIndex -> layout === '18F'", () => {
-    const res = deriveRenderDataMesh(meshWithSkin());
+describe('deriveRenderDataMesh geometry-owned projection', () => {
+  it('preserves the canonical projection for a mesh with skin streams', () => {
+    const mesh = meshWithSkin();
+    const res = deriveRenderDataMesh(mesh);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.value.layout).toBe('18F');
+    expect(res.value.layoutProjection).toEqual(deriveVertexLayoutProjection(mesh.attributes));
+    expect(res.value.layoutProjection.arrayStride).toBe(72);
   });
 
-  it("AC-09.ii (b) MeshAsset without skinIndex -> layout === '12F' (no regression)", () => {
-    const res = deriveRenderDataMesh(meshWithoutSkin());
+  it('preserves the canonical projection for a mesh without skin streams', () => {
+    const mesh = meshWithoutSkin();
+    const res = deriveRenderDataMesh(mesh);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.value.layout).toBe('12F');
+    expect(res.value.layoutProjection).toEqual(deriveVertexLayoutProjection(mesh.attributes));
+    expect(res.value.layoutProjection.arrayStride).toBe(48);
   });
 
-  it('AC-09.ii (c) skinWeight alone (without skinIndex) does not flip layout to 18F', () => {
-    // Defensive: the bridge always writes both skinIndex and skinWeight when
-    // a primitive carries JOINTS_0/WEIGHTS_0 (M2/w8). The discriminator is
-    // skinIndex; a hypothetical asset writing only skinWeight (which would
-    // be a parse-gltf fail-fast upstream -- AC-06) must not be misread as
-    // 18F at this projection layer.
+  it('keeps a skinWeight-only authored map visible in the projection', () => {
     const mesh: MeshAsset = {
       ...meshWithoutSkin(),
-      attributes: { skinWeight: new Float32Array(16) },
+      attributes: {
+        ...canonicalAttributes(4),
+        skinWeight: new Float32Array(16),
+      },
     };
     const res = deriveRenderDataMesh(mesh);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.value.layout).toBe('12F');
+    expect(res.value.layoutProjection.attributes.map((attribute) => attribute.key)).toEqual([
+      'position',
+      'normal',
+      'uv',
+      'tangent',
+      'skinWeight',
+    ]);
   });
 });

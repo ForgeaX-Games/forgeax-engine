@@ -1,3 +1,4 @@
+import * as SceneOwner from '@forgeax/engine-scene';
 // scene-sugar-instantiate.test - engine.assets.instantiate sugar wrapper
 // runtime equivalence (feat-20260514-scene-as-world-blueprint w30; M3 rewrite
 // from old SceneInstanceId returns to new Entity returns).
@@ -6,7 +7,7 @@
 //   (a) sugar entry runs the same pipeline as the main entry: a 2-node
 //       SceneAsset goes through `engine.assets.instantiate(handle, world)`
 //       and yields the same Entity root / mapping / overrides as the
-//       direct `world.instantiateScene(handle)` call (AC-03 +
+//       direct `SceneOwner.worldInstantiateScene(world, handle)` call (AC-03 +
 //       requirements §IN-3 sugar contract).
 //   (b) `parent?` passthrough: passing a parent through the sugar wrapper
 //       attaches `ChildOf { parent }` to the root nodes byte-for-byte the
@@ -18,12 +19,13 @@
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { defineComponent, type EntityHandle, World } from '@forgeax/engine-ecs';
-import { SceneInstance } from '@forgeax/engine-render/internal';
+import { SceneInstance } from '@forgeax/engine-render';
 import { ChildOf } from '@forgeax/engine-scene';
 import type { Handle, LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+import { registerRuntimeComponents } from './helpers/register-runtime-components';
 
 function localId(n: number): LocalEntityId {
   return n as LocalEntityId;
@@ -50,19 +52,21 @@ describe('w30 - engine.assets.instantiate sugar wrapper equivalence (AC-03)', ()
     const asset = buildScene();
     // Direct path baseline.
     const worldA = new World();
+    registerRuntimeComponents(worldA);
     const handleA = registerSceneAsset(worldA, asset);
-    const directRes = worldA.instantiateScene(handleA);
+    const directRes = SceneOwner.worldInstantiateScene(worldA, handleA);
     expect(directRes.ok).toBe(true);
     if (!directRes.ok) return;
     const directRoot = directRes.value.root;
     const directInst = worldA.get(directRoot, SceneInstance);
     expect(directInst.ok).toBe(true);
     if (!directInst.ok) return;
-    const directState = worldA.getSceneInstanceState(directRoot);
+    const directState = SceneOwner.worldGetSceneInstanceState(worldA, directRoot);
     expect(directState.ok).toBe(true);
     if (!directState.ok) return;
     // Sugar path.
     const worldB = new World();
+    registerRuntimeComponents(worldB);
     const handleB = registerSceneAsset(worldB, asset);
     const sugarRes = reg.instantiate<SceneAsset>(handleB, worldB);
     expect(sugarRes.ok).toBe(true);
@@ -71,7 +75,7 @@ describe('w30 - engine.assets.instantiate sugar wrapper equivalence (AC-03)', ()
     const sugarInst = worldB.get(sugarRoot, SceneInstance);
     expect(sugarInst.ok).toBe(true);
     if (!sugarInst.ok) return;
-    const sugarState = worldB.getSceneInstanceState(sugarRoot);
+    const sugarState = SceneOwner.worldGetSceneInstanceState(worldB, sugarRoot);
     expect(sugarState.ok).toBe(true);
     if (!sugarState.ok) return;
     // Mapping length parity (2 nodes -> 2 slots).
@@ -85,6 +89,7 @@ describe('w30 - engine.assets.instantiate sugar wrapper equivalence (AC-03)', ()
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const asset = buildScene();
     const world = new World();
+    registerRuntimeComponents(world);
     const handle = registerSceneAsset(world, asset);
     const parentSpawn = world.spawn({
       component: Transform,
@@ -97,7 +102,7 @@ describe('w30 - engine.assets.instantiate sugar wrapper equivalence (AC-03)', ()
     expect(sugarRes.ok).toBe(true);
     if (!sugarRes.ok) return;
     const sugarRoot: EntityHandle = sugarRes.value;
-    const sugarState = world.getSceneInstanceState(sugarRoot);
+    const sugarState = SceneOwner.worldGetSceneInstanceState(world, sugarRoot);
     expect(sugarState.ok).toBe(true);
     if (!sugarState.ok) return;
     // The synthetic root now carries a ChildOf component pointing at the
@@ -112,6 +117,7 @@ describe('w30 - engine.assets.instantiate sugar wrapper equivalence (AC-03)', ()
   it('(c) error passthrough: invalid handle -> sugar returns Err verbatim', () => {
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();
+    registerRuntimeComponents(world);
     // Use a handle that is not a managed ref -> instantiateScene returns Err.
     const bogusHandle = toShared<'SceneAsset'>(9999);
     const r = reg.instantiate<SceneAsset>(bogusHandle, world);
@@ -160,12 +166,13 @@ describe('M5 post-instantiate component injection (w13 / AC-09 + AC-10)', () => 
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const asset = buildPostScene();
     const world = new World();
+    registerRuntimeComponents(world, [Enemy, Waypoint]);
     const handle = registerSceneAsset(world, asset);
     const r = reg.instantiate<SceneAsset>(handle, world);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const root: EntityHandle = r.value;
-    const state = world.getSceneInstanceState(root);
+    const state = SceneOwner.worldGetSceneInstanceState(world, root);
     expect(state.ok).toBe(true);
     if (!state.ok) return;
     const roots = state.value.rootEntities;
@@ -190,6 +197,7 @@ describe('M5 post-instantiate component injection (w13 / AC-09 + AC-10)', () => 
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const asset = buildPostScene();
     const world = new World();
+    registerRuntimeComponents(world, [Enemy, Waypoint]);
     const handle = registerSceneAsset(world, asset);
     const r = reg.instantiate<SceneAsset>(handle, world);
     expect(r.ok).toBe(true);
@@ -224,13 +232,14 @@ describe('M5 post-instantiate component injection (w13 / AC-09 + AC-10)', () => 
     ];
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();
+    registerRuntimeComponents(world, [Enemy, Waypoint]);
     const asset: SceneAsset = { kind: 'scene', entities: multiRoot };
     const handle = registerSceneAsset(world, asset);
     const r = reg.instantiate<SceneAsset>(handle, world);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const root: EntityHandle = r.value;
-    const state = world.getSceneInstanceState(root);
+    const state = SceneOwner.worldGetSceneInstanceState(world, root);
     expect(state.ok).toBe(true);
     if (!state.ok) return;
     const roots = state.value.rootEntities;
@@ -256,6 +265,7 @@ describe('M5 post-instantiate component injection (w13 / AC-09 + AC-10)', () => 
     defineComponent('Transform', { pos: 'array<f32, 3>' });
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();
+    registerRuntimeComponents(world, [Enemy, Waypoint]);
     const singleRoot: SceneEntity[] = [
       { localId: localId(0), components: { Transform: { pos: [0, 0, 0] } } },
     ];
@@ -266,7 +276,7 @@ describe('M5 post-instantiate component injection (w13 / AC-09 + AC-10)', () => 
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const root: EntityHandle = r.value;
-    const state = world.getSceneInstanceState(root);
+    const state = SceneOwner.worldGetSceneInstanceState(world, root);
     expect(state.ok).toBe(true);
     if (!state.ok) return;
     const roots1 = state.value.rootEntities;
@@ -277,7 +287,7 @@ describe('M5 post-instantiate component injection (w13 / AC-09 + AC-10)', () => 
       data: { speed: 1, hp: 10 },
     });
     expect(addRes.ok).toBe(true);
-    const state2 = world.getSceneInstanceState(root);
+    const state2 = SceneOwner.worldGetSceneInstanceState(world, root);
     expect(state2.ok).toBe(true);
     if (!state2.ok) return;
     const roots2 = state2.value.rootEntities;
@@ -288,6 +298,7 @@ describe('M5 post-instantiate component injection (w13 / AC-09 + AC-10)', () => 
     defineComponent('Transform', { pos: 'array<f32, 3>' });
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();
+    registerRuntimeComponents(world);
     const asset = buildPostScene();
     const handle = registerSceneAsset(world, asset);
     const r = reg.instantiate<SceneAsset>(handle, world);

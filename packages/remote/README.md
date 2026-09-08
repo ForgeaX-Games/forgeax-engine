@@ -5,8 +5,8 @@
 ```mermaid
 flowchart LR
     AI["AI User / CLI / In-Process"] -->|"eval(script)"| CORE["eval Core (host realm new Function)"]
-    CORE -.->|"_import"| ECS["@forgeax/engine-ecs<br/>World.query / QueryRow"]
-    CORE --> ROOTS["Eval Scope Live Roots<br/>world · renderer · assets · debugAdapter"]
+    CORE -.->|"host import resolver"| ECS["@forgeax/engine-ecs<br/>World.query / QueryRow"]
+    CORE --> ROOTS["Eval Scope Live Roots<br/>world · renderer · assets · rhiCapture"]
     ROOTS --> W["Running World / Renderer"]
 ```
 
@@ -18,7 +18,6 @@ flowchart LR
 |:--|:--|:--|
 | In-process client | `client.eval(script)` | Direct `async` call within the host process — zero network overhead |
 | WS JSON-RPC 2.0 server | `ws://localhost:<port>` `{"method":"eval","params":{"script":"..."}}` | Host embeds via `startRemoteServer`; external tools (CLI / AI agents) connect over WebSocket |
-| CLI plugin bins | `forgeax-engine-remote-{ecs,asset,gltf,font,state}` | Standalone binaries per capability package; called out-of-process; discoverable via `PATH` prefix scan |
 
 All three paths converge on the same `eval(script)` protocol. The `createApp` entry point wires the server by default in dev mode (`app.remote` is non-undefined, port > 0) and leaves it off in production — **the only safety boundary is whether the host starts the server.**
 
@@ -30,7 +29,7 @@ sequenceDiagram
     participant W as World / Renderer / Assets
 
     C->>S: { method: "eval", params: { script: "…" } }
-    S->>E: new Function(world, renderer, assets, debugAdapter, _import, body)
+    S->>E: new Function(world, renderer, assets, rhiCapture, _import, body)
     E->>E: await _import('@forgeax/engine-ecs')
     E->>W: world.query(descriptor)
     W-->>E: Query row iteration
@@ -43,7 +42,7 @@ sequenceDiagram
 ### Script contract
 
 **Your script is the body of an async function** with `world` / `renderer` / `assets` /
-`debugAdapter` / `_import` in scope. Concretely:
+`rhiCapture` / `_import` in scope. Concretely:
 
 - **A lone expression is auto-returned** — `renderer.backend` yields `"webgpu"` (a trailing
   semicolon is fine).
@@ -64,14 +63,22 @@ Three live engine roots are always present in eval scope. Diagnostics are struct
 | `world` | `World` (from `@forgeax/engine-ecs`) | ECS read/write: `spawn`, `despawn`, `set`, `query` |
 | `renderer` | `Renderer` | Renderer control: create/destroy render targets, read backbuffer |
 | `assets` | `AssetRegistry` | Asset queries: `loadByGuid`, `resolveName`, `rename` |
-| `debugAdapter` | `DebugRhiAdapter \| undefined` | RHI frame capture: `captureFrames(frames, label?, options?)`, `inspectAt(tapePath, drawIdx, fields?)`. `options.snapshotTimeoutMs` is an explicit bounded fault-control for exercising the documented timeout/recovery boundary. **Only defined when the app was created with `FORGEAX_ENGINE_RHI_DEBUG=1`** (else `undefined` — guard before use). Browser capture uses the separate `window.__forgeax.captureFrame(frames, options?)` surface. |
+| `rhiCapture` | `{ captureFrame(options?) } \| undefined` | Single-frame RHI capture returning one `{ kind: 'rhi-tape', digest, bytes }` artifact. **Only defined when the app was created with `FORGEAX_ENGINE_RHI_DEBUG=1`** (else `undefined` — guard before use). Browser capture uses the same `window.__forgeax.captureFrame(options?)` capability. |
 | `profiler` | `Profiler \| undefined` | Bounded CPU capture: `startCapture({ frameLimit, eventLimit })`. **Only defined when the host passes `profiler` to `createApp` or `startServer`.** |
 | `execution` | `{ report(): unknown; rebuild(): Promise<unknown> } \| undefined` | App-owned execution report and explicit poisoned-World rebuild. Remote imports no App or ECS execution type. |
 
 The `_import(specifier)` injection enables dynamic ESM imports inside eval scope. **Plain `import` keyword is NOT available**; scripts use `await _import('@forgeax/engine-ecs')` to pull in engine packages.
 
+The App host's ECS import resolver is explicit: when the host exposes
+`@forgeax/engine-ecs`, it projects only `World`, `Entity`, `Update`,
+`FixedUpdate`, `Time`, and `FixedTime`. The remote transport owns no engine
+package vocabulary; another host can inject a different resolver through
+`startServer({ importModule })`. Other package exports are not transported by
+the App ECS projection; use the owning package's public import when a script
+needs another domain token.
+
 > [!NOTE]
-> `debugAdapter`, `profiler`, and `execution` are conditional capabilities. Guard each before use. `world`, `renderer`, and `assets` are always present.
+> `rhiCapture`, `profiler`, and `execution` are conditional capabilities. Guard each before use. `world`, `renderer`, and `assets` are always present.
 
 ### Handle and component discovery
 
@@ -116,20 +123,18 @@ world.despawn(h);
 > [!IMPORTANT]
 > Eval is full-access — no write interception, no `inspector-write-denied` error code, no `ECS_MUTATING_METHODS` blacklist. `spawn` / `set` / `despawn` execute directly. See [Transport and Security](#transport-and-security) for the safety model.
 
-### Frame Capture via debugAdapter
+### Frame Capture via rhiCapture
 
 ```js
 // Capture the current steady-state frame
-const capture = await debugAdapter.captureFrames(1, 'my-snapshot');
-const tape = capture.tapes[0];
-// tape.tapePath is the on-disk handoff consumed by RHI-debug `summary` / `inspect-offline`
-
-// Per-draw inspection
-const draw = await debugAdapter.inspectAt(tape.tapePath, 3);
-// draw: { pipelineState, bindings, renderTargetPNG }
+if (rhiCapture === undefined) return { ok: false, error: { code: 'capture-unavailable' } };
+const capture = await rhiCapture.captureFrame();
+if (!capture.ok) return capture;
+// Pass this single artifact to `forgeax run rhi.summary` or `rhi.inspect`.
+return { kind: capture.value.kind, digest: capture.value.digest };
 ```
 
-Offline CLI subcommands (`inspect-offline`, `summary`, `trigger-browser`) do not connect over WebSocket and are not routed through eval. See `@forgeax/engine-rhi-debug` README for the full capture/inspect/summary workflow.
+Offline operations (`rhi.summary` and `rhi.inspect`) do not connect over WebSocket and are not routed through eval. See `@forgeax/engine-rhi-debug` README for the full capture/summary/inspect workflow.
 
 ### CPU profiling via profiler
 
@@ -151,7 +156,7 @@ CLI analysis. The root does not add ECS, GPU, UI, or network-trace behavior to t
 
 ## RemoteErrorCode
 
-`RemoteErrorCode` is a **4-member closed union**. TypeScript `switch (err.code)` exhaustiveness is enforced at compile time — no `default` branch. The JSON-RPC 2.0 numeric segment `-32001..-32004` maps 1:1 to the 4 members.
+`RemoteErrorCode` is a **5-member closed union**. TypeScript `switch (err.code)` exhaustiveness is enforced at compile time — no `default` branch. The JSON-RPC 2.0 numeric segment `-32001..-32005` maps 1:1 to the 5 members.
 
 | code | JSON-RPC | `.expected` | `.hint` |
 |:--|:--|:--|:--|
@@ -159,8 +164,9 @@ CLI analysis. The root does not add ECS, GPU, UI, or network-trace behavior to t
 | `script-runtime-error` | -32002 | `'script executes without throwing'` | `'inspect error; verify symbol availability; eval has full access to world/renderer/assets'` |
 | `server-startup-failed` | -32003 | `'server starts successfully on requested port'` | `'check if port is already in use (default 5732); pass different port; or kill existing process holding the port'` |
 | `server-not-running` | -32004 | `'server is reachable at ws://localhost:<port>'` | `'start the demo first; verify app.remote is wired; pass --port to override default 5732'` |
+| `eval-result-not-serializable` | -32005 | `'eval result is JSON-serializable'` | `'return a JSON-safe value; BigInt and cyclic objects are unsupported over JSON-RPC'` |
 
-Each `RemoteError` instance carries the structured triple (`.code` / `.expected` / `.hint`) plus an auto-composed `.message` for human stack traces. AI users consume via property access — never by parsing `.message`.
+Each `RemoteError` instance carries the structured triple (`.code` / `.expected` / `.hint`) plus an optional bounded `.detail` and an auto-composed `.message` for human stack traces. For `eval-result-not-serializable`, `.detail` contains only `{ code, shape }` where `shape` is `bigint`, `cyclic-object`, or `unsupported`; returned object contents never cross the error boundary. AI users consume via property access — never by parsing `.message`.
 
 ```ts
 import { RemoteError, type RemoteErrorCode } from '@forgeax/engine-remote';
@@ -171,6 +177,7 @@ function recover(code: RemoteErrorCode): string {
     case 'script-runtime-error':  return 'inspect stack trace; verify symbol availability';
     case 'server-startup-failed': return 'pick a different port or free port 5732';
     case 'server-not-running':    return 'start demo dev or wire app.remote';
+    case 'eval-result-not-serializable': return 'return a JSON-safe eval result';
   }
 }
 ```
@@ -180,10 +187,11 @@ The SSOT split: the **type alias** `RemoteErrorCode` and **structural interface*
 ```mermaid
 stateDiagram-v2
     direction LR
-    script-syntax-error: script body has syntax error
-    script-runtime-error: script threw at runtime
-    server-startup-failed: server cannot bind port
-    server-not-running: no server to connect to
+    state "script body has syntax error" as scriptSyntaxError
+    state "script threw at runtime" as scriptRuntimeError
+    state "server cannot bind port" as serverStartupFailed
+    state "no server to connect to" as serverNotRunning
+    state "eval result cannot cross JSON-RPC" as evalResultNotSerializable
 ```
 
 ## Transport and Security
@@ -198,11 +206,6 @@ flowchart TD
     subgraph WS["WebSocket"]
         C["ws://localhost:5732<br/>JSON-RPC 2.0"] --> S["startRemoteServer"] --> E
     end
-    subgraph CLI["CLI Plugin Bins"]
-        B1["forgeax-engine-remote-ecs"] --> C
-        B2["forgeax-engine-remote-asset"] --> C
-        B3["forgeax-engine-remote-gltf"] --> C
-    end
     E --> W["Live Engine State"]
 ```
 
@@ -210,12 +213,11 @@ flowchart TD
 |:--|:--|:--|
 | In-process | `const result = await client.eval('world.inspect().entityCount')` | Host self-inspection; zero network cost |
 | WebSocket | `ws://localhost:5732` send `{"method":"eval","params":{"script":"..."}}` | External AI agents / CLI tools attaching to a running **Node / dawn-node** app |
-| CLI plugin bin | `forgeax-engine-remote-ecs entities` | Offline / out-of-process data tools; each bin is a standalone executable |
 | Browser loopback relay (**remote-live**) | `POST http://127.0.0.1:5733/eval {"code":"..."}` → page dials the relay | Driving a **live browser** engine (`pnpm --filter <app> dev`, :5173) where no WS server can bind |
 
 > **Browsers cannot host a WS server.** `startServer` uses `ws.WebSocketServer` (a Node listening socket), so it never starts in a browser — `createApp` catches the failure and `app.remote` stays `undefined`. To reach a running browser engine, `createApp` mounts a DEV-only bridge that dials OUT to a loopback relay and runs the ws-free eval core (`@forgeax/engine-remote/execute`) in the page realm. Start it with `node scripts/dev-live.mjs <app>` and drive it with `node skills/forgeax-engine-cli/scripts/remote-live.mjs "<code>"`. On by default in dev; opt out with `VITE_FORGEAX_ENGINE_BRIDGE=0`. Full recipe + security notes: the `forgeax-engine-cli` skill (§remote-live). This path is additive — it does not change the WS-server path or `app.remote` semantics.
 
-The wire protocol exposes **two** JSON-RPC methods: `eval` (the single capability above) and `introspect`. Send `{"method":"introspect"}` to get an OpenRPC L2 subset document listing the available methods (`eval` / `introspect`) and the eval-scope live roots — an AI agent can self-describe the surface without reading source. Recoverable failures map to JSON-RPC error codes `-32001..-32006` (the 4-member `RemoteErrorCode` union; see above).
+The wire protocol exposes **two** JSON-RPC methods: `eval` (the single capability above) and `introspect`. Send `{"method":"introspect"}` to get an OpenRPC L2 subset document listing the available methods (`eval` / `introspect`) and the eval-scope live roots — an AI agent can self-describe the surface without reading source. Recoverable failures map to JSON-RPC error codes `-32001..-32005` (the 5-member `RemoteErrorCode` union; see above).
 
 ### Security Model
 
@@ -233,7 +235,7 @@ The wire protocol exposes **two** JSON-RPC methods: `eval` (the single capabilit
 
 ## Physical Isolation
 
-The engine bundle is physically isolated from the remote package — `@forgeax/engine-remote` never imports `@forgeax/engine-{runtime,ecs,pack,gltf}`, and the engine bundle never references `@forgeax/engine-remote`. Seven grep gates enforce this bidirectionally:
+The engine bundle is physically isolated from the remote package — `@forgeax/engine-remote` never imports `@forgeax/engine-{runtime,ecs,pack,gltf}`, and the engine bundle never references `@forgeax/engine-remote`. Six grep gates enforce this bidirectionally:
 
 | Gate Script | Direction | What It Guards |
 |:--|:--|:--|
@@ -241,7 +243,6 @@ The engine bundle is physically isolated from the remote package — `@forgeax/e
 | `check-console-not-in-engine-bundle.mjs` | Engine -> Remote | Engine dist bundle must not carry remote package literals |
 | `check-console-not-import-engine.mjs` | Remote -> Engine | Remote package must not import `@forgeax/engine-{runtime,ecs,pack,gltf}` (4 surfaces: deps, peerDeps, src imports, literals) |
 | `check-no-string-sugar.mjs` | Remote internal | No `buildXxxScript` string-sugar identifiers in remote `src/` |
-| `check-no-help-string-array.mjs` | Remote internal | No hand-rolled `--help` string arrays in remote `src/` |
 | `check-no-cli-deps.mjs` | Remote internal | No commander/yargs/cac/sade deps in remote `package.json` |
 | `check-readme-sections.mjs` | Remote internal | This README's 5 H2 section headings are character-exact present |
 ## Injected component schemas
@@ -266,20 +267,3 @@ This is a JSON-safe reflection boundary, not a component registry in remote.
 Remote production has no imports from ECS, render, or runtime and adds no RPC,
 CLI, or MCP method. Camera, picking, lifecycle, assets, and VFX shadow policy
 remain out of scope.
-
-## Simulation read root
-
-Remote discovers `simulation.inspect` through the existing `introspect` and
-`eval` paths. The value is the JSON-safe inspection summary described by the
-[App schema](../app/schema/simulation-inspection.schema.json): participants,
-version/schema owners, baseline fingerprint, trace counts, report domains, and
-tolerance metadata.
-
-Only read/eval consumption is public. Do not add `simulation.restore` or
-`simulation.replay` methods, and never return World, Rapier WASM/native values,
-AudioContext, AudioBuffer, or source nodes. The simulation owner remains in ECS
-and App; Remote only transports a projection.
-
-For a failed read, switch on the structured `code`, then use `expected`, `hint`,
-and `detail`. Repair the owner or fresh target at its source and query again.
-RHI tape replay and game replay are separate producer-owned surfaces.

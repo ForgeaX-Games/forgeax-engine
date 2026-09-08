@@ -1,28 +1,20 @@
 /**
  * @module @forgeax/engine-ecs
  *
- * Archetype ECS with three-layer error architecture:
+ * Archetype ECS with Result-based mutation errors and poisoned-frame recovery:
  *
  * 1. **Layer 1 (World methods)** — every mutation (`get`/`set`/`spawn`/`despawn`/
  *    `addComponent`/`removeComponent`) returns `Result<T, EcsError>`.
  *    Use `.unwrap()` for quick-and-dirty or `if (!r.ok) ... r.error ...` for programmatic branching.
  *
- * 2. **Layer 2 (ParamValidation)** — system parameter pre-checks (query empty → skipped,
- *    resource missing → invalid). Systems with invalid params do not execute.
- *
- * 3. **Layer 3 (ErrorHandler + Severity)** — system execution errors and Layer 2
- *    `invalid` results are routed to an `ErrorHandler`. Default: `matchSeverity`
- *    (Panic → throw, Error → console.error, ..., Ignore → silent).
  *
  * AI users: import types from this module — `.d.ts` signatures expose
  * `Result<T, EcsError>` on all World methods, making error paths discoverable
  * without reading source. Switch on `.code` for programmatic error branching.
  *
  * **Warning — Result propagation in system bodies**: TypeScript lacks Rust's `?`
- * operator. If your system fn is `void`, an unhandled Result err branch
- * (`r.ok === false`) from World methods will NOT reach the Layer 3
- * ErrorHandler. Either use `.unwrap()` (throws on err, caught by default
- * Panic handler) or return the Result explicitly from your system.
+ * operator. Handle every Result branch explicitly or return the failure from
+ * the system so the frame poison boundary can stop the host.
  */
 
 // Layered exports: core API first (World / defineComponent / Entity / Query),
@@ -56,12 +48,13 @@
  * ```
  */
 
+import { isComponentDefinitionOrderValid } from './component';
 // ────────────────────────────────────────────────────────────────────────────
 // Essential-id forced registration (feat-20260602 M1 / w1; plan-strategy
 // D-1 / D-6b; feat-20260611 D-9 SSOT switch to ESSENTIAL_COMPONENT_IDS).
 //
 // The `Entity` component MUST be the first `defineComponent` evaluated in the
-// process so the auto-increment component-id counter assigns it id=0. ESM
+// process so the owner identity assigns it id=0. ESM
 // evaluates import bindings in source order before any other statement, so this
 // import -- placed textually first among the barrel's module imports -- forces
 // `entity.ts` (and thus `defineComponent('Entity', ...)`) to run ahead of
@@ -70,7 +63,7 @@
 // startup throw (charter P3).
 //
 // The assertion reads `ESSENTIAL_COMPONENT_IDS` (the SSOT for which ids must
-// be present and where) rather than hard-coding `Entity.id !== 0` so adding a
+// be present and where) rather than hard-coding a token property so adding a
 // future essential component requires updating exactly one place.
 //
 // `Entity` is re-exported from the barrel as a value (the id=0 component
@@ -82,7 +75,11 @@
 // slot was free).
 import { Disabled, Entity, ESSENTIAL_COMPONENT_IDS, foldEssentials } from './entity';
 
-if (ESSENTIAL_COMPONENT_IDS.length !== 1 || ESSENTIAL_COMPONENT_IDS[0] !== 0) {
+if (
+  !isComponentDefinitionOrderValid() ||
+  ESSENTIAL_COMPONENT_IDS.length !== 1 ||
+  ESSENTIAL_COMPONENT_IDS[0] !== 0
+) {
   throw new Error(
     'forgeax-engine-ecs: ESSENTIAL_COMPONENT_IDS invariant violated ' +
       `(expected [0], got [${ESSENTIAL_COMPONENT_IDS.join(', ')}]). ` +
@@ -91,10 +88,6 @@ if (ESSENTIAL_COMPONENT_IDS.length !== 1 || ESSENTIAL_COMPONENT_IDS[0] !== 0) {
   );
 }
 
-// Result<T, E> SSOT lives in `@forgeax/engine-types` (tweak-20260612). The
-// barrel re-export keeps the historical `import { err, ok, Result } from
-// '@forgeax/engine-ecs'` consumer surface unchanged.
-export { err, ok, type Result } from '@forgeax/engine-types';
 /**
  * Branded-number handle type identifying a row (24-bit index + 8-bit
  * generation). The `Entity` component token (value-space, id=0) and the
@@ -103,14 +96,22 @@ export { err, ok, type Result } from '@forgeax/engine-types';
  * `: Entity` annotations.
  */
 export type { EntityHandle } from './entity-handle';
+export type { EcsErrorCode } from './errors';
+export { SharedRefStaleError, UniqueRefStaleError } from './errors';
+export {
+  createWorldContext,
+  worldPlugin,
+} from './plugin-service';
+export {
+  defineRelationship,
+  type RelationshipTargetComponent,
+} from './relationship-index';
 export {
   FixedUpdate,
-  FrameEnd,
   type ScheduleName,
   type ScheduleToken,
   Update,
 } from './schedule-token';
-export type { ChangeTicks } from './storage/change-detection';
 export {
   FixedTime,
   type FixedTimeResource,
@@ -156,25 +157,17 @@ export { Disabled, Entity, ESSENTIAL_COMPONENT_IDS, foldEssentials };
  *
  * Cross-mode and cross-target assignment is a TS error (AC-02).
  *
- * Re-exported from `@forgeax/engine-types` (single SSOT physical location,
- * feat-20260517-handle-type-unify D-2 / D-3); the ecs barrel forwards a
- * narrow subset so `import { Handle } from '@forgeax/engine-ecs'` keeps
- * working for existing consumers. The `UniqueHandle<T>` alias + the
- * ECS-internal `'String'` tag are deliberately NOT re-exported (AC-15
- * keeps the AI-facing barrel narrow). `TagOf` and `unwrapHandle` are also
- * not on the ecs barrel — they remain available from
- * `@forgeax/engine-types` directly when explicitly needed.
+ * The handle type is owned by `@forgeax/engine-types`; ECS schema fields
+ * consume it but the ECS barrel does not forward the type.
  *
  * @example
  * ```ts
- * import type { Handle } from '@forgeax/engine-ecs';
+ * import type { Handle } from '@forgeax/engine-types';
  *
  * declare const mesh: Handle<'MeshAsset', 'shared'>;
  * // const mat: Handle<'MaterialAsset', 'shared'> = mesh; // TS error
  * ```
  */
-export type { Handle, SharedHandle } from '@forgeax/engine-types';
-export { toShared, toUnique } from '@forgeax/engine-types';
 /**
  * Opaque component token carrying name + schema type information.
  *
@@ -196,85 +189,20 @@ export { toShared, toUnique } from '@forgeax/engine-types';
 export type {
   Component,
   ComponentSchema,
-  ComponentStorage,
-  DefineComponentOptions,
-  FieldInputType,
-  FieldValueType,
+  FieldReflection,
   InputShapeOf,
-  RelationshipMeta,
-  ScalarFieldType,
-  SchemaFieldType,
-  SchemaVocabKeyword,
+  SchemaOf,
   ShapeOf,
-  TypedArrayFor,
 } from './component';
 /**
- * Declare a component schema. Returns a frozen opaque token with `.name`, `.schema`, `.id`.
+ * Declare a component schema. Returns a frozen opaque token with `.name`, `.fields`, `.storage`.
  *
  * @example
  * ```ts
  * const Position = defineComponent('Position', { x: 'f32', y: 'f32' });
  * ```
  */
-/**
- * Global component-name -> token resolver. Returns the live {@link Component}
- * token for a name that has been passed to {@link defineComponent}, or
- * `undefined` when the name was never defined. Engine-internal consumers
- * (render extract / pick / glyph layout / asset-registry scene resolve) use
- * this to gate component lookups without a per-World registration ledger.
- *
- * {@link getRegisteredComponents} returns the read-only name -> token map for
- * enumerating every defined component (mirrors `getRegisteredSystems`).
- */
-export {
-  checkRelationshipMirrorsTransient,
-  defineComponent,
-  getRegisteredComponents,
-  RELATIONSHIP_COMPONENTS,
-  resolveComponent,
-} from './component';
-export type { ManagedArrayErrorEnvelope } from './errors';
-export {
-  ProtectedResourceError,
-  ScheduleScopeMismatchError,
-  TimeConfigInvalidError,
-  TimeDeltaInvalidError,
-} from './errors';
-export {
-  createSimulationError,
-  type SimulationError,
-  type SimulationErrorCode,
-  type SimulationErrorDetailMap,
-  type SimulationErrorFor,
-} from './errors/simulation-errors';
-export type {
-  KernelDispatchFailure,
-  KernelDispatchResult,
-  KernelDispatchSpan,
-  SharedFieldView,
-  SharedKernelDefinition,
-  SharedKernelDispatch,
-  SharedKernelEligibilityReason,
-  SharedKernelExecutor,
-  SharedKernelHandle,
-  SharedSpanBinding,
-  WorldExecutionFault,
-  WorldExecutionHealth,
-  WorldExecutionState,
-} from './execution';
-export {
-  bindSharedSpan,
-  defineSharedKernel,
-  isKernelDispatchFailure,
-  isSharedSpan,
-  SHARED_KERNEL_ELIGIBILITY_REASONS,
-  SHARED_KERNEL_EXECUTOR_RESOURCE_KEY,
-  SharedKernelEligibilityError,
-  SharedKernelFailureError,
-  sharedKernelEligibility,
-  splitSharedSpan,
-  WorldPoisonedError,
-} from './execution';
+export { defineComponent } from './component';
 /**
  * Query descriptor for With/Without archetype filtering.
  *
@@ -284,27 +212,22 @@ export {
  * ```
  */
 export type {
-  MutableColumnShape,
-  MutableRowShape,
   Query,
   QueryCreationError,
   QueryDescriptor,
   QueryRow,
   QuerySpan,
-  ReadonlyColumnShape,
-  ReadonlyRowShape,
 } from './query/query';
 /**
  * ECS-aware refcount-tracked handle store (M3). Owns the lifecycle of every
  * `Handle<T, 'shared'>` derived from `shared<T>` schema fields. The producer
  * (typically AssetRegistry) calls `alloc` once (alloc-grant rc=1); each
- * additional holder retains; release decrements; rc 1 -> 0 fires the
- * per-handle `onLastRelease` deleter (passed as the third `alloc` argument,
- * mirroring `UniqueRefStore.alloc`) and drops the slot. There is no global
- * listener — the release signal is per-handle (M6 D-10).
+ * additional holder retains; release decrements; rc 1 -> 0 drops the slot
+ * and publishes structured release evidence. Payload disposal belongs to the
+ * renderer/assets/plugin owner; ECS invokes no user callback.
  *
  * D-15: the store manages ONLY user-tier slots (`>= BUILTIN_BASE`); builtin
- * asset payloads are process-static in `BuiltinAssetRegistry`
+ * asset payloads are process-static in their authoring package
  * (@forgeax/engine-runtime) and never reference-counted. Passing a builtin
  * slot fails fast with `BuiltinSlotNotOwnedError`.
  *
@@ -315,13 +238,14 @@ export type {
  * @example
  * ```ts
  * const world = new World();
- * const handle = world.allocSharedRef('MaterialAsset', payload, (p) => dropGpu(p));
+ * const handle = world.allocSharedRef('MaterialAsset', payload);
  * const M = defineComponent('M', { asset: 'shared<MaterialAsset>' });
  * world.spawn({ component: M, data: { asset: handle } });
- * // the per-handle deleter fires once when this handle's rc reaches 0.
+ * // the SharedRefStore publishes release evidence at rc=0.
  * ```
  */
-export { SharedRefStore } from './shared-ref-store';
+export type { SharedRefReleaseEvidence } from './shared-ref-store';
+
 /**
  * ECS-managed handle store (M1). Owns the lifecycle of every
  * `Handle<T, 'unique'>` derived from `ref<T>` schema fields - World hooks
@@ -339,7 +263,6 @@ export { SharedRefStore } from './shared-ref-store';
  * // World owns the UniqueRefStore internally; AI users do not wire it.
  * ```
  */
-export { UniqueRefStore } from './unique-ref-store';
 
 /**
  * Component data bundle for spawn/addComponent: pairs a component token with initial values.
@@ -406,16 +329,11 @@ export type { CommandBuffer } from './commands';
 export type {
   SystemDescriptor,
   SystemHandle,
-  SystemParamDefinition,
-  SystemParamQueryResults,
-  SystemParamValues,
   SystemSet,
 } from './schedule';
 /**
- * Define a system at module level + register it globally ("define ==
- * register"). Returns a {@link SystemHandle} token consumed directly by
- * `world.addSystem(token)`. {@link getRegisteredSystems} enumerates all
- * defined systems by name.
+ * Define a frozen system token. Executable registration is World-local through
+ * `world.addSystem`.
  *
  * @example
  * ```ts
@@ -428,9 +346,7 @@ export type {
  * ```
  */
 /**
- * Define a system set at module level. Returns a frozen branded token and
- * records it in the global registry under its name. Duplicate names silently
- * overwrite (matching `defineSystem` / `defineComponent` convention).
+ * Define a frozen system-set token. Membership is World-local.
  *
  * @example
  * ```ts
@@ -440,30 +356,8 @@ export type {
  */
 export {
   defineSystem,
-  defineSystemParam,
   defineSystemSet,
-  getRegisteredSystemSets,
-  getRegisteredSystems,
 } from './schedule';
-
-/**
- * Type alias for the `fn` field of `SystemDescriptor`. Lets typed console
- * sugar (`@forgeax/engine-remote/defineSugar` / `injectSystem`) reference
- * the system function shape without the verbose
- * `SystemDescriptor<Qs>['fn']` indexed-access form.
- *
- * @example
- * ```ts
- * import type { SystemFn } from '@forgeax/engine-ecs';
- * const move: SystemFn = (world, results, commands) => { ... };
- * ```
- */
-export type SystemFn<
-  Qs extends ReadonlyArray<import('./query/query').QueryDescriptor> = ReadonlyArray<
-    import('./query/query').QueryDescriptor
-  >,
-  Ps extends ReadonlyArray<unknown> = readonly [],
-> = import('./schedule').SystemDescriptor<Qs, Ps>['fn'];
 
 /**
  * Inspection snapshot returned by `world.inspect()`. Contains entity count,
@@ -475,20 +369,6 @@ export type SystemFn<
  * console.log(info.entityCount, info.archetypeCount);
  * ```
  */
-// C-R2 (feat-20260622-s5): non-fatal SceneAsset unknown-field diagnostics +
-// the instantiateScene success envelope ({ root, diagnostics }).
-export type {
-  ArchetypeInfo,
-  SceneInstantiateDiagnostic,
-  SceneInstantiateFlatOk,
-  SceneInstantiateOk,
-  TableInfo,
-  WorldInspection,
-  WorldScheduleData,
-  WorldScheduleQueryData,
-  WorldScheduleSetData,
-  WorldScheduleSystemData,
-} from './world';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Entity encoding utilities
@@ -503,7 +383,6 @@ export type {
  * const rebuilt = encodeEntity(index, generation);
  * ```
  */
-export { decodeEntity, encodeEntity } from './entity-handle';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Query engine utilities
@@ -513,204 +392,21 @@ export { decodeEntity, encodeEntity } from './entity-handle';
 // Component internals (for advanced use: custom storage, tooling)
 // ────────────────────────────────────────────────────────────────────────────
 
-export type {
-  ArrayMeta,
-  ComponentId,
-  FieldDescriptor,
-  FieldReflection,
-  FieldShapeKind,
-  SchemaOf,
-  TypeMetadataRow,
-} from './component';
-export {
-  isEntityField,
-  isManagedArrayField,
-  isManagedBufferField,
-  isManagedField,
-  TYPE_METADATA,
-} from './component';
-
 // ────────────────────────────────────────────────────────────────────────────
 // Layer-3 default-value SSOT helper (feat-20260517-spawn-default-fallback / M1)
 // ────────────────────────────────────────────────────────────────────────────
 
-/**
- * Fill missing schema fields on a partial spawn-data raw with their
- * layer-2 / layer-3 defaults. Single SSOT helper consumed by two
- * write paths: `World.spawn` / `World.addComponent`. See
- * `component-default-fallback.ts` head JSDoc for the closed 14-vocab
- * default-value table + two-layer split (layer-3 raw / layer-4 column).
- */
-export {
-  fillComponentDefaults,
-  validateComponentDataKeys,
-} from './component-default-fallback';
-
 // ────────────────────────────────────────────────────────────────────────────
-// Column / storage internals (for advanced use: custom archetype tooling)
-// ────────────────────────────────────────────────────────────────────────────
-
-export type { Column, FieldView, ManagedColumnReader } from './storage/column';
-export { createColumn, growColumn, isHotSchema } from './storage/column';
-
-// ────────────────────────────────────────────────────────────────────────────
-// Archetype internals
-// ────────────────────────────────────────────────────────────────────────────
-
-export type { Archetype, ArchetypeId } from './storage/archetype';
-export type { Table, TableComponentStorage, TableId } from './storage/table';
-
-// ────────────────────────────────────────────────────────────────────────────
-// Schedule internals
-// ────────────────────────────────────────────────────────────────────────────
-
-export type { Schedule } from './schedule';
-
-// ────────────────────────────────────────────────────────────────────────────
-// Error architecture — Layer 2 (ParamValidation) + Layer 3 (ErrorHandler)
-// ────────────────────────────────────────────────────────────────────────────
-
-/**
- * ErrorHandler function signature + ErrorContext metadata.
- * Set via `world.setErrorHandler(handler)`.
- */
-/**
- * Three-state param validation result: ok / skipped / invalid.
- * Used by Layer 2 to decide whether a system body executes.
- */
-export type { ErrorContext, ErrorHandler, ParamValidation, SeverityLevel } from './schedule';
-/**
- * Seven-level severity enum. Default is `Panic` (fail-fast).
- * Ordered: Ignore < Trace < Debug < Info < Warning < Error < Panic.
- */
-export { matchSeverity, Severity } from './schedule';
-
-// ────────────────────────────────────────────────────────────────────────────
-// Error classes — typed errors with context + hint for AI-friendly self-repair
-// ────────────────────────────────────────────────────────────────────────────
-
-export type {
-  EcsErrorCode,
-  EcsErrorDetail,
-  QuerySpanUnavailableReason,
-  ScheduleMutationErrorCode,
-  ScheduleMutationErrorDetail,
-} from './errors';
-export {
-  ArrayPopEmptyError,
-  BuiltinSlotNotOwnedError,
-  CardinalityExceededError,
-  ChangeEpochExhaustedError,
-  ComponentAlreadyPresentError,
-  ComponentFieldInvalidValueError,
-  ComponentNotDefinedError,
-  ComponentNotPresentError,
-  CyclicDependencyError,
-  EntityIndexOverflowError,
-  FixedArrayOverflowError,
-  FixedSizeMismatchError,
-  InstanceTransformsStrideMismatchError,
-  ManagedArrayElementTypeNotAllowedError,
-  ManagedBufferOutOfBoundsError,
-  ManagedBufferShrinkNotSupportedError,
-  QueryDataRequiresFieldsError,
-  QueryDescriptorConflictError,
-  QueryIterationActiveError,
-  QueryIterationInvalidatedError,
-  QuerySpanUnavailableError,
-  RelationshipDetachMismatchError,
-  RelationshipMirrorComponentNotRegisteredError,
-  RelationshipMirrorFieldTypeMismatchError,
-  RelationshipSelfCycleError,
-  RemoveEssentialComponentError,
-  ResourceInvalidValueError,
-  ResourceNotFoundError,
-  ScheduleMutationError,
-  SchemaUnsupportedFieldError,
-  SharedFieldInvalidValueError,
-  SharedRefDoubleReleaseError,
-  SharedRefReleasedError,
-  SharedRefStaleError,
-  SparseStorageRequiresTagError,
-  SpawnDataUnknownFieldError,
-  SpawnLightInvalidBoundsError,
-  SpriteAnimationInvalidError,
-  // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M3 / w10 —
-  // surface the 3 sprite-instances error classes declared in M1 / w2 so the
-  // runtime extract path can route them via worldInternal._routeError.
-  SpriteInstancesCountMismatchError,
-  SpriteInstancesMutuallyExclusiveWithInstancesError,
-  SpriteInstancesRequiresSpriteShaderError,
-  StaleEntityError,
-  SystemSetNotRegisteredError,
-  UniqueRefDoubleReleaseError,
-  UniqueRefReleasedError,
-  UniqueRefStaleError,
-} from './errors';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Constants
 // ────────────────────────────────────────────────────────────────────────────
 
+// Component policy and metadata are an explicit schema projection, not fields
+// on the token or a process-global registry. Owners that need these facts must
+// receive the token's projection through this seam.
+export { componentDefinition } from './component-schema';
 export { ENTITY_MAX_GENERATION, ENTITY_MAX_INDEX, ENTITY_NULL_RAW } from './entity-handle';
-export type { RecoverableResourceDescriptor } from './resource';
-export { defineRecoverableResource } from './resource';
-export { simulationCompare } from './simulation/compare';
-export { SimulationParticipantRegistry } from './simulation/coordinator';
-// Public simulation seam: record, restore, trace, and reports share one ECS owner.
-export {
-  createSimulationRecordV1,
-  simulationRecordFingerprint,
-  validateSimulationRecordV1,
-} from './simulation/record';
-export {
-  createSimulationTrace,
-  replaySimulationTrace,
-  type SimulationTrace,
-  type SimulationTraceRecorder,
-  validateSimulationTrace,
-} from './simulation/trace';
-export type {
-  SimulationClockProjection,
-  SimulationComparisonDomain,
-  SimulationComparisonDomainSummary,
-  SimulationComparisonEntry,
-  SimulationComparisonFact,
-  SimulationComparisonInput,
-  SimulationComparisonReport,
-  SimulationComponentProjection,
-  SimulationEntityProjection,
-  SimulationEvidenceReport,
-  SimulationParticipant,
-  SimulationParticipantRecord,
-  SimulationParticipantStage,
-  SimulationRecordContext,
-  SimulationRecordInput,
-  SimulationRecordV1,
-  SimulationResourceProjection,
-  SimulationRestoreContext,
-  SimulationTraceSample,
-  SimulationWorldProjection,
-} from './simulation/types';
-export {
-  SIMULATION_COMPARISON_DOMAINS,
-  SIMULATION_ERROR_CODES,
-  SIMULATION_RECORD_FORMAT_VERSION,
-  type SimulationRecordFormatVersion,
-} from './simulation/types';
-export { registerFixedTickHook } from './world-scheduling';
-// ────────────────────────────────────────────────────────────────────────────
-// Externalization (shared projection/remap kernel)
-// ────────────────────────────────────────────────────────────────────────────
-
-export {
-  classifyEntityField,
-  type EntityFieldKind,
-  type ProfileComponentError,
-  projectComponentData,
-  projectSimulationComponentData,
-  validateProfileComponents,
-} from './externalization/index';
 
 // w8: Inspector contributor (registerEcsInspector + RegisterEcsInspectorResult)
 // deleted — routing layer (Registry / sandbox) is removed; eval is the sole

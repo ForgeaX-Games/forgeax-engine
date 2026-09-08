@@ -22,7 +22,7 @@
 
 import type { Handle } from '@forgeax/engine-types';
 import { describe, expectTypeOf, it } from 'vitest';
-import type { FieldValueType, ScalarFieldType, ShapeOf } from '../component';
+import type { FieldValueType, ScalarFieldType, SchemaOf, ShapeOf } from '../component';
 import { defineComponent } from '../component';
 import type { EntityHandle } from '../entity-handle';
 
@@ -94,7 +94,7 @@ describe('schema vocab — ShapeOf composition (w3, AC-01)', () => {
       mesh: { type: 'shared<MeshAsset>' },
       parent: { type: 'entity' },
     });
-    type Shape = ShapeOf<typeof C.schema>;
+    type Shape = ShapeOf<SchemaOf<typeof C>>;
     expectTypeOf<Shape['data']>().toEqualTypeOf<Uint8Array>();
     expectTypeOf<Shape['mat']>().toEqualTypeOf<Handle<'MaterialAsset', 'unique'>>();
     expectTypeOf<Shape['mesh']>().toEqualTypeOf<Handle<'MeshAsset', 'shared'>>();

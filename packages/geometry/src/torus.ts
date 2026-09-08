@@ -9,8 +9,8 @@
 // Related: requirements §AC-06 / §AC-14; plan-strategy §M3 + D-P5;
 //          plan-tasks.json w8 acceptanceCheck.
 
-import { err, ok, type Result } from '@forgeax/engine-ecs';
 import type { AssetError, MeshAsset } from '@forgeax/engine-types';
+import { err, type Result } from '@forgeax/engine-types';
 import { degenerate, FACTORY_FLOATS_PER_VERTEX, meshFromInterleaved } from './box';
 
 export function createTorusGeometry(
@@ -79,5 +79,5 @@ export function createTorusGeometry(
     }
   }
 
-  return ok(meshFromInterleaved(vertices, indices));
+  return meshFromInterleaved(vertices, indices);
 }

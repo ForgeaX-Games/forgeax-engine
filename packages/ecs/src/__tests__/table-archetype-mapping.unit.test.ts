@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defineComponent } from '../component';
+import { componentId, defineComponent } from '../component';
 import { Entity } from '../entity';
 import type { EntityHandle } from '../entity-handle';
 import { appendArchetypeRow, growArchetype, removeArchetypeRow } from '../storage/archetype';
@@ -11,12 +11,12 @@ describe('Table and Archetype ownership', () => {
   it('stores component columns only on Table and logical membership only on Archetype', () => {
     const Position = defineComponent('TableOwnerPosition', { x: 'f32' });
     const graph = createArchetypeGraph();
-    const archetype = getOrCreateArchetype(graph, [Position.id], [Position]);
+    const archetype = getOrCreateArchetype(graph, [componentId(Position)], [Position]);
     const table = graph.tables[archetype.tableId];
     if (table === undefined) throw new Error('table missing');
 
-    expect(table.storage.has(Entity.id)).toBe(true);
-    expect(table.storage.has(Position.id)).toBe(true);
+    expect(table.storage.has(componentId(Entity))).toBe(true);
+    expect(table.storage.has(componentId(Position))).toBe(true);
     expect(archetype.rows).toBeInstanceOf(Uint32Array);
     expect('storage' in archetype).toBe(false);
   });
@@ -24,7 +24,7 @@ describe('Table and Archetype ownership', () => {
   it('grows logical and physical capacities independently', () => {
     const Position = defineComponent('IndependentCapacityPosition', { x: 'f32' });
     const graph = createArchetypeGraph();
-    const archetype = getOrCreateArchetype(graph, [Position.id], [Position]);
+    const archetype = getOrCreateArchetype(graph, [componentId(Position)], [Position]);
     const table = graph.tables[archetype.tableId];
     if (table === undefined) throw new Error('table missing');
     const archetypeCapacity = archetype.capacity;
@@ -42,7 +42,7 @@ describe('Table and Archetype ownership', () => {
   it('keeps archetypeRow to tableRow explicit across independent swap-pop', () => {
     const Position = defineComponent('SwapMappingPosition', { x: 'f32' });
     const graph = createArchetypeGraph();
-    const archetype = getOrCreateArchetype(graph, [Position.id], [Position]);
+    const archetype = getOrCreateArchetype(graph, [componentId(Position)], [Position]);
     const table = graph.tables[archetype.tableId];
     if (table === undefined) throw new Error('table missing');
     const first = 0x01000001 as EntityHandle;
@@ -55,7 +55,7 @@ describe('Table and Archetype ownership', () => {
     expect(removeArchetypeRow(archetype, 0)).toEqual({ movedTableRow: 1, newRow: 0 });
     expect(archetype.rows[0]).toBe(1);
     expect(removeTableRow(table, 0)).toEqual({ movedEntity: second, newRow: 0 });
-    expect(table.storage.get(Entity.id)?.fields.get('self')?.view[0]).toBe(second);
+    expect(table.storage.get(componentId(Entity))?.fields.get('self')?.view[0]).toBe(second);
   });
 
   it('world migration and despawn maintain both mapping layers', () => {

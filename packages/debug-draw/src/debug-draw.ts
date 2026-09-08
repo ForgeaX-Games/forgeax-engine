@@ -17,6 +17,7 @@ import type {
   RenderPipeline,
   RhiCommandEncoder,
   RhiDevice,
+  RhiRenderPassEncoder,
   TextureView,
 } from '@forgeax/engine-rhi';
 import type { Result } from '@forgeax/engine-types';
@@ -87,6 +88,11 @@ function at(a: { readonly [index: number]: number }, i: number): number {
   return a[i] as number;
 }
 
+function normalizeCapacity(value: number, fallback: number): number {
+  const finiteValue = Number.isFinite(value) ? Math.floor(value) : fallback;
+  return Math.max(1, finiteValue);
+}
+
 // ==========================================================================
 // DebugDraw (w12 / w13 / w14)
 // ==========================================================================
@@ -94,6 +100,8 @@ function at(a: { readonly [index: number]: number }, i: number): number {
 export class DebugDraw implements DebugDrawInterface {
   private stagingArr: Float32Array;
   private stagingLen = 0;
+
+  private lastFlushedVertexCount = 0;
 
   private capVal: number;
 
@@ -119,6 +127,9 @@ export class DebugDraw implements DebugDrawInterface {
   // class is meaningless.
   private destroyedWarnedOnce = false;
 
+  // Hard-cap diagnostics are per frame: flush() clears this flag with staging.
+  private truncationWarned = false;
+
   /**
    * Depth texture view for less-equal depth mode.
    * Set via {@link _setDepthView} before flush() when depthMode is 'less-equal'.
@@ -136,19 +147,29 @@ export class DebugDraw implements DebugDrawInterface {
     initialCapacity: number,
     maxCapacity: number,
   ) {
+    const boundedMaxCapacity = normalizeCapacity(maxCapacity, MAX_VERTEX_CAPACITY);
+    const boundedInitialCapacity = Math.min(
+      normalizeCapacity(initialCapacity, INITIAL_VERTEX_CAPACITY),
+      boundedMaxCapacity,
+    );
     this.rhiDevice = device;
     this.gpuPipeline = pipeline;
     this.gpuVbo = vbo;
     this.gpuUniformBuffer = uniformBuffer;
     this.gpuBindGroup = bindGroup;
-    this.capVal = initialCapacity;
-    this.maxCapVal = maxCapacity;
-    this.stagingArr = new Float32Array(initialCapacity * (VERTEX_STRIDE_BYTES / 4));
+    this.capVal = boundedInitialCapacity;
+    this.maxCapVal = boundedMaxCapacity;
+    this.stagingArr = new Float32Array(boundedInitialCapacity * (VERTEX_STRIDE_BYTES / 4));
   }
 
   /** @internal CPU staging vertex count (exposed for unit tests). */
   get _stagingVertexCount(): number {
     return this.stagingLen;
+  }
+
+  /** @internal Vertex count passed to the most recent non-empty draw call. */
+  get _lastFlushVertexCount(): number {
+    return this.lastFlushedVertexCount;
   }
 
   /** @internal Current GPU vertex buffer capacity in vertex count. */
@@ -242,16 +263,22 @@ export class DebugDraw implements DebugDrawInterface {
     this.stagingLen++;
   }
 
+  private warnTruncationOnce(): void {
+    if (this.truncationWarned) return;
+    this.truncationWarned = true;
+    console.warn(
+      `[DebugDraw] Vertex count would exceed MAX_VERTEX_CAPACITY=${this.maxCapVal}; ` +
+        'vertices beyond the limit are discarded.',
+    );
+  }
+
   private ensureCapacity(needed: number): void {
     if (this.isDestroyed) return;
     if (needed <= this.capVal) return;
 
-    // Warn for hard-cap truncation (once, before any vertex drops)
+    // Warn for hard-cap truncation once for this frame, before any vertex drops.
     if (needed > this.maxCapVal) {
-      console.warn(
-        `[DebugDraw] Vertex count would exceed MAX_VERTEX_CAPACITY=${this.maxCapVal}; ` +
-          'vertices beyond the limit are discarded.',
-      );
+      this.warnTruncationOnce();
     }
 
     // Double up to max cap
@@ -395,50 +422,12 @@ export class DebugDraw implements DebugDrawInterface {
     view: TextureView,
     viewProj: Mat4,
   ): Result<void, DebugDrawError> {
-    if (this.isDestroyed) {
-      return flushedAfterDestroy();
-    }
-
-    if (viewProj === undefined || viewProj === null) {
-      return viewProjRequired();
-    }
-
+    if (this.isDestroyed) return flushedAfterDestroy();
+    if (viewProj === undefined || viewProj === null) return viewProjRequired();
     if (this.stagingLen === 0) {
+      this.lastFlushedVertexCount = 0;
       return ok(undefined as void);
     }
-
-    const vertexCount = Math.min(this.stagingLen, this.maxCapVal);
-
-    // Truncation warning (already warned in ensureCapacity, but double-check at flush)
-    if (this.stagingLen > this.maxCapVal) {
-      console.warn(
-        `[DebugDraw] Flush truncated: ${this.stagingLen} vertices staged, ` +
-          `only ${this.maxCapVal} flushed (MAX_VERTEX_CAPACITY).`,
-      );
-    }
-
-    // Narrow nullable GPU resources for this call site
-    const vbo = this.gpuVbo as Buffer;
-    const pipeline = this.gpuPipeline as RenderPipeline;
-    const uniformBuf = this.gpuUniformBuffer as Buffer;
-    const bindGroup = this.gpuBindGroup as BindGroup;
-
-    // Upload staging to GPU via writeBuffer
-    const byteCount = vertexCount * VERTEX_STRIDE_BYTES;
-    this.rhiDevice.queue.writeBuffer(
-      vbo,
-      0,
-      new Uint8Array(this.stagingArr.buffer, 0, byteCount),
-      0,
-      byteCount,
-    );
-
-    // Upload viewProj uniform (mat4x4<f32> = 64 bytes)
-    const uniformData = new Float32Array(16);
-    for (let i = 0; i < 16; i++) {
-      uniformData[i] = viewProj[i] as number;
-    }
-    this.rhiDevice.queue.writeBuffer(uniformBuf, 0, new Uint8Array(uniformData.buffer), 0, 64);
 
     // Begin render pass with loadOp='load' to preserve scene content.
     // forgeax TextureView is an opaque RHI handle; the underlying WebGPU
@@ -468,14 +457,45 @@ export class DebugDraw implements DebugDrawInterface {
     // biome-ignore lint/suspicious/noExplicitAny: opaque RHI descriptor
     const pass = encoder.beginRenderPass(passDesc as any);
 
+    const encoded = this.encode(pass, viewProj);
+    pass.end();
+    return encoded;
+  }
+
+  encode(pass: RhiRenderPassEncoder, viewProj: Mat4): Result<void, DebugDrawError> {
+    if (this.isDestroyed) return flushedAfterDestroy();
+    if (viewProj === undefined || viewProj === null) return viewProjRequired();
+    if (this.stagingLen === 0) {
+      this.lastFlushedVertexCount = 0;
+      return ok(undefined as void);
+    }
+
+    const vertexCount = Math.min(this.stagingLen, this.maxCapVal);
+    const vbo = this.gpuVbo as Buffer;
+    const pipeline = this.gpuPipeline as RenderPipeline;
+    const uniformBuf = this.gpuUniformBuffer as Buffer;
+    const bindGroup = this.gpuBindGroup as BindGroup;
+    const byteCount = vertexCount * VERTEX_STRIDE_BYTES;
+    this.rhiDevice.queue.writeBuffer(
+      vbo,
+      0,
+      new Uint8Array(this.stagingArr.buffer, 0, byteCount),
+      0,
+      byteCount,
+    );
+    const uniformData = new Float32Array(16);
+    for (let i = 0; i < 16; i++) uniformData[i] = viewProj[i] as number;
+    this.rhiDevice.queue.writeBuffer(uniformBuf, 0, new Uint8Array(uniformData.buffer), 0, 64);
+
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, bindGroup);
     pass.setVertexBuffer(0, vbo);
     pass.draw(vertexCount);
-    pass.end();
+    this.lastFlushedVertexCount = vertexCount;
 
     // Reset staging for next frame
     this.stagingLen = 0;
+    this.truncationWarned = false;
 
     return ok(undefined as void);
   }
@@ -500,6 +520,7 @@ export class DebugDraw implements DebugDrawInterface {
     this.gpuPipeline = null;
     this.stagingArr = new Float32Array(0);
     this.stagingLen = 0;
+    this.lastFlushedVertexCount = 0;
   }
 }
 
@@ -514,8 +535,17 @@ export async function createDebugDraw(
   const fmt: string = opts.format ?? 'bgra8unorm';
   const depthFormat = opts.depthFormat;
   const depthMode = opts.depthMode ?? 'always';
-  const initialCap = opts.initialVertexCapacity ?? INITIAL_VERTEX_CAPACITY;
-  const maxCap = opts.maxVertexCapacity ?? MAX_VERTEX_CAPACITY;
+  const maxCap = normalizeCapacity(
+    opts.maxVertexCapacity ?? MAX_VERTEX_CAPACITY,
+    MAX_VERTEX_CAPACITY,
+  );
+  const initialCap = Math.min(
+    normalizeCapacity(
+      opts.initialVertexCapacity ?? INITIAL_VERTEX_CAPACITY,
+      INITIAL_VERTEX_CAPACITY,
+    ),
+    maxCap,
+  );
 
   // Allocate GPU vertex buffer
   // GPUBufferUsage.COPY_DST=8, VERTEX=32

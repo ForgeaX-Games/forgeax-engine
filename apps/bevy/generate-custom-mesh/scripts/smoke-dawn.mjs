@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // bevy-generate-custom-mesh headless dawn smoke.
 // Browser and smoke share src/generate-custom-mesh.ts.
 
@@ -84,48 +85,34 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(re
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  renderer = await createSmokeRenderer(createRenderer, mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 }
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
-const ready = await renderer.ready;
-if (!ready.ok) { console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code}`); process.exit(1); }
+subscribeSmokeErrors(renderer, (err) => errors.push({ code: err.code, hint: err.hint }));
 
 const { buildCustomMeshWorld, makeCustomMeshTexture, toggleCustomMesh } = await import(resolve(here, '..', 'src', 'generate-custom-mesh.ts'));
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const texture = makeCustomMeshTexture();
 const textureHandle = world.allocSharedRef('TextureAsset', texture);
-const textureUpload = await renderer.store.uploadTexture(textureHandle, texture, {
-  bytes: texture.data,
-  width: texture.width,
-  height: texture.height,
-  mime: 'image/png',
-  colorSpace: 'srgb',
-  mipmap: false,
-});
-if (!textureUpload.ok) {
-  console.error(`[smoke] FAIL - texture upload: ${textureUpload.error.code}`);
-  process.exit(1);
-}
 const meshState = buildCustomMeshWorld(world, unwrapHandle(textureHandle));
 
 world.update().unwrap();
-await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+await drawSmokeFrame(renderer, world);
 await delay(50);
 const beforePixels = await capture();
-toggleCustomMesh(meshState, renderer.store);
+toggleCustomMesh(world, meshState);
 world.update().unwrap();
-await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+await drawSmokeFrame(renderer, world);
 await delay(50);
 const afterPixels = await capture();
 for (let i = 2; i < SMOKE_MIN_FRAMES; i++) {
   world.update().unwrap();
-  await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  await drawSmokeFrame(renderer, world);
 }
 const pixels = afterPixels;
 const refPath = resolve(here, '..', 'artifacts', 'generate-custom-mesh-ref.png');
@@ -145,7 +132,7 @@ for (let i = 0; i < beforePixels.length; i += 4) {
 }
 const uvDiffMean = uvDiffSum / (WIDTH * HEIGHT);
 const checks = [
-  ['backend=webgpu', renderer.backend === 'webgpu'],
+  ['backend=webgpu', rendererBackend(renderer) === 'webgpu'],
   ['not-black', notBlack],
   ['uv-toggle-changed-pixels', uvDiffPixels > 100],
   ['uv-toggle-mean-diff', uvDiffMean > 1],
@@ -154,5 +141,5 @@ const checks = [
 let all = true;
 for (const [n, ok] of checks) { console.log(`${ok ? '✓' : '✗'} ${n}`); if (!ok) all = false; }
 if (!all) { console.error(`[smoke] FAIL - uvDiffPixels=${uvDiffPixels} uvDiffMean=${uvDiffMean.toFixed(3)}`); process.exit(1); }
-console.log(`[smoke] PASS - ${SMOKE_MIN_FRAMES} frames, backend=${renderer.backend}, uvDiffPixels=${uvDiffPixels}, uvDiffMean=${uvDiffMean.toFixed(3)}`);
+console.log(`[smoke] PASS - ${SMOKE_MIN_FRAMES} frames, backend=${rendererBackend(renderer)}, uvDiffPixels=${uvDiffPixels}, uvDiffMean=${uvDiffMean.toFixed(3)}`);
 process.exit(0);

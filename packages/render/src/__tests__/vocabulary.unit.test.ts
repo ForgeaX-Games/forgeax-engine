@@ -1,3 +1,5 @@
+// @perf-budget-skip: intentional public render-barrel vocabulary smoke gate.
+
 import { describe, expect, it } from 'vitest';
 
 describe('render vocabulary', () => {
@@ -14,6 +16,6 @@ describe('render vocabulary', () => {
     expect(render.Instances).toBeDefined();
     expect(render.PostProcessParams).toBeDefined();
     expect(render.TONEMAP_REINHARD).toBeDefined();
-    expect(render.tonemapToU32).toBeDefined();
+    expect('tonemapToU32' in render).toBe(false);
   }, 15_000);
 });

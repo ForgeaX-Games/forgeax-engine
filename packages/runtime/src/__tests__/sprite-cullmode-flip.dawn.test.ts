@@ -22,17 +22,17 @@
 
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
-import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
 import {
   ANTIALIAS_NONE,
   Camera,
   MeshFilter,
   MeshRenderer,
   TONEMAP_NONE,
-} from '@forgeax/engine-render/internal';
+} from '@forgeax/engine-render';
+import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import { createRenderer } from '../index';
+import { constructRuntimeRendererHost } from '../renderer-host';
 
 const WIDTH = 256;
 const HEIGHT = 256;
@@ -206,21 +206,24 @@ describe('feat-20260608 M2 m2-t5: sprite pipeline cullMode "none" lets H/V flipp
       removeEventListener() {},
     } as unknown as HTMLCanvasElement;
 
-    let renderer: Awaited<ReturnType<typeof createRenderer>>;
+    let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
     try {
-      renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+      host = await constructRuntimeRendererHost(
+        mockCanvas,
+        {},
+        {
+          shaderManifestUrl: ENGINE_MANIFEST_URL,
+        },
+      );
     } finally {
       globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
     }
-    expect(renderer.backend).toBe('webgpu');
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
-    if (!ready.ok) return;
+    expect(host.ok).toBe(true);
+    if (!host.ok) throw host.error;
+    const { renderer } = host.value;
+    expect(renderer.inspect().state).toBe('alive');
     const device = sharedDevice;
     if (device === undefined) throw new Error('GPUDevice not captured');
-
-    const assets = renderer.assets;
-    if (assets === null) throw new Error('AssetRegistry is null');
     const worldFlip = new World();
 
     const synth = buildSyntheticRgba();
@@ -234,17 +237,6 @@ describe('feat-20260608 M2 m2-t5: sprite pipeline cullMode "none" lets H/V flipp
       mipmap: false,
     };
     const textureHandle = worldFlip.allocSharedRef('TextureAsset', synthPod as never);
-    const uploadRes = await renderer.store.uploadTexture(textureHandle, synthPod as never, {
-      bytes: synth.data,
-      width: synth.width,
-      height: synth.height,
-      mime: 'image/png',
-      colorSpace: 'srgb',
-      mipmap: false,
-    });
-    expect(uploadRes.ok, 'sprite texture upload').toBe(true);
-    if (!uploadRes.ok) return;
-
     const samplerHandle = worldFlip.allocSharedRef('SamplerAsset', {
       kind: 'sampler',
       magFilter: 'linear',
@@ -290,9 +282,15 @@ describe('feat-20260608 M2 m2-t5: sprite pipeline cullMode "none" lets H/V flipp
     // Render an H-flipped sprite (scale.x < 0). With cullMode='back' this
     // would be culled and the centre would stay clear-colour-black.
     spawnFlippedSpriteScene(worldFlip, spriteMaterial, /* sx= */ -1, /* sy= */ 1);
-    expect(renderer.attachWorld(worldFlip).ok).toBe(true);
+    const attachment = renderer.attach(worldFlip);
+    expect(attachment.ok).toBe(true);
+    if (!attachment.ok) throw attachment.error;
     worldFlip.update(1 / 60).unwrap();
-    const drawn = renderer.draw([worldFlip], { cameraOwner: 0, resourceOwner: 0 });
+    const drawn = renderer.draw({
+      leases: [attachment.value],
+      camera: { lease: attachment.value },
+      environment: { lease: attachment.value },
+    });
     await device.queue.onSubmittedWorkDone();
     expect(drawn.ok, 'H-flipped sprite draw').toBe(true);
 
@@ -361,21 +359,24 @@ describe('feat-20260608 M2 m2-t5: sprite pipeline cullMode "none" lets H/V flipp
       removeEventListener() {},
     } as unknown as HTMLCanvasElement;
 
-    let renderer: Awaited<ReturnType<typeof createRenderer>>;
+    let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
     try {
-      renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+      host = await constructRuntimeRendererHost(
+        mockCanvas,
+        {},
+        {
+          shaderManifestUrl: ENGINE_MANIFEST_URL,
+        },
+      );
     } finally {
       globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
     }
-    expect(renderer.backend).toBe('webgpu');
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
-    if (!ready.ok) return;
+    expect(host.ok).toBe(true);
+    if (!host.ok) throw host.error;
+    const { renderer } = host.value;
+    expect(renderer.inspect().state).toBe('alive');
     const device = sharedDevice;
     if (device === undefined) throw new Error('GPUDevice not captured');
-
-    const assets = renderer.assets;
-    if (assets === null) throw new Error('AssetRegistry is null');
     const worldFlipBoth = new World();
 
     const synth = buildSyntheticRgba();
@@ -389,15 +390,6 @@ describe('feat-20260608 M2 m2-t5: sprite pipeline cullMode "none" lets H/V flipp
       mipmap: false,
     };
     const textureHandle = worldFlipBoth.allocSharedRef('TextureAsset', synthPod as never);
-    await renderer.store.uploadTexture(textureHandle, synthPod as never, {
-      bytes: synth.data,
-      width: synth.width,
-      height: synth.height,
-      mime: 'image/png',
-      colorSpace: 'srgb',
-      mipmap: false,
-    });
-
     const samplerHandle = worldFlipBoth.allocSharedRef('SamplerAsset', {
       kind: 'sampler',
       magFilter: 'linear',
@@ -441,9 +433,15 @@ describe('feat-20260608 M2 m2-t5: sprite pipeline cullMode "none" lets H/V flipp
     } as never);
 
     spawnFlippedSpriteScene(worldFlipBoth, spriteMaterial, /* sx= */ -1, /* sy= */ -1);
-    expect(renderer.attachWorld(worldFlipBoth).ok).toBe(true);
+    const attachmentBoth = renderer.attach(worldFlipBoth);
+    expect(attachmentBoth.ok).toBe(true);
+    if (!attachmentBoth.ok) throw attachmentBoth.error;
     worldFlipBoth.update(1 / 60).unwrap();
-    const drawn = renderer.draw([worldFlipBoth], { cameraOwner: 0, resourceOwner: 0 });
+    const drawn = renderer.draw({
+      leases: [attachmentBoth.value],
+      camera: { lease: attachmentBoth.value },
+      environment: { lease: attachmentBoth.value },
+    });
     await device.queue.onSubmittedWorkDone();
     expect(drawn.ok).toBe(true);
 

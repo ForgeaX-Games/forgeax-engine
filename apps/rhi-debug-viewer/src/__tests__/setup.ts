@@ -2,10 +2,9 @@
 //
 // localStorage availability varies by runtime: jsdom only backs it when an
 // origin is set, and Node >= 22.13 ships an experimental global `localStorage`
-// that throws without `--localstorage-file`. The layout-persistence tests
-// (dockview-layout.test.tsx) call localStorage.{clear,getItem,setItem}, so we
-// install a deterministic in-memory Storage when a working one is absent. This
-// is a no-op where jsdom already provides a functional localStorage.
+// that throws without `--localstorage-file`. Install a deterministic in-memory
+// Storage when a working one is absent. This is a no-op where jsdom already
+// provides a functional localStorage.
 
 function makeMemoryStorage(): Storage {
   const map = new Map<string, string>();

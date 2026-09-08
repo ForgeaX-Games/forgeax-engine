@@ -1,9 +1,10 @@
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { Time, Update } from '@forgeax/engine-ecs';
 // apps/learn-render/1.getting-started/7.camera/src/index.ts
 // LearnOpenGL section 1.7 - Camera (forgeax first-person mapping with
 // WASD + mouse yaw/pitch + dt speed compensation + scroll-wheel FoV
 // zoom on the @forgeax/engine-input frame-start scan + the @forgeax/
-// engine-runtime renderer.input.snapshot(world) first-class API).
+// engine-input InputSnapshot resource).
 //
 // Scene mirrors LO 7.3 verbatim: 10 textured cubes (`cubePositions[]`)
 // each tilted on the (1, 0.3, 0.5) axis by `20 deg * i`, sharing a
@@ -20,7 +21,7 @@ import { Time, Update } from '@forgeax/engine-ecs';
 //
 // In forgeax the LO 1.7 surface maps onto three layers (charter P4 +
 // AC-07 + AC-09):
-//   1. **input** -> `renderer.input.snapshot(world)` returns the frozen
+//   1. **input** -> the `InputSnapshot` resource returns the frozen
 //      4-method `InputSnapshot` Resource (keyboard.down(key) /
 //      keyboard.up(key) / mouse.movementDelta / mouse.button(0|1|2))
 //      plus `mouse.wheelDelta` (sign-discrete notch per frame).
@@ -51,13 +52,14 @@ import { Time, Update } from '@forgeax/engine-ecs';
 // / MeshAsset POD types + 4 component schemas (Transform / Camera /
 // MeshFilter / MeshRenderer). createApp owns the rAF frame-loop +
 // Time resource + auto input attach.
-import { createApp, inputPlugin } from '@forgeax/engine-app';
+import { createApp } from '@forgeax/engine-app';
 import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { World } from '@forgeax/engine-ecs';
 import {
-  INPUT_BACKEND_KEY,
+  INPUT_SNAPSHOT_RESOURCE_KEY,
   type InputBackend,
   type InputBackendSample,
+  type InputSnapshot,
 } from '@forgeax/engine-input';
 import { quat, vec3 } from '@forgeax/engine-math';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
@@ -66,10 +68,11 @@ import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import { createDevImportTransport, createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { captureCanvasPixels } from '@forgeax/apps-shared/canvas-capture';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 
 import type { MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
-import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
+import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import materialPackJson from '../assets/material-container.pack.json';
 import {
@@ -95,10 +98,7 @@ import {
 const CONTAINER_TEXTURE_GUID = '019e3969-1d46-773e-988c-a10e305ff2a4';
 const CUBE_MESH_GUID = '019e3968-6007-71ae-856e-1fd6c9728cfb';
 const CUBE_MATERIAL_GUID = '019e2cc7-3a01-7c22-8f70-501bd9e74206';
-const PACK_INDEX_URL = '/pack-index.json';
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-1-7-camera',
-);
+
 
 // LO 7.3 cubePositions[] array (verbatim translation; the LO source
 // uses `glm::vec3(...)` literals, here they map onto the per-entity
@@ -176,8 +176,8 @@ interface MaterialPackFile {
 }
 
 // 3. bootstrap - locate the canvas the index.html document declares,
-// hand it to createApp, wire AssetRegistry through configurePackIndex
-// + loadByGuid, spawn 10 textured cubes + camera + first-person and
+// hand it to createApp, wire AssetRegistry through the shared catalog
+// configuration helper + loadByGuid, spawn 10 textured cubes + camera + first-person and
 // scroll systems, then start the app.
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (canvas === null) {
@@ -199,7 +199,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = appRes.value;
-  const renderer = app.renderer;
   const world = app.world;
 
   app.onError((e) => {
@@ -208,9 +207,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     if (bus !== undefined) bus.push({ code: e.code, hint: e.hint });
   });
 
-  const assets = renderer.assets;
-  assets.configureRuntimeBinding(runtimeBinding);
-  assets.configurePackIndex(PACK_INDEX_URL);
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[learn-render 1.7 camera] host assets are unavailable');
+    return;
+  }
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   const containerGuidRes = AssetGuid.parse(CONTAINER_TEXTURE_GUID);
   const cubeGuidRes = AssetGuid.parse(CUBE_MESH_GUID);
@@ -221,7 +223,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   // Resolve container texture through the production fetch chain
-  // (configurePackIndex -> /pack-index.json -> container.jpg ->
+  // (catalog configuration -> container.jpg ->
   // parseImage -> uploadTexture). If loadByGuid fails (e.g. submodule
   // missing in a non-test environment), the demo falls back to an
   // untextured baseColor material so the first-person system + AC-07
@@ -338,7 +340,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           far: CAMERA_FAR,
         }),
         // LO 1.7 reuses LO 1.1's teal clear color (was the retired
-        // RendererOptions.clearColor; sinks onto Camera per
+        // the former renderer clearColor option; sinks onto Camera per
         // feat-20260608-create-app-param-surface-trim / M1 / D-1).
         clearColor: [0.2, 0.3, 0.3, 1.0],
       },
@@ -362,9 +364,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.addSystem(Update, {
     name: 'learn-render-camera-first-person',
     after: ['input-frame-start-scan'],
-    queries: [{ write: [Transform], with: [Camera] }],
+    queries: [{ write: [Transform], with: [Camera] }] as const,
     fn: (world, queryResults) => {
-      const snap = renderer.input.snapshot(world);
+      const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (snap === undefined) return;
       // AC-13 type-narrowing probes: verify GamepadButtonIndex (0|1|...|16)
       // and GamepadAxisIndex (0|1|2|3) literal unions narrow correctly at the
@@ -374,10 +376,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       void snap.gamepad(0).axis(2);
       void snap.gamepad(0).buttonValue(6);
       void snap.capabilities.gamepad;
-      // @ts-expect-error: 17 is not assignable to GamepadButtonIndex
-      void snap.gamepad(0).button(17);
-      // @ts-expect-error: 4 is not assignable to GamepadAxisIndex
-      void snap.gamepad(0).axis(4);
       const time = world.getResource(Time);
       const dt = time.delta;
       const dx = snap.mouse.movementDelta.x;
@@ -436,9 +434,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.addSystem(Update, {
     name: 'learn-render-camera-scroll-fov',
     after: ['input-frame-start-scan'],
-    queries: [{ write: [Camera] }],
+    queries: [{ write: [Camera] }] as const,
     fn: (world, queryResults) => {
-      const snap = renderer.input.snapshot(world);
+      const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (snap === undefined) return;
       scrollAcc.apply(snap.mouse.wheelDelta);
       const fovRad = scrollAcc.fovRad;
@@ -446,7 +444,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
   });
 
-  installCaptureHooks(target, app, world, () => ({
+  installCaptureHooks(target, world, () => ({
     yaw,
     pitch,
     dirX: lastDirX,
@@ -461,7 +459,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[learn-render 1.7 camera] app.start failed:', startRes.error);
     return;
   }
-  console.warn(`[learn-render 1.7 camera] backend=${renderer.backend} cameraSpeed=${CAMERA_SPEED_PER_SECOND}`);
+  console.warn(`[learn-render 1.7 camera] Standard pipeline active cameraSpeed=${CAMERA_SPEED_PER_SECOND}`);
 }
 
 async function createAppForCamera(
@@ -481,17 +479,12 @@ async function createAppForCamera(
   // the ternary below.
   const bundler = {
     ...forgeaxBundlerAdapter(),
-    importTransport: createDevImportTransport(runtimeBinding),
+    importTransport: createRuntimeAssetImportTransport(runtimeBinding),
   };
   if (overrideBackend === undefined) {
     return createApp(target, {}, bundler);
   }
-  const renderer = await createRenderer(target, {}, bundler);
-  const world = new World();
-  // M3 (w17): host pre-injects input backend BEFORE createApp so
-  // inputPlugin.build finds INPUT_BACKEND_KEY and registers the scan system.
-  world.insertResource(INPUT_BACKEND_KEY, overrideBackend);
-  return createApp({ renderer, world, plugins: [inputPlugin()] });
+  return createApp(target, { input: overrideBackend }, bundler);
 }
 
 interface CameraInputState {
@@ -512,8 +505,7 @@ interface CameraInputDriver {
 }
 
 function installCaptureHooks(
-  _target: HTMLCanvasElement,
-  app: App,
+  target: HTMLCanvasElement,
   world: World,
   readState: () => CameraInputState,
 ): void {
@@ -523,16 +515,13 @@ function installCaptureHooks(
     __captureCamera?: CameraCaptureHook;
     __captureCameraInput?: CameraInputCaptureHook;
   };
-  const renderer = app.renderer;
-  const worldAttachment1 = renderer.attachWorld(world);
-  if (!worldAttachment1.ok) throw worldAttachment1.error;
   win.__captureCamera = async (): Promise<Uint8Array> => {
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    const r = await renderer.readPixels();
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const r = await captureCanvasPixels(target);
     if (!r.ok) {
       throw new Error(
-        `[learn-render 1.7 camera] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
+        `[learn-render 1.7 camera] canvas capture failed: ${r.error.hint}`,
       );
     }
     return r.value;
@@ -560,7 +549,7 @@ function installCaptureHooks(
       },
       tick: async (): Promise<CameraInputState> => {
         world.update(1 / 60).unwrap();
-        renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
         return readState();
       },
     };

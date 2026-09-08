@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
-import { defineComponent } from '../component';
+import { componentId, defineComponent } from '../component';
 import type { EntityHandle } from '../entity-handle';
 import {
   QueryDataRequiresFieldsError,
@@ -8,7 +8,10 @@ import {
   QueryIterationInvalidatedError,
 } from '../errors';
 import type { QueryRow } from '../query/query';
+import type { Table } from '../storage/table';
 import { World } from '../world';
+
+import { worldInternal } from '../world-internal';
 
 const Position = defineComponent('QueryPosition', { x: 'f32', y: 'f32' });
 const Velocity = defineComponent('QueryVelocity', { x: 'f32', y: 'f32' });
@@ -62,10 +65,22 @@ describe('executable Query', () => {
     expect(seen).not.toContain(second);
   });
 
+  it('addresses one matching entity without scanning the query tables', () => {
+    const { world, first, second } = createWorld();
+    const query = world
+      .query({ read: [Position], optional: [Velocity], with: [Selected] })
+      .unwrap();
+
+    const row = query.at(first);
+    expect(row?.entity).toBe(first);
+    expect(row?.get(Position)?.x).toBe(1);
+    expect(query.at(second)).toBeUndefined();
+  });
+
   it('checks optional presence without materialising a component row', () => {
     const { world } = createWorld();
     const query = world.query({ read: [Position], optional: [Velocity] }).unwrap();
-    const readRowSpy = vi.spyOn(world, '_getQueryRow');
+    const readRowSpy = vi.spyOn(world[worldInternal], 'getQueryRow');
 
     const presence: boolean[] = [];
     for (const row of query) presence.push(row.has(Velocity));
@@ -76,13 +91,13 @@ describe('executable Query', () => {
   it('row.mut marks one epoch and writes through the component owner', () => {
     const { world, first } = createWorld();
     const query = world.query({ write: [Position], with: [Selected] }).unwrap();
-    const before = world._getMutationEpoch();
+    const before = world[worldInternal].getMutationEpoch();
     for (const row of query) {
       const position = row.mut(Position);
       position.x += 10;
       position.y = 20;
     }
-    expect(world._getMutationEpoch()).toBe(before + 1);
+    expect(world[worldInternal].getMutationEpoch()).toBe(before + 1);
     expect(world.get(first, Position).unwrap()).toMatchObject({ x: 11, y: 20 });
   });
 
@@ -90,10 +105,10 @@ describe('executable Query', () => {
     const { world, first, second } = createWorld();
     const query = world.query({ write: [Position] }).unwrap();
     const spans = query.spans().unwrap();
-    const before = world._getMutationEpoch();
+    const before = world[worldInternal].getMutationEpoch();
     const buffers = new Set(
-      world._getGraph().tables.flatMap((table) => {
-        const buffer = table.storage.get(Position.id)?.fields.get('x')?.view.buffer;
+      world[worldInternal].getGraph().tables.flatMap((table: Table) => {
+        const buffer = table.storage.get(componentId(Position))?.fields.get('x')?.view.buffer;
         return buffer === undefined ? [] : [buffer];
       }),
     );
@@ -108,9 +123,19 @@ describe('executable Query', () => {
       expect(buffers.has(positions.x.buffer)).toBe(true);
     }
     expect(count).toBe(2);
-    expect(world._getMutationEpoch()).toBe(before + spanCount);
+    expect(world[worldInternal].getMutationEpoch()).toBe(before + spanCount);
     expect(world.get(first, Position).unwrap().x).toBe(42);
     expect(world.get(second, Position).unwrap().x).toBe(43);
+  });
+
+  it('exposes packed readonly entity identities on each span', () => {
+    const { world, first, second } = createWorld();
+    const query = world.query({ read: [Position] }).unwrap();
+    const spans = [...query.spans().unwrap()];
+
+    expect(spans.reduce((count, span) => count + span.length, 0)).toBe(2);
+    expect(spans.flatMap((span) => Array.from(span.entities))).toEqual([first, second]);
+    expect(spans[0]?.get(Position).x[0]).toBe(1);
   });
 
   it('returns structured span capability failures', () => {

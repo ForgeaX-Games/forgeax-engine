@@ -5,7 +5,6 @@ import type {
   GameProjectionValue,
   GameReadDef,
 } from '@forgeax/engine-app';
-import type { SimulationError, SimulationErrorCode } from '@forgeax/engine-ecs';
 
 type PreviewInspectionErrorCode =
   | 'projection-action-not-found'
@@ -15,10 +14,13 @@ type PreviewInspectionErrorCode =
   | 'projection-result-not-serializable'
   | 'rhi-debug-unavailable'
   | 'rhi-capture-failed'
+  | 'rhi-artifact-upload-failed'
   | 'recover-not-needed'
   | 'recover-not-implemented'
   | 'recover-adapter-unavailable'
-  | 'recover-device-unavailable';
+  | 'recover-device-unavailable'
+  | 'recover-lifecycle-failed'
+  | 'recover-disposed-during-rebuild';
 
 export type PreviewInspectionError = {
   readonly code: PreviewInspectionErrorCode;
@@ -30,75 +32,6 @@ export type PreviewInspectionError = {
 export type PreviewInspectionResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: PreviewInspectionError };
-
-export interface SimulationErrorSurface {
-  readonly code: SimulationErrorCode;
-  readonly expected: string;
-  readonly hint: string;
-  readonly detail: SimulationError['detail'];
-  readonly action: string;
-  readonly baselineFingerprint: string;
-}
-
-export const SIMULATION_INSPECTION_SCHEMA_URI =
-  'https://forgeax.dev/schema/simulation-inspection-v1.json';
-
-/** Project a simulation failure without turning the Preview into a restore owner. */
-export function consumeSimulationError(
-  simulationError: SimulationError,
-  baselineFingerprint: string,
-): SimulationErrorSurface {
-  let action: string;
-  switch (simulationError.code) {
-    case 'simulation-record-invalid':
-      action = 'repair the record and create a new in-process v1 record';
-      break;
-    case 'simulation-state-unsupported':
-      action = 'mark the value transient or add an owner-level portable descriptor';
-      break;
-    case 'simulation-resource-invalid':
-      action = 'register the recoverable resource descriptor and create a new record';
-      break;
-    case 'simulation-entity-unmapped':
-      action = 'create a fresh target and preserve every entity mapping';
-      break;
-    case 'simulation-participant-duplicate':
-      action = 'keep one participant registration per stable id';
-      break;
-    case 'simulation-participant-missing':
-      action = 'register participant on a fresh target and retry';
-      break;
-    case 'simulation-participant-version-mismatch':
-      action = 'use the declared participant version and create a new record';
-      break;
-    case 'simulation-participant-schema-mismatch':
-      action = 'use a compatible participant schema and create a new record';
-      break;
-    case 'simulation-participant-not-ready':
-      action = 'wait until the participant is ready, then retry on a fresh target';
-      break;
-    case 'simulation-participant-prepare-failed':
-      action = 'discard the staging result and retry with a fresh target';
-      break;
-    case 'simulation-trace-invalid':
-      action = 'repair the fixed-tick trace before restoring the record';
-      break;
-    case 'simulation-compare-invalid':
-      action = 'declare a finite non-negative tolerance for every numeric field';
-      break;
-    case 'simulation-target-not-fresh':
-      action = 'create a new target World and retry without reusing partial state';
-      break;
-  }
-  return {
-    code: simulationError.code,
-    expected: simulationError.expected,
-    hint: simulationError.hint,
-    detail: simulationError.detail,
-    action,
-    baselineFingerprint,
-  };
-}
 
 export type PreviewProjectionDescriptor = {
   readonly id: string;
@@ -122,10 +55,10 @@ export type PreviewInspection = {
     readonly health: () => GameProjectionValue;
     readonly recover: () => Promise<PreviewInspectionResult<GameProjectionValue>>;
   };
+  /** Test-only access to the live registry used by browser transport gates. */
+  readonly assets: App['assets'];
   readonly captureFrame: (frames?: number) => Promise<PreviewInspectionResult<GameProjectionValue>>;
 };
-
-type BrowserCapture = (frames?: number) => Promise<GameProjectionValue>;
 
 const hostKey = '__forgeaxPreviewInspection';
 
@@ -161,11 +94,25 @@ function descriptor(def: GameActionDef | GameReadDef): PreviewProjectionDescript
   };
 }
 
+function rendererHealth(app: App): GameProjectionValue {
+  const inspection = app.renderer.inspect();
+  return {
+    reason: inspection.state,
+    recoverable: inspection.state === 'device-lost',
+    surface: inspection.surface,
+    frame: {
+      frameId: inspection.frame.frameId,
+      deviceGeneration: inspection.frame.deviceGeneration,
+    },
+    features: [...inspection.features],
+  };
+}
+
 /**
  * Create the Preview-only inspection boundary for one loaded game.
  *
  * The host owns transport and renderer lifecycle; game code owns the action/read
- * meanings. The returned registrar is passed through BootstrapContext and is
+ * meanings. The returned registrar is passed through GameHost and is
  * cleared by registerCleanup, so a stopped run cannot leave stale closures on
  * the browser global.
  */
@@ -175,18 +122,6 @@ export function createPreviewInspection(
 ): { readonly registrar: GameProjectionRegistrar; readonly inspection: PreviewInspection } {
   const actions = new Map<string, GameActionDef>();
   const reads = new Map<string, GameReadDef>();
-
-  const simulationInspection = (
-    app as App & { readonly simulationInspection?: () => GameProjectionValue }
-  ).simulationInspection;
-  if (simulationInspection !== undefined) {
-    reads.set('simulation.inspect', {
-      id: 'simulation.inspect',
-      title: 'Simulation inspection',
-      description: `Read the World-owned simulation record, participant, trace, and report summary (${SIMULATION_INSPECTION_SCHEMA_URI}).`,
-      read: simulationInspection,
-    });
-  }
 
   const registrar: GameProjectionRegistrar = {
     registerAction(def) {
@@ -299,31 +234,36 @@ export function createPreviewInspection(
     read,
     run,
     renderer: {
-      health: () => {
-        const result = serialise(app.renderer.health());
-        return result.ok ? result.value : { reason: 'internal-fault', recoverable: false };
-      },
+      health: () => rendererHealth(app),
       recover: async () => {
         const result = await app.renderer.recover();
-        const health = serialise(app.renderer.health());
-        const healthValue = health.ok
-          ? health.value
-          : { reason: 'internal-fault', recoverable: false };
+        const healthValue = rendererHealth(app);
         return result.ok
           ? { ok: true, value: { recovered: true, health: healthValue } }
           : {
               ok: false,
               error: {
-                code: result.error.code,
+                code: 'recover-lifecycle-failed',
                 expected: result.error.expected,
-                hint: result.error.hint,
+                hint: `${result.error.hint} (${result.error.code})`,
               },
             };
       },
     },
+    assets: app.assets,
     captureFrame: async (frames = 1) => {
-      const capture = (globalThis as { __forgeax?: { captureFrame?: BrowserCapture } }).__forgeax
-        ?.captureFrame;
+      if (frames !== 1) {
+        return {
+          ok: false,
+          error: error(
+            'rhi-capture-failed',
+            'one capture request must produce one single-file rhi-tape ArtifactRef',
+            'request exactly one frame and use the returned ArtifactRef for summary and inspect',
+            { id: 'frames', cause: `requested ${frames}` },
+          ),
+        };
+      }
+      const capture = app.rhiCapture;
       if (capture === undefined) {
         return {
           ok: false,
@@ -335,14 +275,56 @@ export function createPreviewInspection(
         };
       }
       try {
-        return { ok: true, value: await capture(frames) };
+        const captured = await capture.captureFrame();
+        if (!captured.ok) {
+          return {
+            ok: false,
+            error: error('rhi-capture-failed', captured.error.expected, captured.error.hint, {
+              cause: captured.error.code,
+            }),
+          };
+        }
+        const runId = `preview-${globalThis.crypto.randomUUID().replaceAll('-', '')}`;
+        const response = await fetch(`/__forgeax-debug/tape?runId=${encodeURIComponent(runId)}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-forgeax-rhitape' },
+          body: captured.value.bytes as unknown as BodyInit,
+        });
+        const payload: unknown = await response.json();
+        if (
+          !response.ok ||
+          payload === null ||
+          typeof payload !== 'object' ||
+          (payload as { kind?: unknown }).kind !== 'rhi-tape' ||
+          (payload as { digest?: unknown }).digest !== captured.value.digest ||
+          typeof (payload as { path?: unknown }).path !== 'string'
+        ) {
+          return {
+            ok: false,
+            error: error(
+              'rhi-artifact-upload-failed',
+              'the Vite RHI debug provider must accept one raw v7 .rhitape and return its ArtifactRef',
+              'start the Preview dev host with the RHI debug plugin and retry the capture',
+              { cause: JSON.stringify(payload) },
+            ),
+          };
+        }
+        return {
+          ok: true,
+          value: {
+            kind: 'rhi-tape',
+            digest: captured.value.digest,
+            source: 'rhi.capture',
+            path: (payload as { path: string }).path,
+          },
+        };
       } catch (cause) {
         return {
           ok: false,
           error: error(
-            'rhi-capture-failed',
-            'the active renderer must produce an uploadable RHI tape',
-            'inspect the renderer error and retry after the next healthy frame',
+            'rhi-artifact-upload-failed',
+            'the active renderer must produce an uploadable RHI tape and the dev provider must be reachable',
+            'inspect the Preview dev server and retry after the next healthy frame',
             { cause: String(cause) },
           ),
         };

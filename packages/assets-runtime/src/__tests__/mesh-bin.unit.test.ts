@@ -1,185 +1,152 @@
-// @forgeax/engine-assets-runtime -- unpackMeshBin coverage (fix issue #709).
-// Builds 28-byte header v2 `.bin` buffers matching the encoder contract and
-// exercises the happy path plus every fail-fast return-undefined branch.
-
+import { deriveVertexLayoutProjection } from '@forgeax/engine-geometry';
+import {
+  MESH_BIN_HEADER_V4_BYTES,
+  type MeshBinHeaderV4,
+  writeMeshBinHeader,
+} from '@forgeax/engine-pack';
 import { describe, expect, it } from 'vitest';
-import { unpackMeshBin } from '../mesh-bin';
+import { unpackMeshBinV4 } from '../loaders/mesh-bin';
 
-const HEADER_V2_BYTES = 28;
-
-interface BinParts {
-  version?: number;
-  uvSetCount?: number;
-  floatsPerVertex?: number;
-  vertices?: Float32Array;
-  indices?: Uint16Array | Uint32Array;
-  json?: Record<string, unknown> | string;
-  skinIndex?: Uint16Array;
-  skinWeight?: Float32Array;
-  /** Truncate the produced buffer to this many bytes (to test short-buffer guards). */
-  truncateTo?: number;
+function makeArtifact(
+  options: {
+    readonly attributes?: Record<string, Float32Array | Uint16Array>;
+    readonly vertices?: Float32Array;
+    readonly indices?: Uint16Array | Uint32Array;
+    readonly json?: Record<string, unknown>;
+    readonly version?: number;
+    readonly trailingBytes?: number;
+  } = {},
+): Uint8Array {
+  const attributes = options.attributes ?? {
+    position: new Float32Array(3),
+    normal: new Float32Array(3),
+    uv: new Float32Array(2),
+    tangent: new Float32Array(4),
+  };
+  const projection = deriveVertexLayoutProjection(attributes);
+  const vertices = options.vertices ?? new Float32Array(projection.arrayStride / 4);
+  const indices = options.indices;
+  const json = new TextEncoder().encode(
+    JSON.stringify(
+      options.json ?? {
+        submeshes: [{ indexOffset: 0, indexCount: indices?.length ?? 0, materialSlot: 0 }],
+        materialSlots: [{ slotName: 'Default' }],
+      },
+    ),
+  );
+  const indexWidth = indices === undefined ? 0 : indices.BYTES_PER_ELEMENT;
+  const header: MeshBinHeaderV4 = {
+    version: 4,
+    projectionVersion: projection.schemaVersion,
+    mask: projection.mask,
+    digest: projection.digest,
+    stride: projection.arrayStride,
+    vertexCount: vertices.byteLength / projection.arrayStride,
+    vertexBytes: vertices.byteLength,
+    indexCount: indices?.length ?? 0,
+    indexWidth: indexWidth as 0 | 2 | 4,
+    indexBytes: indices?.byteLength ?? 0,
+    jsonBytes: json.byteLength,
+  };
+  const bytes = new Uint8Array(
+    MESH_BIN_HEADER_V4_BYTES + vertices.byteLength + (indices?.byteLength ?? 0) + json.byteLength,
+  );
+  writeMeshBinHeader(header, bytes);
+  if (options.version !== undefined) new DataView(bytes.buffer).setUint32(0, options.version, true);
+  let offset = MESH_BIN_HEADER_V4_BYTES;
+  bytes.set(new Uint8Array(vertices.buffer, vertices.byteOffset, vertices.byteLength), offset);
+  offset += vertices.byteLength;
+  if (indices !== undefined) {
+    bytes.set(new Uint8Array(indices.buffer, indices.byteOffset, indices.byteLength), offset);
+    offset += indices.byteLength;
+  }
+  bytes.set(json, offset);
+  if (options.trailingBytes !== undefined)
+    return new Uint8Array([...bytes, ...new Uint8Array(options.trailingBytes)]);
+  return bytes;
 }
 
-function buildBin(parts: BinParts): Uint8Array {
-  const vertices = parts.vertices ?? new Float32Array(0);
-  const indices = parts.indices;
-  const iwidth = indices instanceof Uint32Array ? 4 : indices instanceof Uint16Array ? 2 : 0;
-  const ilen = indices?.length ?? 0;
-  const jsonStr =
-    parts.json === undefined
-      ? ''
-      : typeof parts.json === 'string'
-        ? parts.json
-        : JSON.stringify(parts.json);
-  const jsonBytes = new TextEncoder().encode(jsonStr);
-
-  const skinIndexBytes = (parts.skinIndex?.length ?? 0) * 2;
-  const skinWeightBytes = (parts.skinWeight?.length ?? 0) * 4;
-
-  const total =
-    HEADER_V2_BYTES +
-    vertices.byteLength +
-    ilen * iwidth +
-    jsonBytes.byteLength +
-    skinIndexBytes +
-    skinWeightBytes;
-  const buf = new Uint8Array(total);
-  const view = new DataView(buf.buffer);
-  view.setUint32(0, parts.version ?? 2, true);
-  view.setUint32(4, parts.uvSetCount ?? 1, true);
-  view.setUint32(8, parts.floatsPerVertex ?? 12, true);
-  view.setUint32(12, vertices.length, true);
-  view.setUint32(16, ilen, true);
-  view.setUint32(20, iwidth, true);
-  view.setUint32(24, jsonBytes.byteLength, true);
-
-  let off = HEADER_V2_BYTES;
-  buf.set(new Uint8Array(vertices.buffer, vertices.byteOffset, vertices.byteLength), off);
-  off += vertices.byteLength;
-  if (indices) {
-    buf.set(new Uint8Array(indices.buffer, indices.byteOffset, indices.byteLength), off);
-    off += indices.byteLength;
-  }
-  buf.set(jsonBytes, off);
-  off += jsonBytes.byteLength;
-  if (parts.skinIndex) {
-    buf.set(new Uint8Array(parts.skinIndex.buffer, 0, skinIndexBytes), off);
-    off += skinIndexBytes;
-  }
-  if (parts.skinWeight) {
-    buf.set(new Uint8Array(parts.skinWeight.buffer, 0, skinWeightBytes), off);
-  }
-
-  return parts.truncateTo === undefined ? buf : buf.slice(0, parts.truncateTo);
-}
-
-describe('unpackMeshBin happy path', () => {
-  it('decodes vertices + Uint16 indices + submeshes/aabb JSON tail', () => {
-    const vertices = new Float32Array(24); // 2 vertices * 12 floats
+describe('unpackMeshBin v4 happy path', () => {
+  it('decodes vertices, indices, submeshes, and aabb metadata', () => {
+    const vertices = new Float32Array(12);
     vertices[0] = 1.5;
-    const indices = Uint16Array.of(0, 1, 0);
-    const out = unpackMeshBin(
-      buildBin({
+    const out = unpackMeshBinV4(
+      makeArtifact({
         vertices,
-        indices,
-        json: { submeshes: [{ indexOffset: 0, indexCount: 3 }], aabb: [0, 0, 0, 1, 1, 1] },
+        indices: Uint16Array.of(0, 1, 0),
+        json: {
+          submeshes: [{ indexOffset: 0, indexCount: 3, materialSlot: 0 }],
+          materialSlots: [{ slotName: 'Default' }],
+          aabb: [0, 0, 0, 1, 1, 1],
+        },
       }),
+      'mesh/happy',
     );
-    expect(out).toBeDefined();
-    expect(out?.vertices).toBeInstanceOf(Float32Array);
-    expect(out?.vertices[0]).toBeCloseTo(1.5);
-    expect(out?.indices).toBeInstanceOf(Uint16Array);
-    expect(Array.from(out?.indices as Uint16Array)).toEqual([0, 1, 0]);
-    expect(out?.submeshes).toHaveLength(1);
-    expect(Array.from(out?.aabb as Float32Array)).toEqual([0, 0, 0, 1, 1, 1]);
-    expect(out?.uvSetCount).toBe(1);
-    expect(out?.floatsPerVertex).toBe(12);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.value.vertices[0]).toBeCloseTo(1.5);
+    expect(out.value.indices).toBeInstanceOf(Uint16Array);
+    expect(out.value.submeshes).toHaveLength(1);
+    expect(Array.from(out.value.aabb ?? [])).toEqual([0, 0, 0, 1, 1, 1]);
   });
 
-  it('decodes Uint32 indices (iwidth 4)', () => {
-    const out = unpackMeshBin(
-      buildBin({ vertices: new Float32Array(12), indices: Uint32Array.of(0, 0, 0), json: {} }),
-    );
-    expect(out?.indices).toBeInstanceOf(Uint32Array);
-  });
-
-  it('decodes a skinned mesh (18 floats/vertex + skinIndex + skinWeight tails)', () => {
-    const out = unpackMeshBin(
-      buildBin({
-        floatsPerVertex: 18,
-        vertices: new Float32Array(18),
-        json: { skinIndexLen: 4, skinWeightLen: 4 },
-        skinIndex: Uint16Array.of(0, 1, 2, 3),
-        skinWeight: Float32Array.of(0.25, 0.25, 0.25, 0.25),
+  it('decodes Uint32 indices and reconstructs projection attributes', () => {
+    const out = unpackMeshBinV4(
+      makeArtifact({
+        indices: Uint32Array.of(0, 0, 0),
+        attributes: {
+          position: new Float32Array(3),
+          normal: new Float32Array(3),
+          uv: new Float32Array(2),
+          tangent: new Float32Array(4),
+          color: new Float32Array(4),
+        },
       }),
+      'mesh/uint32',
     );
-    expect(out?.skinIndex).toBeInstanceOf(Uint16Array);
-    expect(out?.skinWeight).toBeInstanceOf(Float32Array);
-    expect(Array.from(out?.skinIndex as Uint16Array)).toEqual([0, 1, 2, 3]);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.value.indices).toBeInstanceOf(Uint32Array);
+    expect(out.value.attributes.color).toBeInstanceOf(Float32Array);
   });
 
-  it('decodes an empty mesh (floatsPerVertex 0, vlen 0)', () => {
-    const out = unpackMeshBin(buildBin({ floatsPerVertex: 0, vertices: new Float32Array(0) }));
-    expect(out).toBeDefined();
-    expect(out?.vertices.length).toBe(0);
-  });
-
-  it('supports multi-UV stride (uvSetCount 2 -> 14 floats/vertex)', () => {
-    const out = unpackMeshBin(
-      buildBin({ uvSetCount: 2, floatsPerVertex: 14, vertices: new Float32Array(14) }),
+  it('decodes skin streams from the canonical interleaved projection', () => {
+    const out = unpackMeshBinV4(
+      makeArtifact({
+        attributes: {
+          position: new Float32Array(3),
+          normal: new Float32Array(3),
+          uv: new Float32Array(2),
+          tangent: new Float32Array(4),
+          skinIndex: new Uint16Array(4),
+          skinWeight: new Float32Array(4),
+        },
+      }),
+      'mesh/skin',
     );
-    expect(out?.uvSetCount).toBe(2);
-    expect(out?.floatsPerVertex).toBe(14);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.value.attributes.skinIndex).toBeInstanceOf(Uint16Array);
+    expect(out.value.attributes.skinWeight).toBeInstanceOf(Float32Array);
   });
 });
 
-describe('unpackMeshBin fail-fast (returns undefined)', () => {
-  it('buffer shorter than the 28-byte header', () => {
-    expect(unpackMeshBin(new Uint8Array(10))).toBeUndefined();
+describe('unpackMeshBin v4 fail-closed', () => {
+  it('rejects legacy versions and truncated headers', () => {
+    expect(unpackMeshBinV4(makeArtifact({ version: 3 }), 'mesh/legacy').ok).toBe(false);
+    expect(unpackMeshBinV4(new Uint8Array(10), 'mesh/truncated').ok).toBe(false);
   });
 
-  it('unknown header version', () => {
-    expect(unpackMeshBin(buildBin({ version: 3, vertices: new Float32Array(12) }))).toBeUndefined();
-  });
-
-  it('uvSetCount out of [1, 8] range', () => {
-    expect(unpackMeshBin(buildBin({ uvSetCount: 0 }))).toBeUndefined();
-    expect(unpackMeshBin(buildBin({ uvSetCount: 9 }))).toBeUndefined();
-  });
-
-  it('vlen not divisible by floatsPerVertex', () => {
-    // floatsPerVertex 12, vlen 13 -> 13 % 12 !== 0
-    expect(unpackMeshBin(buildBin({ vertices: new Float32Array(13) }))).toBeUndefined();
-  });
-
-  it('floatsPerVertex inconsistent with uvSetCount', () => {
-    // uvSetCount 1 expects 12 (no skin) or 18 (skin); 16 matches neither
-    expect(
-      unpackMeshBin(
-        buildBin({ uvSetCount: 1, floatsPerVertex: 16, vertices: new Float32Array(16) }),
-      ),
-    ).toBeUndefined();
-  });
-
-  it('declared payload longer than the actual buffer', () => {
-    const good = buildBin({ vertices: new Float32Array(12), indices: Uint16Array.of(0) });
-    expect(unpackMeshBin(good.slice(0, good.length - 4))).toBeUndefined();
-  });
-
-  it('malformed JSON tail', () => {
-    expect(
-      unpackMeshBin(buildBin({ vertices: new Float32Array(12), json: '{not valid json' })),
-    ).toBeUndefined();
-  });
-
-  it('skin tails declared in JSON but truncated in the buffer', () => {
-    const full = buildBin({
-      floatsPerVertex: 18,
-      vertices: new Float32Array(18),
-      json: { skinIndexLen: 4, skinWeightLen: 4 },
-      skinIndex: Uint16Array.of(0, 1, 2, 3),
-      skinWeight: Float32Array.of(1, 1, 1, 1),
-    });
-    expect(unpackMeshBin(full.slice(0, full.length - 8))).toBeUndefined();
+  it('rejects trailing bytes and malformed metadata with recovery facts', () => {
+    const trailing = unpackMeshBinV4(makeArtifact({ trailingBytes: 1 }), 'mesh/trailing');
+    expect(trailing.ok).toBe(false);
+    const malformed = unpackMeshBinV4(
+      makeArtifact({ json: { submeshes: [], materialSlots: [] } }),
+      'mesh/metadata',
+    );
+    expect(malformed.ok).toBe(false);
+    if (malformed.ok) return;
+    expect(malformed.error.sourceKey).toBe('mesh/metadata');
+    expect(malformed.error.recovery).toContain('re-cook');
   });
 });

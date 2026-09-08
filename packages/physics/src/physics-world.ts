@@ -33,6 +33,8 @@ export interface RaycastHit {
  * systems (syncBackend → stepSimulation → writeback), not by user calls.
  */
 export interface PhysicsWorld {
+  /** Release backend-native resources. Called by the owning physics plugin. */
+  dispose(): void;
   /** Set world gravity vector. */
   setGravity(gravity: Vec3): void;
 
@@ -123,6 +125,8 @@ export interface RaycastHit2D {
 
 /** 2D PhysicsWorld Resource interface. */
 export interface PhysicsWorld2D {
+  /** Release backend-native resources. Called by the owning physics plugin. */
+  dispose(): void;
   setGravity(gravity: Vec2): void;
   getGravity(): Vec2;
   raycast(

@@ -11,13 +11,13 @@
 // state, no further migration to a tilemap feature package).
 
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import { err, ok, type Result } from '@forgeax/engine-rhi';
+import { ChildOf } from '@forgeax/engine-scene';
+import { ASSET_ERROR_HINTS, AssetError } from '@forgeax/engine-types';
 import {
   TileLayer as runtimeTileLayer,
   Tilemap as runtimeTilemap,
-} from '@forgeax/engine-render/authoring';
-import { err, ok, type Result } from '@forgeax/engine-rhi';
-import { ChildOf } from '@forgeax/engine-scene';
-import { ASSET_ERROR_HINTS, AssetError, handleSlot } from '@forgeax/engine-types';
+} from '../../render/src/components';
 
 function invalidValue(field: string, value: unknown, reason: string): AssetError {
   return new AssetError({
@@ -31,7 +31,7 @@ function invalidValue(field: string, value: unknown, reason: string): AssetError
 /**
  * Validate Tilemap component invariants on the spawned entity (M0 baseline).
  *
- * Checks: `cols / rows >= 1`, `chunkSize >= 1`, `tileset` handle != 0.
+ * Checks: `cols / rows >= 1`, `chunkSize >= 1`, `tileset` GUID is non-empty.
  * Returns `Result.ok(undefined)` when every invariant holds, otherwise
  * `Result.err(AssetError 'asset-invalid-value')` with field-specific
  * detail (charter P3 fail-fast + P4 consistent with `validateMeshPayload`).
@@ -53,8 +53,8 @@ export function validateTilemapAtRegister(
   if (!(chunkSize >= 1)) {
     return err(invalidValue('Tilemap.chunkSize', chunkSize, 'chunkSize-below-one'));
   }
-  if (handleSlot(tileset) === 0) {
-    return err(invalidValue('Tilemap.tileset', tileset, 'tileset-handle-zero'));
+  if (tileset.length === 0) {
+    return err(invalidValue('Tilemap.tileset', tileset, 'tileset-guid-empty'));
   }
   return ok(undefined);
 }

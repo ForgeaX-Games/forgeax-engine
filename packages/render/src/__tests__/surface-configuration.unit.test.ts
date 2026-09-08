@@ -1,7 +1,7 @@
 import type { RhiCanvasContext, RhiDevice } from '@forgeax/engine-rhi';
 import { ok } from '@forgeax/engine-rhi';
 import { describe, expect, it, vi } from 'vitest';
-import { configureSurface } from '../render-system';
+import { configureSurface, resolveSurfaceFormatPair } from '../render-system';
 
 function device(backendKind: 'webgpu' | 'wgpu-webgl2', storageBuffer = false): RhiDevice {
   return {
@@ -11,6 +11,17 @@ function device(backendKind: 'webgpu' | 'wgpu-webgl2', storageBuffer = false): R
 }
 
 describe('configureSurface', () => {
+  it('projects the configured surface format into graph topology without reinterpretation drift', () => {
+    expect(resolveSurfaceFormatPair('webgpu', 'bgra8unorm', 'bgra8unorm-srgb')).toEqual({
+      storage: 'bgra8unorm',
+      view: 'bgra8unorm-srgb',
+    });
+    expect(resolveSurfaceFormatPair('wgpu-webgl2', 'rgba8unorm', 'rgba8unorm-srgb')).toEqual({
+      storage: 'rgba8unorm-srgb',
+      view: 'rgba8unorm-srgb',
+    });
+  });
+
   it('keeps native WebGPU sRGB view support when texture binding is available', () => {
     const configure = vi.fn(() => ok(undefined));
     const context = { configure } as unknown as RhiCanvasContext;

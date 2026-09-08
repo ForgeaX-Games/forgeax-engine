@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // bevy-pbr headless dawn smoke — proves Bevy PBR behavior:
 // 11×5 sphere grid with metallic (0→1 bottom-to-top) and roughness
 // (0→1 left-to-right) varying per sphere, plus unlit sphere,
@@ -107,28 +108,23 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  renderer = await createSmokeRenderer(createRenderer, mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
-console.log(`[bevy-pbr] backend=${renderer.backend}`);
+console.log(`[bevy-pbr] backend=${rendererBackend(renderer)}`);
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+subscribeSmokeErrors(renderer, (err) => errors.push({ code: err.code, hint: err.hint }));
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 const GOLD = [1.0, 0.847, 0.569, 1.0];
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 // ── 11×5 PBR sphere grid (x: -5..5, y: -2..2) ─────────────────────────
@@ -199,7 +195,7 @@ let rightStripAvg = 0;
 
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = drawSmokeFrame(renderer, world);
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
 
@@ -317,7 +313,7 @@ const centerRegionLit = (() => {
 const roughnessSpread = Math.abs(rightStripAvg - leftStripAvg);
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (rendererBackend(renderer) !== 'webgpu') failures.push(`(a) backend=${rendererBackend(renderer)} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (centerRegionLit <= SMOKE_PIXEL_THRESHOLD) {
   failures.push(`(c) center-region max=${centerRegionLit.toFixed(4)} <= ${SMOKE_PIXEL_THRESHOLD} — lit scene not visible`);

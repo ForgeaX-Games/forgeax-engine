@@ -45,10 +45,13 @@
     "@forgeax/engine-gltf": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
+    "@forgeax/engine-render": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
     "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/apps-shared": "workspace:*",
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@types/node": "^25.8.0",

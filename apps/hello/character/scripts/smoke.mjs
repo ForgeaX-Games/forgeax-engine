@@ -16,7 +16,7 @@
 // (feat-20260617 G-2 / AC-15). Structural-only: no pixel readback (the demo's
 // visual gate is the Playwright browser probe + human Read(*.png)).
 //
-// Note: physicsPlugin.build awaits the Rapier WASM import -- runPlugins in
+// Note: physicsPlugin.apply awaits the Rapier WASM import -- Cordis activation in
 // createApp resolves after the WASM module is loaded, so PhysicsWorld is
 // populated before the first app frame. If it fails to load within the
 // timeout, the smoke FAILs (non-vacuous PASS).
@@ -165,7 +165,7 @@ if (!appResult.ok) {
   process.exit(1);
 }
 const app = appResult.value;
-console.log(`[hello-character] backend=${app.renderer.backend}`);
+console.log(`[hello-character] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
 // Character resting height: ground top at y=-0.35, capsule half-total 0.8 -> 0.45.
 const CHAR_REST_Y = 0.45;
@@ -208,11 +208,6 @@ app.world.spawn({
 const onErrorEvents = [];
 app.onError((err) => onErrorEvents.push({ code: err.code, hint: err.hint }));
 
-const ready = await app.renderer.ready;
-if (!ready.ok) {
-  originalConsoleError(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 let fakeNow = 0;
 globalThis.performance.now = () => fakeNow;

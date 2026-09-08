@@ -29,9 +29,10 @@ const wrapper = resolve(harnessRoot, wrapperPath);
 const session = `boss-lightning-${process.pid}`;
 const port = process.env.BOSS_LIGHTNING_PORT ?? '5173';
 const mode = process.env.BOSS_LIGHTNING_FALSIFY ?? '';
+const m35Mode = process.env.BOSS_LIGHTNING_M35 === '1';
 const captureDelayMs = Number.parseInt(process.env.BOSS_LIGHTNING_CAPTURE_DELAY_MS ?? '1200', 10);
 const eventScenario = 'event-sub-emitter';
-const pageUrl = `http://127.0.0.1:${port}/?boss-lightning-falsify=${encodeURIComponent(mode)}`;
+const pageUrl = `http://127.0.0.1:${port}/?boss-lightning-falsify=${encodeURIComponent(mode)}${m35Mode ? '&boss-lightning-m35=1' : ''}`;
 const visualExpectationIds = [
   'advanced-renderers-visible',
   'live-patch-continuity',
@@ -64,7 +65,122 @@ function topologyPixelEvidence(path) {
   return counts;
 }
 
+function nonBlackPixelCount(path) {
+  const png = PNG.sync.read(readFileSync(path));
+  let count = 0;
+  for (let offset = 0; offset < png.data.length; offset += 4) {
+    if (png.data[offset] > 8 || png.data[offset + 1] > 8 || png.data[offset + 2] > 8) count += 1;
+  }
+  return count;
+}
+
 function probeCode() {
+  if (m35Mode) {
+    return `async page => {
+      await page.waitForFunction(() => globalThis.__forgeaxBossLightning?.m35 !== undefined, null, { timeout: 10000 });
+      await page.waitForTimeout(${captureDelayMs});
+      return await page.evaluate(async () => {
+        const front = globalThis.__forgeaxBossLightning;
+        const m35 = front?.m35;
+        if (front === undefined || m35 === undefined) return { booted: false };
+        const sleep = () => new Promise(resolve => setTimeout(resolve, 0));
+        const playerOf = (snapshot, player) => snapshot?.players?.find(candidate => candidate.player === player);
+        const step = () => m35.step();
+        const inspect = () => m35.inspect();
+        const drawError = result => {
+          const error = result?.draw?.error;
+          return {
+            ok: result?.draw?.ok,
+            name: error?.name,
+            code: error?.code,
+            hint: error?.hint,
+            detail: error?.detail,
+            string: String(error),
+          };
+        };
+        const boot = { ...inspect() };
+        m35.pause();
+        let baseline;
+        for (let index = 0; index < 60; index += 1) {
+          const result = step();
+          if (result.draw?.ok !== true) return { booted: true, m35: true, error: drawError(result) };
+          await sleep();
+          baseline = inspect();
+          const affected = playerOf(baseline.affected, m35.player);
+          const sibling = playerOf(baseline.sibling, front.player);
+          if (
+            affected?.queuedIntents === 0 &&
+            sibling?.queuedIntents === 0 &&
+            baseline.affected?.diagnostics?.length === 0 &&
+            baseline.sibling?.diagnostics?.length === 0 &&
+            affected.lastCommitted !== null &&
+            sibling.lastCommitted !== null
+          ) break;
+        }
+        const baselineAffected = playerOf(baseline?.affected, m35.player);
+        const baselineSibling = playerOf(baseline?.sibling, front.player);
+        const initialControl = m35.control();
+        if (initialControl?.ok !== true) return { booted: true, m35: true, baseline, control: initialControl };
+        const paused = initialControl.value.setPlayerRenderConsumption({ player: m35.player, enabled: false });
+        const pausedFrames = [];
+        for (let index = 0; index < 3; index += 1) {
+          const result = step();
+          if (result.draw?.ok !== true) return { booted: true, m35: true, baseline, pausedFrames, error: drawError(result) };
+          await sleep();
+          const snapshot = inspect();
+          const affected = playerOf(snapshot.affected, m35.player);
+          const sibling = playerOf(snapshot.sibling, front.player);
+          pausedFrames.push({
+            queuedIntents: affected?.queuedIntents ?? -1,
+            queuedTicks: affected?.queuedTicks ?? -1,
+            diagnostics: snapshot.affected?.diagnostics ?? [],
+            lastCommitted: affected?.lastCommitted,
+            siblingLastCommitted: sibling?.lastCommitted,
+            siblingDiagnostics: snapshot.sibling?.diagnostics ?? [],
+          });
+        }
+        const overflow = inspect();
+        const overflowAffected = playerOf(overflow.affected, m35.player);
+        const overflowDiagnostics = (overflow.affected?.diagnostics ?? []).filter(
+          diagnostic => diagnostic.detail?.player === m35.player,
+        );
+        const resumed = initialControl.value.setPlayerRenderConsumption({ player: m35.player, enabled: true });
+        const resumeStep = step();
+        if (resumeStep.draw?.ok !== true) return { booted: true, m35: true, baseline, overflow, error: drawError(resumeStep) };
+        await sleep();
+        const afterResume = inspect();
+        const afterResumeAffected = playerOf(afterResume.affected, m35.player);
+        const replay = front.publicApi?.replay?.();
+        const replayStep = step();
+        if (replayStep.draw?.ok !== true) return { booted: true, m35: true, baseline, overflow, afterResume, error: drawError(replayStep) };
+        await sleep();
+        const afterReplay = inspect();
+        const afterReplayAffected = playerOf(afterReplay.affected, m35.player);
+        const afterReplaySibling = playerOf(afterReplay.sibling, front.player);
+        return {
+          booted: true,
+          m35: true,
+          seed: 43,
+          program: front.effectAsset === undefined ? undefined : {
+            format: front.effectAsset.program.format,
+            fingerprint: front.effectAsset.program.fingerprint,
+            emitters: front.effectAsset.program.emitters.map(item => ({
+              id: item.id,
+              renderers: item.renderers.map(renderer => renderer.kind),
+            })),
+          },
+          boot,
+          baseline: { affected: baselineAffected, sibling: baselineSibling },
+          paused: { command: paused, frames: pausedFrames },
+          overflow: { affected: overflowAffected, diagnostics: overflowDiagnostics },
+          resume: { command: resumed, affected: afterResumeAffected },
+          replay: { command: replay, affected: afterReplayAffected, sibling: afterReplaySibling },
+          validationErrors: (front.validationErrors ?? []).slice(-8),
+          cameraReady: front.cameraReady ?? false,
+        };
+      });
+    }`;
+  }
   return `async page => {
     await page.waitForFunction(() => globalThis.__forgeaxBossLightning !== undefined, null, { timeout: 10000 });
     await page.waitForTimeout(${captureDelayMs});
@@ -180,6 +296,48 @@ function assertNormal(value) {
   }
 }
 
+function assertM35(value) {
+  const affected = value.overflow?.affected;
+  const baseline = value.baseline?.affected;
+  const replay = value.replay?.affected;
+  const sibling = value.replay?.sibling;
+  const overflowDiagnostics = value.overflow?.diagnostics ?? [];
+  if (!value.booted || !value.m35 || value.program === undefined) {
+    throw new Error(`M35 browser path did not expose the public Boss Lightning front door: ${JSON.stringify(value)}`);
+  }
+  const kinds = new Set(value.program.emitters.flatMap(item => item.renderers));
+  if (!kinds.has('billboard') || !kinds.has('mesh')) {
+    throw new Error(`M35 browser path missing visible particle renderers: ${JSON.stringify(value.program.emitters)}`);
+  }
+  if (
+    baseline?.queuedIntents !== 0 ||
+    baseline?.lastCommitted === null ||
+    value.paused?.frames?.some(frame => frame.queuedIntents > value.program.emitters.length) ||
+    value.paused?.frames?.some(frame => frame.queuedTicks > 1) ||
+    affected?.queuedIntents > value.program.emitters.length ||
+    affected?.queuedTicks > 1 ||
+    overflowDiagnostics.length !== 1 ||
+    overflowDiagnostics[0]?.code !== 'vfx-intent-queue-overflow' ||
+    overflowDiagnostics[0]?.detail?.maxQueuedTicks !== 1 ||
+    value.paused?.frames?.some(frame => frame.siblingDiagnostics.length !== 0) ||
+    value.resume?.affected?.queuedIntents !== 0 ||
+    value.resume?.affected?.lastCommitted?.playCycle !== baseline?.lastCommitted?.playCycle ||
+    value.replay?.affected?.queuedIntents !== 0 ||
+    value.replay?.affected?.lastCommitted?.reset !== true ||
+    value.replay?.affected?.lastCommitted?.phaseTick !== 0 ||
+    value.replay?.affected?.lastCommitted?.playCycle !== (baseline?.lastCommitted?.playCycle ?? -1) + 1 ||
+    value.replay?.affected?.lastCommitted?.firstParticleId !== 0 ||
+    value.replay?.affected?.diagnostics?.length !== 0 ||
+    sibling?.lastCommitted?.tick <= (value.baseline?.sibling?.lastCommitted?.tick ?? -1) ||
+    value.replay?.sibling?.diagnostics?.length !== 0
+  ) {
+    throw new Error(`M35 browser overflow/restart contract failed: ${JSON.stringify(value)}`);
+  }
+  if (!value.cameraReady || value.validationErrors.length !== 0) {
+    throw new Error(`M35 browser page/device errors were observed: ${JSON.stringify(value)}`);
+  }
+}
+
 function assertFalsified(value) {
   if (mode === 'disable-vfx' && value.validationErrors.length !== 0) {
     throw new Error('disabled VFX produced renderer errors');
@@ -262,36 +420,91 @@ try {
   const screenshot = process.env.BOSS_LIGHTNING_SCREENSHOT ?? `/tmp/batch-b-vfx-${process.pid}.png`;
   cli('screenshot', '--filename', screenshot);
   const topologyPixels = topologyPixelEvidence(screenshot);
+  const visiblePixels = nonBlackPixelCount(screenshot);
+  if (m35Mode) {
+    const rawCleanup = cli(
+      '--raw',
+      'run-code',
+      `async page => await page.evaluate(() => globalThis.__forgeaxBossLightning?.m35?.cleanup?.())`,
+    );
+    try {
+      value.cleanup = JSON.parse(rawCleanup);
+    } catch (error) {
+      throw new Error(`M35 cleanup returned non-JSON: ${rawCleanup}`, { cause: error });
+    }
+  }
   const rendererKinds = new Set(value.program?.emitters?.flatMap(item => item.renderers) ?? []);
   const advancedVisible =
     value.runtime?.renderFeatureEnabled !== false &&
     ['ribbon', 'trail', 'beam'].every(kind => rendererKinds.has(kind) && topologyPixels[kind] >= 20);
-  value.visualEvidence = {
-    target: 'batch-b-vfx-showcase',
-    screenshot,
-    expectations: visualExpectationIds.map(id => ({
-      id,
-      observed:
-        id === 'advanced-renderers-visible'
-          ? `renderers=${[...rendererKinds].join(',')} pixels=${JSON.stringify(topologyPixels)}`
-          : id === 'live-patch-continuity'
-            ? `generation=${value.lastCommitted?.generation ?? 'missing'} patchCount=${value.lastCommitted?.patchCount ?? 0}`
-            : id === 'event-sub-emitter-visible'
-              ? `consumed=${value.eventCounters?.consumed ?? 0} fanOut=${value.eventCounters?.fanOut ?? 0}`
-              : `stage=${value.stageOutput ?? 'missing'} lkg=${value.lastKnownGoodStage !== undefined}`,
-      verdict:
-        id === 'advanced-renderers-visible'
-          ? advancedVisible ? 'pass' : 'fail'
-          : id === 'live-patch-continuity'
-            ? value.lastCommitted?.generation > 0 ? 'pass' : 'fail'
-            : id === 'event-sub-emitter-visible'
-              ? value.eventCounters?.consumed > 0 ? 'pass' : 'fail'
-              : value.lastKnownGoodStage !== undefined ? 'pass' : 'fail',
-      confidence: 1,
-    })),
-  };
-  if (mode.length === 0) assertNormal(value);
+  value.visualEvidence = m35Mode
+    ? {
+        target: 'm35-vfx-overflow-restart',
+        screenshot,
+        expectations: [
+          {
+            id: 'boss-particles-visible-after-restart',
+            observed: `renderers=${[...rendererKinds].join(',')} nonBlackPixels=${visiblePixels}`,
+            verdict:
+              rendererKinds.has('billboard') && rendererKinds.has('mesh') && visiblePixels > 100
+                ? 'pass'
+                : 'fail',
+            confidence: 1,
+          },
+          {
+            id: 'overflow-restart-public-contract',
+            observed: `diagnostics=${value.overflow?.diagnostics?.length ?? 0} playCycle=${value.replay?.affected?.lastCommitted?.playCycle ?? 'missing'} phaseTick=${value.replay?.affected?.lastCommitted?.phaseTick ?? 'missing'}`,
+            verdict:
+              value.overflow?.diagnostics?.length === 1 &&
+              value.replay?.affected?.lastCommitted?.playCycle === 1 &&
+              value.replay?.affected?.lastCommitted?.phaseTick === 0
+                ? 'pass'
+                : 'fail',
+            confidence: 1,
+          },
+        ],
+      }
+    : {
+        target: 'batch-b-vfx-showcase',
+        screenshot,
+        expectations: visualExpectationIds.map(id => ({
+          id,
+          observed:
+            id === 'advanced-renderers-visible'
+              ? `renderers=${[...rendererKinds].join(',')} pixels=${JSON.stringify(topologyPixels)}`
+              : id === 'live-patch-continuity'
+                ? `generation=${value.lastCommitted?.generation ?? 'missing'} patchCount=${value.lastCommitted?.patchCount ?? 0}`
+                : id === 'event-sub-emitter-visible'
+                  ? `consumed=${value.eventCounters?.consumed ?? 0} fanOut=${value.eventCounters?.fanOut ?? 0}`
+                  : `stage=${value.stageOutput ?? 'missing'} lkg=${value.lastKnownGoodStage !== undefined}`,
+          verdict:
+            id === 'advanced-renderers-visible'
+              ? advancedVisible ? 'pass' : 'fail'
+              : id === 'live-patch-continuity'
+                ? value.lastCommitted?.generation > 0 ? 'pass' : 'fail'
+                : id === 'event-sub-emitter-visible'
+                  ? value.eventCounters?.consumed > 0 ? 'pass' : 'fail'
+                  : value.lastKnownGoodStage !== undefined ? 'pass' : 'fail',
+          confidence: 1,
+        })),
+      };
+  if (m35Mode) assertM35(value);
+  else if (mode.length === 0) assertNormal(value);
   else assertFalsified(value);
+  if (m35Mode) {
+    console.log(
+      `[m35-vfx] Chrome overflow/restart: PASS ${JSON.stringify({
+        overflowDiagnostics: value.overflow.diagnostics.length,
+        pausedQueue: value.overflow.affected.queuedIntents,
+        pausedTicks: value.overflow.affected.queuedTicks,
+        lkg: value.overflow.affected.lastCommitted,
+        replay: value.replay.affected.lastCommitted,
+        sibling: value.replay.sibling.lastCommitted,
+        cleanup: value.cleanup,
+        screenshot,
+      })}`,
+    );
+  }
   console.log(`[smoke-browser] PASS mode=${mode || 'normal'} seed=42 frame=${value.camera?.frame ?? 0} ${JSON.stringify(value)}`);
 } catch (error) {
   console.error(`[smoke-browser] FAIL mode=${mode || 'normal'} ${error instanceof Error ? error.message : String(error)}`);

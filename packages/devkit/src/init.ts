@@ -7,14 +7,25 @@ import type { CommandResult, InitOptions, ProjectFacts } from './types.js';
 const STANDARD_SCRIPTS = {
   dev: 'forgeax dev',
   build: 'forgeax build',
+  package: 'forgeax package',
+  serve: 'forgeax serve',
   preview: 'forgeax preview',
   doctor: 'forgeax doctor',
   test: 'forgeax test',
 } as const;
 
+const SDK_DEV_DEPENDENCIES = {
+  '@types/node': '20.19.40',
+  '@webgpu/types': '0.1.71',
+  tsx: '4.23.1',
+  typescript: '6.0.3',
+  vitest: '4.1.11',
+} as const;
+
 export interface InitPlan {
   readonly root: string;
   readonly version: string;
+  readonly pnpmVersion?: string;
   readonly archiveBacked: boolean;
   readonly dependencyChanges: readonly {
     readonly section: string;
@@ -27,7 +38,7 @@ export interface InitPlan {
 
 export function createInitPlan(
   facts: ProjectFacts,
-  sdk?: Pick<SdkManifest, 'sdkVersion' | 'packages'>,
+  sdk?: Pick<SdkManifest, 'sdkVersion' | 'packages' | 'requirements'>,
 ): CommandResult<InitPlan> {
   const manifest = structuredClone(facts.packageJson) as Record<string, unknown>;
   const packageVersions = new Map(sdk?.packages.map((entry) => [entry.name, entry.version]));
@@ -38,11 +49,7 @@ export function createInitPlan(
       const dependencies = manifest[section];
       if (dependencies === null || typeof dependencies !== 'object') continue;
       const unsupported = Object.keys(dependencies).filter(
-        (name) =>
-          !name.startsWith('@forgeax/engine-') &&
-          name !== '@webgpu/types' &&
-          name !== 'tsx' &&
-          name !== 'vitest',
+        (name) => !name.startsWith('@forgeax/engine-') && !(name in SDK_DEV_DEPENDENCIES),
       );
       if (unsupported.length > 0) {
         return {
@@ -92,30 +99,13 @@ export function createInitPlan(
       manifest.devDependencies !== null && typeof manifest.devDependencies === 'object'
         ? (manifest.devDependencies as Record<string, unknown>)
         : {};
-    if (devDependencies['@webgpu/types'] !== '0.1.71') {
+    for (const [name, version] of Object.entries(SDK_DEV_DEPENDENCIES)) {
+      if (devDependencies[name] === version) continue;
       dependencyChanges.push({
         section: 'devDependencies',
-        name: '@webgpu/types',
-        ...(typeof devDependencies['@webgpu/types'] === 'string'
-          ? { from: devDependencies['@webgpu/types'] }
-          : {}),
-        to: '0.1.71',
-      });
-    }
-    if (devDependencies.vitest !== '4.1.5') {
-      dependencyChanges.push({
-        section: 'devDependencies',
-        name: 'vitest',
-        ...(typeof devDependencies.vitest === 'string' ? { from: devDependencies.vitest } : {}),
-        to: '4.1.5',
-      });
-    }
-    if (devDependencies.tsx !== '4.23.1') {
-      dependencyChanges.push({
-        section: 'devDependencies',
-        name: 'tsx',
-        ...(typeof devDependencies.tsx === 'string' ? { from: devDependencies.tsx } : {}),
-        to: '4.23.1',
+        name,
+        ...(typeof devDependencies[name] === 'string' ? { from: devDependencies[name] } : {}),
+        to: version,
       });
     }
   }
@@ -158,6 +148,7 @@ export function createInitPlan(
     value: {
       root: facts.root,
       version: sdk?.sdkVersion ?? devkitVersion,
+      ...(sdk === undefined ? {} : { pnpmVersion: sdk.requirements.pnpm }),
       archiveBacked: sdk !== undefined,
       dependencyChanges,
       scriptChanges,
@@ -189,15 +180,8 @@ export async function applyInitPlan(
   for (const change of plan.scriptChanges) scripts[change.name] = change.to;
   manifest.scripts = scripts;
   if (plan.archiveBacked) {
-    manifest.packageManager = 'pnpm@10.33.2';
-    manifest.pnpm = {
-      onlyBuiltDependencies: [
-        '@forgeax/engine-codec',
-        '@forgeax/engine-fbx',
-        '@forgeax/engine-wgpu-wasm',
-        'esbuild',
-      ],
-    };
+    if (plan.pnpmVersion === undefined) throw new Error('sdk-pnpm-version-missing');
+    manifest.packageManager = `pnpm@${plan.pnpmVersion}`;
   }
   await writeFile(resolve(facts.root, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   return { ok: true, value: plan };

@@ -1,275 +1,184 @@
 # @forgeax/engine-render-graph
 
-> Declarative render-graph pipeline: declare pass I/O as string keys, let the graph manage texture lifecycle and barriers.
+> RHI-pure frame-graph kernel with typed resources, explicit accesses, graph-owned raster/compute/copy encoding, and immutable compiled graphs.
 
 ## Proposition
 
-**AI users**: replace "open a 2473-line record file, copy-paste texture lazy-alloc templates 4 times, hand-write beginRenderPass + bindgroup creation" with a few `graph.addPass({ reads, writes, execute })` declarations. The graph owns resource lifecycle and barrier insertion; your `execute` closure is the only custom logic.
+A graph author declares four facts once:
+
+1. whether a resource is graph-created or imported;
+2. which texture subresource or buffer a pass accesses;
+3. the exact access mode;
+4. the pass kind and declaration order.
+
+The compiler derives physical usage, RAW/WAR/WAW dependencies, lifetime bounds, capability requirements, and pass-local resource visibility from those facts. It does not invent backend barriers or reorder a future writer before an earlier reader.
 
 ```mermaid
 flowchart LR
-  subgraph rg["@forgeax/engine-render-graph (RHI-pure)"]
-    RES["ResourceRegistry<br/>key -> descriptor / bufferRole / lifetime"]
-    PASS["PassRegistry<br/>name -> reads / writes / execute"]
-    COMP["compile()<br/>topo-sort + fail-fast + barrier plan"]
-    EXEC["execute(ctx)<br/>serial encode"]
-    RES --> COMP
-    PASS --> COMP --> EXEC
-  end
-  rg --> rhi["@forgeax/engine-rhi"]
-  rg --> math["@forgeax/engine-math"]
-  runtime["@forgeax/engine-runtime"] --> rg
+  OWNER["Pipeline or feature owner"] --> BUILDER["RenderGraphBuilder"]
+  BUILDER --> COMPILE["compile once"]
+  COMPILE --> GRAPH["immutable CompiledRenderGraph"]
+  GRAPH --> EXEC["execute frames"]
+  GRAPH --> INSPECT["inspect"]
+  GRAPH --> RETIRE["fence-aware retire"]
+  EXEC --> RHI["@forgeax/engine-rhi"]
 ```
 
-- **RHI-pure** -- depends only on `@forgeax/engine-rhi` and `@forgeax/engine-math`; never touches `@forgeax/engine-runtime`, ECS World, or PipelineState. The `compile()` allocation phase holds an `RhiDevice` interface handle (passed in via `CompileOptions.device`) to call `createTexture` / `createTextureView` / `createSampler` for `addColorTarget` resources, including MSAA multi-sample colour + depth targets — handle-only, no concrete backend import.
-- **Resource-owning** -- `addColorTarget(name, desc)` declares transient / persistent / aliased GPU textures; `compile()` allocates the physical textures via the `RhiDevice` handle, pools by `{format, w, h, usage, sampleCount}`, and folds explicit alias chains (KB-1 / D-2). Pass closures resolve names to `TextureView` via the per-pass `resolve(name)` context.
-- **Declarative** -- resources and passes are string-key schemas (`reads: string[]` / `writes: string[]`). The graph derives scheduling, barriers, and lazy-allocation from them.
-- **Fail-fast** -- `compile()` returns a structured `Result<T, RenderGraphError>` with 7 error codes (`dangling-read` / `cap-missing` / `cyclic-dependency` / `duplicate-resource` / `unknown-resource` / `resource-alloc-failed` / `invalid-format`); TS `switch (err.code)` is exhaustive with no `default` fallback.
-- **Minimal viable** -- Godot RDG benchmark (~600 LOC); no pass auto-reorder.
+> [!IMPORTANT]
+> Declaration order is the observable v1 execution order. An imported resource may be read first; a graph-created resource must be initialized before its first read.
 
-## API
-
-### RenderGraph
+## Primary API
 
 ```ts
-import { RenderGraph } from '@forgeax/engine-render-graph';
-import type { PassDescriptor, ResourceDescriptor } from '@forgeax/engine-render-graph';
+import { RenderGraphBuilder } from '@forgeax/engine-render-graph';
+import type { Buffer, RhiCommandEncoder } from '@forgeax/engine-rhi';
+
+interface Frame {
+  readonly encoder: RhiCommandEncoder;
+  readonly particles: Buffer;
+}
+
+const builder = new RenderGraphBuilder<Frame>();
+const particles = builder
+  .importBuffer(
+    'particles',
+    { size: 64 * 1024, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX },
+    (frame) => frame.particles,
+  )
+  .unwrap();
+
+builder
+  .addComputePass('simulate', {
+    accesses: [{ resource: particles, usage: 'storage-read-write' }],
+    encode: ({ pass }) => {
+      pass.setPipeline(simulatePipeline);
+      pass.setBindGroup(0, simulateBindings);
+      pass.dispatchWorkgroups(256);
+    },
+  })
+  .unwrap();
+
+const compiled = builder
+  .compile({ device, surfaceSize: { width: 1280, height: 720 } })
+  .unwrap();
+
+compiled.execute({ encoder, particles }).unwrap();
+console.log(compiled.inspect());
+await compiled.retire();
 ```
 
-| Method | Signature | Purpose |
+### Resource declaration
+
+| Method | Ownership | Physical usage |
 |:--|:--|:--|
-| `addResource` | `(key: string, desc: ResourceDescriptor) => Result<ResourceEntry, RenderGraphError>` | Declare a named resource (texture or buffer) |
-| `addPass` | `(name: string, desc: PassDescriptor<Ctx>) => PassEntry<Ctx>` | Declare a Graph Pass with `reads` / `writes` / `execute` |
-| `compile` | `(opts: CompileOptions) => Result<InternalizedGraph, RenderGraphError>` | Topo-sort + fail-fast validate + barrier plan |
-| `execute` | `(ctx: Ctx) => void` | Iterate passes in compiled order, calling each `execute` closure |
-| `listPasses` | `() => readonly PassInfo[]` | Enumerate all registered passes with their reads/writes |
-| `listResources` | `() => readonly ResourceInfo[]` | Enumerate all registered resources with key/kind/lifetime |
+| `createTexture` / `createBuffer` | Graph allocates and retires the handle | Derived from every declared access |
+| `importTexture` / `importBuffer` | Caller resolves and owns the handle | Supplied usage must contain derived usage |
+| `view` | Typed texture subresource | Mip, layer, aspect, dimension, and optional format are explicit |
 
-### ResourceDescriptor
+Resource and pass labels are unique diagnostics. Handles are opaque and builder-scoped; passing a foreign handle is a structured error.
 
-```ts
-interface ResourceDescriptor {
-  readonly kind: 'texture' | 'buffer';
-  readonly lifetime: 'transient' | 'persistent';
-  readonly bufferRole?: 'auto-storage-or-uniform' | 'uniform';
-}
-```
+### Access vocabulary
 
-| Field | Required | Values | Purpose |
-|:--|:--|:--|:--|
-| `kind` | yes | `'texture'` / `'buffer'` | Resource type |
-| `lifetime` | yes | `'transient'` / `'persistent'` | Transient = frame-internal (destroyed on resize); persistent = cross-frame (keyed by swap-size or mapSize) |
-| `bufferRole` | no (buffer only) | `'auto-storage-or-uniform'` / `'uniform'` | `'auto-storage-or-uniform'` selects storage when `caps.storageBuffer === true`, uniform otherwise; `'uniform'` forces uniform always |
+| Buffer | Texture |
+|:--|:--|
+| `uniform-read` | `sampled-read` |
+| `storage-read` | `storage-read` |
+| `storage-write` | `storage-write` |
+| `storage-read-write` | `storage-read-write` |
+| `indirect-read` | `storage-read-write` |
+| `vertex-read` | `color-attachment` |
+| `index-read` | `depth-stencil-read` |
+| `copy-src` / `copy-dst` | `depth-stencil-write` |
+|  | `copy-src` / `copy-dst` |
 
-### PassDescriptor
+A raster attachment with `loadOp: 'load'` is a read/write access. A clear attachment is the first write. The compiler checks overlapping texture mip/layer/aspect ranges rather than treating unrelated subresources as one hazard.
 
-```ts
-interface PassDescriptor<Ctx = unknown> {
-  readonly reads: readonly string[];
-  readonly writes: readonly string[];
-  readonly execute?: (ctx: Ctx) => void;
-  readonly compute?: boolean;
-  readonly storageBuffer?: boolean;
-}
-```
+### Pass declaration
 
-| Field | Required | Purpose |
+| Method | Encoder ownership |
+|:--|:--|
+| `addRasterPass` | Graph resolves attachments and owns `beginRenderPass` / `end` |
+| `addComputePass` | Graph owns `beginComputePass` / `end`; optional `begin(frame)` supplies the descriptor and `after(frame)` runs after `end` |
+| `addCopyPass` | Graph lends the frame command encoder for copy commands |
+
+Each encode callback receives a pass-local resolver. Resolving a resource not declared in that pass is rejected.
+Compute pass descriptors such as `timestampWrites` come from `begin`; the graph keeps the diagnostic
+label. Compute work that targets the parent command encoder, such as resolving timestamp queries,
+belongs in `after`; pass commands remain in `encode`. `onBeginError` lets the pass owner terminalize
+feature-local evidence before the graph returns `pass-encode-failed`.
+
+## Compile and execution
+
+`compile({ device, surfaceSize })`:
+
+- seals the builder;
+- validates descriptors, access conflicts, initialization, import usage, and capabilities;
+- derives created-resource usage and lifetime intervals;
+- allocates transactionally, rolling back all staged handles on failure;
+- returns a separate immutable `CompiledRenderGraph`.
+
+`execute(frame)` resolves imported handles for that frame and encodes passes in declaration order. `inspect()` returns a frozen projection of pass kinds, accesses, dependencies, resource origin, derived usage, and lifetime bounds.
+
+`retire()` first waits for `device.queue.onSubmittedWorkDone()`, then destroys graph-created resources exactly once. Imported resources are never destroyed by the graph.
+
+The older string-key `RenderGraph` descriptor surface remains limited to
+feature-local staging and isolated legacy tests. Renderer frame ownership uses
+`RenderGraphBuilder`; new pipeline and compute work must not add string resource
+keys or call the facade's compile/execute path.
+
+## Ordering and hazards
+
+The compiler scans each resource/subresource in declaration order.
+
+| Current access | Prior overlapping state | Dependency |
 |:--|:--|:--|
-| `reads` | yes | Resource keys this pass reads |
-| `writes` | yes | Resource keys this pass writes |
-| `execute` | no | Closure called during `execute(ctx)`; receives the typed context (`Ctx`) |
-| `compute` | no | When `true`, `compile()` checks `caps.compute` (fail-fast if missing) |
-| `storageBuffer` | no | When `true`, `compile()` checks `caps.storageBuffer` (fail-fast if missing) |
+| read | latest write | RAW |
+| write | latest write | WAW |
+| write | reads since latest write | WAR |
 
-### CompileOptions
+A later write never becomes the producer of an earlier read. This makes temporal multi-writer and ping-pong sequences unambiguous without a public resource-version type.
 
-```ts
-interface CompileOptions {
-  readonly backendKind: 'webgpu' | 'wgpu-native' | 'wgpu-webgl2';
-  readonly caps: RhiCaps;
-}
-```
+The RHI remains responsible for backend state transitions and synchronization. The graph exposes dependency evidence; it does not claim to insert a barrier that no RHI command executes.
 
-`backendKind` drives barrier planning (see [Barrier semantics](#barrier-semantics)).
+## Capabilities
 
-### Query interfaces (D-5)
+A compute pass requires `caps.compute`. Storage accesses require the matching storage-buffer or storage-texture capability, and indirect access requires indirect drawing support. Capability absence fails compilation with `capability-missing`; the pipeline or feature owner selects a fallback lane before graph construction.
 
-```ts
-interface PassInfo {
-  readonly name: string;
-  readonly reads: readonly string[];
-  readonly writes: readonly string[];
-}
-
-interface ResourceInfo {
-  readonly key: string;
-  readonly kind: 'texture' | 'buffer';
-  readonly lifetime: 'transient' | 'persistent';
-}
-```
-
-`listPasses()` / `listResources()` return these read-only arrays. AI users call them to discover what passes exist, who writes each resource, and where to hook in a new pass.
-
-### InternalizedGraph
-
-`compile()` returns `Result<InternalizedGraph, RenderGraphError>`:
-
-```ts
-interface InternalizedPass {
-  readonly name: string;
-  readonly reads: readonly string[];
-  readonly writes: readonly string[];
-  readonly barriers: readonly string[];
-}
-
-interface InternalizedGraph {
-  readonly passes: readonly InternalizedPass[];
-}
-```
-
-The `barriers` array carries resource keys that need barriers before this pass executes. It is non-empty only on `wgpu-native` backends (see [Barrier semantics](#barrier-semantics)).
-
-## Minimal usage
-
-```ts
-const graph = new RenderGraph<MyContext>();
-
-// 1. Declare resources
-graph.addResource('depth', { kind: 'texture', lifetime: 'persistent' });
-graph.addResource('hdr',   { kind: 'texture', lifetime: 'transient' });
-
-// 2. Declare passes
-graph.addPass('shadow', {
-  reads: [],
-  writes: ['depth'],
-  execute: (ctx) => { /* beginRenderPass + draw */ },
-});
-
-graph.addPass('main', {
-  reads: ['depth'],
-  writes: ['hdr'],
-  execute: (ctx) => { /* beginRenderPass + draw forward */ },
-});
-
-// 3. Compile -- fails fast on dangling reads, cap mismatch, cycles
-const compiled = graph.compile({ backendKind: 'webgpu', caps: device.caps });
-if (!compiled.ok) {
-  // compiled.error.code is a RenderGraphErrorCode -- switch exhaustively
-  throw compiled.error;
-}
-
-// 4. Execute each frame
-graph.execute(ctx);
-```
+v1 uses one command encoder and one primary queue. There is no `asyncCompute` option until the RHI exposes a real second queue, fences, and measured overlap evidence.
 
 ## Error model
 
-`RenderGraphErrorCode` is a closed 7-member union. All failures return `Result<T, RenderGraphError>` (never throw). The private code-to-detail authority correlates each constructor `code` with its accepted `detail` shape while keeping `detail` optional.
+All expected builder, compile, execute, and retire failures use `Result<T, RenderGraphError>`. Every error carries `code`, `expected`, `hint`, and code-correlated `detail`.
 
-| Code | Trigger | `.detail` shape |
-|:--|:--|:--|
-| `'dangling-read'` | A pass `reads` a resource key that no pass `writes` | `{ resourceKey: string, passName: string }` |
-| `'cap-missing'` | `compute: true` but `caps.compute === false`, or `storageBuffer: true` but `caps.storageBuffer === false` | `{ cap: 'compute' \| 'storageBuffer', passName: string }` |
-| `'cyclic-dependency'` | Pass dependency graph contains a cycle (topo-sort failed) | `{ cycle: readonly string[] }` |
-| `'duplicate-resource'` | Same resource key registered twice via `addResource` | `{ resourceKey: string }` |
-| `'unknown-resource'` | A pass references a resource key that was never registered | `{ resourceKey: string, passName: string }` |
-| `'resource-alloc-failed'` | GPU allocation or view creation returns an RHI error | `{ resourceKey: string, passName?: string, rhiCode?: string }` |
-| `'invalid-format'` | An `addColorTarget` format is not a valid GPU texture format | `{ resourceKey: string, format: string, expected: readonly string[] }` |
+The closed union covers these groups:
 
-Every error carries four readonly fields aligned with the engine error convention (research Finding 8):
-
-```ts
-class RenderGraphError extends Error {
-  readonly code: RenderGraphErrorCode;     // closed-union member -- primary signal
-  readonly expected: string;               // expected-state description
-  readonly hint: string;                   // actionable recovery guidance
-  readonly detail: RenderGraphErrorDetail | undefined; // optional payload per code
-}
-```
-
-**AI user self-recovery** -- AI users `switch (err.code)` for exhaustive handling:
-
-| Error | AI recovery |
+| Phase | Codes |
 |:--|:--|
-| `dangling-read` | Add a pass that `writes: [key]` or fix a typo in `reads` |
-| `cap-missing` | Switch to a render-pass path or enable the cap on the backend |
-| `cyclic-dependency` | Break the cycle among passes (cycle path in `.detail.cycle`) |
-| `duplicate-resource` | Remove the duplicate `addResource` call |
-| `unknown-resource` | Register the resource with `addResource` before referencing it |
-| `resource-alloc-failed` | Check device state and recreate the graph or device if allocation fails |
-| `invalid-format` | Use a standard GPU texture format listed in `.detail.expected` |
+| Declaration | `duplicate-pass-name`, `duplicate-resource-label`, `builder-sealed`, `foreign-resource-handle`, `alias-source-missing` |
+| Access analysis | `resource-not-declared-by-pass`, `uninitialized-read`, `access-conflict`, `import-usage-mismatch` |
+| Compile | `capability-missing`, `resource-descriptor-invalid`, `resource-allocation-failed` |
+| Execute | `resource-resolution-failed`, `pass-encode-failed`, `compiled-graph-retired` |
+| Retire | `resource-retire-failed` |
 
-`compile()` does **not** error on "dangling write" (a resource written but never read). This is intentional -- the output resource may be consumed by swap-chain display, Inspector readback, or a future downstream pass (plan-strategy D-5).
+The package still contains the existing string-key `RenderGraph` facade while standard renderer raster consumers move to the typed builder. New compute paths and external callers use `RenderGraphBuilder`; no new feature should add boolean `compute` flags or record a whole compute pass outside graph ownership.
 
-## Barrier semantics (AC-10)
-
-Barrier insertion discriminates on **backend-kind**, not package name. The `rhi-wgpu` package hosts both a native desktop path and a WebGL2 sub-path (`--features webgl`); only the native desktop path needs explicit barriers.
-
-| `backendKind` | Barrier behavior |
-|:--|:--|
-| `'webgpu'` | No explicit barriers (browser's WebGPU spec manages synchronization) |
-| `'wgpu-webgl2'` | No explicit barriers (GL implicit synchronization) |
-| `'wgpu-native'` | `compile()` inserts barriers between passes where a resource is written then read by a later pass |
-
-The `backendKind` value comes from `RhiCaps.backendKind`, set by each backend's `createDevice` implementation (plan-strategy D-1). Pass it into `compile()`:
-
-```ts
-const result = graph.compile({
-  backendKind: device.caps.backendKind,
-  caps: device.caps,
-});
-```
-
-## Capability fallback (AC-09)
-
-**Uniform-vs-storage buffer role**. When `bufferRole: 'auto-storage-or-uniform'`, the graph selects `'read-only-storage'` when `caps.storageBuffer === true` and `'uniform'` when `false`. This mirrors the existing pattern in `pbr-pipeline.ts` (research Finding 7). Pass `bufferRole: 'uniform'` to force uniform regardless of caps.
-
-**Compute cap gate** (AC-08). A pass with `compute: true` triggers cap-gate during `compile()`: if `caps.compute === false`, compile returns `'cap-missing'`. Same for `storageBuffer: true` + `caps.storageBuffer === false`. This gate is forward-looking -- current engine pass roster has zero compute passes (research Finding 2), but future bloom/SSAO/SSR passes will use it.
-
-## Terminology: Graph Pass vs material pass (AC-12)
-
-| Term | Meaning | In code |
-|:--|:--|:--|
-| **Graph Pass** | A render-graph pass node declared via `graph.addPass({ reads, writes, execute })` | `RenderGraph.addPass()`, `PassDescriptor` |
-| **material pass** | A shader descriptor inside `MaterialAsset.passes[]` | `MaterialAsset.passes?: readonly MaterialPass[]` |
-
-`MaterialAsset.passes[]` retains its name (unchanged). Graph Pass is the framework concept; material pass is the shader-descriptor concept. Documentation and comments distinguish the two.
-
-## Dependencies
+## Package boundary
 
 ```mermaid
 flowchart LR
-  render-graph --> rhi["@forgeax/engine-rhi"]
-  render-graph --> math["@forgeax/engine-math"]
+  render["@forgeax/engine-render"] --> rg["@forgeax/engine-render-graph"]
+  rg --> rhi["@forgeax/engine-rhi"]
+  rg --> types["@forgeax/engine-types"]
 ```
 
-| Dep | Why |
-|:--|:--|
-| `@forgeax/engine-rhi` | RHI handle types, caps, texture descriptor, Result pattern |
-| `@forgeax/engine-math` | Math shapes (sizes, matrices) for resource descriptors |
+The package does not import runtime, ECS, renderer policy, a concrete backend, or math. Color-domain policy and frame-observation policy belong in `@forgeax/engine-render`.
 
-Runtime (`@forgeax/engine-runtime`) consumes `@forgeax/engine-render-graph`. The dependency chain `runtime -> render-graph -> rhi` is acyclic (AC-03).
+## Verification
 
-## Progressive disclosure (charter P1)
+Run from this package:
 
-| Layer | Content | Audience |
-|:--|:--|:--|
-| Top (this section + Proposition) | What: declarative pass I/O, graph owns lifecycle + barriers | First-time reader deciding if this package fits |
-| Middle (API tables) | How: full type signatures for addResource/addPass/compile/execute/listPasses/listResources | AI user adding a pass |
-| Bottom (Error model + Barrier + Fallback) | Edge cases: 7 error codes with detail shapes, backend-kind discrimination, uniform-storage fallback | AI user debugging a compile failure |
+```bash
+../../node_modules/.bin/vitest run
+```
 
-Type signatures and error-code tables are the machine-readable SSOT (charter F2: text over images).
-
-## Gating
-
-A repo-root grep gate (`scripts/check-render-graph-no-runtime-import.mjs`) enforces the RHI-pure boundary: any `import ... '@forgeax/engine-runtime'` inside `packages/render-graph/src/` is a hard CI failure (AC-02). The gate is wired into `.github/workflows/ci.yml` lint job alongside the existing shader/app/image isolation gates (research Finding 9).
-
-## Design constraints
-
-| Constraint | Source |
-|:--|:--|
-| No pass auto-reorder -- passes keep declaration order | OOS-1 / plan-strategy D-5 |
-| No transient memory aliasing (Frostbite-level reuse) | OOS-2 / Godot RDG baseline |
-| Transient resources use whole-frame retention + size-drift rebuild | plan-strategy D-4 / research Finding 1 |
-| IBL convolution + shadow probe passes excluded from graph | OOS-3 / OOS-4 (one-shot / on-demand passes) |
-| Dangling write is silent (not an error) | plan-strategy D-5 (legal: swap-chain / Inspector readback) |
+The suite covers declaration order, temporal multi-writer chains, imported first reads, typed subresource hazards, duplicate labels, builder sealing, capability rejection, transactional allocation rollback, pass-local resolution, graph-owned compute encoding, real RHI-null integration, and fence-aware retirement. Render-owned Dawn and Chromium tests additionally prove compute-generated indirect dispatch/draw args, storage-buffer ping-pong, storage-texture-to-raster pixels, imported persistent GPU Scene cull/compact work, and an HZB mip chain whose dependencies follow exact subresources.

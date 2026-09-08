@@ -16,15 +16,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appResult = await createApp(target, {}, forgeaxBundlerAdapter());
   if (!appResult.ok) { console.error('[bevy-texture-atlas] createApp failed:', appResult.error); return; }
   const app = appResult.value;
-  console.warn(`[bevy-texture-atlas] backend=${app.renderer.backend}`);
+  console.warn(`[bevy-texture-atlas] backend=${app.renderer.inspect().capabilities.backendKind}`);
   const atlases = [makeAtlas('unpadding'), makeAtlas('padding'), makeAtlas('unpadding'), makeAtlas('padding')];
   const variants: Array<{ texture: number; atlas: AtlasTexture }> = [];
   for (let index = 0; index < atlases.length; index += 1) {
     const atlas = atlases[index]!;
     const texture = { kind: 'texture' as const, width: atlas.size, height: atlas.size, format: 'rgba8unorm-srgb' as const, data: atlas.pixels, colorSpace: 'srgb' as const, mipmap: false };
     const textureHandle = app.world.allocSharedRef('TextureAsset', texture);
-    const upload = await app.renderer.store.uploadTexture(textureHandle, texture, { bytes: atlas.pixels, width: atlas.size, height: atlas.size, mime: 'image/png', colorSpace: 'srgb', mipmap: false });
-    if (!upload.ok) { console.error('[bevy-texture-atlas] texture upload failed:', upload.error.code, upload.error.hint); return; }
     variants.push({ texture: unwrapHandle(textureHandle), atlas });
   }
   buildTextureAtlasWorld(app.world, variants);

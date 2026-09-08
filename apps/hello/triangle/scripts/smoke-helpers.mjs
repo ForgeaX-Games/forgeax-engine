@@ -19,24 +19,24 @@
 //                                        Component schemas come from their canonical
 //                                        engine-render / engine-scene owners; the smoke
 //                                        script keeps the runtime import for the renderer.
-//   bootRenderer(opts) - createRenderer try/catch + backend log + onError listener
+//   bootRenderer(opts) - runtime host construction + backend log + Renderer event listener
 //                        registration. Returns { renderer, errors } so the smoke script
-//                        can keep the literal `await renderer.ready` token in its body.
+//                        can keep the literal `await host initialization` token in its body.
 //   runFrameLoopAndReadback(opts) - fixed-N frame loop + onSubmittedWorkDone +
 //                                   copyTextureToBuffer + mapAsync + NDC-center / corner
 //                                   pixel sample read. Callee owns the deterministic loop;
 //                                   draw() is a thunk so each smoke script keeps the literal
-//                                   `renderer.draw(world)` token.
+//                                   lease-bound `renderer.draw({ ... })` request.
 //   evaluateAndExit(opts) - verdict + errors -> stdout PASS line / stderr FAIL block +
 //                           process.exit. Centralises the orchestration tail so the smoke
 //                           scripts shrink below jscpd minLines=30 threshold.
 //
 // Token preservation contract (smoke-coverage-gate.mjs delta layer):
-//   - smoke-dawn.mjs / smoke-wgpu-wasm.mjs MUST still contain literal:
+//   - smoke-dawn.mjs MUST still contain literal:
 //       import('@forgeax/engine-ecs') / import('@forgeax/engine-runtime')
 //       HANDLE_TRIANGLE
-//       await renderer.ready
-//       renderer.draw(world)
+//       await host initialization
+//       renderer.draw({ leases: [attachment.value], ... })
 //   This helper deliberately does NOT host those tokens; the smoke scripts feed them in
 //   as parameters / thunks (charter proposition 6: shared-symbol grep is a behavioural
 //   gate independent of jscpd-style structural dedup).
@@ -206,47 +206,41 @@ export function populateSmokeWorld(world, components, assets) {
   });
 }
 
-// Boot the renderer: wraps createRenderer + backend log + onError listener registration.
+// Boot the renderer host: logs the backend and registers the public Renderer event stream.
 // `createRenderer` is passed in (instead of imported here) so each smoke script holds the
 // literal `import('@forgeax/engine-runtime')` token. `extraOpts` lets the wgpu-wasm variant
 // inject `{ rhi: rhiWgpu }` while smoke-dawn passes `{}`. Returns { renderer, errors }
 // where `errors` is the listener accumulator for evaluateAndExit's tail check.
 //
-// `rawDeviceForContextConfigureFn` is a thunk returning the captured shared GPUDevice
-// (typically `() => shim.sharedDevice`). The parameter name avoids the bare identifier
-// `getRawDevice` because ac-08-grep-gate.mjs gate (g) treats `\bgetRawDevice\b` as a
-// D-S1 violation; the engine uses `_internal_getRawDevice` everywhere. Spelling the
-// parameter as `rawDeviceForContextConfigureFn` keeps the token off the gate's word-
-// boundary radar while preserving the original `rawDeviceForContextConfigure:` field
-// name surfaced by the engine config.
-export async function bootRenderer({ createRenderer, mockCanvas, shaderManifestUrl, rawDeviceForContextConfigureFn, extraOpts = {} }) {
+export async function bootRenderer({ createRenderer, mockCanvas, shaderManifestUrl, extraOpts = {} }) {
   let renderer;
   try {
     // feat-20260608 / M2: shaderManifestUrl moved to BundlerOptions third arg.
-    renderer = await createRenderer(
+    const created = await createRenderer(
       mockCanvas,
-      {
-        rawDeviceForContextConfigure: rawDeviceForContextConfigureFn,
-        ...extraOpts,
-      },
+      { ...extraOpts },
       { shaderManifestUrl },
     );
+    if (!created.ok) throw created.error;
+    renderer = created.value.renderer;
   } catch (err) {
     console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
-  console.log(`[hello-triangle] backend=${renderer.backend}`);
-  // Accumulate Renderer.onError fires for diagnostics surfacing.
+  console.log(`[hello-triangle] backend=${renderer.inspect().capabilities.backendKind}`);
+  // Accumulate Renderer error events for diagnostics surfacing.
   const errors = [];
-  renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+  renderer.subscribe((event) => {
+    if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint });
+  });
   return { renderer, errors };
 }
 
 // Fixed-N frame loop + onSubmittedWorkDone + pixel readback (NDC-center + corner sample).
-// `draw` is a zero-arg thunk so each smoke script keeps the literal `renderer.draw(world)`
-// token (smoke-coverage-gate.mjs delta layer). `shim` is the object returned by
+// `draw` is a zero-arg thunk so each smoke script owns its lease-bound Renderer request.
+// `shim` is the object returned by
 // setupGpuShim above; sharedDevice / renderTarget are read through its getters because
-// the engine path populates them lazily during renderer.ready.
+// the engine path populates them lazily during host initialization.
 //
 // Returns { framesObserved, pixelSamples, device } so the smoke script can run
 // evaluateSmokeCriteria + cleanup.

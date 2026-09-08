@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "1.0.0",
+  "producer": "packages/preview/scripts/build-canonical-kit.mjs",
+  "source": {
+    "sourceKey": "forgeax-generated://canonical-kit/sky.hdr",
+    "guid": "81eec382-392f-5a93-8998-0ecf11ef7990",
+    "digest": "sha256:a6047f6d65ac4310d388c7731fa1a6e18b5fc90073d87bdee8c0d740336b024e",
+    "metaDigest": "sha256:5f7942e73ad007c67b8c0b8903ffe5a06a5c89f73d427443f3a50fa9db4649a9"
+  },
+  "recipe": {
+    "digest": "sha256:e6551f1d31f92aefa2622b16709c96c6e477a97814c0ac2d7b6dc48d74d1f3bb",
+    "value": {
+      "schemaVersion": "1.0.0",
+      "rig": "handle-sphere",
+      "environment": "engine-canonical",
+      "skybox": "engine-canonical",
+      "skylight": "engine-canonical",
+      "directionalLight": "engine-canonical",
+      "stage": "neutral-material-checker-unlit",
+      "camera": "bounds-derived"
+    }
+  },
+  "cooked": {
+    "importer": "image",
+    "kind": "equirect",
+    "sourceDigest": "sha256:a6047f6d65ac4310d388c7731fa1a6e18b5fc90073d87bdee8c0d740336b024e",
+    "metaDigest": "sha256:5f7942e73ad007c67b8c0b8903ffe5a06a5c89f73d427443f3a50fa9db4649a9"
+  },
+  "package": {
+    "name": "@forgeax/engine-preview",
+    "root": "assets/canonical-kit"
+  },
+  "transport": {
+    "dev": "pluginPack",
+    "build": "pluginPack",
+    "sdk": "files/assets/canonical-kit",
+    "source": "sky.hdr",
+    "meta": "sky.hdr.meta.json"
+  }
+}

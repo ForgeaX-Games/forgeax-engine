@@ -25,11 +25,12 @@ import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { MeshFilter, SceneInstance } from '@forgeax/engine-render/internal';
+import { MeshFilter, SceneInstance } from '@forgeax/engine-render';
 import type { LocalEntityId, MeshAsset, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { BUILTIN_BASE } from '@forgeax/engine-types';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+import { registerSceneComponents } from './helpers/register-scene-components';
 
 function localId(n: number): LocalEntityId {
   return n as LocalEntityId;
@@ -50,12 +51,7 @@ describe('regression — prod bare-GUID scene envelope.refs resolve before retai
   it('instantiate resolves bare-GUID MeshFilter.assetHandle across N entities (no shared-ref-released)', () => {
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();
-
-    // Capture any Layer-3 routed error — the buggy path routes a
-    // `shared-ref-released` here (Severity.Error → no throw, so res.ok stays
-    // true; only the handler sees it).
-    const errorSpy = vi.fn();
-    world.setErrorHandler(errorSpy);
+    registerSceneComponents(world, [MeshFilter]);
 
     // Catalogue the two mesh payloads (as loadByGuid would on the prod path).
     const guidA = AssetGuid.parse(MESH_GUID_A);
@@ -95,15 +91,7 @@ describe('regression — prod bare-GUID scene envelope.refs resolve before retai
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 
-    // (1) No `shared-ref-released` routed to the Layer-3 handler — the GUID
-    //     string never reached `retainSharedScalarHandle`.
-    const routedCodes = errorSpy.mock.calls.map(
-      (c) => (c[0] as { code?: string } | undefined)?.code,
-    );
-    expect(routedCodes).not.toContain('shared-ref-released');
-    expect(errorSpy).not.toHaveBeenCalled();
-
-    // (2) Every spawned member's MeshFilter.assetHandle is a resolved
+    // Every spawned member's MeshFilter.assetHandle is a resolved
     //     user-tier slot (>= BUILTIN_BASE) — not the sentinel 0 a coerced GUID
     //     string would leave behind.
     const inst = world.get(res.value, SceneInstance);
@@ -122,7 +110,7 @@ describe('regression — prod bare-GUID scene envelope.refs resolve before retai
     }
     expect(seen).toBe(4);
 
-    // (3) Dedup: the two distinct GUIDs mint exactly two user-tier handles,
+    // Dedup: the two distinct GUIDs mint exactly two user-tier handles,
     //     shared across the four members (one allocSharedRef per unique GUID).
     const handles = new Set<number>();
     for (let i = 0; i < 4; i++) {

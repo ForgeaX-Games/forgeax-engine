@@ -11,7 +11,10 @@ function mesh(over: Partial<MeshAsset>): Asset {
     kind: 'mesh',
     vertices: new Float32Array(0),
     attributes: {},
-    submeshes: [{ indexOffset: 0, indexCount: 0, vertexCount: 0, topology: 'triangle-list' }],
+    submeshes: [
+      { indexOffset: 0, indexCount: 0, vertexCount: 0, topology: 'triangle-list', materialSlot: 0 },
+    ],
+    materialSlots: [{ slotName: 'Default' }],
     ...over,
   } as MeshAsset;
 }
@@ -34,7 +37,15 @@ describe('validateMeshPayload', () => {
     const e = validateMeshPayload(
       mesh({
         vertices: new Float32Array(12),
-        submeshes: [{ indexOffset: 0, indexCount: 0, vertexCount: 1, topology: 'triangle-strip' }],
+        submeshes: [
+          {
+            indexOffset: 0,
+            indexCount: 0,
+            vertexCount: 1,
+            topology: 'triangle-strip',
+            materialSlot: 0,
+          },
+        ],
       }),
     );
     expect(e?.code).toBe('asset-invalid-value');
@@ -45,7 +56,9 @@ describe('validateMeshPayload', () => {
     const e = validateMeshPayload(
       mesh({
         vertices: new Float32Array(0),
-        submeshes: [{ indexOffset: 0, indexCount: 0, vertexCount: 0, topology: 'line-list' }],
+        submeshes: [
+          { indexOffset: 0, indexCount: 0, vertexCount: 0, topology: 'line-list', materialSlot: 0 },
+        ],
       }),
     );
     expect(e?.code).toBe('asset-invalid-value');
@@ -57,7 +70,15 @@ describe('validateMeshPayload', () => {
       mesh({
         vertices: new Float32Array(36), // 3 verts * 12
         indices: Uint16Array.of(0, 1, 2),
-        submeshes: [{ indexOffset: 0, indexCount: 6, vertexCount: 3, topology: 'triangle-list' }],
+        submeshes: [
+          {
+            indexOffset: 0,
+            indexCount: 6,
+            vertexCount: 3,
+            topology: 'triangle-list',
+            materialSlot: 0,
+          },
+        ],
       }),
     );
     expect(e?.code).toBe('mesh-submesh-index-range-out-of-bounds');
@@ -67,7 +88,15 @@ describe('validateMeshPayload', () => {
     const e = validateMeshPayload(
       mesh({
         vertices: new Float32Array(13),
-        submeshes: [{ indexOffset: 0, indexCount: 0, vertexCount: 1, topology: 'triangle-list' }],
+        submeshes: [
+          {
+            indexOffset: 0,
+            indexCount: 0,
+            vertexCount: 1,
+            topology: 'triangle-list',
+            materialSlot: 0,
+          },
+        ],
       }),
     );
     expect(e?.code).toBe('mesh-vertex-stride-mismatch');
@@ -78,7 +107,15 @@ describe('validateMeshPayload', () => {
       mesh({
         vertices: new Float32Array(24), // 2 vertices
         indices: Uint16Array.of(0, 1, 5), // maxIndex 5 -> expects 6 verts
-        submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 2, topology: 'triangle-list' }],
+        submeshes: [
+          {
+            indexOffset: 0,
+            indexCount: 3,
+            vertexCount: 2,
+            topology: 'triangle-list',
+            materialSlot: 0,
+          },
+        ],
       }),
     );
     expect(e?.code).toBe('mesh-vertex-stride-mismatch');
@@ -91,7 +128,15 @@ describe('validateMeshPayload', () => {
         mesh({
           vertices: new Float32Array(36), // 3 vertices
           indices: Uint16Array.of(0, 1, 2),
-          submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+          submeshes: [
+            {
+              indexOffset: 0,
+              indexCount: 3,
+              vertexCount: 3,
+              topology: 'triangle-list',
+              materialSlot: 0,
+            },
+          ],
         }),
       ),
     ).toBeNull();
@@ -102,7 +147,15 @@ describe('validateMeshPayload', () => {
       validateMeshPayload(
         mesh({
           vertices: new Float32Array(24),
-          submeshes: [{ indexOffset: 0, indexCount: 0, vertexCount: 2, topology: 'triangle-list' }],
+          submeshes: [
+            {
+              indexOffset: 0,
+              indexCount: 0,
+              vertexCount: 2,
+              topology: 'triangle-list',
+              materialSlot: 0,
+            },
+          ],
         }),
       ),
     ).toBeNull();
@@ -112,8 +165,7 @@ describe('validateMeshPayload', () => {
 function tileset(over: Partial<TilesetAsset>): TilesetAsset {
   return {
     kind: 'tileset',
-    guid: 'ts-guid',
-    atlases: [1 as never],
+    atlases: ['atlas-guid'],
     tileWidth: 16,
     tileHeight: 16,
     columns: 4,

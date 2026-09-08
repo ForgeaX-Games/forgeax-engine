@@ -1753,7 +1753,7 @@ function sharedInputsContract(overrides = {}) {
   contract.timingRoster = [];
   contract.sharedInputs = {
     producer: 'shared-app-inputs',
-    consumer: 'app-shard',
+    consumers: ['app-shard'],
     schemaVersion: 1,
     manifestPath: 'shared-app-inputs/manifest.json',
     inventory: ['shared-app-inputs/assets/catalog.json', 'shared-app-inputs/shaders/manifest.json'],
@@ -1792,8 +1792,23 @@ test('w5: shared classes reject an undeclared consumer', () => {
     assert.notEqual(result.exitCode, 0);
     const error = JSON.parse(result.stdout);
     assert.equal(error.code, 'ci-artifact-shared-consumer-unknown');
-    assert.equal(error.expected, 'app-shard');
+    assert.deepEqual(error.expected, ['app-shard']);
     assert.match(error.hint, /shared-app-inputs/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('w5: shared classes allow only explicitly declared read-only consumers', () => {
+  const contract = sharedInputsContract();
+  contract.consumers['smoke-fleet'] = {
+    requiredArtifactClasses: ['engine-dist', 'shared-engine-shaders'],
+  };
+  contract.sharedInputs.readOnlyConsumers = ['smoke-fleet'];
+  const { dir, fp } = tmpContract(contract);
+  try {
+    const result = runChecker([fp]);
+    assert.equal(result.exitCode, 0, result.stderr);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

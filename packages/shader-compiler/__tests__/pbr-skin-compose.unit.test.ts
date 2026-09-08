@@ -34,7 +34,9 @@ function loadEngineImports(): Record<string, string> {
 
   return {
     'forgeax_view::common': read('common.wgsl'),
+    'forgeax_view::fog': read('fog.wgsl'),
     'forgeax_pbr::brdf': read('brdf.wgsl'),
+    'forgeax_pbr::temporal': read('pbr-temporal.wgsl'),
     'forgeax_pbr::ibl_shared': read('ibl-shared.wgsl'),
     'forgeax_pbr::ibl_sampling': read('ibl-sampling.wgsl'),
     'forgeax_pbr::tbn': read('tbn.wgsl'),

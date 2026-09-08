@@ -1,5 +1,6 @@
 import type { Component } from '@forgeax/engine-ecs';
-import { validateProfileComponents } from '@forgeax/engine-ecs';
+import { validateProfileComponents } from '@forgeax/engine-ecs/externalization';
+import { componentSchema } from '@forgeax/engine-ecs/internal';
 import { err, ok, type Result } from '@forgeax/engine-types';
 export interface ReplicationLimits {
   readonly maxMessageBytes: number;
@@ -102,7 +103,7 @@ export function defineReplication(
     },
     components: options.components.map((component) => ({
       name: component.name,
-      schema: component.schema,
+      schema: componentSchema(component),
     })),
     limits,
   });

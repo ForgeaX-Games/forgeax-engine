@@ -1,6 +1,7 @@
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
 
-#import forgeax_view::common::{View, Mesh, view, meshes, sampleMaterialTexture}
+#import forgeax_view::common::{View, FogViewParams, FogRay, Mesh, view, meshes, sampleMaterialTexture}
+#import forgeax_view::fog::{apply_fog}
 
 // @forgeax/engine-shader - msdf-text.wgsl
 // (feat-20260531-world-space-msdf-text-rendering M5 / w20).
@@ -50,10 +51,6 @@
 //                                                               f32 + atlas dims)
 //   @group(1) @binding(1) baseColorSampler           sampler   (atlas sampler)
 //   @group(1) @binding(2) baseColorTexture           texture_2d<f32> (MSDF atlas)
-//   @group(1) @binding(3) metallicRoughnessSampler   sampler   (UNUSED)
-//   @group(1) @binding(4) metallicRoughnessTexture   texture_2d<f32> (UNUSED)
-//   @group(1) @binding(5) normalSampler              sampler   (UNUSED)
-//   @group(1) @binding(6) normalTexture              texture_2d<f32> (UNUSED)
 //   @group(2) @binding(0) meshes                     storage   (msdf-text reads
 //                                                               meshes[idx]
 //                                                               .worldFromLocal
@@ -69,27 +66,13 @@ struct Material {
   // dimensions so screenPxRange can convert atlas units to screen pixels.
   // distanceRange in .x; atlasSize in .yz; .w padding (std140 vec4 align).
   distanceRange : vec4<f32>,
-  textureScalePadding : array<vec4<f32>, 3>,
-  baseColorUvScale : vec2<f32>,
-  metallicRoughnessUvScale : vec2<f32>,
-  normalUvScale : vec2<f32>,
-  emissiveUvScale : vec2<f32>,
-  occlusionUvScale : vec2<f32>,
+  baseColorTextureCoordinatesTransform : vec4<f32>,
+  baseColorTextureCoordinatesMetadata : vec4<f32>,
 };
 
 @group(1) @binding(0) var<uniform> material : Material;
 @group(1) @binding(1) var baseColorSampler : sampler;
 @group(1) @binding(2) var baseColorTexture : texture_2d<f32>;
-// Unused but declared so the BindGroupLayout binding-set matches the shared
-// PBR / sprite layout byte-for-byte (D-1 candidate b -- 4 placeholder slots
-// bound to pipelineState.defaultSampler / defaultWhiteTextureView at the
-// host side; this shader never references them but WGPU pipeline validation
-// requires layout congruence).
-@group(1) @binding(3) var metallicRoughnessSampler : sampler;
-@group(1) @binding(4) var metallicRoughnessTexture : texture_2d<f32>;
-@group(1) @binding(5) var normalSampler : sampler;
-@group(1) @binding(6) var normalTexture : texture_2d<f32>;
-
 // Preserve filtering reflection for the bound texture passed to the helper.
 fn materialTextureFilteringWitness() {
   let base = baseColorTexture;
@@ -106,6 +89,7 @@ struct VsIn {
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
   @location(0) uv         : vec2<f32>,
+  @location(1) worldPos   : vec3<f32>,
 };
 
 @vertex
@@ -140,6 +124,7 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   var out : VsOut;
   out.clip = view.worldViewProj * vec4<f32>(world_pos, 1.0);
   out.uv = in.uv;
+  out.worldPos = world_pos;
   return out;
 }
 
@@ -161,12 +146,28 @@ fn screen_px_range(uv : vec2<f32>) -> f32 {
   return max(0.5 * dot(unit_range, screen_tex_size), 1.0);
 }
 
+fn applySceneFog(viewParams : View, color : vec3<f32>, alpha : f32, worldPos : vec3<f32>) -> vec4<f32> {
+  var origin = viewParams.cameraPos;
+  var direction = normalize(worldPos - origin);
+  var rayDistance = length(worldPos - origin);
+  if (viewParams.temporalProjection.z >= 0.5) {
+    let nearH = viewParams.inverseViewProj * vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    let farH = viewParams.inverseViewProj * vec4<f32>(0.0, 0.0, 1.0, 1.0);
+    let nearPoint = nearH.xyz / nearH.w;
+    let farPoint = farH.xyz / farH.w;
+    direction = normalize(farPoint - nearPoint);
+    origin = worldPos - direction * dot(worldPos - viewParams.cameraPos, direction);
+    rayDistance = max(dot(worldPos - origin, direction), 0.0);
+  }
+  return apply_fog(viewParams.fog, FogRay(origin, direction, rayDistance), vec4<f32>(color, alpha));
+}
+
 // fs_main_hdr: outputs linear premultiplied alpha for the rgba16float
 // offscreen target (D-7 / R-7). The tonemap fullscreen pass handles sRGB
 // encoding; writing hdrColor lets the bloom bright-pass catch the text.
 @fragment
 fn fs_main_hdr(in : VsOut) -> @location(0) vec4<f32> {
-  let msd = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv, material.baseColorUvScale).rgb;
+  let msd = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv, material.baseColorTextureCoordinatesMetadata.zw).rgb;
   let sd = median(msd.r, msd.g, msd.b);
   // wiki section 3.3: opacity = clamp((sd - 0.5) * screenPxRange + 0.5, 0, 1)
   // (linear ramp; equivalent to smoothstep(0.5 - delta, 0.5 + delta, sd) at
@@ -175,7 +176,8 @@ fn fs_main_hdr(in : VsOut) -> @location(0) vec4<f32> {
   let alpha = clamp(dist + 0.5, 0.0, 1.0) * material.tintColor.a;
   // Premultiplied output: rgb already multiplied by alpha for srcFactor=ONE /
   // dstFactor=ONE_MINUS_SRC_ALPHA (wiki section 6 SSOT).
-  return vec4<f32>(material.tintColor.rgb * alpha, alpha);
+  let fogged = applySceneFog(view, material.tintColor.rgb, alpha, in.worldPos);
+  return vec4<f32>(fogged.rgb * fogged.a, fogged.a);
 }
 
 // linear_to_srgb: per-channel IEC 61966-2-1 transfer function for the LDR
@@ -191,15 +193,16 @@ fn linear_to_srgb(linear : f32) -> f32 {
 // is not hardware-sRGB-encoded), alpha stays linear through the blend.
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  let msd = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv, material.baseColorUvScale).rgb;
+  let msd = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv, material.baseColorTextureCoordinatesMetadata.zw).rgb;
   let sd = median(msd.r, msd.g, msd.b);
   let dist = (sd - 0.5) * screen_px_range(in.uv);
   let alpha = clamp(dist + 0.5, 0.0, 1.0) * material.tintColor.a;
-  let premult = material.tintColor.rgb * alpha;
+  let fogged = applySceneFog(view, material.tintColor.rgb, alpha, in.worldPos);
+  let premult = fogged.rgb * fogged.a;
   return vec4<f32>(
     linear_to_srgb(premult.r),
     linear_to_srgb(premult.g),
     linear_to_srgb(premult.b),
-    alpha,
+    fogged.a,
   );
 }

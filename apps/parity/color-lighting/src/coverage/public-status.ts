@@ -16,6 +16,37 @@ export interface PublicParityStatusInput {
   readonly missingPipelineIds?: readonly string[];
 }
 
+export interface InjectedVisualEvidenceStatusInput {
+  readonly caseId: string;
+  readonly status?: unknown;
+  readonly verdict?: unknown;
+}
+
+export function mergeInjectedVisualEvidenceStatuses(
+  caseStatuses: Readonly<Record<string, MatrixStatus>>,
+  caseBackendStatuses: Readonly<Record<string, Readonly<Record<string, MatrixStatus>>>>,
+  inputs: readonly InjectedVisualEvidenceStatusInput[],
+): {
+  readonly caseStatuses: Readonly<Record<string, MatrixStatus>>;
+  readonly caseBackendStatuses: Readonly<Record<string, Readonly<Record<string, MatrixStatus>>>>;
+} {
+  const mergedCaseStatuses: Record<string, MatrixStatus> = { ...caseStatuses };
+  const mergedCaseBackendStatuses: Record<string, Record<string, MatrixStatus>> = Object.fromEntries(
+    Object.entries(caseBackendStatuses).map(([caseId, statuses]) => [caseId, { ...statuses }]),
+  );
+  for (const input of inputs) {
+    const status: MatrixStatus = input.status === 'complete' && input.verdict === 'passed'
+      ? 'pass'
+      : 'failed';
+    mergedCaseStatuses[input.caseId] = status;
+    mergedCaseBackendStatuses[input.caseId] = {
+      ...(mergedCaseBackendStatuses[input.caseId] ?? {}),
+      'browser-webgpu': status,
+    };
+  }
+  return { caseStatuses: mergedCaseStatuses, caseBackendStatuses: mergedCaseBackendStatuses };
+}
+
 function backendMatrixStatus(
   caseStatus: MatrixStatus,
   observedBackends: Readonly<Record<string, MatrixStatus>> | undefined,

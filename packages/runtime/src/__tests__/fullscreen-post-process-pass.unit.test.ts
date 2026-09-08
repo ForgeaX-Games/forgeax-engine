@@ -9,9 +9,11 @@
 //    'r32float' -> sampleType='unfilterable-float';
 //    everything else -> sampleType='float'.
 
-import type { PipelineSpec } from '@forgeax/engine-render/internal';
-import { buildBindGroupLayoutDescriptor } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
+import {
+  buildBindGroupLayoutDescriptor,
+  type PipelineSpec,
+} from '../../../render/src/pipeline-spec';
 
 function makeSpec(attachments: Partial<PipelineSpec['attachments']>): PipelineSpec {
   return {

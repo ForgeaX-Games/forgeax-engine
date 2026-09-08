@@ -1,9 +1,11 @@
 // @forgeax/engine-assets-runtime -- material validation collaboration module (feat-20260705-runtime-tier2-decomposition M1 / w5, D-4). Free functions taking the AssetRegistry instance as first param; extracted from the class body, logic byte-preserved.
 
+import type { CookedMaterialRecord } from '@forgeax/engine-pack';
 import {
   AssetError,
-  derive,
+  createMaterialError,
   type MaterialAsset,
+  type MaterialError,
   type MaterialParameter,
 } from '@forgeax/engine-types';
 import type { AssetRegistry } from '../asset-registry';
@@ -107,6 +109,33 @@ export function validateMaterialPasses(
     });
   }
 
+  return null;
+}
+
+export interface MaterialEffectiveRootIdentity {
+  readonly guid: string;
+  readonly layoutIdentity: string;
+}
+
+export function validateMaterialCookIdentity(
+  record: Pick<CookedMaterialRecord, 'guid' | 'receipt'>,
+  root: MaterialEffectiveRootIdentity,
+): MaterialError | null {
+  const actual = record.receipt.identity.layoutIdentity;
+  if (
+    actual !== root.layoutIdentity ||
+    record.receipt.derivedInterface.layoutIdentity !== root.layoutIdentity
+  ) {
+    return createMaterialError('material-derived-interface-mismatch', {
+      code: 'material-derived-interface-mismatch',
+      stage: 'extract',
+      material: record.guid,
+      layoutIdentity: root.layoutIdentity,
+      expectedIdentity: root.layoutIdentity,
+      actualIdentity: actual,
+      action: 'recook',
+    });
+  }
   return null;
 }
 
@@ -275,7 +304,14 @@ export function validateParamType(
         value.every((v) => typeof v === 'number')
       );
     case 'texture':
-      return typeof value === 'object' && value !== null && !Array.isArray(value);
+      // A cooked pack may keep an asset GUID as the compact texture
+      // shorthand. The render material resolver expands that reference at
+      // the resource boundary; rejecting it here makes authored packs fail
+      // before the same value can reach the resolver.
+      return (
+        typeof value === 'string' ||
+        (typeof value === 'object' && value !== null && !Array.isArray(value))
+      );
     case 'bool':
       return typeof value === 'boolean';
     default:
@@ -345,5 +381,5 @@ export function materialShaderTextureFieldNames(
 ): ReadonlySet<string> | undefined {
   const lookup = registry.shaderRegistry.findMaterialArtifact(shaderId);
   if (!lookup.ok) return undefined;
-  return derive(lookup.value.paramSchema).textureFieldNames;
+  return lookup.value.paramSchemaProjection.derivedInterface.textureFieldNames;
 }

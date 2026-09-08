@@ -5,7 +5,7 @@
 
 import { World } from '@forgeax/engine-ecs';
 import type { Asset, Handle, MaterialAsset } from '@forgeax/engine-types';
-import { BUILTIN_BASE, toShared } from '@forgeax/engine-types';
+import { BUILTIN_BASE, handleGeneration, handleSlot, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { HANDLE_CUBE } from '../handles';
 import { resolveAssetHandle, walkMaterialPassesOverSharedRefs } from '../resolve-asset-handle';
@@ -47,6 +47,67 @@ describe('resolveAssetHandle two-tier dispatch', () => {
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect((res.error as { code: string }).code).toBe('shared-ref-stale');
+  });
+
+  it('forwards exact stale detail without exposing the replacement payload', () => {
+    const world = new World();
+    const oldPayload = { kind: 'material', values: { baseColor: [1, 0, 0] } } as unknown as Asset;
+    const oldHandle = world.allocSharedRef('MaterialAsset', oldPayload);
+    const oldSlot = handleSlot(oldHandle);
+    const oldGeneration = handleGeneration(oldHandle);
+
+    expect(world.sharedRefs.release(oldHandle).ok).toBe(true);
+    const replacementPayload = {
+      kind: 'material',
+      values: { baseColor: [0, 0, 1] },
+    } as unknown as Asset;
+    const replacementHandle = world.allocSharedRef('MaterialAsset', replacementPayload);
+
+    expect(handleSlot(replacementHandle)).toBe(oldSlot);
+    expect(handleGeneration(replacementHandle)).toBe(oldGeneration + 1);
+
+    const res = resolveAssetHandle(world, oldHandle as Handle<string, 'shared'>);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error.code).toBe('shared-ref-stale');
+    expect(res.error.detail).toEqual({
+      slot: oldSlot,
+      expectedGeneration: oldGeneration,
+      actualGeneration: handleGeneration(replacementHandle),
+    });
+    expect('value' in res.error).toBe(false);
+
+    const foreignModuleWorld = {
+      sharedRefs: {
+        resolve: () => ({
+          ok: false,
+          error: {
+            code: 'shared-ref-stale' as const,
+            detail: {
+              slot: oldSlot,
+              expectedGeneration: oldGeneration,
+              actualGeneration: handleGeneration(replacementHandle),
+            },
+          },
+        }),
+      },
+    } as unknown as World;
+    const bridged = resolveAssetHandle(foreignModuleWorld, oldHandle as Handle<string, 'shared'>);
+    expect(bridged).toEqual({
+      ok: false,
+      error: {
+        code: 'shared-ref-stale',
+        detail: {
+          slot: oldSlot,
+          expectedGeneration: oldGeneration,
+          actualGeneration: handleGeneration(replacementHandle),
+        },
+      },
+    });
+
+    const replacement = resolveAssetHandle(world, replacementHandle as Handle<string, 'shared'>);
+    expect(replacement).toMatchObject({ ok: true, value: replacementPayload });
+    expect(replacement.ok && replacement.value).not.toBe(oldPayload);
   });
 
   it('errors with asset-not-found for an unallocated user-tier slot', () => {
@@ -106,7 +167,7 @@ describe('walkMaterialPassesOverSharedRefs', () => {
     const child = mat({
       parent: 'p-guid' as never,
       parameters: [
-        { name: 'roughness', type: 'f32', static: true },
+        { name: 'roughness', type: 'f32' },
         { name: 'normalTexture', type: 'texture' },
       ],
     });

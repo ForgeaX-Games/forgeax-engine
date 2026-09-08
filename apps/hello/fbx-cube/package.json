@@ -50,6 +50,7 @@
     "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/apps-shared": "workspace:*",
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",

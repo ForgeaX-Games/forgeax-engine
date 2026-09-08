@@ -4,8 +4,8 @@
 // state directly through registerPackage (Risk-2: no pack-index fetch needed).
 //
 // Coverage:
-//   AC-01 — single-asset package: resolveName === basename(path); the stored
-//           Asset POD carries no `name` property (name is never on the payload).
+//   AC-01 — single-asset package: an explicit stored name wins; basename(path)
+//           remains the fallback. The Asset POD carries no `name` property.
 //   AC-02 — multi-asset package: resolveName returns each entry's stored name.
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
@@ -41,6 +41,18 @@ describe('resolveName single-asset package (AC-01)', () => {
     const stored = reg.lookup(SINGLE_GUID);
     expect(stored).toBeDefined();
     expect(Object.hasOwn(stored as object, 'name')).toBe(false);
+  });
+
+  it('preserves an explicit authored name for a single-member pack', () => {
+    const reg = makeRegistry();
+    reg.catalog(parseGuid(SINGLE_GUID), sampler);
+    reg._registerPackage(
+      'assets/Materials.pack.json',
+      [SINGLE_GUID],
+      new Map([[SINGLE_GUID, 'NewMaterial']]),
+    );
+
+    expect(reg.resolveName(SINGLE_GUID)).toBe('NewMaterial');
   });
 });
 

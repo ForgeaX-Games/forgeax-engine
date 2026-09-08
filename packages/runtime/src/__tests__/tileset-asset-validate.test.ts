@@ -25,11 +25,9 @@
 import { AssetRegistry, validateTilesetPayload } from '@forgeax/engine-assets-runtime';
 import {
   AssetError,
-  type Handle,
   type TilesetAsset,
   type TilesetTileCollider,
   type TilesetTileEntry,
-  toShared,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
@@ -38,15 +36,10 @@ function makeAssetRegistry(): AssetRegistry {
   return new AssetRegistry(makeMockShaderRegistry());
 }
 
-function makeAtlasHandle(id: number): Handle<'TextureAsset', 'shared'> {
-  return toShared<'TextureAsset'>(id);
-}
-
 function makeTileset(overrides: Partial<TilesetAsset> = {}): TilesetAsset {
   return {
     kind: 'tileset',
-    guid: 'test/tileset',
-    atlases: [makeAtlasHandle(101)],
+    atlases: ['test/atlas'],
     tileWidth: 16,
     tileHeight: 16,
     columns: 2,
@@ -102,7 +95,7 @@ describe('validateTilesetPayload — M0 baseline (region + regionIndex)', () => 
     if (err?.detail !== undefined && 'regionIndex' in err.detail) {
       expect(err.detail.regionIndex).toBe(5);
       expect(err.detail.regionCount).toBe(1);
-      expect(err.detail.tilesetGuid).toBe('test/tileset');
+      expect(err.detail.tilesetGuid).toBe('<no-guid>');
     } else {
       expect.fail('expected regionIndex detail');
     }
@@ -136,7 +129,7 @@ describe('AssetRegistry.catalog<TilesetAsset> wires validateTilesetPayload', () 
       regions: [{ x: 0, y: 0, width: 16, height: 16 }],
       tiles: [{ regionIndex: 99 }],
     });
-    const result = registry.catalog<TilesetAsset>(asset.guid, asset);
+    const result = registry.catalog<TilesetAsset>('test/tileset', asset);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('tileset-region-index-out-of-range');
@@ -146,7 +139,7 @@ describe('AssetRegistry.catalog<TilesetAsset> wires validateTilesetPayload', () 
   it('accepts a valid tileset', () => {
     const registry = makeAssetRegistry();
     const asset = makeTileset();
-    const result = registry.catalog<TilesetAsset>(asset.guid, asset);
+    const result = registry.catalog<TilesetAsset>('test/tileset', asset);
     expect(result.ok).toBe(true);
   });
 });
@@ -173,7 +166,7 @@ function expectMalformed(
     if (opts.tileEntryIndex !== undefined) {
       expect(d.tileEntryIndex).toBe(opts.tileEntryIndex);
     }
-    expect(d.tilesetGuid).toBe('test/tileset');
+    expect(d.tilesetGuid).toBe('<no-guid>');
   } else {
     expect.fail(`expected tileset-tile-entry-malformed detail; got ${JSON.stringify(d)}`);
   }
@@ -626,7 +619,7 @@ describe('AssetRegistry.register<TilesetAsset> wires M1 fail-fast', () => {
     const asset = makeTileset({
       tiles: [{ regionIndex: 0, widthCells: 0 }, { regionIndex: 1 }],
     });
-    const result = registry.catalog<TilesetAsset>(asset.guid, asset);
+    const result = registry.catalog<TilesetAsset>('test/tileset', asset);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('tileset-tile-entry-malformed');
@@ -636,7 +629,7 @@ describe('AssetRegistry.register<TilesetAsset> wires M1 fail-fast', () => {
   it('rejects atlases=[] via Result.err', () => {
     const registry = makeAssetRegistry();
     const asset = makeTileset({ atlases: [] });
-    const result = registry.catalog<TilesetAsset>(asset.guid, asset);
+    const result = registry.catalog<TilesetAsset>('test/tileset', asset);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('tileset-tile-entry-malformed');

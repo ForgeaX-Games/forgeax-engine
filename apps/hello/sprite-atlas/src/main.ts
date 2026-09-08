@@ -18,9 +18,9 @@
 //   - record-stage fold operator (this feat M1 / w4) -- 10000 entries with
 //     equal (Layer.value, pos z, materialHandle) collapse into one fold
 //     bucket -> one drawIndexed(indexCount, 10000).
-//   - foldedDraws metric (this feat M3 / w13) -- exposed via
-//     `renderer.metrics.snapshot()['render.instancing.foldedDraws']`; the
-//     smoke (and verify-stage M4 verifier) reads it to confirm fold engaged.
+//   - foldedDraws metric (this feat M3 / w13) -- retained as host-owned
+//     evidence; the smoke (and verify-stage M4 verifier) reads it to confirm
+//     fold engaged without widening the Renderer facade.
 //
 // charter mapping:
 //   F1 -- 4-step recipe lives at the top of bootstrap().
@@ -30,23 +30,22 @@
 //   P5 -- atlas PNG + sidecar pre-generated; demo build chain has zero
 //         atlas-tool dependency.
 
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
-import { ok as okResult } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
 import { CAMERA_PROJECTION_ORTHOGRAPHIC } from '@forgeax/engine-render';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { SpriteRegionOverride, SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 
-import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
+import { ok as okResult, type MaterialAsset, type TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const ATLAS_GUID = '0e8657b1-c0ab-4940-a4f6-27fcd976823c';
-const PACK_INDEX_URL = '/pack-index.json';
 
 // 10000 independent sprite entities arranged in a 100x100 grid. Each gets
 // its own Transform / MeshFilter / MeshRenderer / SpriteRegionOverride;
@@ -85,27 +84,22 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     reportAppError(appRes.error);
     return;
   }
   const app: App = appRes.value;
-  console.warn(`[sprite-atlas] backend=${app.renderer.backend}`);
+  console.warn(`[sprite-atlas] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
-  const ready = await app.renderer.ready;
-  if (!ready.ok) {
-    console.error('[sprite-atlas] renderer.ready failed:', ready.error.code, ready.error.hint);
+
+  const assets = app.assets;
+  if (assets === undefined || assets === null) {
+    console.error('[sprite-atlas] AssetRegistry is unavailable (no usable backend)');
     return;
   }
-
-  const assets = app.renderer.assets;
-  if (assets === null) {
-    console.error('[sprite-atlas] AssetRegistry is null (no usable backend)');
-    return;
-  }
-  assets.configurePackIndex(PACK_INDEX_URL);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   const world = app.world;
 

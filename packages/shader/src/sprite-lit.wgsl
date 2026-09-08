@@ -1,7 +1,8 @@
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
 #define_import_path forgeax_material::sprite-lit
 
-#import forgeax_view::common::{View, Mesh, InstanceData, PointLight, SpotLight, view, meshes, instances, pointLightsBuffer, spotLightsBuffer, sampleMaterialTexture}
+#import forgeax_view::common::{View, FogViewParams, FogRay, Mesh, InstanceData, PointLight, SpotLight, view, meshes, instances, pointLightsBuffer, spotLightsBuffer, sampleMaterialTexture, packSceneTemporal}
+#import forgeax_view::fog::{apply_fog}
 
 // @forgeax/engine-shader - sprite-lit.wgsl
 // (tweak-20260701-sprite-lit-flat-default-drop-ndotl-for-2d).
@@ -46,10 +47,6 @@
 //                                                             slicesAndMode)
 //   @group(1) @binding(1) baseColorSampler           sampler
 //   @group(1) @binding(2) baseColorTexture           texture_2d<f32>
-//   @group(1) @binding(3) metallicRoughnessSampler   sampler          (UNUSED)
-//   @group(1) @binding(4) metallicRoughnessTexture   texture_2d<f32>  (UNUSED)
-//   @group(1) @binding(5) normalSampler              sampler          (UNUSED)
-//   @group(1) @binding(6) normalTexture              texture_2d<f32>  (UNUSED)
 //   @group(2) @binding(0) meshes                     storage
 //   @group(3) @binding(0) instances                  storage (per-instance
 //                                                             localFromInstance
@@ -63,27 +60,13 @@ struct Material {
   region        : vec4<f32>,
   pivotAndSize  : vec4<f32>,
   slicesAndMode : vec4<f32>,
-  textureScalePadding : vec4<f32>,
-  baseColorUvScale : vec2<f32>,
-  metallicRoughnessUvScale : vec2<f32>,
-  normalUvScale : vec2<f32>,
-  emissiveUvScale : vec2<f32>,
-  occlusionUvScale : vec2<f32>,
+  baseColorTextureCoordinatesTransform : vec4<f32>,
+  baseColorTextureCoordinatesMetadata : vec4<f32>,
 };
 
 @group(1) @binding(0) var<uniform> material : Material;
 @group(1) @binding(1) var baseColorSampler : sampler;
 @group(1) @binding(2) var baseColorTexture : texture_2d<f32>;
-// Unused but declared so the BindGroupLayout binding-set matches the
-// shared PBR layout byte-for-byte (4 placeholder slots bound to
-// pipelineState.defaultSampler / defaultWhiteTextureView at the host side;
-// sprite.wgsl L118-129 same shape). sprite-lit MUST NOT sample these in
-// fs_main / fs_main_hdr.
-@group(1) @binding(3) var metallicRoughnessSampler : sampler;
-@group(1) @binding(4) var metallicRoughnessTexture : texture_2d<f32>;
-@group(1) @binding(5) var normalSampler : sampler;
-@group(1) @binding(6) var normalTexture : texture_2d<f32>;
-
 // Preserve filtering reflection for the bound texture passed to the helper.
 fn materialTextureFilteringWitness() {
   let base = baseColorTexture;
@@ -109,8 +92,12 @@ struct VsOut {
   @location(1)       worldPos : vec3<f32>,
 };
 
-@vertex
-fn vs_main(in : VsIn, @builtin(instance_index) idx : u32, @builtin(vertex_index) vertex_index : u32) -> VsOut {
+struct SpriteVertex {
+  posLocal : vec3<f32>,
+  uvAtlas : vec2<f32>,
+};
+
+fn resolveSpriteVertex(in : VsIn, vertex_index : u32) -> SpriteVertex {
   // Body is the slice-aware sprite vertex stage byte-for-byte ported from
   // sprite.wgsl (feat-20260520 M-3 / w19 + feat-20260527 M3 / w15). The
   // 9-slice early-out via slicesAndMode == 0 sentinel keeps the legacy
@@ -151,13 +138,22 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32, @builtin(vertex_index)
     pos_local = vec3<f32>((uv_eff - pivot) * size, 0.0);
     uv_atlas = uv_eff * material.region.zw + material.region.xy;
   }
+  var out : SpriteVertex;
+  out.posLocal = pos_local;
+  out.uvAtlas = uv_atlas;
+  return out;
+}
+
+@vertex
+fn vs_main(in : VsIn, @builtin(instance_index) idx : u32, @builtin(vertex_index) vertex_index : u32) -> VsOut {
+  let vertex = resolveSpriteVertex(in, vertex_index);
   // AC-11 instances path day-1: the world transform is meshes[0].worldFromLocal
   // * instances[idx].localFromInstance * vec4(pos_local, 1.0) -- same chain
   // sprite.wgsl + default-standard-pbr.wgsl use.
-  let world = meshes[0].worldFromLocal * instances[idx].localFromInstance * vec4<f32>(pos_local, 1.0);
+  let world = meshes[0].worldFromLocal * instances[idx].localFromInstance * vec4<f32>(vertex.posLocal, 1.0);
   var out : VsOut;
   out.clip = view.worldViewProj * world;
-  out.uv_atlas = uv_atlas;
+  out.uv_atlas = vertex.uvAtlas;
   out.worldPos = world.xyz;
   return out;
 }
@@ -225,15 +221,32 @@ fn spriteLitShadeAccum(albedo : vec3<f32>, worldPos : vec3<f32>) -> vec3<f32> {
   return lit;
 }
 
+fn applySceneFog(viewParams : View, color : vec3<f32>, alpha : f32, worldPos : vec3<f32>) -> vec4<f32> {
+  var origin = viewParams.cameraPos;
+  var direction = normalize(worldPos - origin);
+  var rayDistance = length(worldPos - origin);
+  if (viewParams.temporalProjection.z >= 0.5) {
+    let nearH = viewParams.inverseViewProj * vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    let farH = viewParams.inverseViewProj * vec4<f32>(0.0, 0.0, 1.0, 1.0);
+    let nearPoint = nearH.xyz / nearH.w;
+    let farPoint = farH.xyz / farH.w;
+    direction = normalize(farPoint - nearPoint);
+    origin = worldPos - direction * dot(worldPos - viewParams.cameraPos, direction);
+    rayDistance = max(dot(worldPos - origin, direction), 0.0);
+  }
+  return apply_fog(viewParams.fog, FogRay(origin, direction, rayDistance), vec4<f32>(color, alpha));
+}
+
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  let texel = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv_atlas, material.baseColorUvScale);
+  let texel = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv_atlas, material.baseColorTextureCoordinatesMetadata.zw);
   let albedo4 = texel * material.colorTint;
   let lit = spriteLitShadeAccum(albedo4.rgb, in.worldPos);
   // Strict clamp 0..1 before premultiplied alpha multiply keeps the LDR
   // path bounded even when a scene stacks many lights.
   let lit_rgba = clamp(vec4<f32>(lit, albedo4.a), vec4<f32>(0.0), vec4<f32>(1.0));
-  let premult = vec4<f32>(lit_rgba.rgb * lit_rgba.a, lit_rgba.a);
+  let fogged = applySceneFog(view, lit_rgba.rgb, lit_rgba.a, in.worldPos);
+  let premult = vec4<f32>(fogged.rgb * fogged.a, fogged.a);
   // LDR target is bgra8unorm; encode rgb via the sRGB transfer in-shader.
   return vec4<f32>(
     linear_to_srgb(premult.r),
@@ -245,14 +258,50 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_main_hdr(in : VsOut) -> @location(0) vec4<f32> {
-  let texel = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv_atlas, material.baseColorUvScale);
+  let texel = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv_atlas, material.baseColorTextureCoordinatesMetadata.zw);
   let albedo4 = texel * material.colorTint;
   let lit = spriteLitShadeAccum(albedo4.rgb, in.worldPos);
   // HDR variant: do NOT clamp the lit output to [0, 1]; let the tonemap
   // pass absorb HDR values > 1. Alpha stays clamped because the premult
   // math requires alpha in [0, 1].
   let alpha = clamp(albedo4.a, 0.0, 1.0);
-  return vec4<f32>(lit * alpha, alpha);
+  let fogged = applySceneFog(view, lit, alpha, in.worldPos);
+  return vec4<f32>(fogged.rgb * fogged.a, fogged.a);
+}
+
+struct TemporalVsOut {
+  @builtin(position) clip : vec4<f32>,
+  @location(0) uvAtlas : vec2<f32>,
+  @location(1) @interpolate(linear) currentClip : vec4<f32>,
+  @location(2) @interpolate(linear) previousClip : vec4<f32>,
+};
+
+@vertex
+fn vs_temporal(in : VsIn, @builtin(instance_index) idx : u32, @builtin(vertex_index) vertex_index : u32) -> TemporalVsOut {
+  let vertex = resolveSpriteVertex(in, vertex_index);
+  let currentWorld = meshes[0].worldFromLocal *
+    instances[idx].localFromInstance * vec4<f32>(vertex.posLocal, 1.0);
+  var previousWorld = currentWorld;
+#if STORAGE_BUFFER_AVAILABLE == true
+  previousWorld = meshes[0].previousWorldFromLocal *
+    instances[idx].previousLocalFromInstance * vec4<f32>(vertex.posLocal, 1.0);
+#endif
+  var out : TemporalVsOut;
+  out.currentClip = view.temporalCurrentViewProj * currentWorld;
+  out.clip = out.currentClip;
+  out.previousClip = view.temporalPreviousViewProj * previousWorld;
+  out.uvAtlas = vertex.uvAtlas;
+  return out;
+}
+
+@fragment
+fn fs_temporal(in : TemporalVsOut) -> @location(0) vec4<f32> {
+  let texel = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uvAtlas, material.baseColorTextureCoordinatesMetadata.zw);
+  let alpha = clamp(texel.a * material.colorTint.a, 0.0, 1.0);
+  if (alpha <= 0.0) {
+    discard;
+  }
+  return packSceneTemporal(in.currentClip, in.previousClip, 1.0);
 }
 // sprite-lit needs at least one light in the scene to be visible; for unlit
 // sprites use forgeax::sprite (1 string change in MaterialAsset).

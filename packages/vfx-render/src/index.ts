@@ -46,6 +46,7 @@ export {
   createVfxDataInterfaceRegistry,
 } from './host/data-interface-providers.js';
 export type {
+  VfxAuthoringAssetRegistry,
   VfxRuntimeHost,
   VfxRuntimeHostControl,
   VfxRuntimeHostControlError,
@@ -53,4 +54,4 @@ export type {
   VfxRuntimeHostInspectSnapshot,
   VfxRuntimeHostOptions,
 } from './host/vfx-runtime-host.js';
-export { createVfxRuntimeHost } from './host/vfx-runtime-host.js';
+export { createVfxRuntimeHost, installVfxRuntimeDecoder } from './host/vfx-runtime-host.js';

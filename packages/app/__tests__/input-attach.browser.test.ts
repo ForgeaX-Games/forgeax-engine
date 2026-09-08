@@ -24,48 +24,34 @@
 // wiring in packages/app/src/create-app.ts.
 //
 // Anchors:
-//   - AC-05 four-step input ergonomics + removeSystem err path:
+//   - AC-05 four-step input ergonomics:
 //       1. createApp(canvas) auto attachBrowserInputBackend(canvas)
 //       2. createApp(canvas) auto insertResource(INPUT_BACKEND_KEY, backend) +
 //          addSystem(InputFrameStartScan)
 //       3. app.start drives one frame; world.getResource('InputSnapshot') is non-null
-//       4. app.stop calls detach() (DOM listener count returns to 0) +
-//          world.removeSystem(Update, FRAME_START_SCAN_SYSTEM_NAME)
-//       5. removeSystem returning Result.err(ScheduleMutationError) is wrapped
-//          as AppError({code: 'app-system-update-failed', detail: { cause, systemName }})
-//          and dispatched via onError; app.stop still returns Result.ok(undefined)
+//       4. app.dispose unloads the input Fiber, removes the scan system/resource,
+//          then detaches the Host-owned DOM backend
 //   - AC-05 opts.input === false opt-out path: zero attach/detach activity;
 //     app.input === undefined.
-//   - plan-strategy D-4 + R-4: removeSystem failure goes through the same
-//     cleanup() funnel as device-lost (M4 reuses the same internal helper).
 //   - research engine-input-public-contract.md: the InputFrameStartScan token
 //     reads INPUT_BACKEND_KEY; FRAME_START_SCAN_SYSTEM_NAME literal ==
 //     'input-frame-start-scan'.
 //
 // charter awareness:
-//   - P3 explicit failure: removeSystem err is observable via onError fan-out
-//     (not silently swallowed); stop still returns Result.ok so host shutdown
-//     paths do not branch on cleanup-internal-only signals.
 //   - P5 producer/consumer split: input-attach.ts is the only app-shell touch
 //     point on packages/input; tests verify AC-05 at this boundary.
 
+import { World } from '@forgeax/engine-ecs';
 import {
-  type Result,
-  ScheduleMutationError,
-  World,
-} from '@forgeax/engine-ecs';
-import {
-  FRAME_START_SCAN_SYSTEM_NAME,
-  INPUT_BACKEND_KEY,
   INPUT_SNAPSHOT_RESOURCE_KEY,
   type InputBackend,
+  inputBackendPlugin,
   type InputSnapshot,
 } from '@forgeax/engine-input';
 import { createRenderer } from '@forgeax/engine-runtime';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp, inputPlugin } from '../src/index';
-import type { AppError } from '../src/types';
 
 interface ListenerProbe {
   readonly add: number;
@@ -165,7 +151,7 @@ describe.skip('createApp(canvas) auto input attach (AC-05 default path)', () => 
     // attach phase added DOM listeners (window keyboard + canvas mouse/click)
     expect(probe.add).toBeGreaterThan(0);
     // teardown so afterEach does not leak
-    app.stop();
+    await app.dispose();
   });
 
   it('one frame after start writes InputSnapshot Resource (AC-05 step 3)', async () => {
@@ -182,7 +168,7 @@ describe.skip('createApp(canvas) auto input attach (AC-05 default path)', () => 
     expect(snap).toBeDefined();
     expect(typeof snap.keyboard.down).toBe('function');
     expect(typeof snap.mouse.movementDelta.x).toBe('number');
-    app.stop();
+    await app.dispose();
   });
 
   // bug-20260610: skipped on the chromium GH-runner because the wgpu-wasm
@@ -198,7 +184,7 @@ describe.skip('createApp(canvas) auto input attach (AC-05 default path)', () => 
   // for the dawn-node-incompatible GL adapter, or once the input probe
   // is moved off addEventListener wrapping (research-grade alternative:
   // intercept at the EventTarget descriptor level).
-  it('app.stop detaches listeners (AC-05 step 3 -- net listener delta = 0)', async () => {
+  it('app.dispose detaches listeners (AC-05 step 3 -- net listener delta = 0)', async () => {
     const { canvas, probe, appResult } = await buildAppOnRealCanvas();
     createdCanvases.push(canvas);
     expect(appResult.ok).toBe(true);
@@ -206,8 +192,8 @@ describe.skip('createApp(canvas) auto input attach (AC-05 default path)', () => 
     const app = appResult.value;
     app.start();
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    const stopResult = app.stop();
-    expect(stopResult.ok).toBe(true);
+    const disposeResult = await app.dispose();
+    expect(disposeResult.ok).toBe(true);
     // every add must have a corresponding remove (idempotent detach contract)
     expect(probe.remove).toBe(probe.add);
   });
@@ -225,72 +211,7 @@ describe.skip('createApp(canvas) auto input attach (AC-05 default path)', () => 
     // beyond what the app shell would have skipped" -- compare against
     // a known-good attached path test which adds > 5 listeners.
     expect(probe.add).toBeLessThan(3);
-    app.stop();
-  });
-});
-
-describe.skip('createApp(canvas) removeSystem err path (AC-05 / D-4)', () => {
-  it('removeSystem err -> AppError(app-system-update-failed) on onError + stop ok', async () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = 64;
-    canvas.height = 64;
-    document.body.appendChild(canvas);
-
-    // Install a World.prototype.removeSystem spy BEFORE createApp(canvas)
-    // so the freshly-built World inside the canvas form picks it up. The
-    // mock returns Result.err only when the input-attach cleanup path
-    // tries to remove the scan system.
-    const mutationError = new ScheduleMutationError(
-      'system-before-unknown',
-      `mock: removeSystem('${FRAME_START_SCAN_SYSTEM_NAME}') failed for AC-05 D-4 wrap test`,
-      `mock hint: ensure ${FRAME_START_SCAN_SYSTEM_NAME} is registered before removal`,
-      { candidates: [] },
-    );
-    const removeSpy = vi
-      .spyOn(World.prototype, 'removeSystem')
-      .mockImplementation(
-        function (this: World, name: string): Result<void, ScheduleMutationError> {
-          if (name === FRAME_START_SCAN_SYSTEM_NAME) {
-            return { ok: false, error: mutationError };
-          }
-          return { ok: true, value: undefined };
-        },
-      );
-
-    const appResult = await createApp(canvas);
-    expect(appResult.ok).toBe(true);
-    if (!appResult.ok) {
-      removeSpy.mockRestore();
-      canvas.remove();
-      return;
-    }
-    const app = appResult.value;
-
-    const errors: AppError[] = [];
-    app.onError((e) => {
-      if (typeof (e as AppError).code === 'string') {
-        errors.push(e as AppError);
-      }
-    });
-
-    app.start();
-    const stopResult = app.stop();
-    // stop still returns Result.ok(undefined) -- removeSystem err is a side
-    // signal funnelled through onError, not a stop-blocking failure.
-    expect(stopResult.ok).toBe(true);
-
-    const wrap = errors.find((e) => e.code === 'app-system-update-failed');
-    expect(wrap).toBeDefined();
-    if (wrap === undefined) {
-      removeSpy.mockRestore();
-      canvas.remove();
-      return;
-    }
-    expect(wrap.detail.cause).toBe(mutationError);
-    expect(wrap.detail.systemName).toBe(FRAME_START_SCAN_SYSTEM_NAME);
-    expect(removeSpy).toHaveBeenCalledWith(FRAME_START_SCAN_SYSTEM_NAME);
-    removeSpy.mockRestore();
-    canvas.remove();
+    await app.dispose();
   });
 });
 
@@ -300,7 +221,9 @@ describe.skip('createApp(assemble form) host-supplied InputBackend bypass', () =
     canvas.width = 64;
     canvas.height = 64;
     document.body.appendChild(canvas);
-    const renderer = await createRenderer(canvas);
+    const created = await createRenderer(canvas);
+    if (!created.ok) throw created.error;
+    const renderer = created.value;
     const world = new World();
     // Host owns the backend explicitly -- assemble form does not auto-attach.
     const fakeBackend: InputBackend = {
@@ -318,10 +241,11 @@ describe.skip('createApp(assemble form) host-supplied InputBackend bypass', () =
         // host-managed
       },
     };
-    // Pre-inject the host backend as a world resource (D-3); the old
-    // AppAssembleArgs.input opt was deleted in the plugin-system unify (M3).
-    world.insertResource(INPUT_BACKEND_KEY, fakeBackend);
-    const appResult = await createApp({ renderer, world, plugins: [inputPlugin()] });
+    const appResult = await createApp({
+      renderer,
+      world,
+      plugins: [inputBackendPlugin(fakeBackend), inputPlugin()],
+    });
     expect(appResult.ok).toBe(true);
     if (!appResult.ok) {
       canvas.remove();
@@ -330,6 +254,7 @@ describe.skip('createApp(assemble form) host-supplied InputBackend bypass', () =
     const app = appResult.value;
     // reference equality: app.input is the host-provided backend (AC-09)
     expect(app.input).toBe(fakeBackend);
+    await app.dispose();
     canvas.remove();
   });
 });

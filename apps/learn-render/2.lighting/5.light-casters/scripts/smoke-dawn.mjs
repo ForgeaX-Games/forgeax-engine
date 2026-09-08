@@ -232,9 +232,8 @@ const mockCanvas = {
 // --- 3. Drive engine ECS path -----------------------------------------------
 
 const { World } = await import('@forgeax/engine-ecs');
-const enginePkg = await import('@forgeax/engine-runtime');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { createPlaneGeometry } = await import('@forgeax/engine-geometry');
-const { createRenderer } = enginePkg;
 const { Materials } = await import('@forgeax/engine-render');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective, PointLight, SpotLight } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
@@ -247,36 +246,34 @@ const ENGINE_MANIFEST = await buildEngineShaderManifest();
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
 
 let renderer;
+let assets;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  assets = constructed.value.assets;
 } catch (err) {
   console.error(
-    `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
+    `[smoke] FAIL - constructRuntimeRendererHost failed: ${err instanceof Error ? err.message : String(err)}`,
   );
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[learn-render-light-casters] backend=${renderer.backend}`);
-
-const assets = renderer.assets;
+console.log(`[learn-render-light-casters] backend=${renderer.inspect().capabilities.backendKind}`);
 if (!assets) {
   console.error('[smoke] FAIL - AssetRegistry is null');
   process.exit(1);
 }
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => { if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint }); });
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code}`);
-  process.exit(1);
-}
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const lease = worldAttachment1.value;
 
 // LO 2.5 cube grid + lights (regression: AC-07 the original scene survives).
 const CUBE_POSITIONS = [
@@ -445,8 +442,17 @@ const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-  if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  const r = renderer.draw({
+    leases: [lease],
+    camera: { lease },
+    environment: { lease },
+  });
+  if (!r.ok) {
+    console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  } else {
+    const completed = await r.value.completed;
+    if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+  }
   framesObserved++;
 }
 const device = sharedDevice;
@@ -588,7 +594,9 @@ console.log(
 );
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (renderer.inspect().capabilities.backendKind !== 'webgpu') {
+  failures.push(`(a) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
+}
 if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 
 // (c) the floor must actually be rendered (non-clear) at the lit site -- guards

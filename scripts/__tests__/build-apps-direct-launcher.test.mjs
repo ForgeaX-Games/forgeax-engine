@@ -22,7 +22,7 @@ test('resolves the installed Vite CLI from the repository package manifest', () 
 
 test('the discovered app fleet uses the canonical Vite build script', () => {
   const apps = appPackages(repoRoot);
-  assert.equal(apps.length, 196);
+  assert.equal(apps.length, 204);
   validateCanonicalAppBuilds(apps);
 });
 
@@ -38,9 +38,8 @@ test('build invocation preserves app cwd, explicit environment, and direct Node 
   const invocation = createViteBuildInvocation({
     app: { directory: '/tmp/fixture-app', manifest: { name: '@fixture/app' } },
     viteCliPath: '/repo/node_modules/vite/bin/vite.js',
-    sharedInputManifest: '/repo/shared-build-inputs/manifest.json',
     appFactsDir: '/tmp/facts',
-    baseEnv: { KEEP_ME: 'yes' },
+    baseEnv: { KEEP_ME: 'yes', FORGEAX_SHARED_APP_INPUTS_MANIFEST: '/tmp/shared/manifest.json' },
   });
   assert.equal(invocation.command, process.execPath);
   assert.deepEqual(invocation.args, ['/repo/node_modules/vite/bin/vite.js', 'build']);
@@ -50,7 +49,7 @@ test('build invocation preserves app cwd, explicit environment, and direct Node 
     shell: false,
     env: {
       KEEP_ME: 'yes',
-      FORGEAX_SHARED_APP_INPUTS_MANIFEST: '/repo/shared-build-inputs/manifest.json',
+      FORGEAX_SHARED_APP_INPUTS_MANIFEST: '/tmp/shared/manifest.json',
       FORGEAX_BUILD_METRICS_DIR: '/tmp/facts',
     },
   });

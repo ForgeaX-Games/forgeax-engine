@@ -9,6 +9,15 @@ function message(value: number): EndpointEvent {
 }
 
 describe('BoundedEventQueue', () => {
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects invalid maxQueuedEvents value %s',
+    (maxQueuedEvents) => {
+      expect(() => new BoundedEventQueue(maxQueuedEvents)).toThrow(
+        'maxQueuedEvents must be a positive integer',
+      );
+    },
+  );
+
   it('dequeues events in insertion order', () => {
     const queue = new BoundedEventQueue(3);
 

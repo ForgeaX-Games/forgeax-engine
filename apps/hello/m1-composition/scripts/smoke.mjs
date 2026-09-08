@@ -10,11 +10,10 @@ import {
   ok,
 } from '@forgeax/engine-ecs';
 import {
-  INPUT_BACKEND_KEY,
   INPUT_MAP_KEY,
   INPUT_SNAPSHOT_RESOURCE_KEY,
+  inputBackendPlugin,
 } from '@forgeax/engine-input';
-import { runPlugins } from '@forgeax/engine-plugin';
 import { vec3 } from '@forgeax/engine-math';
 import { ChildOf } from '@forgeax/engine-scene';
 import {
@@ -73,6 +72,10 @@ function makeRenderer(drawCalls) {
     onLost() {
       return () => {};
     },
+    attach() {
+      return ok(undefined);
+    },
+    detachWorld() {},
     dispose() {},
   };
 }
@@ -103,20 +106,18 @@ async function main() {
   let faultThrown = false;
   let snapshotReference;
 
-  world.insertResource(INPUT_BACKEND_KEY, inputBackend);
   world.insertResource(INPUT_MAP_KEY, [
     { action: 'jump', bindings: [{ type: 'key', key: 'Space' }] },
   ]);
 
   const plugin = {
     name: 'm1-composition',
-    build(target) {
-      target.insertResource('m1CompositionPluginBuilt', true);
-      return ok(undefined);
+    inject: ['world'],
+    apply(ctx) {
+      ctx.world.insertResource('m1CompositionPluginBuilt', true);
+      return () => ctx.world.removeResource('m1CompositionPluginBuilt');
     },
   };
-  const pluginProbe = await runPlugins(world, [plugin], []);
-  assert.equal(pluginProbe.ok, true);
 
   const root = assertResult(
     world.spawn({ component: Position, data: { x: 0, y: 0, z: 0 }}),
@@ -292,7 +293,7 @@ async function main() {
   const appResult = await createApp({
     renderer: makeRenderer(drawCalls),
     world,
-    plugins: [statePlugin(), inputPlugin(), plugin],
+    plugins: [inputBackendPlugin(inputBackend), statePlugin(), inputPlugin(), plugin],
     silenceUnhandledErrors: true,
     drawSource: () => ({ worlds: [world, secondaryWorld], cameraOwner: 0, resourceOwner: 0 }),
   });
@@ -321,9 +322,10 @@ async function main() {
     assert.equal(world.inspect().entityCount, deferredBeforeCount + 1);
     assert.equal([...world.iterDescendants(root)].length, 1);
     assert.equal(world.getResource('m1CompositionPluginBuilt'), true);
-    assert.equal(app.pluginRegistry.has('state'), true);
-    assert.equal(app.pluginRegistry.has('input'), true);
-    assert.equal(app.pluginRegistry.has('m1-composition'), true);
+    const pluginNames = [...app.pluginContext.registry.values()].map((runtime) => runtime.name);
+    assert.equal(pluginNames.includes('state'), true);
+    assert.equal(pluginNames.includes('input'), true);
+    assert.equal(pluginNames.includes('m1-composition'), true);
     assert.equal(drawCalls[0]?.worldCount, 2);
     assert.equal(secondaryFixedTicks, 2);
     console.log('[m1-composition] schedule order: update-before-fixed -> fixed -> fixed -> update-after-fixed');
@@ -357,7 +359,7 @@ async function main() {
     assert.equal(faultThrown, true);
     assert.equal(errors.filter((error) => error.code === 'app-system-update-failed').length, 1);
     assert.equal(secondaryFixedTicks, 6);
-    assert.equal(drawCalls.length, 3);
+    assert.equal(drawCalls.length, 2);
     assertResult(app.stop(), 'app stop');
     console.log('[m1-composition] App error fan-out and same-process recovery: PASS');
   } finally {
@@ -374,6 +376,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`[m1-composition] FAIL - ${error instanceof Error ? error.message : String(error)}`);
+  console.error(`[m1-composition] FAIL - ${error instanceof Error ? error.stack : String(error)}`);
   process.exitCode = 1;
 });

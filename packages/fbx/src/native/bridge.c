@@ -195,7 +195,71 @@ static void write_mesh(Buf *b, ufbx_mesh *mesh, int source_index) {
         buf_char(b, ']');
     }
 
-    buf_str(b, "},");
+    buf_str(b, "}");
+
+    /* BlendShape channels are the FBX producer's morph source of truth.
+     * Keep one dense target per ordinary channel; parse-mesh applies the
+     * shared target/attribute budgets and rejects in-between keyframes. */
+    size_t morph_count = 0;
+    for (size_t di = 0; di < mesh->blend_deformers.count; di++) {
+        ufbx_blend_deformer *blend = mesh->blend_deformers.data[di];
+        morph_count += blend->channels.count;
+    }
+    if (morph_count > 0) {
+        buf_str(b, ",\"morphTargets\":[");
+        size_t target_index = 0;
+        for (size_t di = 0; di < mesh->blend_deformers.count; di++) {
+            ufbx_blend_deformer *blend = mesh->blend_deformers.data[di];
+            for (size_t ci = 0; ci < blend->channels.count; ci++) {
+                ufbx_blend_channel *channel = blend->channels.data[ci];
+                if (target_index++ > 0) buf_char(b, ',');
+                ufbx_blend_shape *shape = channel->target_shape;
+                if (shape == NULL && channel->keyframes.count == 1) {
+                    shape = channel->keyframes.data[0].shape;
+                }
+                buf_char(b, '{');
+                buf_str(b, "\"position\":[");
+                for (size_t vi = 0; vi < mesh->num_indices; vi++) {
+                    if (vi > 0) buf_char(b, ',');
+                    uint32_t cp = mesh->vertex_position.indices.data[vi];
+                    ufbx_vec3 value = shape ? ufbx_get_blend_shape_vertex_offset(shape, cp) : (ufbx_vec3){0,0,0};
+                    buf_double(b, value.x); buf_char(b, ',');
+                    buf_double(b, value.y); buf_char(b, ',');
+                    buf_double(b, value.z);
+                }
+                buf_char(b, ']');
+                if (shape != NULL && shape->normal_offsets.count > 0) {
+                    buf_str(b, ",\"normal\":[");
+                    for (size_t vi = 0; vi < mesh->num_indices; vi++) {
+                        if (vi > 0) buf_char(b, ',');
+                        uint32_t cp = mesh->vertex_position.indices.data[vi];
+                        uint32_t oi = ufbx_get_blend_shape_offset_index(shape, cp);
+                        ufbx_vec3 value = (ufbx_vec3){0,0,0};
+                        if (oi != UFBX_NO_INDEX && oi < shape->normal_offsets.count) {
+                            value = shape->normal_offsets.data[oi];
+                        }
+                        buf_double(b, value.x); buf_char(b, ',');
+                        buf_double(b, value.y); buf_char(b, ',');
+                        buf_double(b, value.z);
+                    }
+                    buf_char(b, ']');
+                }
+                buf_char(b, '}');
+            }
+        }
+        buf_str(b, "],\"morphWeights\":[");
+        target_index = 0;
+        for (size_t di = 0; di < mesh->blend_deformers.count; di++) {
+            ufbx_blend_deformer *blend = mesh->blend_deformers.data[di];
+            for (size_t ci = 0; ci < blend->channels.count; ci++) {
+                if (target_index++ > 0) buf_char(b, ',');
+                buf_double(b, blend->channels.data[ci]->weight);
+            }
+        }
+        buf_char(b, ']');
+    }
+
+    buf_char(b, ',');
 
     /* polygonCount, sourceIndex, materialIndex */
     buf_str(b, "\"polygonCount\":"); buf_size(b, mesh->num_faces); buf_char(b, ',');

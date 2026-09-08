@@ -58,8 +58,8 @@ function standardParameters(colorSpace: MaterialColorSpace): readonly MaterialPa
 function unlitParameters(colorSpace: MaterialColorSpace): readonly MaterialParameter[] {
   return [
     authoredColorParameter('baseColor', 'color', colorSpace),
-    { name: 'baseColorTexture', type: 'texture', optional: true },
     { name: 'alphaCutoff', type: 'f32', optional: true },
+    { name: 'baseColorTexture', type: 'texture', optional: true },
   ];
 }
 

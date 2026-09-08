@@ -13,7 +13,7 @@
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { COMPONENT_TYPE, decodeAccessor } from '../decode-accessor.js';
+import { COMPONENT_TYPE, decodeAccessor } from '../accessor/decode-accessor.js';
 import { parseAnimation } from '../parse-animation.js';
 import { parseGlbChunks, parseGltfHeader } from '../parse-glb-chunks.js';
 import type { GltfMeshIr } from '../parse-gltf.js';
@@ -581,7 +581,7 @@ import { decomposeNodeTransform } from '../transform.js';
         if (!r.ok) expect(r.error.code).toBe('gltf-animation-cubicspline-unsupported');
       });
 
-      it('fail-fast on morph weights channel', () => {
+      it('preserves morph weights channel output for playback', () => {
         const input = new Float32Array([0, 1]);
         const output = new Float32Array([0, 0, 0, 1, 1, 1]);
         const inputBuf = new Uint8Array(input.buffer);
@@ -605,8 +605,11 @@ import { decomposeNodeTransform } from '../transform.js';
           ],
           [inputBuf, outputBuf],
         );
-        expect(r.ok).toBe(false);
-        if (!r.ok) expect(r.error.code).toBe('gltf-morph-unsupported');
+        expect(r.ok).toBe(true);
+        if (r.ok) {
+          expect(r.value[0]?.channels[0]?.property).toBe('weights');
+          expect(r.value[0]?.channels[0]?.sampler.output).toHaveLength(6);
+        }
       });
 
       it('computes duration as max(input[last]) across channels', () => {

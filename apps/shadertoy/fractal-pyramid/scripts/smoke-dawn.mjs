@@ -130,9 +130,10 @@ const mockCanvas = {
 // --- 3. Engine bootstrap ----------------------------------------------------
 
 const { World } = await import('@forgeax/engine-ecs');
-const enginePkg = await import('@forgeax/engine-runtime');
 const { createPlaneGeometry } = await import('@forgeax/engine-geometry');
-const { createRenderer } = enginePkg;
+const { constructRuntimeRendererHost } = await import(
+  '@forgeax/engine-runtime/internal/renderer-host',
+);
 const { Transform } = await import('@forgeax/engine-scene');
 const { Camera, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 
@@ -176,34 +177,25 @@ if (
 }
 
 let renderer;
+let assets;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  assets = constructed.value.assets;
 } catch (err) {
   console.error(
-    `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
+    `[smoke] FAIL - renderer host construction failed: ${err instanceof Error ? err.message : String(err)}`,
   );
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[fractal-pyramid] backend=${renderer.backend}`);
+console.log('[fractal-pyramid] pipeline=Standard');
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
-
-const shader = renderer.shader;
-const assets = renderer.assets;
-if (shader === null || assets === null) {
-  console.error('[smoke] FAIL - renderer.shader or renderer.assets is null on dawn path');
-  process.exit(1);
-}
-
-if (!shader.findMaterialArtifact('shadertoy::fractal_pyramid').ok) {
-  shader.installMaterialArtifact('shadertoy::fractal_pyramid', {
+if (!assets.shaderRegistry.findMaterialArtifact('shadertoy::fractal_pyramid').ok) {
+  assets.shaderRegistry.installMaterialArtifact('shadertoy::fractal_pyramid', {
     source: composedWgsl,
     paramSchema: [
       { name: 'iResolution', type: 'vec2' },
@@ -218,8 +210,13 @@ const values = {
   iTime: 0,
 };
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const frameRequest = {
+  leases: [worldAttachment1.value],
+  camera: { lease: worldAttachment1.value },
+  environment: { lease: worldAttachment1.value },
+};
 const materialHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
@@ -256,7 +253,9 @@ world.spawn(
 );
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint });
+});
 
 // --- 4. Drive 3 t-points + readback ----------------------------------------
 
@@ -285,7 +284,7 @@ async function captureFrameAtT(t) {
   for (let i = 0; i < SMOKE_FRAMES_PER_T; i++) {
     if (!FALSIFY_NO_DRAW) {
       world.update().unwrap();
-      const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      const r = renderer.draw(frameRequest);
       if (!r.ok) console.error(`[smoke] draw t=${t} frame ${i} error: ${r.error.code}`);
     }
   }
@@ -361,9 +360,6 @@ console.log(
 // --- 5. Verdict -------------------------------------------------------------
 
 const failures = [];
-if (renderer.backend !== 'webgpu') {
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
-}
 const maxBrightness = Math.max(b0, b1, b2);
 if (maxBrightness < MEAN_BRIGHTNESS_MIN) {
   failures.push(
@@ -391,7 +387,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS -- backend=webgpu, frames=${framesObserved}, maxMeanBrightness=${maxBrightness.toFixed(5)}>=${MEAN_BRIGHTNESS_MIN}, maxFrameDelta=${maxDelta.toFixed(5)}>=${FRAME_DELTA_MIN}, oracle=${captureEvidence.mode}, RhiError count=0`,
+  `[smoke] PASS -- pipeline=Standard, frames=${framesObserved}, maxMeanBrightness=${maxBrightness.toFixed(5)}>=${MEAN_BRIGHTNESS_MIN}, maxFrameDelta=${maxDelta.toFixed(5)}>=${FRAME_DELTA_MIN}, oracle=${captureEvidence.mode}, RhiError count=0`,
 );
 
 device.destroy?.();

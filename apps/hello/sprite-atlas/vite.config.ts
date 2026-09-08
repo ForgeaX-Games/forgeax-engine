@@ -1,8 +1,11 @@
 import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { imageImporter } from '@forgeax/engine-image/image-importer';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
+import { optionalAssetPack } from '../../shared/src/optional-asset-pack.js';
 
 // hello-sprite-atlas vite config (feat-20260521-sprite-atlas-animation M6).
 //
@@ -18,11 +21,15 @@ import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
 const demoAssets = resolve(monorepoRoot, 'forgeax-engine-assets', 'demo-assets', 'hello-sprite-atlas');
+const assetRoots = [demoAssets];
+const runtimeBinding = createStandaloneRuntimeAssetBinding('hello-sprite-atlas');
 
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
-    pluginPack({ roots: [demoAssets] , refresh: reloadAssetHost() }),
+    ...optionalAssetPack(assetRoots, () =>
+      pluginPack({ runtimeBinding, roots: assetRoots, importers: [imageImporter], refresh: reloadAssetHost() }),
+    ),
   ],
   server: {
     port: 5194,

@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const assetRoot = resolve(process.cwd(), 'templates/game-default/assets/ui');
+const assetRoot = resolve(import.meta.dirname, '../assets/ui');
 
 async function readPack(name: string): Promise<Record<string, unknown>> {
   return JSON.parse(await readFile(resolve(assetRoot, name), 'utf8')) as Record<string, unknown>;

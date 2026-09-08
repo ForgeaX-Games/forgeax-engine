@@ -1,11 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 import { World } from '@forgeax/engine-ecs';
+import { Context } from '@forgeax/engine-plugin';
+import { registerStatesPlugin } from '@forgeax/engine-state';
 import { installGameplayState } from '../assets/plugins/gameplay-state';
+
+function installState(world: World, options: Omit<Parameters<typeof installGameplayState>[0], 'context' | 'world'>) {
+  registerStatesPlugin(world);
+  return installGameplayState({ context: new Context(), world, ...options });
+}
 
 describe('game-default victory replay lifecycle', () => {
   it('preserves counterattack Defeat precedence when it follows extraction Victory in one frame', () => {
     const world = new World();
-    const state = installGameplayState({ world, reset: vi.fn() });
+    const state = installState(world, { reset: vi.fn() });
     world.update(1 / 60).unwrap();
 
     state.requestVictory();
@@ -23,7 +30,7 @@ describe('game-default victory replay lifecycle', () => {
     const world = new World();
     const reset = vi.fn();
     const onPhaseChange = vi.fn();
-    const state = installGameplayState({ world, reset, onPhaseChange });
+    const state = installState(world, { reset, onPhaseChange });
 
     world.update(1 / 60).unwrap();
     const playTicks = state.snapshot().fixedTicks;
@@ -55,7 +62,7 @@ describe('game-default victory replay lifecycle', () => {
   it('freezes the same Play simulation in Defeat and replays through Reset', () => {
     const world = new World();
     const reset = vi.fn();
-    const state = installGameplayState({ world, reset });
+    const state = installState(world, { reset });
     world.update(1 / 60).unwrap();
     const playTicks = state.snapshot().fixedTicks;
 

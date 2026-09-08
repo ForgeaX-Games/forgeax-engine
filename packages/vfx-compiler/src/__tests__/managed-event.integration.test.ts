@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { cookParticleCodeProgram } from '../code-program.js';
 
 const source = {
@@ -25,9 +25,17 @@ fn vfx_spawn(ctx: VfxSpawnContext, particle: ptr<function, VfxParticle>) {}
 fn vfx_update(ctx: VfxUpdateContext, particle: ptr<function, VfxParticle>) {}`;
 
 describe('managed GPU event artifact', () => {
-  it('includes event resources, stable ordering, and limits in the cooked reflection', async () => {
-    const result = await cookParticleCodeProgram(source, { 'bolt.vfx.wgsl': { entry: module } });
+  let result: Awaited<ReturnType<typeof cookParticleCodeProgram>>;
+
+  beforeAll(async () => {
+    result = await cookParticleCodeProgram(source, { 'bolt.vfx.wgsl': { entry: module } });
+  });
+
+  it('cooks the managed event artifact', () => {
     expect(result.ok).toBe(true);
+  });
+
+  it('includes event resources and limits in the cooked reflection', () => {
     if (!result.ok) return;
     const emitter = result.value.program.emitters[0];
     expect(emitter?.reflection).toMatchObject({
@@ -35,6 +43,10 @@ describe('managed GPU event artifact', () => {
       eventChannels: [{ id: 'impact', capacity: 2, overflow: 'drop-newest' }],
       events: [{ id: 'impact-event', channel: 'impact', fanOut: 2, recursionDepth: 1 }],
     });
+  });
+
+  it('emits a stable cooked fingerprint', () => {
+    if (!result.ok) return;
     expect(result.value.fingerprint).toBeTruthy();
   });
 });

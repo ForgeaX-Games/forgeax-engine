@@ -1,4 +1,5 @@
 import { Update } from '@forgeax/engine-ecs';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 // apps/hello/fxaa -- FXAA real-time comparison demo
 // (feat-20260529-fxaa-demo-real-antialiasing-comparison-runtime-tog / M2).
 //
@@ -64,13 +65,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = appRes.value;
-  console.warn(`[fxaa] backend=${app.renderer.backend}`);
+  console.warn(`[fxaa] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
-  const ready = await app.renderer.ready;
-  if (!ready.ok) {
-    console.error('[fxaa] renderer.ready failed:', ready.error.code, ready.error.hint);
-    return;
-  }
 
   const world = app.world;
 
@@ -163,7 +159,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     after: ['input-frame-start-scan'],
     queries: [],
     fn: () => {
-      const snap = app.renderer.input.snapshot(world);
+      const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (snap === undefined) return;
 
       // InputSnapshot.keyboard matches KeyboardEvent.key (browser backend

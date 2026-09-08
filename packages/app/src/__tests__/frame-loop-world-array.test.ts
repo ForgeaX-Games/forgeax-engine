@@ -15,27 +15,38 @@
 // world identity path (worldId 0) is preserved (AC-03 regression guarantee).
 
 import { Update, World } from '@forgeax/engine-ecs';
-import type { Renderer } from '@forgeax/engine-render';
+import type { Renderer, RenderWorldLease } from '@forgeax/engine-render';
 import { describe, expect, it, vi } from 'vitest';
 import { createFrameLoop } from '../internal/frame-loop';
 
 interface DrawCall {
-  readonly worlds: unknown;
-  readonly options: unknown;
+  readonly request: unknown;
+}
+
+function lease(onDispose: () => void = () => {}): RenderWorldLease {
+  return {
+    worldIdentity: {},
+    generation: 0,
+    readChanges: vi.fn(),
+    querySpans: vi.fn(),
+    inspectCursor: vi.fn(),
+    dispose: onDispose,
+  } as unknown as RenderWorldLease;
 }
 
 function makeSpyRenderer(): { renderer: Renderer; calls: DrawCall[] } {
   const calls: DrawCall[] = [];
   const renderer = {
     backend: 'webgpu' as const,
-    ready: Promise.resolve({ ok: true, value: undefined }),
-    attachWorld(): { ok: true; value: undefined } {
-      return { ok: true, value: undefined };
+    attach(): { ok: true; value: RenderWorldLease } {
+      return { ok: true, value: lease() };
     },
-    detachWorld(): void {},
-    draw(worlds: unknown, options: unknown): { ok: true; value: undefined } {
-      calls.push({ worlds, options });
-      return { ok: true, value: undefined };
+    draw(request: unknown): {
+      ok: true;
+      value: { frameId: number; deviceGeneration: number; completed: true };
+    } {
+      calls.push({ request });
+      return { ok: true, value: { frameId: calls.length, deviceGeneration: 0, completed: true } };
     },
     onError(): () => void {
       return () => {
@@ -92,15 +103,13 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
       .unwrap();
     const renderer = {
       backend: 'webgpu' as const,
-      ready: Promise.resolve({ ok: true, value: undefined }),
-      attachWorld(): { ok: true; value: undefined } {
+      attach(): { ok: true; value: RenderWorldLease } {
         events.push('attach');
-        return { ok: true, value: undefined };
+        return { ok: true, value: lease() };
       },
-      detachWorld(): void {},
-      draw(): { ok: true; value: undefined } {
+      draw(): { ok: true; value: { frameId: number; deviceGeneration: number; completed: true } } {
         events.push('draw');
-        return { ok: true, value: undefined };
+        return { ok: true, value: { frameId: 1, deviceGeneration: 0, completed: true } };
       },
       onError: () => () => {},
       dispose: () => {},
@@ -133,7 +142,7 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     ]);
   });
 
-  it('calls renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }) once per running frame', () => {
+  it('calls renderer.draw with one lease-bound world per running frame', () => {
     const world = new World();
     const { renderer, calls } = makeSpyRenderer();
     const { raf, caf, now, pump } = makeSyncScheduler();
@@ -148,13 +157,11 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
 
     expect(calls.length).toBeGreaterThanOrEqual(3);
     for (const call of calls) {
-      // The worlds argument is an array carrying exactly the single world.
-      expect(Array.isArray(call.worlds)).toBe(true);
-      const arr = call.worlds as unknown[];
-      expect(arr.length).toBe(1);
-      expect(arr[0]).toBe(world);
-      // owner is the required, defaulted-to-0 index (single-world identity).
-      expect(call.options).toEqual({ cameraOwner: 0, resourceOwner: 0 });
+      expect(call.request).toMatchObject({
+        leases: [{ worldIdentity: expect.any(Object) }],
+        camera: { lease: expect.any(Object) },
+        environment: { lease: expect.any(Object) },
+      });
     }
 
     loop.stop();
@@ -202,11 +209,9 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     const rhiErr = { code: 'rhi-not-available' } as const;
     const renderer = {
       backend: 'webgpu' as const,
-      ready: Promise.resolve({ ok: true, value: undefined }),
-      attachWorld: () => ({ ok: true, value: undefined }),
-      detachWorld: () => {},
-      draw(worlds: unknown, options: unknown): { ok: false; error: typeof rhiErr } {
-        calls.push({ worlds, options });
+      attach: () => ({ ok: true as const, value: lease() }),
+      draw(request: unknown): { ok: false; error: typeof rhiErr } {
+        calls.push({ request });
         return { ok: false, error: rhiErr };
       },
       onError(): () => void {
@@ -226,26 +231,24 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     // start() schedules the first tick via raf; pump once to run it.
     pump(1);
 
-    expect(calls[0]?.worlds).toEqual([world]);
-    expect(calls[0]?.options).toEqual({ cameraOwner: 0, resourceOwner: 0 });
+    expect(calls[0]?.request).toMatchObject({
+      camera: { lease: expect.any(Object) },
+      environment: { lease: expect.any(Object) },
+    });
     expect(onError).toHaveBeenCalledWith(rhiErr);
 
     loop.stop();
   });
 
-  it('keeps the rAF heartbeat but freezes draw work during device loss', () => {
+  it('keeps the rAF heartbeat and submits receipt-bound frames', () => {
     const world = new World();
-    let reason: 'alive' | 'device-lost' = 'alive';
     const calls: unknown[] = [];
     const renderer = {
       backend: 'webgpu' as const,
-      ready: Promise.resolve({ ok: true, value: undefined }),
-      attachWorld: () => ({ ok: true, value: undefined }),
-      detachWorld: () => {},
-      health: () => ({ reason, recoverable: reason === 'device-lost' }),
-      draw(): { ok: true; value: undefined } {
+      attach: () => ({ ok: true as const, value: lease() }),
+      draw(): { ok: true; value: { frameId: number; deviceGeneration: number; completed: true } } {
         calls.push(undefined);
-        return { ok: true, value: undefined };
+        return { ok: true, value: { frameId: calls.length, deviceGeneration: 0, completed: true } };
       },
       onError(): () => void {
         return () => {};
@@ -257,14 +260,8 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     loop.start();
     pump(1);
     expect(calls).toHaveLength(1);
-
-    reason = 'device-lost';
     pump(3);
-    expect(calls).toHaveLength(1);
-
-    reason = 'alive';
-    pump(1);
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(4);
     loop.stop();
   });
 
@@ -282,7 +279,12 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     expect(stepped.ok).toBe(true);
     expect(update).toHaveBeenCalledTimes(1);
     expect(update).toHaveBeenCalledWith(1 / 60);
-    expect(calls).toEqual([{ worlds: [world], options: { cameraOwner: 0, resourceOwner: 0 } }]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.request).toMatchObject({
+      leases: [{ worldIdentity: expect.any(Object) }],
+      camera: { lease: expect.any(Object) },
+      environment: { lease: expect.any(Object) },
+    });
 
     expect(loop.resume().ok).toBe(true);
     expect(loop.stop().ok).toBe(true);
@@ -298,7 +300,9 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     expect(idle.ok).toBe(false);
     if (!idle.ok) {
       expect(idle.error.code).toBe('app-frame-step-invalid');
-      expect(idle.error.detail).toEqual({ state: 'idle', deltaSeconds: 1 / 60, reason: 'state' });
+      if ('detail' in idle.error) {
+        expect(idle.error.detail).toEqual({ state: 'idle', deltaSeconds: 1 / 60, reason: 'state' });
+      }
     }
 
     expect(loop.start().ok).toBe(true);
@@ -322,15 +326,14 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     const detached: World[] = [];
     const renderer = {
       backend: 'webgpu' as const,
-      ready: Promise.resolve({ ok: true, value: undefined }),
-      attachWorld(candidate: World) {
+      attach(candidate: World) {
         attached.push(candidate);
-        return { ok: true as const, value: undefined };
+        return { ok: true as const, value: lease(() => detached.push(candidate)) };
       },
-      detachWorld(candidate: World): void {
-        detached.push(candidate);
-      },
-      draw: () => ({ ok: true as const, value: undefined }),
+      draw: () => ({
+        ok: true as const,
+        value: { frameId: 1, deviceGeneration: 0, completed: true as const },
+      }),
       onError: () => () => {},
       dispose: () => {},
     } as unknown as Renderer;
@@ -361,12 +364,14 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     const detached: World[] = [];
     const renderer = {
       backend: 'webgpu' as const,
-      ready: Promise.resolve({ ok: true, value: undefined }),
-      attachWorld: () => ({ ok: true as const, value: undefined }),
-      detachWorld(candidate: World): void {
-        detached.push(candidate);
-      },
-      draw: () => ({ ok: true as const, value: undefined }),
+      attach: (candidate: World) => ({
+        ok: true as const,
+        value: lease(() => detached.push(candidate)),
+      }),
+      draw: () => ({
+        ok: true as const,
+        value: { frameId: 1, deviceGeneration: 0, completed: true as const },
+      }),
       onError: () => () => {},
       dispose: () => {},
     } as unknown as Renderer;
@@ -392,12 +397,14 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     const detached: World[] = [];
     const renderer = {
       backend: 'webgpu' as const,
-      ready: Promise.resolve({ ok: true, value: undefined }),
-      attachWorld: () => ({ ok: true as const, value: undefined }),
-      detachWorld(candidate: World): void {
-        detached.push(candidate);
-      },
-      draw: () => ({ ok: true as const, value: undefined }),
+      attach: (candidate: World) => ({
+        ok: true as const,
+        value: lease(() => detached.push(candidate)),
+      }),
+      draw: () => ({
+        ok: true as const,
+        value: { frameId: 1, deviceGeneration: 0, completed: true as const },
+      }),
       onError: () => () => {},
       dispose: () => {},
     } as unknown as Renderer;
@@ -418,12 +425,14 @@ describe('M3 / m3-t3 — frame-loop wraps the single World into [world] with own
     const detached: World[] = [];
     const renderer = {
       backend: 'webgpu' as const,
-      ready: Promise.resolve({ ok: true, value: undefined }),
-      attachWorld: () => ({ ok: true as const, value: undefined }),
-      detachWorld(candidate: World): void {
-        detached.push(candidate);
-      },
-      draw: () => ({ ok: true as const, value: undefined }),
+      attach: (candidate: World) => ({
+        ok: true as const,
+        value: lease(() => detached.push(candidate)),
+      }),
+      draw: () => ({
+        ok: true as const,
+        value: { frameId: 1, deviceGeneration: 0, completed: true as const },
+      }),
       onError: () => () => {},
       dispose: () => {},
     } as unknown as Renderer;

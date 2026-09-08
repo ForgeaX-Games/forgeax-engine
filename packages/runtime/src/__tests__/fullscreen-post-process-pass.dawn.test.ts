@@ -2,7 +2,7 @@
 // and-fullscreen-postpr M2 / w10.
 //
 // Dawn integration tests for FullscreenPostProcessPass:
-// (a) AC-06: addFullscreenPass samples input texture and writes to target,
+// (a) AC-06: the typed fullscreen pass samples input texture and writes to target,
 //     producing visible pixel output (non-black readback).
 // (b) AC-09: FXAA OFF/ON dual-pass pixel readback byte-identical to
 //     pre-refactor baseline (epsilon <= 0.05).
@@ -10,26 +10,25 @@
 //     srgb view confirms the dual-pass comparison has discriminability
 //     (the sRGB-pass variant produces different bytes).
 //
-// These tests are INTENTIONALLY RED in TDD phase: the APIs under test
-// (addFullscreenPass, postProcess.register) do not exist yet; import errors
-// confirm the red state. The tests go green after w13/w14 implement the
-// primitives.
+// These tests exercise the current typed feature-host and RHI record contract;
+// no legacy graph registration API is part of this surface.
 //
 // Follows fxaa-pixel-diff.dawn.test.ts pattern for canvas mock, device capture,
 // and pixel readback.
 
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
+import type { Renderer } from '@forgeax/engine-render';
 import {
   ANTIALIAS_FXAA,
   ANTIALIAS_NONE,
   Camera,
   MeshFilter,
   MeshRenderer,
-} from '@forgeax/engine-render/internal';
+} from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import { createRenderer } from '../index';
+import { constructRuntimeRendererHost } from '../renderer-host';
 
 const WIDTH = 256;
 const HEIGHT = 256;
@@ -118,7 +117,7 @@ function spawnCubeScene(world: World, antialias: number): void {
  * and render target for readback.
  */
 async function setupRenderer(): Promise<{
-  renderer: Awaited<ReturnType<typeof createRenderer>>;
+  renderer: Renderer;
   device: GPUDevice;
   renderTarget: GPUTexture;
 }> {
@@ -176,18 +175,18 @@ async function setupRenderer(): Promise<{
     removeEventListener() {},
   } as unknown as HTMLCanvasElement;
 
-  let renderer: Awaited<ReturnType<typeof createRenderer>>;
+  let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
   try {
-    renderer = await createRenderer(mockCanvas, undefined, {
+    host = await constructRuntimeRendererHost(mockCanvas, undefined, {
       shaderManifestUrl: ENGINE_MANIFEST_URL,
     });
   } finally {
     globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
   }
-  expect(renderer.backend).toBe('webgpu');
-  const ready = await renderer.ready;
-  expect(ready.ok).toBe(true);
-  if (!ready.ok) throw new Error('renderer.ready failed');
+  expect(host.ok).toBe(true);
+  if (!host.ok) throw host.error;
+  const { renderer } = host.value;
+  expect(renderer.inspect().state).toBe('alive');
   const device = sharedDevice;
   if (device === undefined) throw new Error('GPUDevice not captured');
 
@@ -207,10 +206,16 @@ describe('feat-20260604 M2 w10: FullscreenPostProcessPass dawn tests', () => {
 
     const world = new World();
     spawnCubeScene(world, ANTIALIAS_FXAA);
-    expect(renderer.attachWorld(world).ok).toBe(true);
+    const attachment = renderer.attach(world);
+    expect(attachment.ok).toBe(true);
+    if (!attachment.ok) throw attachment.error;
     world.update(1 / 60).unwrap();
 
-    const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const drawn = renderer.draw({
+      leases: [attachment.value],
+      camera: { lease: attachment.value },
+      environment: { lease: attachment.value },
+    });
     expect(drawn.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
 
@@ -241,9 +246,15 @@ describe('feat-20260604 M2 w10: FullscreenPostProcessPass dawn tests', () => {
     // Pass 1: antialias='none' baseline.
     const worldNone = new World();
     spawnCubeScene(worldNone, ANTIALIAS_NONE);
-    expect(renderer.attachWorld(worldNone).ok).toBe(true);
+    const attachmentNone = renderer.attach(worldNone);
+    expect(attachmentNone.ok).toBe(true);
+    if (!attachmentNone.ok) throw attachmentNone.error;
     worldNone.update(1 / 60).unwrap();
-    const drawnNone = renderer.draw([worldNone], { cameraOwner: 0, resourceOwner: 0 });
+    const drawnNone = renderer.draw({
+      leases: [attachmentNone.value],
+      camera: { lease: attachmentNone.value },
+      environment: { lease: attachmentNone.value },
+    });
     expect(drawnNone.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
     const pixelsNone = await doReadPixels(device, renderTarget);
@@ -251,9 +262,15 @@ describe('feat-20260604 M2 w10: FullscreenPostProcessPass dawn tests', () => {
     // Pass 2: antialias='fxaa'.
     const worldFxaa = new World();
     spawnCubeScene(worldFxaa, ANTIALIAS_FXAA);
-    expect(renderer.attachWorld(worldFxaa).ok).toBe(true);
+    const attachmentFxaa = renderer.attach(worldFxaa);
+    expect(attachmentFxaa.ok).toBe(true);
+    if (!attachmentFxaa.ok) throw attachmentFxaa.error;
     worldFxaa.update(1 / 60).unwrap();
-    const drawnFxaa = renderer.draw([worldFxaa], { cameraOwner: 0, resourceOwner: 0 });
+    const drawnFxaa = renderer.draw({
+      leases: [attachmentFxaa.value],
+      camera: { lease: attachmentFxaa.value },
+      environment: { lease: attachmentFxaa.value },
+    });
     expect(drawnFxaa.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
     const pixelsFxaa = await doReadPixels(device, renderTarget);

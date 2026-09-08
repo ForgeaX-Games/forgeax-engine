@@ -16,15 +16,12 @@ import type {
 } from '@forgeax/engine-rhi';
 import type { Result } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
-import { DebugError } from './errors';
-import { extractDrawInfo } from './inspect-core';
-import { adaptReplayFormat } from './replay-format';
-import type { Replay } from './replayer';
-import { bytesPerTexel } from './texel-layout';
+import { createRhiDebugError, type RhiDebugError } from './errors';
 import type { RhiCallEvent } from './types';
 
 // GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ = 8 | 1 = 9.
 const COPY_DST_MAP_READ = 9;
+const TEXTURE_READBACK_USAGE = COPY_DST_MAP_READ;
 
 // ============================================================================
 // resolveTextureDescriptor — tape handle -> source texture descriptor (SSOT)
@@ -41,155 +38,6 @@ export interface ResolvedTextureDescriptor {
   readonly dimension: string;
   /** The source texture's depthOrArrayLayers (slice count); 1 for a plain 2D texture. */
   readonly arrayLayers: number;
-}
-
-export interface LiveObservationDescriptor {
-  readonly texture: unknown;
-  readonly format: string;
-  readonly size: { readonly width: number; readonly height: number };
-  readonly usage: number;
-  readonly frameId: number;
-}
-
-export interface LiveObservationSource {
-  readonly texture: unknown;
-  readonly descriptor: LiveObservationDescriptor;
-  readonly lifetime: { readonly frameId: number; readonly state: 'active' | 'retired' };
-}
-
-type LiveObservationResult<T, E> =
-  | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly error: E };
-
-export interface LiveObservationLease {
-  readonly descriptor: LiveObservationDescriptor;
-  readonly lifetime: { readonly frameId: number; readonly state: 'active' | 'retired' };
-  readonly state: 'active' | 'retired';
-  beginReadback(): LiveObservationResult<
-    LiveObservationSource,
-    { readonly code: string; readonly hint: string }
-  >;
-  retire(): void;
-}
-
-export interface LiveLinearHdrReadback {
-  readonly bytes: Uint8Array;
-  readonly format: 'rgba16float';
-  readonly size: { readonly width: number; readonly height: number };
-  readonly rawHash: string;
-  readonly frameId: number;
-  readonly lifetime: { readonly frameId: number; readonly state: 'active' | 'retired' };
-  readonly status: 'ready';
-}
-
-export interface NamedLinearHdrReadbackMetadata {
-  readonly attachmentName: string;
-  readonly layer: number;
-  readonly capabilitySnapshot: { readonly rgba16floatRenderable: boolean };
-  readonly fallbackArtifact: string | null;
-  readonly lastKnownGood: string;
-}
-
-export interface NamedLinearHdrReadback
-  extends LiveLinearHdrReadback,
-    NamedLinearHdrReadbackMetadata {}
-
-function hashRawBytes(bytes: Uint8Array): string {
-  let hash = 0x811c9dc5;
-  for (const byte of bytes) {
-    hash ^= byte;
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16).padStart(8, '0');
-}
-
-function liveReadbackFailure(stage: 'copy' | 'map', hint: string): Result<never, DebugError> {
-  return err(
-    new DebugError({
-      code: 'snapshot-readback-failed',
-      expected: 'live rgba16float observation readback to succeed',
-      hint,
-      detail: { handleId: 'live-linear-hdr', stage },
-    }),
-  );
-}
-
-/**
- * Eagerly copy and map a producer-authorized live rgba16float observation.
- * The producer owns the lease lifetime; this adapter never retires it.
- */
-export async function readbackLiveLinearHdr(
-  device: RhiDevice,
-  lease: LiveObservationLease,
-): Promise<Result<LiveLinearHdrReadback, DebugError>> {
-  const descriptor = lease.descriptor;
-  if (descriptor.format !== 'rgba16float') {
-    return liveReadbackFailure('copy', 'live observation must retain rgba16float format');
-  }
-  if (
-    !Number.isInteger(descriptor.size.width) ||
-    !Number.isInteger(descriptor.size.height) ||
-    descriptor.size.width <= 0 ||
-    descriptor.size.height <= 0
-  ) {
-    return liveReadbackFailure('copy', 'live observation must have a positive integer size');
-  }
-  if ((descriptor.usage & 0x01) === 0) {
-    return liveReadbackFailure('copy', 'live observation texture must include COPY_SRC usage');
-  }
-
-  const sourceResult = lease.beginReadback();
-  if (!sourceResult.ok) {
-    return liveReadbackFailure(
-      'copy',
-      `live observation lease unavailable: ${sourceResult.error.hint}`,
-    );
-  }
-
-  let bytes: Uint8Array;
-  try {
-    bytes = await readbackTexturePixels(
-      device,
-      sourceResult.value.texture,
-      descriptor.size.width,
-      descriptor.size.height,
-      { bytesPerTexel: 8 },
-    );
-  } catch (cause) {
-    const message = cause instanceof Error ? cause.message : String(cause);
-    const stage = /mapAsync|getMappedRange|map/i.test(message) ? 'map' : 'copy';
-    return liveReadbackFailure(stage, `live observation readback failed: ${message}`);
-  }
-
-  return ok({
-    bytes,
-    format: 'rgba16float',
-    size: descriptor.size,
-    rawHash: hashRawBytes(bytes),
-    frameId: descriptor.frameId,
-    lifetime: sourceResult.value.lifetime,
-    status: 'ready',
-  });
-}
-
-/** Add producer-owned attachment metadata without duplicating the readback path. */
-export async function readbackNamedLinearHdr(
-  device: RhiDevice,
-  lease: LiveObservationLease,
-  metadata: NamedLinearHdrReadbackMetadata,
-): Promise<Result<NamedLinearHdrReadback, DebugError>> {
-  if (metadata.attachmentName.trim() === '') {
-    return liveReadbackFailure('copy', 'named linear HDR attachment must have a non-empty name');
-  }
-  if (!Number.isInteger(metadata.layer) || metadata.layer < 0) {
-    return liveReadbackFailure(
-      'copy',
-      'named linear HDR attachment layer must be a non-negative integer',
-    );
-  }
-  const result = await readbackLiveLinearHdr(device, lease);
-  if (!result.ok) return result;
-  return ok({ ...result.value, ...metadata });
 }
 
 /**
@@ -295,7 +143,7 @@ export function resolveAttachmentSize(
  * row requirement.
  *
  * @param device - The RHI device that owns the texture.
- * @param texture - The texture to read back (opaque branded handle cast as any).
+ * @param texture - The texture to read back (opaque branded handle at the boundary).
  * @param texWidth - Texture width in pixels.
  * @param texHeight - Texture height in pixels.
  */
@@ -440,11 +288,11 @@ export async function readbackTexturePixels(
  * 5. Unmap + destroy staging buffer.
  *
  * Returns Ok(ArrayBuffer) (a detached copy independent of the mapped range)
- * or Err(DebugError snapshot-readback-failed) with `.detail.stage` narrowing
+ * or Err(readback-failed) with `.detail.phase` narrowing
  * the failure point (copy / map). The buffer is passed opaque (`unknown`)
  * because RHI handles are branded; the caller resolved it from the descriptor
- * registry. `.detail.handleId` is left empty here — the caller (snapshotResource)
- * holds the handleId and re-stamps it on the failure path.
+ * registry. The caller (snapshotResource) holds the handleId and maps this
+ * readback error to the capture-snapshot-failed boundary.
  *
  * Reuses the M0-fixed mapAsync(0x1) + Result-unwrap pattern from
  * readbackTexturePixels (never the all-zero mode=2 bug).
@@ -457,16 +305,9 @@ export async function readbackBufferBytes(
   device: RhiDevice,
   buffer: unknown,
   size: number,
-): Promise<Result<ArrayBuffer, DebugError>> {
-  const fail = (stage: 'copy' | 'map', hint: string): Result<ArrayBuffer, DebugError> =>
-    err(
-      new DebugError({
-        code: 'snapshot-readback-failed',
-        expected: 'buffer GPU byte readback to succeed',
-        hint,
-        detail: { handleId: '', stage },
-      }),
-    );
+): Promise<Result<ArrayBuffer, RhiDebugError>> {
+  const fail = (phase: 'copy' | 'map', cause: string): Result<ArrayBuffer, RhiDebugError> =>
+    err(createRhiDebugError('readback-failed', { stage: 'readback', phase, cause }));
 
   const readbackBufferResult = device.createBuffer({ size, usage: COPY_DST_MAP_READ });
   if (!readbackBufferResult.ok) {
@@ -534,6 +375,31 @@ export interface BufferReadbackBatchRequest {
 export interface BufferReadbackBatchCallbacks {
   readonly onResourceStart?: (handleId: string) => void;
   readonly onResourceComplete?: (handleId: string) => void;
+  /** Return true when the owning snapshot generation has been invalidated. */
+  readonly isCancelled?: () => boolean;
+}
+
+async function raceCancellation<T>(
+  work: Promise<T>,
+  isCancelled: (() => boolean) | undefined,
+): Promise<{ readonly cancelled: true } | { readonly cancelled: false; readonly value: T }> {
+  if (isCancelled === undefined) return { cancelled: false, value: await work };
+  if (isCancelled()) return { cancelled: true };
+
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const cancelled = new Promise<{ readonly cancelled: true }>((resolve) => {
+    timer = setInterval(() => {
+      if (isCancelled()) resolve({ cancelled: true });
+    }, 1);
+  });
+  try {
+    return await Promise.race([
+      work.then((value) => ({ cancelled: false as const, value })),
+      cancelled,
+    ]);
+  } finally {
+    if (timer !== undefined) clearInterval(timer);
+  }
 }
 
 /**
@@ -550,18 +416,17 @@ export async function readbackBufferBytesBatch(
   device: RhiDevice,
   requests: readonly BufferReadbackBatchRequest[],
   callbacks: BufferReadbackBatchCallbacks = {},
-): Promise<Result<ReadonlyMap<string, ArrayBuffer>, DebugError>> {
+): Promise<Result<ReadonlyMap<string, ArrayBuffer>, RhiDebugError>> {
   if (requests.length === 0) return ok(new Map());
   const firstRequest = requests[0];
   if (firstRequest === undefined) return ok(new Map());
 
-  const fail = (handleId: string, stage: 'copy' | 'map', hint: string) =>
+  const fail = (handleId: string, phase: 'copy' | 'map', cause: string) =>
     err(
-      new DebugError({
-        code: 'snapshot-readback-failed',
-        expected: 'buffer GPU byte readback to succeed',
-        hint,
-        detail: { handleId, stage },
+      createRhiDebugError('readback-failed', {
+        stage: 'readback',
+        phase,
+        cause: `${handleId}: ${cause}`,
       }),
     );
   const staging: Array<{ readonly request: BufferReadbackBatchRequest; readonly buffer: Buffer }> =
@@ -622,18 +487,32 @@ export async function readbackBufferBytesBatch(
     // Start every mapAsync together. The GPU work has already been submitted
     // and drained; awaiting each map before starting the next one recreates a
     // per-resource synchronization wall even after batching the copies.
-    const mapResults = await Promise.all(
+    const mapResultsPromise = Promise.all(
       staging.map(async (item) => {
         callbacks.onResourceStart?.(item.request.handleId);
         try {
-          return { item, result: await item.buffer.mapAsync(0x1) };
+          const result = await item.buffer.mapAsync(0x1);
+          if (result.ok) {
+            if (callbacks.isCancelled?.()) result.value.unmap();
+            else mapped.set(item.buffer, result.value);
+          }
+          return { item, result };
         } catch (error) {
           return { item, error };
         }
       }),
     );
+    const mapResults = await raceCancellation(mapResultsPromise, callbacks.isCancelled);
+    if (mapResults.cancelled) {
+      cleanup();
+      return fail(
+        firstRequest.handleId,
+        'map',
+        'buffer batch readback cancelled after the snapshot generation was invalidated',
+      );
+    }
     const result = new Map<string, ArrayBuffer>();
-    for (const mappedResult of mapResults) {
+    for (const mappedResult of mapResults.value) {
       if ('error' in mappedResult) {
         cleanup();
         return fail(
@@ -652,7 +531,6 @@ export async function readbackBufferBytesBatch(
       }
       const mappedBuffer = mappedResult.result.value;
       const item = mappedResult.item;
-      mapped.set(item.buffer, mappedBuffer);
       const rangeResult = mappedBuffer.getMappedRange();
       if (!rangeResult.ok) {
         cleanup();
@@ -679,141 +557,248 @@ export async function readbackBufferBytesBatch(
   }
 }
 
-// ============================================================================
-// readbackDrawRt — node-free GPU readback for a specific drawIdx (D-2/D-5)
-// ============================================================================
+/** One (layer, mip) copy contributing to a complete texture snapshot blob. */
+export interface TextureReadbackBatchSlice {
+  readonly layer: number;
+  readonly mip: number;
+  readonly width: number;
+  readonly height: number;
+  readonly byteOffset: number;
+  readonly byteLength: number;
+}
+
+/** A complete texture whose subresources are copied in one bounded batch. */
+export interface TextureReadbackBatchRequest {
+  readonly handleId: string;
+  readonly texture: unknown;
+  readonly bytesPerBlock: number;
+  readonly blockWidth: number;
+  readonly blockHeight: number;
+  readonly totalBytes: number;
+  readonly slices: readonly TextureReadbackBatchSlice[];
+}
+
+export interface TextureReadbackBatchCallbacks {
+  readonly onResourceStart?: (handleId: string) => void;
+  readonly onResourceComplete?: (handleId: string) => void;
+  /** Return true when the owning snapshot generation has been invalidated. */
+  readonly isCancelled?: () => boolean;
+}
 
 /**
- * Read back the color attachment RT pixels for a specific draw call within
- * a replay session.
- *
- * Moved from inspector.ts:530-622 (readbackAndEncodePng segment). Anchors
- * on the target drawIdx color attachment (path B per-draw), not the last
- * beginRenderPass (path A). Returns raw {width, height, pixels} — both
- * rt-to-canvas (L3c) and inspector PNG encode (M2) consume this shape.
- *
- * Steps:
- * 1. Access replay._events and validate.
- * 2. Call extractDrawInfo to get colorAttachmentHandleId at drawIdx.
- * 3. Walk createTextureView events (view->source texture backtracking)
- *    to resolve the GPUTexture handleId from the view handleId.
- * 4. Resolve the texture via replay._resolveHandle.
- * 5. resolveAttachmentSize for w/h.
- * 6. readbackTexturePixels for pixel data.
- *
- * @param replay - The Replay session.
- * @param drawIdx - The draw call index to read back.
- * @param device - The RhiDevice for GPU readback.
- * @returns Ok({width, height, pixels}) or Err(DebugError) on failure.
+ * Read complete texture snapshots with one submission and drain per bounded
+ * resource batch. Each subresource retains its own staging buffer, so mip and
+ * array-layer bytes are copied without padding or ordering loss.
  */
-export async function readbackDrawRt(
-  replay: Replay,
-  drawIdx: number,
+export async function readbackTexturePixelsBatch(
   device: RhiDevice,
-): Promise<
-  Result<
-    {
-      readonly width: number;
-      readonly height: number;
-      readonly format: string;
-      readonly pixels: Uint8Array;
-    },
-    DebugError
-  >
-> {
-  // Access the replay's internal events for draw info extraction.
-  const events = (replay as unknown as { _events: readonly RhiCallEvent[] })._events as
-    | readonly RhiCallEvent[]
-    | undefined;
-  if (events === undefined) {
-    return err(
-      new DebugError({
-        code: 'rt-readback-failed',
-        expected: 'replay to expose internal _events for RT readback',
-        hint: 'the Replay implementation must provide _events accessor for the inspector',
+  requests: readonly TextureReadbackBatchRequest[],
+  callbacks: TextureReadbackBatchCallbacks = {},
+): Promise<Result<ReadonlyMap<string, ArrayBuffer>, RhiDebugError>> {
+  if (requests.length === 0) return ok(new Map());
+  const firstRequest = requests[0];
+  if (firstRequest === undefined) return ok(new Map());
+
+  const fail = (handleId: string, phase: 'copy' | 'map', cause: string) =>
+    err(
+      createRhiDebugError('readback-failed', {
+        stage: 'readback',
+        phase,
+        cause: `${handleId}: ${cause}`,
       }),
     );
-  }
+  const staging: Array<{
+    readonly request: TextureReadbackBatchRequest;
+    readonly slice: TextureReadbackBatchSlice;
+    readonly buffer: Buffer;
+    readonly bytesPerBlock: number;
+    readonly blockWidth: number;
+    readonly blockHeight: number;
+  }> = [];
+  const mapped = new Map<Buffer, MappedBuffer>();
+  const cleaned = new Set<Buffer>();
+  const cleanup = () => {
+    for (const mappedBuffer of mapped.values()) mappedBuffer.unmap();
+    for (const item of staging) {
+      if (!cleaned.has(item.buffer)) {
+        device.destroyBuffer(item.buffer);
+        cleaned.add(item.buffer);
+      }
+    }
+  };
 
-  // Find the color attachment texture handle at drawIdx
-  const drawInfo = extractDrawInfo(events, drawIdx);
-  const attachmentHandleId =
-    drawInfo.colorAttachmentResolveTargetHandleId ?? drawInfo.colorAttachmentHandleId;
-  if (attachmentHandleId === undefined) {
-    return err(
-      new DebugError({
-        code: 'rt-readback-failed',
-        expected: 'a color attachment exists at the given drawIdx',
-        hint: `no color attachment found at drawIdx ${drawIdx}; the draw may be in a compute pass or the tape may have no render pass`,
-      }),
-    );
-  }
-
-  // Resolve the texture handle from the replay
-  const resolveHandle = (replay as unknown as { _resolveHandle(id: string): unknown })
-    ._resolveHandle;
-  if (typeof resolveHandle !== 'function') {
-    return err(
-      new DebugError({
-        code: 'rt-readback-failed',
-        expected: 'replay to expose _resolveHandle method for RT readback',
-        hint: 'the Replay implementation must provide _resolveHandle accessor for the inspector',
-      }),
-    );
-  }
-
-  // colorAttachmentHandleId is the textureVIEW handle. copyTextureToBuffer needs
-  // the source GPUTexture, so resolve view -> source texture (+ real dimensions).
-  const resolved = resolveTextureDescriptor(events, attachmentHandleId);
-  const textureHandleId = resolved?.handleId ?? attachmentHandleId;
-
-  const texture = resolveHandle(textureHandleId);
-  // biome-ignore lint/suspicious/noExplicitAny: texture is an opaque branded type from RHI
-  const tex = texture as any;
-  if (tex === undefined) {
-    return err(
-      new DebugError({
-        code: 'rt-readback-failed',
-        expected: 'color attachment texture was recreated by replay',
-        hint: `handleId '${textureHandleId}' (from attachment '${attachmentHandleId}') not found in replay handle map`,
-      }),
-    );
-  }
-
-  // Resolve real texture dimensions from tape events
-  const texWidth = resolved?.width ?? 512;
-  const texHeight = resolved?.height ?? 512;
-  // Older tapes can lack a createTexture event for the attachment. Keep the
-  // established 512x512 fallback usable by pairing it with the former implicit
-  // RGBA8 readback format.
-  const format = adaptReplayFormat(resolved?.format) ?? 'rgba8unorm';
-  const texelBytes = bytesPerTexel(format as GPUTextureFormat | undefined);
-  if (format === undefined || texelBytes === undefined) {
-    return err(
-      new DebugError({
-        code: 'rt-readback-failed',
-        expected: 'a copyable color attachment format',
-        hint: `color attachment '${drawInfo.colorAttachmentHandleId}' has unsupported format '${format ?? 'unknown'}'`,
-      }),
-    );
-  }
-
-  // Read back tight-packed native texels. The display layer decodes these
-  // according to `format`; assuming RGBA8 corrupts wide formats such as HDR f16.
-  let pixels: Uint8Array;
+  let encoder: RhiCommandEncoder;
   try {
-    pixels = await readbackTexturePixels(device, tex, texWidth, texHeight, {
-      bytesPerTexel: texelBytes,
-    });
-  } catch (e) {
-    return err(
-      new DebugError({
-        code: 'rt-readback-failed',
-        expected: 'readbackTexturePixels to succeed',
-        hint: `GPU readback failed: ${String(e)}`,
+    const encoderResult = device.createCommandEncoder({});
+    if (!encoderResult.ok)
+      return fail(
+        firstRequest.handleId,
+        'copy',
+        `command encoder creation failed: ${encoderResult.error.code}`,
+      );
+    encoder = encoderResult.value;
+    for (const request of requests) {
+      for (const slice of request.slices) {
+        const blockCountX = Math.ceil(slice.width / request.blockWidth);
+        const blockCountY = Math.ceil(slice.height / request.blockHeight);
+        const rowBytes = blockCountX * request.bytesPerBlock;
+        const alignedRowBytes = Math.ceil(rowBytes / 256) * 256;
+        const stagingResult = device.createBuffer({
+          size: alignedRowBytes * blockCountY,
+          usage: TEXTURE_READBACK_USAGE,
+        });
+        if (!stagingResult.ok) {
+          cleanup();
+          return fail(
+            request.handleId,
+            'copy',
+            `staging buffer creation failed: ${stagingResult.error.code}`,
+          );
+        }
+        const stagingBuffer = stagingResult.value;
+        staging.push({
+          request,
+          slice,
+          buffer: stagingBuffer,
+          bytesPerBlock: request.bytesPerBlock,
+          blockWidth: request.blockWidth,
+          blockHeight: request.blockHeight,
+        });
+        try {
+          encoder.copyTextureToBuffer(
+            {
+              texture: request.texture,
+              mipLevel: slice.mip,
+              origin: { x: 0, y: 0, z: slice.layer },
+            } as unknown as never,
+            {
+              buffer: stagingBuffer,
+              offset: 0,
+              bytesPerRow: alignedRowBytes,
+              rowsPerImage: blockCountY,
+            } as unknown as never,
+            {
+              width: blockCountX * request.blockWidth,
+              height: blockCountY * request.blockHeight,
+              depthOrArrayLayers: 1,
+            },
+          );
+        } catch (error) {
+          cleanup();
+          return fail(request.handleId, 'copy', `copyTextureToBuffer failed: ${String(error)}`);
+        }
+      }
+    }
+    const finishResult = encoder.finish();
+    if (!finishResult.ok) {
+      cleanup();
+      return fail(
+        firstRequest.handleId,
+        'copy',
+        `encoder.finish failed: ${finishResult.error.code}`,
+      );
+    }
+    device.queue.submit([finishResult.value as unknown as never] as unknown as readonly never[]);
+    const drain = raceCancellation(device.queue.onSubmittedWorkDone(), callbacks.isCancelled);
+    const drainResult = await drain;
+    if (drainResult.cancelled) {
+      cleanup();
+      return fail(
+        firstRequest.handleId,
+        'map',
+        'texture batch readback cancelled after the snapshot generation was invalidated',
+      );
+    }
+
+    for (const request of requests) callbacks.onResourceStart?.(request.handleId);
+    const mapResultsPromise = Promise.all(
+      staging.map(async (item) => {
+        try {
+          const result = await item.buffer.mapAsync(0x1);
+          if (result.ok) {
+            if (callbacks.isCancelled?.()) result.value.unmap();
+            else mapped.set(item.buffer, result.value);
+          }
+          return { item, result };
+        } catch (error) {
+          return { item, error };
+        }
       }),
     );
-  }
+    const mapResults = await raceCancellation(mapResultsPromise, callbacks.isCancelled);
+    if (mapResults.cancelled) {
+      cleanup();
+      return fail(
+        firstRequest.handleId,
+        'map',
+        'texture batch readback cancelled after the snapshot generation was invalidated',
+      );
+    }
 
-  return ok({ width: texWidth, height: texHeight, format, pixels });
+    const bytesByHandle = new Map<string, Uint8Array>();
+    for (const request of requests)
+      bytesByHandle.set(request.handleId, new Uint8Array(request.totalBytes));
+    for (const mappedResult of mapResults.value) {
+      if ('error' in mappedResult) {
+        cleanup();
+        return fail(
+          mappedResult.item.request.handleId,
+          'map',
+          `mapAsync(READ) failed: ${String(mappedResult.error)}`,
+        );
+      }
+      if (!mappedResult.result.ok) {
+        cleanup();
+        return fail(
+          mappedResult.item.request.handleId,
+          'map',
+          `mapAsync(READ) failed: ${mappedResult.result.error.code}`,
+        );
+      }
+      const item = mappedResult.item;
+      const mappedBuffer = mappedResult.result.value;
+      const rangeResult = mappedBuffer.getMappedRange();
+      if (!rangeResult.ok) {
+        cleanup();
+        return fail(
+          item.request.handleId,
+          'map',
+          `getMappedRange failed: ${rangeResult.error.code}`,
+        );
+      }
+      const fullBytes = new Uint8Array(rangeResult.value);
+      const blockCountX = Math.ceil(item.slice.width / item.blockWidth);
+      const blockCountY = Math.ceil(item.slice.height / item.blockHeight);
+      const rowBytes = blockCountX * item.bytesPerBlock;
+      const alignedRowBytes = Math.ceil(rowBytes / 256) * 256;
+      const output = bytesByHandle.get(item.request.handleId);
+      if (output === undefined) {
+        cleanup();
+        return fail(item.request.handleId, 'map', 'texture batch returned an unknown handle');
+      }
+      for (let y = 0; y < blockCountY; y++) {
+        const srcOffset = y * alignedRowBytes;
+        const dstOffset = item.slice.byteOffset + y * rowBytes;
+        for (let x = 0; x < rowBytes; x++) output[dstOffset + x] = fullBytes[srcOffset + x] ?? 0;
+      }
+      mappedBuffer.unmap();
+      mapped.delete(item.buffer);
+      device.destroyBuffer(item.buffer);
+      cleaned.add(item.buffer);
+    }
+    const result = new Map<string, ArrayBuffer>();
+    for (const request of requests) {
+      const bytes = bytesByHandle.get(request.handleId);
+      if (bytes === undefined) {
+        cleanup();
+        return fail(request.handleId, 'map', 'texture batch returned no bytes for a live texture');
+      }
+      result.set(request.handleId, bytes.buffer as ArrayBuffer);
+      callbacks.onResourceComplete?.(request.handleId);
+    }
+    return ok(result);
+  } catch (error) {
+    cleanup();
+    return fail(firstRequest.handleId, 'map', `texture batch readback failed: ${String(error)}`);
+  }
 }

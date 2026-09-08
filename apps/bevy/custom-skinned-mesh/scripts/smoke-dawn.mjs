@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,19 +71,18 @@ const { createRenderer } = await import('@forgeax/engine-runtime');
 const { scenePlugin, Transform } = await import('@forgeax/engine-scene');
 const { buildWorld } = await import(resolve(appRoot, 'src/main.ts'));
 const manifest = readFileSync(resolve(appRoot, 'dist/shaders/manifest.json'), 'utf8');
-const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: `data:application/json,${encodeURIComponent(manifest)}` });
+const renderer = await createSmokeRenderer(createRenderer, canvas, {}, { shaderManifestUrl: `data:application/json,${encodeURIComponent(manifest)}` });
 const errors = [];
-renderer.onError((error) => errors.push(error));
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
+subscribeSmokeErrors(renderer, (error) => errors.push(error));
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
-if (!(await scenePlugin().build(world)).ok) throw new Error('scene plugin failed');
+const { createWorldContext } = await import('@forgeax/engine-ecs');
+await createWorldContext(world, [scenePlugin()]);
 const rigs = buildWorld(world);
 const initialUpdate = world.update(0);
 if (!initialUpdate.ok) throw new Error(`${initialUpdate.error.code}: ${initialUpdate.error.hint}`);
-renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+drawSmokeFrame(renderer, world);
 await delay(30);
 const earlyFrame = await capture();
 const early = world.get(rigs[0].upper, Transform);
@@ -90,7 +90,7 @@ const earlyQuat = early.ok ? Array.from(early.value.quat) : [];
 for (let frame = 1; frame < frames; frame++) {
   const update = world.update(1 / 60);
   if (!update.ok) throw new Error(`${update.error.code}: ${update.error.hint}`);
-  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const draw = drawSmokeFrame(renderer, world);
   if (!draw.ok) errors.push(draw.error);
 }
 await delay(30);
@@ -113,7 +113,7 @@ const motion = diff(earlyFrame, lateFrame);
 const lateQuat = late.ok ? Array.from(late.value.quat) : [];
 const changed = Math.abs((lateQuat[2] ?? 0) - (earlyQuat[2] ?? 0)) > 0.01 || Math.abs((lateQuat[3] ?? 0) - (earlyQuat[3] ?? 0)) > 0.01;
 const checks = [
-  ['backend=webgpu', renderer.backend === 'webgpu'],
+  ['backend=webgpu', rendererBackend(renderer) === 'webgpu'],
   ['two-joint-skin-rig', rigs.length === 6],
   ['joint-transform-animated', changed],
   ['render-motion-pixels', motion.pixels > 100],

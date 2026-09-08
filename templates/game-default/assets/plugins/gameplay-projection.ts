@@ -1,6 +1,7 @@
 import { Camera } from '@forgeax/engine-render';
-import type { BootstrapContext, GameProjectionValue } from '@forgeax/engine-app';
+import type { GameHost, GameProjectionValue } from '@forgeax/engine-app';
 import { Disabled, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import type { Context } from '@forgeax/engine-plugin';
 import { Transform } from '@forgeax/engine-scene';
 import type { GameplayStateHandle } from './gameplay-state';
 import { TargetHealth, type TargetHealthHandle } from './target-health';
@@ -37,11 +38,15 @@ import type { SentinelRangedThreat } from './sentinel-ranged-threat';
 import { GAME_DEFAULT_COMMAND_COUNTERS, type GameplayCommandCounters } from './resources/gameplay';
 import { Projectile, projectileAllegianceFromValue } from './components/gameplay';
 import type { LightingModeHandle } from './lighting-mode';
+import type { ResonanceForge } from './resonance-forge';
+import { ANIMATED_TARGET_SHADER_ID } from './animated-target-material';
+import { HIT_FLASH_SHADER_ID } from './hit-flash-material';
 
 const COUNTERATTACK_BASELINE = deriveCounterattackPressure(0);
 
 export type GameplayProjectionContext = {
-  readonly host: BootstrapContext;
+  readonly context: Context;
+  readonly host: GameHost;
   readonly world: World;
   readonly camera: EntityHandle;
   readonly getMode: () => ViewMode;
@@ -84,6 +89,7 @@ export type GameplayProjectionContext = {
   readonly sentinel: SentinelRangedThreat | undefined;
   readonly projectileEntities: () => readonly EntityHandle[];
   readonly lightingMode: LightingModeHandle;
+  readonly resonanceForge: ResonanceForge;
 };
 
 const EMPTY_VIDEO_TEXTURE = { available: false, active: 'original', swaps: 0, hitReactions: 0, lastHitPlayhead: null, guid: null, name: null, kind: null, url: null } as const;
@@ -140,6 +146,7 @@ export function installGameplayProjection(args: GameplayProjectionContext): void
           state: args.gameplayState.snapshot(),
           viewMode: args.getMode(),
           lighting: args.lightingMode.snapshot(),
+          resonanceForge: args.resonanceForge.snapshot(),
           cameraProjection: cameraData.ok && cameraData.value.projection === 1 ? 'orthographic' : 'perspective',
           targetHealth: args.targetHealth.snapshot(),
           targetDisabling: args.targetDisabling.snapshot(),
@@ -235,10 +242,12 @@ export function installGameplayProjection(args: GameplayProjectionContext): void
     projection.registerRead({
       id: 'game-default.renderer-contract',
       title: 'Read renderer contract',
-      description: 'Read the public renderer health and registered material shader ids.',
+      description: 'Read bounded renderer inspection facts and the build-owned material shader ids.',
       read: (): GameProjectionValue => asProjection({
-        health: host.renderer?.health() ?? { reason: 'unavailable', recoverable: false },
-        materialShaderIdentifiers: host.renderer?.shader.materialShaderIdentifiers() ?? [],
+        health: host.renderer === undefined
+          ? { state: 'unavailable' }
+          : { state: host.renderer.inspect().state, surface: host.renderer.inspect().surface },
+        materialShaderIdentifiers: [HIT_FLASH_SHADER_ID, ANIMATED_TARGET_SHADER_ID],
       }),
     }),
     projection.registerAction({
@@ -393,7 +402,10 @@ export function installGameplayProjection(args: GameplayProjectionContext): void
       },
     }),
   ];
-  host.registerCleanup?.(() => {
-    for (const dispose of projectionDisposers.reverse()) dispose();
-  });
+  args.context.effect(
+    () => () => {
+      for (const dispose of projectionDisposers.reverse()) dispose();
+    },
+    'game-default/projection',
+  );
 }

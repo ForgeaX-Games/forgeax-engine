@@ -1,5 +1,4 @@
 #define_import_path bevy::shader_defs
-#pragma variant_axis IS_RED
 #import forgeax_view::common::{view, meshes}
 #import forgeax_pbr::brdf::{f_schlick}
 
@@ -33,8 +32,5 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   let f = f_schlick(max(dot(n, v), 0.0), vec3<f32>(0.04));
   let sampled = textureSample(baseColorTexture, baseColorTexture_sampler, in.uv);
   var color = vec4<f32>(material.baseColor.rgb * pulse_factor * sampled.rgb * (vec3<f32>(1.0) - f * 0.1), material.baseColor.a * sampled.a);
-#if IS_RED == true
-  color = vec4<f32>(1.0, 0.05, 0.05, 1.0);
-#endif
   return color;
 }

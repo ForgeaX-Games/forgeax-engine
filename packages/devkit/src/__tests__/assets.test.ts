@@ -9,7 +9,7 @@ async function fixture(): Promise<string> {
   await Promise.all([
     writeFile(
       resolve(root, 'forge.json'),
-      `${JSON.stringify({ id: 'game', name: 'Game', entry: 'main.ts' })}\n`,
+      `${JSON.stringify({ id: 'game', name: 'Game', schemaVersion: '1.0.0', entry: 'main.ts', plugins: [{ id: 'gameplay', name: './main.ts' }] })}\n`,
     ),
     writeFile(resolve(root, 'package.json'), '{"name":"game"}\n'),
     writeFile(resolve(root, 'main.ts'), 'export async function bootstrap() {}\n'),

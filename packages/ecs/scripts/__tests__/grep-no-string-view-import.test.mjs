@@ -1,4 +1,5 @@
 // w15 — colocated test for packages/ecs/scripts/grep-no-string-view-import.mjs.
+// @perf-budget-skip: intentional repository-wide freeze-gate subprocess scan.
 //
 // feat-20260515-string-managed-collapse M4 / w15 — verifies the two-mode
 // contract of the StringView-import freeze gate:

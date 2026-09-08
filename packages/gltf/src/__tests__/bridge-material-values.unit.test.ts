@@ -83,4 +83,24 @@ describe('glTF material bridge values', () => {
       emissiveTexture: { texture: 104, sampler: 204, coordinates: { set: 5 } },
     });
   });
+
+  it('keeps identity texture authoring compact', () => {
+    const material = toMaterialAsset(
+      {
+        baseColorTexture: { texture: 0 },
+        metallicFactor: 0.5,
+        roughnessFactor: 0.5,
+      } as unknown as GltfMaterialIr,
+      {
+        textureHandles: new Map([[0, 100]]) as unknown as ReadonlyMap<
+          number,
+          Handle<'TextureAsset', 'shared'>
+        >,
+        samplerHandles: new Map(),
+      },
+    );
+
+    expect(material.values?.baseColorTexture).toEqual({ texture: 100 });
+    expect(material.values?.baseColorTexture).not.toHaveProperty('coordinates');
+  });
 });

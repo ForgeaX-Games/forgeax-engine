@@ -2,14 +2,16 @@ import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { fbxImporter } from '@forgeax/engine-fbx';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
+import { optionalAssetPack } from '../../shared/src/optional-asset-pack.js';
 
 // hello-fbx-skin vite config (feat-20260615-fbx-importer-via-sdk M5 t51).
 //
 // pluginPack scans forgeax-engine-assets/vendor/fbx-test for humanoid.fbx +
 // humanoid.fbx.meta.json, dispatching to fbxImporter at build time. The runtime
-// resolves the GUIDs at registry time via configurePackIndex('/pack-index.json')
+// resolves the GUIDs at registry time via configureRuntimeAssetCatalog(...)
 // + loadByGuid<SceneAsset>(sceneGuid) + sceneInstances.instantiate x 3 with
 // per-instance AnimationPlayer for pose-distinct rendering.
 //
@@ -18,15 +20,15 @@ import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
+const assetRoots = [resolve(monorepoRoot, 'forgeax-engine-assets/vendor/fbx-test')];
+const runtimeBinding = createStandaloneRuntimeAssetBinding('hello-fbx-skin');
 
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
-    pluginPack({
-      refresh: reloadAssetHost(),
-      roots: [resolve(monorepoRoot, 'forgeax-engine-assets/vendor/fbx-test')],
-      importers: [fbxImporter],
-    }),
+    ...optionalAssetPack(assetRoots, () =>
+      pluginPack({ runtimeBinding, refresh: reloadAssetHost(), roots: assetRoots, importers: [fbxImporter] }),
+    ),
   ],
   server: {
     fs: {

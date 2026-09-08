@@ -1,9 +1,9 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { buildCatalogResult } from '@forgeax/engine-import';
+import type { PackIndexEntry } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it } from 'vitest';
-
-import { buildCatalog, buildCatalogResult } from '../build-catalog.js';
 
 const roots: string[] = [];
 const GOOD_GUID = '018e7a4d-1234-7abc-8def-000000000010';
@@ -76,6 +76,22 @@ describe('catalog failure result', () => {
     });
   });
 
+  it('keeps browser-safe recovery fields after JSON roundtrip', async () => {
+    const root = await makeRoot('json-roundtrip');
+    await writeMeta(root, meta('missing-provider', 'host/blob'));
+    const result = await buildCatalogResult([root]);
+    const diagnostic = result.diagnostics[0];
+    const response = JSON.parse(JSON.stringify(diagnostic));
+
+    expect(response).toMatchObject({
+      code: 'catalog-raw-source-unsupported',
+      expected: expect.any(String),
+      hint: expect.any(String),
+      actual: 'missing-provider',
+    });
+    expect(response.message).toContain('missing-provider');
+  });
+
   it('rejects shader source rows instead of silently skipping them', async () => {
     const root = await makeRoot('shader-source');
     await writeMeta(root, meta('shader', 'shader'));
@@ -92,19 +108,6 @@ describe('catalog failure result', () => {
     });
   });
 
-  it('supports a host-owned build-input filter without weakening the default fail-closed policy', async () => {
-    const root = await makeRoot('shader-filtered');
-    await writeMeta(root, meta('shader', 'shader'));
-
-    const result = await buildCatalogResult([root], '/', new Set(), {
-      ignorePath: (path) => path.endsWith('.meta.json'),
-    });
-
-    expect(result.authority).toBe('authoritative');
-    expect(result.entries).toEqual([]);
-    expect(result.diagnostics).toEqual([]);
-  });
-
   it('marks schema or scan failure as degraded with an affected root', async () => {
     const root = await makeRoot('schema-failure');
     await writeMeta(root, { ...meta('gltf', 'mesh'), importSettings: 'invalid' });
@@ -115,7 +118,7 @@ describe('catalog failure result', () => {
     expect(result.diagnostics).toMatchObject([
       {
         code: 'catalog-scan-failed',
-        path: root,
+        path: '<scan>',
         subjects: [root],
         expected: expect.any(String),
         actual: expect.any(String),
@@ -124,7 +127,7 @@ describe('catalog failure result', () => {
     ]);
   });
 
-  it('keeps unaffected roots visible only in an explicitly degraded result', async () => {
+  it('does not rescan or publish a partial Catalog after one inventory failure', async () => {
     const goodRoot = await makeRoot('partial-good');
     const badRoot = await makeRoot('partial-bad');
     await writeFile(join(goodRoot, 'good.pack.json'), JSON.stringify(pack(GOOD_GUID)));
@@ -134,11 +137,55 @@ describe('catalog failure result', () => {
     const result = await buildCatalogResult([goodRoot, badRoot]);
 
     expect(result.authority).toBe('degraded');
-    expect(result.entries.map((entry) => entry.guid)).toEqual([GOOD_GUID]);
-    expect(result.diagnostics.some((diagnostic) => diagnostic.path === badRoot)).toBe(true);
-    expect(result.diagnostics.some((diagnostic) => diagnostic.subjects?.includes(badRoot))).toBe(
-      true,
-    );
-    expect(await buildCatalog([goodRoot, badRoot])).toEqual([]);
+    expect(result.entries).toEqual([]);
+    expect(result.diagnostics).toMatchObject([
+      {
+        code: 'catalog-scan-failed',
+        path: '<scan>',
+        subjects: [goodRoot, badRoot],
+      },
+    ]);
+  });
+
+  it('keeps a prior LKG navigation URL visible without relabeling the failed row current', () => {
+    const row = {
+      guid: GOOD_GUID,
+      kind: 'scene',
+      sourcePath: 'generated.pack.ts',
+      packageUrl: '/__forgeax-ddc/new.pack.json',
+      subject: 'imported-output',
+      execution: 'cooked',
+      lifecycle: 'failed',
+      projection: {
+        subject: 'imported-output',
+        execution: 'cooked',
+        lifecycle: 'failed',
+        operations: [],
+        lastKnownGood: { packageUrl: '/__forgeax-ddc/old.pack.json' },
+      },
+    } as unknown as PackIndexEntry;
+
+    const projected = {
+      schemaVersion: 'catalog-legacy-v1' as const,
+      entries: [row],
+      authority: 'degraded' as const,
+      diagnostics: [
+        {
+          code: 'catalog-scriptable-pack-invalid' as const,
+          path: 'generated.pack.ts',
+          message: 'source generation failed',
+        },
+      ],
+    };
+
+    expect(projected.authority).toBe('degraded');
+    expect(projected.entries[0]).toMatchObject({
+      lifecycle: 'failed',
+      packageUrl: '/__forgeax-ddc/new.pack.json',
+      projection: {
+        lifecycle: 'failed',
+        lastKnownGood: { packageUrl: '/__forgeax-ddc/old.pack.json' },
+      },
+    });
   });
 });

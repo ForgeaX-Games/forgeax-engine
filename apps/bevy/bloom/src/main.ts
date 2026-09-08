@@ -6,6 +6,7 @@
 
 import { createApp } from '@forgeax/engine-app';
 import { Update } from '@forgeax/engine-ecs';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { BLOOM_DISABLED, BLOOM_ENABLED, Camera } from '@forgeax/engine-render';
 import { buildBloomWorld } from './bloom';
 
@@ -36,7 +37,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     after: ['input-frame-start-scan'],
     queries: [],
     fn: () => {
-      const snap = app.renderer.input.snapshot(world);
+      const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (!snap) return;
       const cur = snap.keyboard.down(' ');
       if (cur && !prevSpace) {

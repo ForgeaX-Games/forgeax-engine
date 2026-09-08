@@ -1,13 +1,87 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import type { SourceDeclarationEvidence } from '@forgeax/engine-types';
 import { SCANNER_BLACKLIST, scan } from '../scanner.js';
+import { projectScriptablePackMeta } from '../scriptable-pack.js';
+import { loadScriptablePack } from '../scriptable-pack-node.js';
 
 /** Project root and GUID used to locate an authoritative source declaration. */
 export interface SourceInventoryRequest {
   readonly projectRoot: string;
   readonly guid: string;
+}
+
+export interface ProducerSemanticIdentityInput {
+  readonly producerRoot: string;
+  readonly sourcePath: string;
+  readonly sourceDigest: string;
+  readonly schemaVersion: string;
+  readonly importer: string;
+  readonly codec: string;
+  readonly settings: unknown;
+  readonly producer: string;
+  readonly profile: string;
+  readonly declaredGuids?: readonly string[];
+}
+
+export interface ProducerRelativeDdcIdentity {
+  readonly logicalPath: string;
+  readonly sourceDigest: string;
+  readonly key: string;
+}
+
+function stableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, stableValue(entry)]),
+    );
+  }
+  return value;
+}
+
+export function producerRelativeLogicalPath(producerRoot: string, sourcePath: string): string {
+  const root = resolve(producerRoot);
+  const source = resolve(sourcePath);
+  const path = relative(root, source);
+  if (
+    path.length === 0 ||
+    path === '..' ||
+    path.startsWith(`..${sep}`) ||
+    resolve(root, path) !== source
+  ) {
+    throw new Error('producer source must be inside the injected producer root');
+  }
+  return path.split(sep).join('/');
+}
+
+export function producerRelativeDdcKey(input: ProducerSemanticIdentityInput): string {
+  const logicalPath = producerRelativeLogicalPath(input.producerRoot, input.sourcePath);
+  const semantic = {
+    schemaVersion: input.schemaVersion,
+    logicalPath,
+    sourceDigest: input.sourceDigest,
+    importer: input.importer,
+    codec: input.codec,
+    settings: stableValue(input.settings),
+    producer: input.producer,
+    profile: input.profile,
+    declaredGuids: [...(input.declaredGuids ?? [])].sort(),
+  };
+  return createHash('sha256').update(JSON.stringify(semantic)).digest('hex');
+}
+
+export function producerRelativeDdcIdentity(
+  input: ProducerSemanticIdentityInput,
+): ProducerRelativeDdcIdentity {
+  return {
+    logicalPath: producerRelativeLogicalPath(input.producerRoot, input.sourcePath),
+    sourceDigest: input.sourceDigest,
+    key: producerRelativeDdcKey(input),
+  };
 }
 
 function fingerprint(meta: string, source: Uint8Array | undefined): string {
@@ -54,7 +128,9 @@ async function collectDeclarationPaths(root: string): Promise<string[]> {
       }
       if (
         entry.isFile() &&
-        (entry.name.endsWith('.meta.json') || entry.name.endsWith('.pack.json'))
+        (entry.name.endsWith('.meta.json') ||
+          entry.name.endsWith('.pack.json') ||
+          entry.name.endsWith('.pack.ts'))
       ) {
         paths.push(path);
       }
@@ -73,15 +149,29 @@ export async function readSourceInventory(
   const guid = request.guid.toLowerCase();
   let authored: SourceDeclarationEvidence | undefined;
   for (const path of paths) {
+    if (path.endsWith('.pack.ts')) {
+      const loaded = await loadScriptablePack(path, { metadataOnly: true });
+      if (!loaded.ok) continue;
+      const meta = projectScriptablePackMeta(loaded.value, path);
+      if (meta.subAssets.some((asset) => asset.guid.toLowerCase() === guid)) {
+        return { origin: 'sourceMeta', sourcePath: path };
+      }
+      continue;
+    }
     const raw = await readFile(path, 'utf8').catch(() => undefined);
     if (raw === undefined) continue;
-    const parsed = JSON.parse(raw) as {
+    let parsed: {
       readonly assets?: readonly { readonly guid?: unknown }[];
       readonly source?: unknown;
       readonly inputFingerprint?: unknown;
       readonly importSettings?: unknown;
       readonly subAssets?: readonly { readonly guid?: unknown }[];
     };
+    try {
+      parsed = JSON.parse(raw) as typeof parsed;
+    } catch {
+      continue;
+    }
     if (path.endsWith('.pack.json')) {
       if (
         parsed.assets?.some(

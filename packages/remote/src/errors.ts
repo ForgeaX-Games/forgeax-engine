@@ -1,5 +1,5 @@
 // @forgeax/engine-remote/src/errors - RemoteError runtime class + re-export of
-// the closed `RemoteErrorCode` union; 4 members (feat-20260629-inspector-two-layer-model D-5).
+// the closed `RemoteErrorCode` union; 5 members (feat-20260629-inspector-two-layer-model D-5).
 //
 // SSOT split: the **type alias** `RemoteErrorCode`
 // + **structural interface** `RemoteError` live in `@forgeax/engine-types`
@@ -10,7 +10,7 @@
 //
 // Shape (mirrors @forgeax/engine-rhi/src/errors.ts RhiError 4-field surface for
 // charter proposition 5 consistent abstraction):
-// - `RemoteErrorCode` = closed union 4 members (re-exported from types).
+// - `RemoteErrorCode` = closed union 5 members (re-exported from types).
 //   tsc strict-mode guards exhaustive switch completeness (charter
 //   proposition 4); AI users consume via `switch (err.code) { case '...': ... }`
 //   with NO default branch.
@@ -24,7 +24,11 @@
 //   `error.data` payload carries .code / .expected / .hint / .message
 //   verbatim through the WebSocket transport.
 
-import type { RemoteErrorCode, RemoteError as RemoteErrorShape } from '@forgeax/engine-types';
+import type {
+  RemoteErrorCode,
+  RemoteErrorDetail,
+  RemoteError as RemoteErrorShape,
+} from '@forgeax/engine-types';
 
 // Re-export the type-side alias verbatim so existing
 // `import { type RemoteErrorCode } from '@forgeax/engine-remote'` call sites
@@ -33,7 +37,7 @@ import type { RemoteErrorCode, RemoteError as RemoteErrorShape } from '@forgeax/
 export type { RemoteErrorCode };
 
 /**
- * Structured remote error. Four-field surface mirroring `@forgeax/engine-rhi`
+ * Structured remote error. Four core fields plus bounded detail, mirroring `@forgeax/engine-rhi`
  * `RhiError` (charter proposition 5 consistent abstraction; AGENTS.md
  * "Errors are structured"). The class `implements RemoteErrorShape`
  * (the structural interface re-exported from `@forgeax/engine-types`) so the type
@@ -57,14 +61,15 @@ export type { RemoteErrorCode };
  * | `'script-runtime-error'` | `'script executes without throwing'` | `'inspect error; verify symbol availability; eval has full access to world/renderer/assets'` |
  * | `'server-startup-failed'` | `'server starts successfully on requested port'` | `'check if port is already in use (default 5732); pass different port; or kill existing process holding the port'` |
  * | `'server-not-running'` | `'server is reachable at ws://localhost:<port>'` | `'start the demo first; verify app.remote is wired; pass --port to override default 5732'` |
+ * | `'eval-result-not-serializable'` | `'eval result is JSON-serializable'` | `'return a JSON-safe value; BigInt and cyclic objects are unsupported over JSON-RPC'` |
  *
- * JSON-RPC 2.0 transport contract: `toJSON()` returns a 4-field plain
- * object so `JSON.stringify(err)` produces the verbatim payload carried
- * via `error.data` on the WebSocket envelope. The JSON-RPC server-error
- * `.code` numeric segment -32001 ~ -32004 maps 1:1 to the 4 members
+ * JSON-RPC 2.0 transport contract: `toJSON()` returns the structured plain
+ * object carried verbatim via `error.data` on the WebSocket envelope. The
+ * JSON-RPC server-error `.code` numeric segment -32001 ~ -32005 maps 1:1
+ * to the 5 members
  * at the dispatch layer.
  *
- * @example AI-user exhaustive switch on the 4 remote-domain alternatives (no default fallback)
+ * @example AI-user exhaustive switch on the 5 remote-domain alternatives (no default fallback)
  * ```ts
  * import { RemoteError, type RemoteErrorCode } from '@forgeax/engine-remote';
  *
@@ -74,6 +79,7 @@ export type { RemoteErrorCode };
  *     case 'script-runtime-error':    return 'inspect stack trace; verify symbol availability';
  *     case 'server-startup-failed':   return 'pick a different port or free port 5732';
  *     case 'server-not-running':      return 'start demo dev or wire app.remote';
+ *     case 'eval-result-not-serializable': return 'return a JSON-safe eval result';
  *   }
  * }
  * ```
@@ -82,17 +88,22 @@ export class RemoteError extends Error implements RemoteErrorShape {
   readonly code: RemoteErrorCode;
   readonly expected: string;
   readonly hint: string;
+  readonly detail?: RemoteErrorDetail;
 
   constructor(args: {
     code: RemoteErrorCode;
     expected: string;
     hint: string;
+    detail?: RemoteErrorDetail;
   }) {
     super(`[RemoteError ${args.code}] expected: ${args.expected}; hint: ${args.hint}`);
     this.name = 'RemoteError';
     this.code = args.code;
     this.expected = args.expected;
     this.hint = args.hint;
+    if (args.detail !== undefined) {
+      this.detail = args.detail;
+    }
   }
 
   toJSON(): {
@@ -100,20 +111,22 @@ export class RemoteError extends Error implements RemoteErrorShape {
     readonly expected: string;
     readonly hint: string;
     readonly message: string;
+    readonly detail?: RemoteErrorDetail;
   } {
-    return {
+    const json = {
       code: this.code,
       expected: this.expected,
       hint: this.hint,
       message: this.message,
     };
+    return this.detail === undefined ? json : { ...json, detail: this.detail };
   }
 }
 
 /**
  * SSOT mapping `RemoteErrorCode` -> JSON-RPC `error.code` numeric segment
- * (feat-20260629-inspector-two-layer-model D-5). The 4 remote P0
- * members occupy the closed segment `-32001..-32004`.
+ * (feat-20260629-inspector-two-layer-model D-5). The 5 remote P0
+ * members occupy the closed segment `-32001..-32005`.
  *
  * `server.ts` consumes this map at the JSON-RPC envelope edge so the wire
  * always carries the lock-in numeric and a future drift in either direction
@@ -126,4 +139,5 @@ export const REMOTE_ERROR_CODE_TO_JSONRPC: Readonly<Record<RemoteErrorCode, numb
   'script-runtime-error': -32002,
   'server-startup-failed': -32003,
   'server-not-running': -32004,
+  'eval-result-not-serializable': -32005,
 };

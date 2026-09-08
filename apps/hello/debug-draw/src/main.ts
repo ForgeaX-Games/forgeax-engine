@@ -1,11 +1,12 @@
 // hello-debug-draw main entry (feat-20260615-debug-draw M4 / M5)
 //
-// 5-mode URL router:
+// 6-mode URL router:
 //   ?mode=low         - low-path RHI: createDebugDraw + 4 shapes + manual flush (w24)
 //   ?mode=empty       - empty frame: no draw calls, control for no-op overlay (w24)
 //   ?mode=runtime     - createApp + app.debugDraw.* auto-attach (w32)
+//   ?mode=cap-recovery - low-path hard-cap truncation + same-device recovery (M31)
 //   ?mode=depth       - two DebugDraw instances (always + less-equal) (w32)
-//   ?mode=hdrp-tonemap - HDRP pipeline overlay after tonemap (w32)
+//   ?mode=standard-tonemap - Standard pipeline overlay after tonemap (w32)
 //
 // Canvas: 256x256 (plan-strategy R-6 lavapipe soft-raster CI control)
 
@@ -13,6 +14,7 @@ import { createDebugDraw } from '@forgeax/engine-debug-draw';
 import { Update } from '@forgeax/engine-ecs';
 import type { Mat4 } from '@forgeax/engine-math';
 import { mat4, vec3 } from '@forgeax/engine-math';
+import type { TextureView } from '@forgeax/engine-rhi';
 import { createShaderModule, _internal_getRawDevice, rhi } from '@forgeax/engine-rhi-webgpu';
 import { Camera, perspective } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
@@ -100,6 +102,118 @@ async function runLow(): Promise<void> {
   if (!submitResult.ok) throw new Error(`submit failed: ${submitResult.error.code}`);
 
   dd.destroy();
+}
+
+// ---------------------------------------------------------------------------
+// cap-recovery mode: hard-cap truncation + same-device next-frame recovery
+// ---------------------------------------------------------------------------
+
+type CapRecoveryPhase = 'initializing' | 'baseline' | 'overflow' | 'recovery';
+
+async function runCapRecovery(): Promise<void> {
+  const adapterResult = await rhi.requestAdapter();
+  if (!adapterResult.ok) throw new Error(`requestAdapter failed: ${adapterResult.error.code}`);
+  const deviceResult = await adapterResult.value.requestDevice({ requiredFeatures: [] });
+  if (!deviceResult.ok) throw new Error(`requestDevice failed: ${deviceResult.error.code}`);
+  const device = deviceResult.value;
+  const rawDevice = _internal_getRawDevice(device)!;
+  const format = navigator.gpu.getPreferredCanvasFormat();
+  const ctx = canvas!.getContext('webgpu');
+  if (!ctx) throw new Error('WebGPU not available');
+  ctx.configure({ device: rawDevice, format, alphaMode: 'premultiplied' });
+
+  const maxVertexCapacity = 10;
+  const ddResult = await createDebugDraw({
+    device,
+    queue: device.queue,
+    createShaderModule,
+    format,
+    initialVertexCapacity: maxVertexCapacity,
+    maxVertexCapacity,
+  });
+  if (!ddResult.ok) throw new Error(`createDebugDraw failed: ${ddResult.error.code}`);
+  const dd = ddResult.value;
+  const viewProj = buildViewProj();
+  let phase: CapRecoveryPhase = 'initializing';
+  let deviceErrors = 0;
+  let lastQueued = 0;
+  rawDevice.addEventListener('uncapturederror', () => {
+    deviceErrors++;
+  });
+
+  const updateHud = (staged: number, draw: number, cleanup = false, queued = staged): void => {
+    document.getElementById('debug-draw-hud')!.textContent =
+      `debug-draw: cap-recovery phase=${phase} cap=${maxVertexCapacity} ` +
+      `queued=${queued} staged=${staged} draw=${draw} deviceErrors=${deviceErrors} sameDevice=1 ` +
+      `cleanup=${cleanup ? 'ok' : 'pending'}`;
+  };
+
+  const renderStage = async (nextPhase: Exclude<CapRecoveryPhase, 'initializing'>): Promise<void> => {
+    const encResult = device.createCommandEncoder();
+    if (!encResult.ok) throw new Error(`createCommandEncoder failed: ${encResult.error.code}`);
+    const encoder = encResult.value;
+    const view = ctx!.getCurrentTexture().createView();
+
+    encoder.beginRenderPass({
+      colorAttachments: [{
+        // The low-path demo intentionally obtains the swap-chain view from the
+        // browser context; the RHI brand is an opaque compile-time boundary.
+        view: view as unknown as TextureView,
+        loadOp: 'clear',
+        storeOp: 'store',
+        clearValue: { r: 0, g: 0, b: 0, a: 1 },
+      }],
+    }).end();
+
+    if (nextPhase === 'baseline') {
+      dd.line(vec3.create(-1.4, -0.55, 0), vec3.create(1.4, -0.55, 0), [1, 0, 0, 1]);
+      dd.line(vec3.create(0, -1.1, 0), vec3.create(0, 1.1, 0), [0, 1, 0, 1]);
+    } else if (nextPhase === 'overflow') {
+      for (let i = 0; i < 5; i++) {
+        const y = -0.8 + i * 0.4;
+        dd.line(vec3.create(-1.35, y, 0), vec3.create(1.35, y, 0), [1, 0, 0, 1]);
+      }
+      dd.line(vec3.create(-1.2, -1.1, 0), vec3.create(1.2, -1.1, 0), [1, 1, 0, 1]);
+      dd.aabb(vec3.create(-0.3, -0.3, 0), vec3.create(0.3, 0.3, 0), [0, 1, 0, 1]);
+    } else {
+      dd.line(vec3.create(-1.1, 0.8, 0), vec3.create(1.1, -0.8, 0), [0, 0, 1, 1]);
+    }
+
+    const queued = dd._stagingVertexCount;
+    lastQueued = queued;
+    const flushResult = dd.flush(encoder, view as any, viewProj);
+    if (!flushResult.ok) throw new Error(`flush failed: ${flushResult.error.code}`);
+    const draw = dd._lastFlushVertexCount;
+    const cbResult = encoder.finish();
+    if (!cbResult.ok) throw new Error(`finish failed: ${cbResult.error.code}`);
+    const submitResult = device.queue.submit([cbResult.value]);
+    if (!submitResult.ok) throw new Error(`submit failed: ${submitResult.error.code}`);
+    await rawDevice.queue.onSubmittedWorkDone();
+
+    phase = nextPhase;
+    updateHud(dd._stagingVertexCount, draw, false, queued);
+  };
+
+  const advance = async (): Promise<void> => {
+    if (phase === 'baseline') {
+      await renderStage('overflow');
+      return;
+    }
+    if (phase === 'overflow') {
+      await renderStage('recovery');
+      const recoveryDraw = dd._lastFlushVertexCount;
+      dd.destroy();
+      dd.destroy();
+      updateHud(dd._stagingVertexCount, recoveryDraw, true, lastQueued);
+      return;
+    }
+    throw new Error(`cap-recovery cannot advance from phase=${phase}`);
+  };
+  Object.assign(globalThis as Record<string, unknown>, {
+    __forgeax_debug_draw__: { advance },
+  });
+
+  await renderStage('baseline');
 }
 
 // ---------------------------------------------------------------------------
@@ -377,7 +491,7 @@ async function runDepth(): Promise<void> {
     const ctxView = ctx.getCurrentTexture().createView();
     encoder.beginRenderPass({
       colorAttachments: [{
-        view: ctxView,
+        view: ctxView as unknown as TextureView,
         loadOp: 'clear',
         storeOp: 'store',
         clearValue: { r: 0, g: 0, b: 0, a: 1 },
@@ -406,13 +520,13 @@ async function runDepth(): Promise<void> {
     // Pre-clear color (black) + depth (far plane) so the less-equal flush loads both.
     encoder.beginRenderPass({
       colorAttachments: [{
-        view: ctxView,
+        view: ctxView as unknown as TextureView,
         loadOp: 'clear',
         storeOp: 'store',
         clearValue: { r: 0, g: 0, b: 0, a: 1 },
       }],
       depthStencilAttachment: {
-        view: _depthTex.createView(),
+        view: _depthTex.createView() as unknown as TextureView,
         depthClearValue: 1.0,
         depthLoadOp: 'clear',
         depthStoreOp: 'store',
@@ -438,12 +552,11 @@ async function runDepth(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// hdrp-tonemap mode: HDRP pipeline overlay after tonemap (w32 / AC-07)
+// standard-tonemap mode: Standard pipeline overlay after tonemap (w32 / AC-07)
 // ---------------------------------------------------------------------------
 
-async function runHdrpTonemap(): Promise<void> {
+async function runStandardTonemap(): Promise<void> {
   const { createApp } = await import('@forgeax/engine-app');
-  const { HDRP_PIPELINE_ID, hdrpPipeline } = await import('@forgeax/engine-render/internal');
 
   const appResult = await createApp(canvas!);
   if (!appResult.ok) throw appResult.error;
@@ -451,44 +564,28 @@ async function runHdrpTonemap(): Promise<void> {
 
   if (!app.debugDraw) throw new Error('app.debugDraw missing');
 
-  // Register and install HDRP pipeline. feat-20260614 M8 (D-19):
-  // installPipeline takes the RenderPipelineAsset POD directly -- the
-  // AssetRegistry holds no handle concept, so there is no register round-trip.
-  app.renderer.registerPipeline(HDRP_PIPELINE_ID, hdrpPipeline);
-
-  const installResult = app.renderer.installPipeline({
-    kind: 'render-pipeline',
-    pipelineId: HDRP_PIPELINE_ID,
-    config: { clusterGrid: { x: 8, y: 6, z: 16 } },
-  });
-  if (!installResult.ok) {
-    throw new Error(
-      `HDRP installPipeline failed: ${installResult.error.code} — ${installResult.error.hint ?? ''}`,
-    );
-  }
-
   // Draw 4 shapes (same as low-mode) via app.debugDraw. The overlay renders
   // after tonemap, so the red channel of red-colored primitives should be
   // >= 0.85 (AC-07).
-  const ddHdrp = app.debugDraw;
+  const debugDraw = app.debugDraw;
   let drawn = false;
   app.world
     .addSystem(Update, {
-      name: 'debug-draw-hdrp-shapes',
+      name: 'debug-draw-standard-shapes',
       queries: [],
       fn: () => {
         if (drawn) return;
         drawn = true;
-        ddHdrp.line(vec3.create(-1.5, -0.7, 0), vec3.create(1.5, -0.7, 0), [1, 0, 0, 1]);
-        ddHdrp.sphere(vec3.create(0, 0.5, 0), 0.6, [0, 1, 0, 1]);
-        ddHdrp.aabb(vec3.create(-0.4, -0.4, -0.4), vec3.create(0.4, 0.4, 0.4), [0, 0, 1, 1]);
+        debugDraw.line(vec3.create(-1.5, -0.7, 0), vec3.create(1.5, -0.7, 0), [1, 0, 0, 1]);
+        debugDraw.sphere(vec3.create(0, 0.5, 0), 0.6, [0, 1, 0, 1]);
+        debugDraw.aabb(vec3.create(-0.4, -0.4, -0.4), vec3.create(0.4, 0.4, 0.4), [0, 0, 1, 1]);
         const upH = vec3.create(0, 1, 0);
         const fcamPosH = vec3.create(0, 1, 2);
         const fcamTargetH = vec3.create(0, 0, 0);
         const fcamViewH = mat4.lookAt(mat4.create(), fcamPosH, fcamTargetH, upH);
         const fcamProjH = mat4.perspective(mat4.create(), Math.PI / 3, 1, 0.5, 3);
         const fcamViewProjH = mat4.multiply(mat4.create(), fcamProjH, fcamViewH);
-        ddHdrp.frustum(fcamViewProjH, [1, 1, 0, 1]);
+        debugDraw.frustum(fcamViewProjH, [1, 1, 0, 1]);
       },
     })
     .unwrap();
@@ -517,13 +614,16 @@ async function main(): Promise<void> {
       await runRuntime();
       document.getElementById('debug-draw-hud')!.textContent = 'debug-draw: runtime (createApp + app.debugDraw) camera=base';
       break;
+    case 'cap-recovery':
+      await runCapRecovery();
+      break;
     case 'depth':
       document.getElementById('debug-draw-hud')!.textContent = 'debug-draw: depth (always vs less-equal)';
       await runDepth();
       break;
-    case 'hdrp-tonemap':
-      document.getElementById('debug-draw-hud')!.textContent = 'debug-draw: hdrp-tonemap (overlay after tonemap)';
-      await runHdrpTonemap();
+    case 'standard-tonemap':
+      document.getElementById('debug-draw-hud')!.textContent = 'debug-draw: standard-tonemap (overlay after tonemap)';
+      await runStandardTonemap();
       break;
     default:
       document.getElementById('debug-draw-hud')!.textContent = `unknown mode: ${mode}`;

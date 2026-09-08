@@ -20,23 +20,31 @@
 //   - "// 3. bootstrap"       entry point wiring (1)+(2)
 
 // 1. engine usage
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { type App, createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { AssetRegistry, HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
-import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import {
+  Camera,
+  DirectionalLight,
+  MeshFilter,
+  MeshRenderer,
+  type RenderWorldLease,
+} from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import { createDevImportTransport } from '@forgeax/engine-runtime';
+
 import { Materials } from '@forgeax/engine-render';
 
 import { createPlaneGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
-import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
+import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 import {
   computeCsmSplits,
+  csmOverlayFeature,
   csmOverlayModeForKey,
   installCsmOverlay,
   setCsmOverlayMode,
@@ -44,10 +52,7 @@ import {
 
 // 2. scene constants
 
-const PACK_INDEX_URL = '/pack-index.json';
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-5-3-3-csm',
-);
+
 
 // Wood texture GUID from forgeax-engine-assets/learn-opengl/textures/wood.png.meta.json.
 const WOOD_GUID_STR = '019e3969-1d48-7c3b-ac24-6d68f457065f';
@@ -110,8 +115,8 @@ void bootstrap(canvas);
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
-    {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
+    { features: [csmOverlayFeature] },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 5.3.3 csm] createApp failed:', appRes.error);
@@ -127,13 +132,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     if (bus !== undefined) bus.push({ code: error.code, hint: error.hint });
   });
 
-  const assets = renderer.assets;
-  if (assets === null) {
-    console.error('[learn-render 5.3.3 csm] AssetRegistry is null');
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[learn-render 5.3.3 csm] App asset owner is unavailable');
     return;
   }
-  assets.configureRuntimeBinding(runtimeBinding);
-  assets.configurePackIndex(PACK_INDEX_URL);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   // Load the two tileable textures (wood floor + metal cube accent) by GUID.
   const woodTex = await loadTextureByGuid(assets, WOOD_GUID_STR);
@@ -214,7 +218,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
   ).unwrap();
 
-  addFirstPersonSystem(app.world, app.renderer, {
+  addFirstPersonSystem(app.world, {
     name: 'learn-render-5.3.3-csm-first-person',
     overrideBackend: undefined,
   });
@@ -229,14 +233,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // shader registered once with structured reads + uniform params; mode
   // changes write the PostProcessParams component UBO (D-8). The call passes
   // `world` so cascade-overlay.ts can spawn the params entity.
-  const splits = installCsmOverlay(renderer, world);
-  if (splits === null) {
-    console.error('[learn-render 5.3.3 csm] installCsmOverlay failed');
-  } else {
-    console.warn(
-      `[learn-render 5.3.3 csm] PSSM splits (demo recompute) = ${Array.from(splits).map((s) => s.toFixed(2)).join(', ')}`,
-    );
-  }
+  const splits = installCsmOverlay(world);
+  console.warn(
+    `[learn-render 5.3.3 csm] PSSM splits (demo recompute) = ${Array.from(splits).map((s) => s.toFixed(2)).join(', ')}`,
+  );
 
   // The RHI-debug Browser lane can select one cascade through the same public
   // overlay mode used by the keyboard path, proving that the selected layer
@@ -286,16 +286,26 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // baked into cascade-overlay.wgsl (logged above for AI users to compare).
   void computeCsmSplits;
 
-  console.warn(`[learn-render 5.3.3 csm] backend=${renderer.backend}`);
+  console.warn(`[learn-render 5.3.3 csm] backend=${renderer.inspect().capabilities.backendKind}`);
 
-  installCaptureHook(app, world);
+  const attached = renderer.attach(world);
+  if (!attached.ok) {
+    console.error('[learn-render 5.3.3 csm] render lease attach failed:', attached.error);
+    return;
+  }
+  installCaptureHook(target, app, world, attached.value);
 }
 
 // RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives
-// one update + draw + readPixels so the live canvas read is anchored to the same
+// one update + draw + canvas read so the live capture is anchored to the same
 // frame the capture records. Only meaningful when the page is served with
 // FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
-function installCaptureHook(app: App, world: App['world']): void {
+function installCaptureHook(
+  target: HTMLCanvasElement,
+  app: App,
+  world: App['world'],
+  lease: RenderWorldLease,
+): void {
   type CaptureHook = () => Promise<Uint8Array>;
   type CapturePrepareHook = () => Promise<void>;
   const win = window as unknown as {
@@ -305,162 +315,27 @@ function installCaptureHook(app: App, world: App['world']): void {
   const renderer = app.renderer;
   const drawCsmFrame = (): void => {
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-  };
-  const runCsmProbe = async (): Promise<void> => {
-    const probeResults = (await renderer.debugSampleShadowFactor?.(csmProbePositions())) ?? null;
-    assertCsmBaseProbe(probeResults);
-    if (probeResults === null) return;
-    assertCsmBoundaryProbe(probeResults.slice(CSM_BASE_PROBE_POSITIONS.length));
+    const drawn = renderer.draw({
+      leases: [lease],
+      camera: { lease },
+      environment: { lease },
+    });
+    if (!drawn.ok) throw drawn.error;
   };
   win.__prepareCsmCapture = async (): Promise<void> => {
     drawCsmFrame();
-    await runCsmProbe();
   };
   win.__captureCsm = async (): Promise<Uint8Array> => {
     drawCsmFrame();
-    const r = await renderer.readPixels();
-    if (!r.ok) {
-      throw new Error(
-        `[learn-render 5.3.3 csm] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
-      );
-    }
-    await runCsmProbe();
-    return r.value;
+    const bitmap = await createImageBitmap(target);
+    const captureCanvas = new OffscreenCanvas(target.width, target.height);
+    const captureContext = captureCanvas.getContext('2d');
+    if (captureContext === null) throw new Error('[learn-render 5.3.3 csm] capture context missing');
+    captureContext.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const r = new Uint8Array(captureContext.getImageData(0, 0, target.width, target.height).data);
+    return r;
   };
-}
-
-const CSM_BOUNDARY_PROBE_EPSILON = 0.25;
-const CSM_BASE_PROBE_POSITIONS: ReadonlyArray<readonly [number, number, number]> = [
-  [0, FLOOR_Y, 4],
-  [0, FLOOR_Y, -4],
-  [-2, FLOOR_Y, -1],
-  [-3, FLOOR_Y, -8],
-  [0, FLOOR_Y, -12],
-  [0, FLOOR_Y, -20],
-  [0, FLOOR_Y, -40],
-];
-const CSM_BASE_PROBE_SHADOWED_INDICES = new Set([2, 3, 6]);
-
-function csmBaseProbePositions(): ReadonlyArray<readonly [number, number, number]> {
-  return CSM_BASE_PROBE_POSITIONS;
-}
-
-function csmProbePositions(): ReadonlyArray<readonly [number, number, number]> {
-  return [...csmBaseProbePositions(), ...csmBoundaryProbePositions()];
-}
-
-function csmBoundaryProbePositions(): ReadonlyArray<readonly [number, number, number]> {
-  const splitPlanes = computeCsmSplits();
-  const positions: Array<readonly [number, number, number]> = [];
-  for (let boundary = 0; boundary < splitPlanes.length - 1; boundary++) {
-    const splitDepth = splitPlanes[boundary];
-    if (splitDepth === undefined) continue;
-    positions.push(
-      [0, FLOOR_Y, CAMERA_POS_Z - (splitDepth - CSM_BOUNDARY_PROBE_EPSILON)],
-      [0, FLOOR_Y, CAMERA_POS_Z - (splitDepth + CSM_BOUNDARY_PROBE_EPSILON)],
-    );
-  }
-  return positions;
-}
-
-function assertCsmBaseProbe(
-  results: ReadonlyArray<{
-    readonly shadowFactor: number;
-    readonly sampledDepth: number;
-    readonly cascadeIndex: number;
-    readonly receiverDepth: number;
-  }> | null,
-): void {
-  if (results === null || results.length !== CSM_BASE_PROBE_POSITIONS.length + 6) {
-    throw new Error(`[learn-render 5.3.3 csm] base probe unavailable: ${results?.length ?? 'null'}`);
-  }
-  const gatedResults = new URLSearchParams(window.location.search).has('csm-probe-shadow-depth-shift')
-    ? results.map((probe, index) =>
-        CSM_BASE_PROBE_SHADOWED_INDICES.has(index)
-          ? { ...probe, sampledDepth: probe.receiverDepth + 0.1 }
-          : probe,
-      )
-    : results;
-  for (const index of CSM_BASE_PROBE_SHADOWED_INDICES) {
-    const probe = gatedResults[index];
-    if (
-      probe === undefined ||
-      !Number.isFinite(probe.shadowFactor) ||
-      probe.shadowFactor >= 0.5 ||
-      !Number.isFinite(probe.sampledDepth) ||
-      probe.sampledDepth < 0 ||
-      probe.sampledDepth > 1 ||
-      !Number.isFinite(probe.receiverDepth) ||
-      probe.receiverDepth < 0 ||
-      probe.receiverDepth > 1 ||
-      probe.sampledDepth + 0.02 >= probe.receiverDepth
-    ) {
-      throw new Error(
-        `[learn-render 5.3.3 csm] shadowed base depth mismatch at ${index}: ` +
-          JSON.stringify(probe),
-      );
-    }
-  }
-  console.warn(
-    '[learn-render 5.3.3 csm] shadowed base probe accepted: ' +
-      'sampled-depth < receiver-depth at indices 2,3,6',
-  );
-}
-
-function assertCsmBoundaryProbe(
-  results: ReadonlyArray<{
-    readonly shadowFactor: number;
-    readonly sampledDepth: number;
-    readonly cascadeIndex: number;
-    readonly receiverDepth: number;
-  }> | null,
-): void {
-  if (results === null || results.length !== 6) {
-    throw new Error(`[learn-render 5.3.3 csm] browser boundary probe unavailable: ${results?.length ?? 'null'}`);
-  }
-  const gatedResults = new URLSearchParams(window.location.search).has('csm-probe-boundary-shift')
-    ? results.map((probe, index) =>
-        index < 6 ? { ...probe, cascadeIndex: (probe.cascadeIndex + 1) % 4 } : probe,
-      )
-    : new URLSearchParams(window.location.search).has('csm-probe-boundary-factor-shift')
-      ? results.map((probe, index) =>
-          index < 6 ? { ...probe, shadowFactor: probe.shadowFactor * 0.5 } : probe,
-        )
-      : new URLSearchParams(window.location.search).has('csm-probe-boundary-depth-shift')
-        ? results.map((probe, index) =>
-            index < 6 ? { ...probe, sampledDepth: probe.sampledDepth - 0.25 } : probe,
-          )
-    : results;
-  for (let boundary = 0; boundary < 3; boundary++) {
-    const nearSide = gatedResults[boundary * 2];
-    const farSide = gatedResults[boundary * 2 + 1];
-    if (
-      nearSide?.cascadeIndex !== boundary ||
-      farSide?.cascadeIndex !== boundary + 1 ||
-      nearSide === undefined ||
-      farSide === undefined ||
-      !Number.isFinite(nearSide.shadowFactor) ||
-      !Number.isFinite(farSide.shadowFactor) ||
-      Math.abs(nearSide.shadowFactor - 1) > 0.01 ||
-      Math.abs(farSide.shadowFactor - 1) > 0.01 ||
-      !Number.isFinite(nearSide.sampledDepth) ||
-      !Number.isFinite(farSide.sampledDepth) ||
-      !Number.isFinite(nearSide.receiverDepth) ||
-      !Number.isFinite(farSide.receiverDepth) ||
-      nearSide.sampledDepth + 0.02 < nearSide.receiverDepth ||
-      farSide.sampledDepth + 0.02 < farSide.receiverDepth
-    ) {
-      throw new Error(
-        `[learn-render 5.3.3 csm] browser split-boundary mismatch at ${boundary}: ` +
-          `near=${JSON.stringify(nearSide)} far=${JSON.stringify(farSide)}`,
-      );
-    }
-  }
-  console.warn(
-    '[learn-render 5.3.3 csm] browser split-boundary probe accepted: ' +
-      'near-side=i, far-side=i+1, raw-depth supports lit receiver',
-  );
 }
 
 async function loadTextureByGuid(

@@ -1,8 +1,10 @@
 import type { ResolveContext } from '@forgeax/engine-render-graph';
 import type { RhiRenderPassEncoder, TextureView } from '@forgeax/engine-rhi';
+import { toShared } from '@forgeax/engine-types';
 import { buildBeginRenderPassDescriptor } from '../pipeline-spec';
-import type { _InternalRenderPipelineContext } from '../render-pipeline-context';
 import { getOrCreateFromChain } from './mesh-ssbo';
+import type { _InternalRenderPipelineContext } from './render-context';
+import { VIEW_UNIFORM_BYTES } from './view-ubo';
 
 /**
  * feat-20260531-skybox-env-background M2 / w8: skybox pass recording stub.
@@ -16,7 +18,10 @@ import { getOrCreateFromChain } from './mesh-ssbo';
  * dependency edges (shadow -> skybox -> main) even before the execute
  * body is filled in.
  */
-export function recordSkyboxPass(c: _InternalRenderPipelineContext): void {
+export function recordSkyboxPass(
+  c: _InternalRenderPipelineContext,
+  graphPass?: RhiRenderPassEncoder,
+): void {
   // Early-return when skybox is not active (no SkyboxBackground entity,
   // or tonemap is disabled -- plan-strategy D-2 NOTE). The graph still
   // compiles because the pass declaration is unconditional; only the
@@ -29,17 +34,20 @@ export function recordSkyboxPass(c: _InternalRenderPipelineContext): void {
 
   // Guard: hdrColorView must be allocated (tonemapActive implies it)
   const hdrColorView = pipelineState.perPassResources.hdrColorView;
-  if (hdrColorView === null) return;
+  if (graphPass === undefined && hdrColorView === null) return;
 
   // feat-20260604 M2 / w10: under MSAA the skybox + main passes share the
   // count=4 multisample target (hdrColorMsaa); only the main pass (last to
   // write) resolves to the single-sample hdrColor (D-8 -- avoids a wasteful
   // mid-chain resolve). The skybox pass writes the multisample target with no
   // resolveTarget and uses the count=4 skybox pipeline variant.
-  const skyboxColorView = c.msaaActive
-    ? pipelineState.perPassResources.hdrColorMsaaView
-    : hdrColorView;
-  if (skyboxColorView === null) return;
+  const skyboxColorView =
+    graphPass === undefined
+      ? c.msaaActive
+        ? pipelineState.perPassResources.hdrColorMsaaView
+        : hdrColorView
+      : null;
+  if (graphPass === undefined && skyboxColorView === null) return;
 
   // Guard: pipeline resources must exist (null when manifest has no
   // skybox entry -- legacy manifests continue to boot)
@@ -70,8 +78,9 @@ export function recordSkyboxPass(c: _InternalRenderPipelineContext): void {
   // progress). In that case, degradation to main pass loadOp:'clear'
   // is handled by the passCtx.skyboxActive gate above -- if the
   // cubemap isn't ready, skyboxActive is already false (see w18).
-  // biome-ignore lint/suspicious/noExplicitAny: branded Handle cast from raw number
-  const cubemapView = store.getCubemapGpuView(skyboxSnapshot.equirectHandle as any);
+  const cubemapView = store.getCubemapGpuView(
+    toShared<'EquirectAsset'>(skyboxSnapshot.equirectHandle),
+  );
   if (cubemapView === undefined) return;
 
   // Identity-cached skybox BindGroup keyed on the cubemap GpuView. The only
@@ -84,7 +93,7 @@ export function recordSkyboxPass(c: _InternalRenderPipelineContext): void {
   // re-projections that reused the old cached bind group.
   const skyboxBg = getOrCreateFromChain(
     c.frameState.postProcessBgCache,
-    [cubemapView as unknown as object],
+    [cubemapView],
     'skybox',
     () => {
       const skyboxBgRes = runtime.device.createBindGroup({
@@ -103,7 +112,7 @@ export function recordSkyboxPass(c: _InternalRenderPipelineContext): void {
             binding: 2,
             resource: {
               kind: 'buffer',
-              value: { buffer: pipelineState.viewUniformBuffer },
+              value: { buffer: pipelineState.viewUniformBuffer, size: VIEW_UNIFORM_BYTES },
             },
           },
           {
@@ -127,18 +136,27 @@ export function recordSkyboxPass(c: _InternalRenderPipelineContext): void {
   // occluded skybox pixels (plan-strategy D-1). HDR target ('rgba16float') is
   // declared on specAttachments for descriptor parity, even though color-only
   // policies do not gate on format.
-  const skyboxPass = encoder.beginRenderPass(
-    buildBeginRenderPassDescriptor(
-      { colorFormats: ['rgba16float'], depthFormat: undefined, sampleCount: 1 },
-      { colorViews: [skyboxColorView] },
-      'skybox',
-    ) as never,
-  );
+  const skyboxPass =
+    graphPass ??
+    encoder.beginRenderPass(
+      buildBeginRenderPassDescriptor(
+        { colorFormats: ['rgba16float'], depthFormat: undefined, sampleCount: 1 },
+        { colorViews: [skyboxColorView as TextureView] },
+        'skybox',
+      ) as never,
+    );
 
   skyboxPass.setPipeline(skyboxPipeline);
   skyboxPass.setBindGroup(0, skyboxBg);
   skyboxPass.draw(3);
-  skyboxPass.end();
+  if (graphPass === undefined) skyboxPass.end();
+}
+
+export function encodeSkyboxPass(
+  c: _InternalRenderPipelineContext,
+  pass: RhiRenderPassEncoder,
+): void {
+  recordSkyboxPass(c, pass);
 }
 
 /**
@@ -162,6 +180,7 @@ export function recordSkyboxPass(c: _InternalRenderPipelineContext): void {
 export function recordBloomBrightPass(
   _c: _InternalRenderPipelineContext,
   resolve?: ResolveContext,
+  graphPass?: RhiRenderPassEncoder,
 ): void {
   const { runtime, pipelineState, encoder, camera, tonemapActive, frameState, bindGroupCounts } =
     _c;
@@ -200,7 +219,7 @@ export function recordBloomBrightPass(
   // view yields a WeakMap miss -> rebuild referencing the live texture.
   const bindGroup = getOrCreateFromChain(
     frameState.postProcessBgCache,
-    [hdrColorView as unknown as object],
+    [hdrColorView],
     'bloom-bright',
     () => {
       const bgRes = runtime.device.createBindGroup({
@@ -219,22 +238,25 @@ export function recordBloomBrightPass(
   );
 
   // 4. Render pass into the 1/2-res intermediate.
-  const pass: RhiRenderPassEncoder = encoder.beginRenderPass(
-    buildBeginRenderPassDescriptor(
-      { colorFormats: ['rgba16float'], depthFormat: undefined, sampleCount: 1 },
-      { colorViews: [bloomBrightView] },
-      'bloom-bright',
-    ) as never,
-  );
+  const pass: RhiRenderPassEncoder =
+    graphPass ??
+    encoder.beginRenderPass(
+      buildBeginRenderPassDescriptor(
+        { colorFormats: ['rgba16float'], depthFormat: undefined, sampleCount: 1 },
+        { colorViews: [bloomBrightView] },
+        'bloom-bright',
+      ) as never,
+    );
   pass.setPipeline(pp.bloomBrightPipeline);
   pass.setBindGroup(0, bindGroup);
   pass.draw(3, 1, 0, 0);
-  pass.end();
+  if (graphPass === undefined) pass.end();
 }
 
 export function recordBloomBlurHPass(
   _c: _InternalRenderPipelineContext,
   resolve?: ResolveContext,
+  graphPass?: RhiRenderPassEncoder,
 ): void {
   const {
     runtime,
@@ -282,7 +304,7 @@ export function recordBloomBlurHPass(
   // graph-resolved bloomBright view so resize rebuilds against the new texture.
   const bindGroup = getOrCreateFromChain(
     frameState.postProcessBgCache,
-    [bloomBrightView as unknown as object],
+    [bloomBrightView],
     'bloom-blur-h',
     () => {
       const bgRes = runtime.device.createBindGroup({
@@ -301,22 +323,25 @@ export function recordBloomBlurHPass(
   );
 
   // 4. Render pass into bloomBlurH intermediate (graph-owned).
-  const pass: RhiRenderPassEncoder = encoder.beginRenderPass(
-    buildBeginRenderPassDescriptor(
-      { colorFormats: ['rgba16float'], depthFormat: undefined, sampleCount: 1 },
-      { colorViews: [bloomBlurHView] },
-      'bloom-blur',
-    ) as never,
-  );
+  const pass: RhiRenderPassEncoder =
+    graphPass ??
+    encoder.beginRenderPass(
+      buildBeginRenderPassDescriptor(
+        { colorFormats: ['rgba16float'], depthFormat: undefined, sampleCount: 1 },
+        { colorViews: [bloomBlurHView] },
+        'bloom-blur',
+      ) as never,
+    );
   pass.setPipeline(pp.bloomBlurHPipeline);
   pass.setBindGroup(0, bindGroup);
   pass.draw(3, 1, 0, 0);
-  pass.end();
+  if (graphPass === undefined) pass.end();
 }
 
 export function recordBloomBlurVPass(
   _c: _InternalRenderPipelineContext,
   resolve?: ResolveContext,
+  graphPass?: RhiRenderPassEncoder,
 ): void {
   const {
     runtime,
@@ -364,7 +389,7 @@ export function recordBloomBlurVPass(
   // graph-resolved bloomBlurH view so resize rebuilds against the new texture.
   const bindGroup = getOrCreateFromChain(
     frameState.postProcessBgCache,
-    [bloomBlurHView as unknown as object],
+    [bloomBlurHView],
     'bloom-blur-v',
     () => {
       const bgRes = runtime.device.createBindGroup({
@@ -383,22 +408,25 @@ export function recordBloomBlurVPass(
   );
 
   // 4. Render pass into bloomBlurV intermediate (graph-owned).
-  const pass: RhiRenderPassEncoder = encoder.beginRenderPass(
-    buildBeginRenderPassDescriptor(
-      { colorFormats: ['rgba16float'], depthFormat: undefined, sampleCount: 1 },
-      { colorViews: [bloomBlurVView] },
-      'bloom-blur',
-    ) as never,
-  );
+  const pass: RhiRenderPassEncoder =
+    graphPass ??
+    encoder.beginRenderPass(
+      buildBeginRenderPassDescriptor(
+        { colorFormats: ['rgba16float'], depthFormat: undefined, sampleCount: 1 },
+        { colorViews: [bloomBlurVView] },
+        'bloom-blur',
+      ) as never,
+    );
   pass.setPipeline(pp.bloomBlurVPipeline);
   pass.setBindGroup(0, bindGroup);
   pass.draw(3, 1, 0, 0);
-  pass.end();
+  if (graphPass === undefined) pass.end();
 }
 
 export function recordBloomCompositePass(
   _c: _InternalRenderPipelineContext,
   resolve?: ResolveContext,
+  graphPass?: RhiRenderPassEncoder,
 ): void {
   const { runtime, pipelineState, encoder, camera, tonemapActive, frameState, bindGroupCounts } =
     _c;
@@ -438,7 +466,7 @@ export function recordBloomCompositePass(
   // bloomBlurV, so a two-node chain rebuilds when either identity changes.
   const bindGroup = getOrCreateFromChain(
     frameState.postProcessBgCache,
-    [hdrColorView as unknown as object, bloomBlurVView as unknown as object],
+    [hdrColorView, bloomBlurVView],
     'bloom-composite',
     () => {
       const bgRes = runtime.device.createBindGroup({
@@ -465,21 +493,27 @@ export function recordBloomCompositePass(
   // (scene + intensity*bloom, sampling scene from hdrColor itself), so the
   // destination needs no prior content -> loadOp='clear' (no stale dependency
   // on hdrComposited's previous-frame content, and no in-place hazard).
-  const pass: RhiRenderPassEncoder = encoder.beginRenderPass(
-    buildBeginRenderPassDescriptor(
-      { colorFormats: ['rgba16float'], depthFormat: undefined, sampleCount: 1 },
-      { colorViews: [hdrCompositedView] },
-      'bloom-composite',
-      { colorLoadOp: 'clear' },
-    ) as never,
-  );
+  const pass: RhiRenderPassEncoder =
+    graphPass ??
+    encoder.beginRenderPass(
+      buildBeginRenderPassDescriptor(
+        { colorFormats: ['rgba16float'], depthFormat: undefined, sampleCount: 1 },
+        { colorViews: [hdrCompositedView] },
+        'bloom-composite',
+        { colorLoadOp: 'clear' },
+      ) as never,
+    );
   pass.setPipeline(pp.bloomCompositePipeline);
   pass.setBindGroup(0, bindGroup);
   pass.draw(3, 1, 0, 0);
-  pass.end();
+  if (graphPass === undefined) pass.end();
 }
 
-export function recordFxaaPass(c: _InternalRenderPipelineContext, resolve: ResolveContext): void {
+export function recordFxaaPass(
+  c: _InternalRenderPipelineContext,
+  resolve: ResolveContext,
+  graphPass?: RhiRenderPassEncoder,
+): void {
   const { runtime, pipelineState, encoder, camera, currentTexture } = c;
   // FXAA samples the graph-owned LDR target and writes the current surface.
   // The surface is an output attachment only: no COPY_SRC usage, no
@@ -530,27 +564,30 @@ export function recordFxaaPass(c: _InternalRenderPipelineContext, resolve: Resol
     const fxaaColorFormat = runtime.device.caps.storageBuffer
       ? pipelineState.format
       : pipelineState.colorAttachmentFormat;
-    const fxaaOutputView = runtime.device.createTextureView(currentTexture, {
-      format: fxaaColorFormat as unknown as GPUTextureFormat,
-    });
-    if (!fxaaOutputView.ok) {
-      runtime.errorRegistry.fire(fxaaOutputView.error);
-      return;
+    let fxaaPass = graphPass;
+    if (fxaaPass === undefined) {
+      const fxaaOutputView = runtime.device.createTextureView(currentTexture, {
+        format: fxaaColorFormat as GPUTextureFormat,
+      });
+      if (!fxaaOutputView.ok) {
+        runtime.errorRegistry.fire(fxaaOutputView.error);
+        return;
+      }
+      fxaaPass = encoder.beginRenderPass(
+        buildBeginRenderPassDescriptor(
+          {
+            colorFormats: [fxaaColorFormat as GPUTextureFormat],
+            depthFormat: undefined,
+            sampleCount: 1,
+          },
+          { colorViews: [fxaaOutputView.value] },
+          'fxaa',
+        ) as never,
+      );
     }
-    const fxaaPass: RhiRenderPassEncoder = encoder.beginRenderPass(
-      buildBeginRenderPassDescriptor(
-        {
-          colorFormats: [fxaaColorFormat as unknown as GPUTextureFormat],
-          depthFormat: undefined,
-          sampleCount: 1,
-        },
-        { colorViews: [fxaaOutputView.value] },
-        'fxaa',
-      ) as never,
-    );
     fxaaPass.setPipeline(pipelineState.perPassResources.fxaaPipeline);
     fxaaPass.setBindGroup(0, fxaaBg);
     fxaaPass.draw(3, 1, 0, 0);
-    fxaaPass.end();
+    if (graphPass === undefined) fxaaPass.end();
   }
 }

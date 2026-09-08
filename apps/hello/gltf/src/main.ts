@@ -9,10 +9,9 @@
 // pipes the .gltf source through `parseGltf` + a small IR -> POD adapter.
 //
 // 4-step recipe (plan-strategy section 3.2 sequence B; AC-07 / AC-14):
-//   (1) configurePackIndex('/box-pack-index.json') — declares the
-//       prod fetch URL up front; for the dev / smoke path the in-memory
-//       fast-path resolves first so the URL is a no-op until vite-plugin-pack
-//       ships gltf-aware emit (feat-future-gltf-buildtime-cook).
+//   (1) configureRuntimeAssetCatalog(assets, runtimeBinding) — selects the
+//       scoped dev catalog or the static production catalog emitted by
+//       vite-plugin-pack.
 //   (2) loadByGuid<MeshAsset>(meshGuid)        — Tier-B cube positions + indices
 //   (3) loadByGuid<MaterialAsset>(matGuid)     — UnlitMaterial baseColor scalar
 //   (4) loadByGuid<SceneAsset>(sceneGuid)      — single Box node + Camera node
@@ -23,19 +22,15 @@
 // The fixture box.gltf embeds its single buffer as a data: URI so the
 // externalLoader never fires (it throws if invoked).
 
-import { World } from '@forgeax/engine-ecs';
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
+import { createWorldContext, World } from '@forgeax/engine-ecs';
 import { gltfDocToSceneAsset, type GltfMaterialIr, type GltfMeshIr, parseGltf } from '@forgeax/engine-gltf';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  acquireCanvasContext,
-  createRenderer,
-  EngineEnvironmentError,
-} from '@forgeax/engine-runtime';
-import {
-  type MaterialAsset,
-  type MeshAsset,
-  type SceneAsset,
-} from '@forgeax/engine-types';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
+import { type MaterialAsset, type MeshAsset, type SceneAsset } from '@forgeax/engine-types';
+import { renderComponentsPlugin } from '@forgeax/engine-render';
+import { scenePlugin } from '@forgeax/engine-scene';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import boxGltfUrl from '../assets/box.gltf?url';
 // vite resolves these at build / dev time — JSON for the meta sidecar
@@ -54,42 +49,28 @@ bootstrap(canvas).catch((err: unknown) => {
 });
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
-  const renderer = await createRenderer(target, {}, forgeaxBundlerAdapter());
-    const ctxResult = acquireCanvasContext(target);
-  if (ctxResult.ok) {
-    const cfgResult = ctxResult.value.configure({
-      device: renderer.device,
-      format: 'rgba8unorm',
-      usage: 0x10 | 0x01,
-    });
-    if (!cfgResult.ok)
-      console.error('[gltf] canvasContext.configure failed:', cfgResult.error);
-  } else {
-    console.error('[gltf] acquireCanvasContext failed:', ctxResult.error);
-  }
-  console.warn(`[gltf] backend=${renderer.backend}`);
+  const constructed = await constructRuntimeRendererHost(target, {}, {
+    ...forgeaxBundlerAdapter(),
+    importTransport: createRuntimeAssetImportTransport(runtimeBinding),
+  });
+  if (!constructed.ok) throw constructed.error;
+  const { renderer, assets } = constructed.value;
+  console.warn('[gltf] Standard pipeline active');
 
-  const ready = await renderer.ready;
-  if (!ready.ok) {
-    console.error('[gltf] renderer.ready failed:', ready.error);
-    return;
-  }
-
-  const assets = renderer.assets;
-  if (assets === null) {
-    console.error('[gltf] AssetRegistry is null (renderer construction did not complete successfully)');
-    return;
-  }
-
-  // Step (1): declare the prod fetch URL up front. The dev / smoke path
-  // resolves through the fast-path in-memory map after the gltf parser
-  // populates the GUID -> Asset bridge below; the real pack-index emit
-  // (vite-plugin-pack with gltf-aware scan) lives in
-  // feat-future-gltf-buildtime-cook.
-  assets.configurePackIndex('/box-pack-index.json');
+  // Step (1): choose the scoped dev catalog or the static production catalog.
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
   const world = new World();
-  const worldAttachment1 = renderer.attachWorld(world);
+  const worldContext = await createWorldContext(world, [
+    renderComponentsPlugin(),
+    scenePlugin(),
+  ]);
+  const worldAttachment1 = renderer.attach(world);
   if (!worldAttachment1.ok) throw worldAttachment1.error;
+  const frameRequest = {
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  };
 
   // Parse the gltf source so the IR -> POD adapter can register MeshAsset
   // / MaterialAsset / SceneAsset PODs against the GUIDs the meta sidecar
@@ -167,8 +148,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   const frame = (): void => {
+    void worldContext;
     world.update().unwrap();
-    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const r = renderer.draw(frameRequest);
     if (!r.ok) console.error('[gltf] draw error:', r.error);
     requestAnimationFrame(frame);
   };
@@ -246,6 +228,7 @@ function meshIrToPod(mesh: GltfMeshIr): MeshAsset {
     indexCount: mesh.indices !== undefined ? mesh.indices.length : 0,
     vertexCount: interleaved.length,
     topology: 'triangle-list' as const,
+    materialSlot: 0,
   };
   return {
     kind: 'mesh',
@@ -258,6 +241,7 @@ function meshIrToPod(mesh: GltfMeshIr): MeshAsset {
       tangent: mesh.tangents ?? new Float32Array(vertexCount * 4).fill(0),
     },
     submeshes: [submesh],
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 

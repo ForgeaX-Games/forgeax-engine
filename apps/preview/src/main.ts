@@ -1,9 +1,9 @@
-// apps/preview -- minimal Vite host for loading bootstrap entry templates.
+// apps/preview -- Vite host for asset-resident Cordis game plugins.
 //
-// Three-statement bootstrap (charter F1 limited context + P1 progressive disclosure):
+// Three-statement composition:
 //   1. createApp(canvas) -- one-shot engine wiring
 //   2. loadGame(slug, resolver) -- resolve + validate the template module
-//   3. await entry.bootstrap(world, ctx); app.start() -- run the game
+//   3. provide GameHost, mount gameplay, then start the App
 //
 // The resolver is a dynamic import proxy injected by the host so loadGame
 // remains independent of Vite / bundler specifics. The slug defaults to
@@ -11,37 +11,53 @@
 
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import {
+  configureRuntimeAssetCatalog,
+  createRuntimeAssetImportTransport,
+  runtimeBinding,
+} from '@forgeax/apps-shared/asset-runtime-config';
+import {
   type App,
-  type BootstrapContext,
-  type BootstrapEntry,
   type CanvasAppError,
   createApp,
+  type GameHost,
+  gameHostPlugin,
   isAppError,
   isLoadGameError,
   loadGame,
 } from '@forgeax/engine-app';
 import { audioPlugin } from '@forgeax/engine-audio';
-import type { SimulationError } from '@forgeax/engine-ecs';
+import { webAudioPlugin } from '@forgeax/engine-audio-webaudio';
 import { physicsPlugin } from '@forgeax/engine-physics';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
-import {
-  type CatalogEntry,
-  createStandaloneRuntimeAssetBinding,
-  ImportError,
-} from '@forgeax/engine-types';
+import { buildProfileModel, createProfiler } from '@forgeax/engine-profiler';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { type CatalogEntry, ImportError, type SceneAsset } from '@forgeax/engine-types';
 import { createUiLoader, type UiAsset, type UiError } from '@forgeax/engine-ui';
-import { consumeSimulationError, createPreviewInspection } from './preview-inspection';
+import { createPreviewInspection } from './preview-inspection';
 import { PREVIEW_UI_SOURCE_GUID, type UiAuthoringAssetGateway } from './ui-authoring';
 import { createPreviewUiRun, type PreviewUiRun, reportPreviewEngineFailure } from './ui-root';
 
+const previewQuery = new URLSearchParams(window.location.search);
+if (previewQuery.get('fixture') === 'gltf-transform') {
+  document.body.dataset.previewFixture = 'gltf-transform';
+}
+const positiveQueryInt = (name: string, fallback: number): number => {
+  const value = Number(previewQuery.get(name));
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+};
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('preview: missing <canvas id="app"> in index.html');
+const previewCanvas = canvas;
 
-const runtimeBinding = import.meta.env.DEV
-  ? createStandaloneRuntimeAssetBinding(import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'preview')
-  : undefined;
-
-const previewRun = createPreviewUiRun(canvas.parentElement ?? document.body);
+// Pack owns the Preview realm identity; this shared projection is used for
+// both the scoped development transport and production publication tuples.
+const runtimeDevBinding = import.meta.env.DEV ? runtimeBinding : undefined;
+const previewRun = createPreviewUiRun(previewCanvas.parentElement ?? document.body);
+const previewProfiler = previewQuery.get('profile') === '1' ? createProfiler() : undefined;
+const previewPlugins = [
+  webAudioPlugin(),
+  audioPlugin(),
+  ...(previewQuery.get('profileNoPhysics') === '1' ? [] : [physicsPlugin('rapier-3d')]),
+];
 
 // Wire dev-mode ImportTransport so loadByGuid for raw-source assets in
 // templates/<slug>/scene.pack.json (and the engine-assets submodule's
@@ -50,20 +66,24 @@ const previewRun = createPreviewUiRun(canvas.parentElement ?? document.body);
 // /pack-index.json, so a missing DDC artefact fails fast instead of probing a
 // dev-only route.
 const app = await createApp(
-  canvas,
-  { uiRoot: previewRun.uiRoot, plugins: [audioPlugin(), physicsPlugin('rapier-3d')] },
+  previewCanvas,
+  {
+    uiRoot: previewRun.uiRoot,
+    plugins: previewPlugins,
+    ...(previewProfiler === undefined ? {} : { profiler: previewProfiler }),
+  },
   {
     ...forgeaxBundlerAdapter(),
-    ...(runtimeBinding === undefined
+    ...(runtimeDevBinding === undefined
       ? {}
-      : { importTransport: createDevImportTransport(runtimeBinding) }),
+      : { importTransport: createRuntimeAssetImportTransport(runtimeDevBinding) }),
   },
 );
 if (!app.ok) {
-  if (runtimeBinding !== undefined) {
+  if (runtimeDevBinding !== undefined) {
     try {
       previewRun.authoring.bind(
-        await createPreviewUiCatalogGateway(runtimeBinding, import.meta.hot),
+        await createPreviewUiCatalogGateway(runtimeDevBinding, import.meta.hot),
       );
     } catch (cause) {
       console.warn('[preview] UI catalog gateway unavailable:', cause);
@@ -76,37 +96,33 @@ if (!app.ok) {
 }
 
 async function startPreview(app: App, previewRun: PreviewUiRun): Promise<void> {
-  const assets = app.renderer.assets;
-  if (runtimeBinding === undefined) assets.configurePackIndex('/pack-index.json');
-  else assets.configureRuntimeBinding(runtimeBinding);
+  const assets = app.assets;
+  if (assets === undefined) {
+    previewRun.cleanup();
+    throw new Error('preview: canvas App did not provide its AssetRegistry');
+  }
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
   await assets.refreshCatalog();
   previewRun.authoring.bind(createPreviewUiAssetGateway(assets, runtimeBinding, import.meta.hot));
   const previewInspection = createPreviewInspection(app, previewRun.registerCleanup);
 
-  const ctx: BootstrapContext = {
-    assets,
-    app,
-    renderer: app.renderer,
-    // M2 D-9: wire the pointer-lock gate setter. The game template calls
-    // setPointerLockAllowed(mode === 'fps') when switching modes; the
-    // preview host delegates to the input backend's setPointerLockAllowed.
-    // No lockProvider is injected — Web host goes W3C path.
-    setPointerLockAllowed: (allowed: boolean) => app.input?.setPointerLockAllowed?.(allowed),
-    uiRoot: previewRun.uiRoot,
-    registerCleanup: previewRun.registerCleanup,
-    gameProjection: previewInspection.registrar,
-  };
-
   const slug = new URLSearchParams(window.location.search).get('game') ?? 'game-default';
 
-  const templateModules = import.meta.glob<{ bootstrap: () => unknown }>(
-    '../../../templates/*/main.ts',
+  const templateManifests = import.meta.glob<{ entry: string; defaultScene?: string }>(
+    '../../../templates/*/forge.json',
+    { eager: true, import: 'default' },
   );
+  const templateModules = import.meta.glob<{ default: unknown }>([
+    '../../../templates/*/main.ts',
+    '../../../templates/*/src/main.ts',
+  ]);
 
   const loaded = await loadGame(slug, (s) => {
-    const key = `../../../templates/${s}/main.ts`;
+    const manifest = templateManifests[`../../../templates/${s}/forge.json`];
+    if (!manifest) return Promise.reject(new Error(`Unknown template: ${s}`));
+    const key = `../../../templates/${s}/${manifest.entry.replace(/^\.\//, '')}`;
     const loader = templateModules[key];
-    if (!loader) return Promise.reject(new Error(`Unknown template: ${s}`));
+    if (!loader) return Promise.reject(new Error(`Unknown template entry: ${s}/${manifest.entry}`));
     return loader();
   });
   if (!loaded.ok) {
@@ -115,15 +131,106 @@ async function startPreview(app: App, previewRun: PreviewUiRun): Promise<void> {
     throw new Error('preview: loadGame failed');
   }
 
-  const entry: BootstrapEntry = loaded.value;
+  const manifest = templateManifests[`../../../templates/${slug}/forge.json`];
+  if (manifest === undefined) throw new Error(`preview: missing loaded template manifest ${slug}`);
+  let defaultScene: SceneAsset | undefined;
+  let defaultSceneRoot: GameHost['defaultSceneRoot'];
+  if (manifest.defaultScene !== undefined) {
+    const scene = await assets.loadByGuid<SceneAsset>(assets.parseGuid(manifest.defaultScene));
+    if (!scene.ok) throw scene.error;
+    defaultScene = scene.value;
+    const handle = app.world.allocSharedRef('SceneAsset', scene.value);
+    const instantiated = assets.instantiate<SceneAsset>(handle, app.world);
+    if (!instantiated.ok) throw instantiated.error;
+    defaultSceneRoot = instantiated.value;
+  }
+
+  const ctx: GameHost = {
+    canvas: previewCanvas,
+    assets,
+    app,
+    renderer: app.renderer,
+    ...(defaultScene === undefined ? {} : { defaultScene }),
+    ...(defaultSceneRoot === undefined ? {} : { defaultSceneRoot }),
+    // M2 D-9: wire the pointer-lock gate setter. The game template calls
+    // setPointerLockAllowed(mode === 'fps') when switching modes; the
+    // preview host delegates to the input backend's setPointerLockAllowed.
+    // No lockProvider is injected — Web host goes W3C path.
+    setPointerLockAllowed: (allowed: boolean) => app.input?.setPointerLockAllowed?.(allowed),
+    uiRoot: previewRun.uiRoot,
+    gameProjection: previewInspection.registrar,
+  };
+
   try {
-    await entry(app.world, ctx);
+    await app.pluginContext.plugin(gameHostPlugin(ctx));
+    await app.pluginContext.plugin(loaded.value);
   } catch (e: unknown) {
     previewRun.cleanup();
-    console.error('[preview] bootstrap rejected:', e);
+    console.error('[preview] gameplay activation rejected:', e);
     throw e;
   }
   app.start();
+
+  if (previewProfiler !== undefined) {
+    const started = previewProfiler.startCapture({
+      frameLimit: positiveQueryInt('profileFrames', 3600),
+      eventLimit: positiveQueryInt('profileEvents', 786432),
+      detail: 'nested',
+    });
+    if (!started.ok) {
+      console.warn(`[preview] profiler start failed: ${started.error.code}`);
+    } else {
+      const poll = window.setInterval(() => {
+        const capture = previewProfiler.latestCapture();
+        if (capture === undefined) return;
+        window.clearInterval(poll);
+        const model = buildProfileModel(capture);
+        if (!model.ok) {
+          console.warn(`[preview] profiler model failed: ${model.error.code}`);
+          return;
+        }
+        const phases = [...model.value.phases]
+          .sort((left, right) => (right.p95DurationMicros ?? -1) - (left.p95DurationMicros ?? -1))
+          .slice(0, 12);
+        const frameP95 = (
+          frames: readonly { readonly durationMicros: number }[],
+        ): number | null => {
+          const values = frames
+            .map((frame) => frame.durationMicros)
+            .filter((value) => value > 0)
+            .sort((a, b) => a - b);
+          return values[Math.max(0, Math.ceil(values.length * 0.95) - 1)] ?? null;
+        };
+        const firstFrames = model.value.frames.slice(0, 60);
+        const lastFrames = model.value.frames.slice(-60);
+        const lastFrame = model.value.frames[model.value.frames.length - 1];
+        // Keep the opt-in capture visible to the host's profiling smoke output.
+        // Other preview diagnostics intentionally use warn/error, per repo lint policy.
+        // biome-ignore lint/suspicious/noConsole: profiler capture is an explicit host diagnostic
+        console.info(
+          '[preview] profiler capture',
+          JSON.stringify({
+            summary: model.value.summary,
+            hottestPhases: phases,
+            frameP95: {
+              first60Micros: frameP95(firstFrames),
+              last60Micros: frameP95(lastFrames),
+              driftMicros: (frameP95(lastFrames) ?? 0) - (frameP95(firstFrames) ?? 0),
+            },
+            lastFrame:
+              lastFrame === undefined
+                ? undefined
+                : {
+                    frameId: lastFrame.frameId,
+                    durationMicros: lastFrame.durationMicros,
+                    recordCount: lastFrame.recordCount,
+                    phaseCount: lastFrame.phaseCount,
+                  },
+          }),
+        );
+      }, 100);
+    }
+  }
 
   // Graceful GPU shutdown: dispose before reload. Without this, rapid reloads
   // leak GPU contexts -> STATUS_ACCESS_VIOLATION.
@@ -132,9 +239,7 @@ async function startPreview(app: App, previewRun: PreviewUiRun): Promise<void> {
   const gracefulDispose = (): void => {
     if (disposed) return;
     disposed = true;
-    app.stop();
-    app.renderer.dispose();
-    previewRun.cleanup();
+    void app.dispose().finally(() => previewRun.cleanup());
   };
   window.addEventListener('message', (ev) => {
     if ((ev.data as { type?: string } | null)?.type === 'VAG_PREVIEW_DISPOSE') {
@@ -155,7 +260,7 @@ async function startPreview(app: App, previewRun: PreviewUiRun): Promise<void> {
 }
 
 function createPreviewUiAssetGateway(
-  assets: App['renderer']['assets'],
+  assets: NonNullable<App['assets']>,
   binding: typeof runtimeBinding,
   hot: ImportMeta['hot'],
 ): UiAuthoringAssetGateway {
@@ -252,7 +357,11 @@ async function createPreviewUiCatalogGateway(
     listCatalog: () =>
       entries
         .filter((entry) => entry.kind === 'ui')
-        .map((entry) => ({ guid: entry.guid, kind: 'ui' as const, sourcePath: entry.sourcePath })),
+        .map((entry) => ({
+          guid: entry.guid,
+          kind: 'ui' as const,
+          sourcePath: entry.sourcePath,
+        })),
     async loadByGuid(guid) {
       let entry = findEntry(guid);
       if (entry === undefined) {
@@ -452,11 +561,6 @@ function reportCreateError(err: CanvasAppError): {
     console.error(`[preview] EngineEnvironmentError: webgpu inner=${code}`);
     return { code: 'engine-environment', detail: `webgpu inner=${code}` };
   }
-  if (isSimulationError(err)) {
-    const surface = consumeSimulationError(err, 'unavailable-before-app-world');
-    console.error(`[preview] SimulationError ${surface.code}: ${surface.hint}`);
-    return { code: surface.code, detail: surface.hint };
-  }
   if (isAppError(err)) {
     switch (err.code) {
       case 'app-not-started':
@@ -493,10 +597,6 @@ function reportCreateError(err: CanvasAppError): {
     }
   }
   return { code: 'unknown', detail: String(err) };
-}
-
-function isSimulationError(err: CanvasAppError): err is SimulationError {
-  return 'code' in err && typeof err.code === 'string' && err.code.startsWith('simulation-');
 }
 
 function reportLoadError(err: unknown): void {

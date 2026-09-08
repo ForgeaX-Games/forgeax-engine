@@ -10,21 +10,12 @@
 //
 // The two seed tables INLINE_PACK_LOADERS + PACK_ARTIFACT_LOADERS are the
 // default set. videoLoader lives in graphics-extras and is wired here. The
-// renderer supplies its concrete Web Audio loader through `extraLoaders`, so
-// this package remains independent of the Web Audio backend while the
-// production registry still has all 13 engine-owned kinds.
+// complete ordinary Asset vocabulary is registered once at this boundary;
+// host-specific loaders may extend the table through `extraLoaders`.
 //
-// Default set wired internally (13 kinds):
-//   inline pack-payload (8): mesh / scene / sampler / material / skeleton /
-//     skin / animation-clip / animation-graph
-//   upstream-branch (3):     texture / font / equirect
-//   video (1):               video (videoLoader, graphics-extras)
-//   UI (1):                  ui (engine-ui)
+// Default set wired internally: the 16 ordinary Asset kinds plus the existing
+// UI consumer loader. Host-only execution remains separate from descriptor load.
 //
-// Deliberately NOT registered (AC-02 exclusion): render-pipeline / shader --
-// these have no inline loader today; `loadByGuid` on them surfaces
-// `loader-not-registered` (charter P3) rather than a silent miss.
-
 import { videoLoader } from '@forgeax/engine-graphics-extras';
 import type { Loader } from '@forgeax/engine-types';
 import { createUiLoader, type UiAsset } from '@forgeax/engine-ui';
@@ -42,28 +33,32 @@ const uiLoader: Loader<UiAsset> = {
 };
 
 /**
- * Wire the engine's default loader set (13 engine-owned kinds: 8 inline +
- * texture + font + equirect + video + UI) plus any `extraLoaders` onto `registry` in
+ * Wire the engine's default loader set (16 ordinary kinds plus UI) plus any
+ * `extraLoaders` onto `registry` in
  * one call. Returns the same `registry` for chaining (so `wireDefaultLoaders(new
  * LoaderRegistry())` is a one-expression wired registry). The `extraLoaders` are
- * appended after the defaults; the production assembly point injects its
- * concrete audio catalog-entry loader to complete the 12-kind set.
+ * appended after the defaults and must use kinds outside the ordinary set.
  *
  * @example
  * ```ts
  * import { LoaderRegistry, wireDefaultLoaders } from '@forgeax/engine-assets-runtime';
  * const loaders = wireDefaultLoaders(new LoaderRegistry());
  * // loaders.get('mesh') / .get('texture') / .get('font') / .get('video') are
- * // non-undefined; audio is supplied via extraLoaders at the assembly point;
- * // render-pipeline / shader stay undefined.
+ * // non-undefined; all ordinary Asset kinds share this same owner table.
  * ```
  */
 export function wireDefaultLoaders(
   registry: LoaderRegistry,
   extraLoaders: readonly Loader[] = [],
 ): LoaderRegistry {
-  for (const loader of INLINE_PACK_LOADERS) registry.register(loader);
-  for (const loader of PACK_ARTIFACT_LOADERS) registry.register(loader);
+  const extraKinds = new Set(extraLoaders.map((loader) => loader.kind));
+  const seeded = new Set<string>();
+  for (const loader of [...INLINE_PACK_LOADERS, ...PACK_ARTIFACT_LOADERS]) {
+    if (extraKinds.has(loader.kind)) continue;
+    if (seeded.has(loader.kind)) continue;
+    seeded.add(loader.kind);
+    registry.register(loader);
+  }
   registry.register(videoLoader);
   registry.register(uiLoader);
   for (const loader of extraLoaders) registry.register(loader);

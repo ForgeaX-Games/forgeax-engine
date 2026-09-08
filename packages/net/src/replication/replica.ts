@@ -1,26 +1,25 @@
-import {
-  type Component,
-  classifyEntityField,
-  type EntityHandle,
-  type World,
-} from '@forgeax/engine-ecs';
+import type { Component, EntityHandle, World } from '@forgeax/engine-ecs';
+import { classifyEntityField } from '@forgeax/engine-ecs/externalization';
+import { componentSchema } from '@forgeax/engine-ecs/internal';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import type { NetEndpoint } from '../endpoint/endpoint';
-import { decodeReplicationBatch, type ReplicationBatch } from './codec';
+import { decodeReplicationPacket } from './codec';
 import { NetError } from './errors';
 import type { ReplicationLimits, ReplicationProfile } from './profile';
+import type { ReplicationDataPacket } from './protocol';
 
 export class ReplicaCoordinator {
   readonly #world: World;
   readonly #profile: ReplicationProfile;
-  readonly #endpoint: NetEndpoint | undefined;
   readonly #entities = new Map<number, EntityHandle>();
   #lastTick = 0;
+  #epoch = -1;
+  #lastSequence = 0;
+  #lastPacketOutcome: 'accepted' | 'duplicate' | 'ignored-old-epoch' = 'accepted';
   #stopped = false;
-  constructor(world: World, profile: ReplicationProfile, endpoint?: NetEndpoint) {
+  constructor(world: World, profile: ReplicationProfile, _endpoint?: unknown) {
     this.#world = world;
     this.#profile = profile;
-    this.#endpoint = endpoint;
   }
   entityFor(id: number): EntityHandle | undefined {
     return this.#entities.get(id);
@@ -41,9 +40,7 @@ export class ReplicaCoordinator {
       }))
       .sort((a, b) => a.id - b.id);
   }
-  disconnect(): void {
-    this.#endpoint?.close();
-  }
+  disconnect(): void {}
   /** Remove the last replica baseline when the authority connection closes. */
   clear(): void {
     for (const entity of this.#entities.values()) this.#world.despawn(entity).unwrap();
@@ -55,13 +52,21 @@ export class ReplicaCoordinator {
   get tick(): number {
     return this.#lastTick;
   }
+  /** Report the last accepted, duplicate, or stale-epoch packet decision. */
+  get lastPacketOutcome(): 'accepted' | 'duplicate' | 'ignored-old-epoch' {
+    return this.#lastPacketOutcome;
+  }
+  getPendingUnresolvedReferences(): number {
+    return 0;
+  }
   #entityReferences(value: unknown): readonly unknown[] {
     if (Array.isArray(value) || ArrayBuffer.isView(value)) {
       return Array.from(value as ArrayLike<unknown>);
     }
     return [];
   }
-  validate(batch: ReplicationBatch): NetError | null {
+  validate(packet: ReplicationDataPacket): NetError | null {
+    this.#lastPacketOutcome = 'accepted';
     if (this.#stopped)
       return new NetError({
         code: 'apply-invariant-failed',
@@ -69,22 +74,54 @@ export class ReplicaCoordinator {
         hint: 'create a new session after a fatal apply failure',
         detail: { reason: 'replication stopped' },
       });
-    if (batch.fingerprint !== this.#profile.fingerprint)
+    if (packet.fingerprint !== this.#profile.fingerprint)
       return new NetError({
         code: 'schema-invalid',
         expected: 'a batch for the negotiated replication profile',
         hint: 'complete handshake before applying replication bytes',
         detail: { component: '', reason: 'fingerprint mismatch' },
       });
-    if (batch.tick <= this.#lastTick)
+    const newEpoch = packet.epoch > this.#epoch;
+    if (this.#epoch < 0 && packet.kind !== 'baseline')
+      return new NetError({
+        code: 'session-illegal-transition',
+        expected: 'a baseline before any delta in a session epoch',
+        hint: 'accept a complete authoritative baseline before applying deltas',
+        detail: { from: 'connecting', to: packet.kind },
+      });
+    if (packet.epoch > this.#epoch && (packet.kind !== 'baseline' || packet.sequence !== 1))
+      return new NetError({
+        code: 'session-illegal-transition',
+        expected: 'a sequence-one baseline at the start of a new epoch',
+        hint: 'request a fresh baseline before applying the next delta',
+        detail: { from: 'resyncing', to: packet.kind },
+      });
+    if (packet.epoch < this.#epoch) return null;
+    if (packet.kind === 'baseline' && !newEpoch && this.#lastSequence >= 1) {
+      this.#lastPacketOutcome = 'duplicate';
+      return null;
+    }
+    if (packet.kind === 'delta' && packet.sequence <= this.#lastSequence) {
+      this.#lastPacketOutcome = 'duplicate';
+      return null;
+    }
+    if (packet.kind === 'delta' && packet.sequence !== this.#lastSequence + 1)
+      return new NetError({
+        code: 'ordering-invalid-tick',
+        expected: 'the next contiguous replication sequence',
+        hint: 'request a fresh baseline when a sequence gap is detected',
+        detail: { receivedTick: packet.sequence, lastTick: this.#lastSequence },
+      });
+    if (!newEpoch && packet.tick <= this.#lastTick)
       return new NetError({
         code: 'ordering-invalid-tick',
         expected: 'a strictly monotonic authority tick',
         hint: 'discard duplicate, stale, and out-of-order batches',
-        detail: { receivedTick: batch.tick, lastTick: this.#lastTick },
+        detail: { receivedTick: packet.tick, lastTick: this.#lastTick },
       });
     const batchIds = new Set<number>();
-    for (const record of batch.entities) {
+    const knownIds = newEpoch ? new Set<number>() : new Set(this.#entities.keys());
+    for (const record of packet.entities) {
       if (!Number.isSafeInteger(record.id) || record.id <= 0 || batchIds.has(record.id))
         return new NetError({
           code: 'identity-invalid',
@@ -94,8 +131,8 @@ export class ReplicaCoordinator {
         });
       batchIds.add(record.id);
     }
-    for (const record of batch.entities) {
-      if (record.kind === 'despawn' && !this.#entities.has(record.id))
+    for (const record of packet.entities) {
+      if (record.kind === 'despawn' && !knownIds.has(record.id))
         return new NetError({
           code: 'identity-invalid',
           expected: 'a known identity for despawn',
@@ -115,7 +152,7 @@ export class ReplicaCoordinator {
           });
         if (entry.operation === 'remove') continue;
         for (const [field, value] of Object.entries(entry.data)) {
-          if (!(field in component.schema))
+          if (!(field in componentSchema(component)))
             return new NetError({
               code: 'schema-invalid',
               expected: 'component fields declared by the negotiated ECS schema',
@@ -129,7 +166,7 @@ export class ReplicaCoordinator {
               reference !== null &&
               (typeof reference !== 'number' ||
                 reference === 0 ||
-                (!this.#entities.has(reference) && !batchIds.has(reference)))
+                (!knownIds.has(reference) && !batchIds.has(reference)))
             )
               return new NetError({
                 code: 'remap-unresolved-reference',
@@ -142,17 +179,26 @@ export class ReplicaCoordinator {
     }
     return null;
   }
-  apply(batch: ReplicationBatch): Result<void, NetError> {
-    const failure = this.validate(batch);
+  apply(packet: ReplicationDataPacket): Result<void, NetError> {
+    const failure = this.validate(packet);
     if (failure) {
-      this.disconnect();
       return err(failure);
     }
+    if (packet.epoch < this.#epoch) {
+      this.#lastPacketOutcome = 'ignored-old-epoch';
+      return ok(undefined);
+    }
+    if (this.#lastPacketOutcome === 'duplicate') return ok(undefined);
+    const replacingEpoch = packet.epoch > this.#epoch;
     try {
-      for (const record of batch.entities)
+      if (replacingEpoch) {
+        for (const entity of this.#entities.values()) this.#world.despawn(entity).unwrap();
+        this.#entities.clear();
+      }
+      for (const record of packet.entities)
         if (record.kind === 'upsert' && !this.#entities.has(record.id))
           this.#entities.set(record.id, this.#world.spawn().unwrap());
-      for (const record of batch.entities)
+      for (const record of packet.entities)
         if (record.kind === 'upsert') {
           const entity = this.#entities.get(record.id);
           if (entity === undefined) throw new Error(`missing allocated entity ${record.id}`);
@@ -193,14 +239,17 @@ export class ReplicaCoordinator {
             if (!write.ok) throw write.error;
           }
         }
-      for (const record of batch.entities)
+      for (const record of packet.entities)
         if (record.kind === 'despawn') {
           const entity = this.#entities.get(record.id);
           if (entity === undefined) throw new Error(`missing despawn entity ${record.id}`);
           this.#world.despawn(entity).unwrap();
           this.#entities.delete(record.id);
         }
-      this.#lastTick = batch.tick;
+      this.#epoch = packet.epoch;
+      this.#lastSequence = packet.sequence;
+      this.#lastTick = packet.tick;
+      this.#lastPacketOutcome = 'accepted';
       return ok(undefined);
     } catch (cause) {
       this.#stopped = true;
@@ -222,22 +271,31 @@ export function createReplicaCoordinator(
 ): ReplicaCoordinator {
   return new ReplicaCoordinator(world, profile, endpoint);
 }
-export function applyReplicaBatch(
+export function applyReplicationPacket(
   replica: ReplicaCoordinator,
-  batch: ReplicationBatch,
+  packet: ReplicationDataPacket,
 ): Result<void, NetError> {
-  return replica.apply(batch);
+  return replica.apply(packet);
 }
 
-export function decodeAndApplyReplicaBatch(
+export function decodeAndApplyReplicationPacket(
   replica: ReplicaCoordinator,
   bytes: Uint8Array,
   limits: ReplicationLimits,
 ): Result<void, NetError> {
-  const decoded = decodeReplicationBatch(bytes, limits);
+  const decoded = decodeReplicationPacket(bytes, limits);
   if (!decoded.ok) {
-    replica.disconnect();
     return err(decoded.error);
+  }
+  if (decoded.value.kind !== 'baseline' && decoded.value.kind !== 'delta') {
+    return err(
+      new NetError({
+        code: 'decode-invalid-payload',
+        expected: 'a baseline or delta replication packet',
+        hint: 'apply only data packets through the replica coordinator',
+        detail: { reason: 'control packet cannot be applied as ECS data' },
+      }),
+    );
   }
   return replica.apply(decoded.value);
 }

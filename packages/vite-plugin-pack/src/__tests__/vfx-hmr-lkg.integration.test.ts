@@ -1,6 +1,5 @@
 import { type NativeCookDraft, NativeCookerRegistry } from '@forgeax/engine-pack/native-cooker';
 import { describe, expect, it } from 'vitest';
-import { runNativeCookerLifecycle } from '../dev/native-cooker-lifecycle.js';
 
 function draft(version: string): NativeCookDraft<{ version: string }> {
   return {
@@ -22,8 +21,7 @@ describe('generation-scoped VFX HMR LKG', () => {
     const registry = new NativeCookerRegistry();
     let version = 'one';
     registry.register({ key: 'particle-effect', cook: () => draft(version) });
-    const first = await runNativeCookerLifecycle<{ version: string }, Record<string, never>>({
-      registry,
+    const first = await registry.runTransaction<{ version: string }, Record<string, never>>({
       key: 'particle-effect',
       input: {},
     });
@@ -31,8 +29,7 @@ describe('generation-scoped VFX HMR LKG', () => {
     if (!first.ok) return;
 
     version = 'invalid';
-    const rejected = await runNativeCookerLifecycle<{ version: string }, Record<string, never>>({
-      registry,
+    const rejected = await registry.runTransaction<{ version: string }, Record<string, never>>({
       key: 'particle-effect',
       input: {},
       previous: first.value,
@@ -52,8 +49,7 @@ describe('generation-scoped VFX HMR LKG', () => {
 
     version = 'two';
     if (!rejected.ok) return;
-    const recovered = await runNativeCookerLifecycle<{ version: string }, Record<string, never>>({
-      registry,
+    const recovered = await registry.runTransaction<{ version: string }, Record<string, never>>({
       key: 'particle-effect',
       input: {},
       previous: rejected.value,

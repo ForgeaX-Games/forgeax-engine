@@ -31,7 +31,7 @@ await vi.hoisted(async () => {
 
 // Import the render-graph-primitives module to extract the functions under test.
 // We can reach them through the resolved module namespace.
-const mod = await import('@forgeax/engine-render/internal');
+const mod = await import('../../../render/src/render-graph-primitives');
 // resolveDepthOnlyView is exported; resolveHdrDepthDepthOnlyView is not.
 // We can test the delegate equivalence by calling resolveDepthOnlyView with
 // the SSAO label, which is the exact body of the delegate.

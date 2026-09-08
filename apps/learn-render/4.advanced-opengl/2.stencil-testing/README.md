@@ -3,7 +3,7 @@
 > [!NOTE]
 > **LO original chapter**: [LearnOpenGL 4.2 Stencil Testing](https://learnopengl.com/Advanced-OpenGL/Stencil-testing)
 >
-> **Engine surface**: `createApp` + `MeshRenderer` with `stencilWriteMask`/`stencilReadMask` in `MaterialRenderState` + `stencilReference` in `MaterialPass` + `configurePackIndex` + `loadByGuid<TextureAsset>` + custom `registerMaterialShader` (outline-solid).
+> **Engine surface**: `createApp` + `MeshRenderer` with `stencilWriteMask`/`stencilReadMask` in `MaterialRenderState` + `stencilReference` in `MaterialPass` + `configureRuntimeAssetCatalog` + `loadByGuid<TextureAsset>` + custom `registerMaterialShader` (outline-solid).
 
 ## Hit-rate index (AI user fast-locate)
 
@@ -60,7 +60,7 @@ pnpm --filter "@forgeax/app-learn-render-4-advanced-opengl-2-stencil-testing" ty
 | Floor plane | Custom 6-vertex plane at Y=-0.5 with texcoord=2.0 | `HANDLE_QUAD` (engine-builtin 1x1 quad) rotated -90 deg around X, scaled 5x5 at Y=-0.5 |
 | Cube geometry | 1x1x1 CCW cube, 36 vertices | `HANDLE_CUBE` (engine-builtin CCW cube) |
 | Cube transforms | `glm::translate((-1,0,-1))` / `glm::translate((2,0,0))` | ECS `Transform` component: `pos=[-1, 0, -1]` / `pos=[2, 0, 0]` |
-| Texture loading | `stb_image.h` + `loadTexture(path)` with `GL_REPEAT` | `configurePackIndex` + `loadByGuid<TextureAsset>` with sidecar `.meta.json` |
+| Texture loading | `stb_image.h` + `loadTexture(path)` with `GL_REPEAT` | `configureRuntimeAssetCatalog` + `loadByGuid<TextureAsset>` with sidecar `.meta.json` |
 | Camera | LO `Camera` class at (0,0,3), Zoom=45 deg | `Transform` (at (0,0,3)) + `Camera` (fov=PI/4, near=0.1, far=100) |
 | Window + loop | `glfwCreateWindow` + `while(!glfwWindowShouldClose)` | `createApp(canvas, opts)` from `@forgeax/engine-app` |
 

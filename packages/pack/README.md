@@ -1,6 +1,68 @@
 # @forgeax/engine-pack
 
+## MaterialAsset 唯一成功路径
+
+Pack 承载 `paramSchema -> derive -> compile/reflect -> cook/load -> extract/record`
+中的 cook/load 边界：producer 先发布含 `coordinateSet`、transform、
+`physicalUvScale`、artifact 与 `layoutIdentity` 的 receipt，再由 catalog 按 GUID
+提供给 runtime。identity 或 receipt 过期时 inspect producer evidence，修复后
+recook 并重新验证，不手改 cooked payload。
+
+> [!IMPORTANT]
+> Pack 是发布与证据边界，不是第二份 schema；恢复动作依赖结构化状态与 receipt，
+> 并沿 producer owner 回到源输入。
+
 ## Authoring and recovery index
+
+## Material contract index
+
+Pack is the single material-cook and publication boundary. It publishes one
+GUID-addressed receipt and artifact for the resolved contract; it does not
+redefine `paramSchema` or mint runtime feature macros. Keep
+`materialContractDigest`, `sourceClosureDigest`, `layoutIdentity`,
+`programIdentity`, `cookIdentity`, and `materialPublicationIdentity` together
+as layered identity. Inspect `current` versus `generation`, repair the owning
+producer at the first divergence, cold-cook the same GUID, and verify receipt,
+artifact, and provenance.
+
+## Mesh binary v4 boundary
+
+Mesh artifacts use one canonical `geometry` projection and one strict wire
+contract. The pack package owns the header facts and digest implementation in
+[`src/mesh-bin-contract.ts`](src/mesh-bin-contract.ts); consumers must not
+recreate that table.
+
+| Fact | Owner | Recovery |
+|:--|:--|:--|
+| projection mask, schema version, stride, digest | `@forgeax/engine-geometry` + pack contract | Re-cook from source and Meta |
+| vertex/index cardinality and payload bounds | build-time import producer | Repair source payload, then cold-cook |
+| malformed or legacy mesh binary | strict runtime loader | Keep LKG; publish only a fully validated replacement |
+
+> [!WARNING]
+> Mesh binary v4 is the only accepted/emitted mesh wire version. v2/v3 are
+> rejected closed; runtime never decodes or re-cooks a legacy payload.
+
+## ScriptablePack in 30 seconds
+
+The public happy path is: declare GUIDs in a `*.pack.ts`, run the Vite Pack
+producer, publish Pack v2 plus the Catalog, then call
+`AssetRegistry.loadByGuid(guid)`. The durable consumer matrix is the exported
+`SCRIPTABLE_PACK_ASSET_KINDS` list: mesh, material, scene, texture, equirect,
+sampler, font, render-pipeline, tileset, video, skeleton, skin,
+animation-clip, animation-graph, audio, and particle-effect.
+
+Every successful row keeps its `sourceKey` identity, dependency `refs`, and
+producer-owned `artifacts`. Audio keeps `mediaType` and bytes; particle effects
+keep `programFingerprint` and the cooked program. Animation and tile consumers
+turn a loaded payload into a World-owned shared reference at their own boundary.
+
+For failure, switch on `code`, inspect `expected`, `hint`, and narrowed `detail`:
+repair the definition or producer, rebuild/cold-cook, refresh the Catalog LKG,
+or attach the missing Host capability. A missing audio/video/VFX capability is
+an install/play/execute error, not a durable-load error. The machine contract
+lives in [`pack.schema.json`](schema/pack.schema.json) and
+[`meta.schema.json`](schema/meta.schema.json); this section is guidance, not a
+second manifest.
 
 The machine contract is [`asset-authority.schema.json`](../../asset-authority.schema.json). The audit gate is [`check-asset-authority-audit.mjs`](../../scripts/forgeax/check-asset-authority-audit.mjs); it reports subject, execution, author authority, runtime source, lifecycle, owner, producer, and sourceKey evidence for every named category.
 
@@ -19,12 +81,36 @@ source.
 
 Pack or external source plus Meta owns author facts. DDC and Catalog are derived projections; they are not author databases or write authorities.
 
+## Engine builtin mesh descriptors
+
+The Engine-owned primitive mesh identities are published from one UUIDv5 table
+(`@forgeax/engine-pack/builtin`). A standalone DevKit build materializes only
+the missing rows as an ordinary Pack v2 tuple; Geometry then derives the mesh
+payload from the `procedural-*` token at load time.
+
+| Descriptor | GUID source | Geometry token |
+|:--|:--|:--|
+| Cube | `HANDLE_CUBE` | `procedural-cube` |
+| Triangle | `HANDLE_TRIANGLE` | `procedural-triangle` |
+| Quad | `HANDLE_QUAD` | `procedural-quad` |
+| Sphere | `HANDLE_SPHERE` | `procedural-sphere` |
+| Nine-slice quad | `HANDLE_NINESLICE_QUAD` | `procedural-nine-slice-quad` |
+| Cylinder | `HANDLE_CYLINDER` | `procedural-cylinder` |
+
+This keeps the runtime registry generic while ensuring a packaged game can
+resolve legacy scene references without a second process-static asset owner.
+
 > [!IMPORTANT]
 > The pack contract has one material authoring shape: a `MaterialAsset` payload. The cook stage resolves inheritance, values, texture coordinates, module references, artifact bytes, and a receipt into one record. Runtime consumers use the GUID and catalog locator; they do not author a second shader resource.
 
 ## MaterialAsset cook contract
 
 Put the material payload in the package `assets[]` row and keep its `refs[]` graph complete. The `passes`, `values`, `parent`, and texture `coordinates` remain one authored route. A valid cooked material record contains `resolved`, `refs`, `artifact`, and `receipt`. If any part is absent, recover by fixing the producer payload or re-running the cook; this is the recovery route. Then repeat `lookup/verify --guid --project --catalog --json`.
+
+当 `parameters` 将字段声明为 `texture` 时，`values` 可保留纹理 GUID 字符串简写；省略
+`parameters` 的默认材质也只对 `MATERIAL_TEXTURE_SLOTS` 中的纹理槽启用该简写。只有
+sampler、强度或非默认坐标等附加元数据才使用结构化纹理对象。坐标字段的省略由运行时
+统一解析为 identity，但 cook/load 不得把 identity 坐标自动展开并写回创作 payload。
 
 > [!IMPORTANT]
 > The producer publishes facts; the consumer does not guess. `packageId`,
@@ -59,11 +145,58 @@ by a demo-side mesh substitute.
 
 Build-time importers write source meta and producer receipts; the Vite plugin publishes the locator. Runtime packages consume the resulting Pack v2 bytes and must not import this Node-only evidence adapter. See [`packages/types/src/asset-evidence.ts`](../types/src/asset-evidence.ts) for the exact schema and closed errors.
 
+Browser runtime code uses the focused Pack subpaths instead of the Node-oriented
+root barrel. The root entry remains the build-time scanner/evidence surface.
+
+| Runtime need | Browser-safe entry |
+|:--|:--|
+| Pack v2 validation and parsing | `@forgeax/engine-pack/runtime` |
+| Artifact locator validation | `@forgeax/engine-pack/artifact-path` |
+| Cooked material records | `@forgeax/engine-pack/material-cook` |
+| Mesh wire facts | `@forgeax/engine-pack/mesh-bin-contract` |
+
 ## Quick start
+
+### ScriptablePack source
+
+Use `@forgeax/engine-pack/source` when one trusted TypeScript source declares and builds a multi-asset package. The definition owns `packageId`, every output `guid`, `sourceKey`, `kind`, optional display `name`, and the scene component schema needed to externalize scene refs. `build(reader)` returns ordinary typed Assets keyed by the same `sourceKey` set; it cannot publish, mutate Catalog, or mint identity.
+
+```ts
+import type { ScriptablePackDefinition } from '@forgeax/engine-pack/source';
+import { Camera } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
+
+export default {
+  schemaVersion: '1.0.0',
+  packageId,
+  assets: {
+    mesh: { guid: meshGuid, kind: 'mesh', name: 'Generated Mesh' },
+    scene: { guid: sceneGuid, kind: 'scene', name: 'Generated Scene' },
+  },
+  sceneComponents: [Transform, Camera],
+  externalAssets: { material: materialGuid },
+  build: async (assets) => ({ ok: true, value: { mesh, scene } }),
+} satisfies ScriptablePackDefinition;
+```
+
+`sceneComponents` is optional for packs that never produce a `scene`. When a
+scene is produced, declare every component used by its entities in the same
+definition; the isolated Pack worker projects the tokens to a neutral,
+serializable schema. A scene component missing from that declaration is a
+fail-closed producer error, not a lookup into a global World schema.
+
+`forgeax-engine-remote-asset meta <source.pack.ts> --json` executes module initialization, validates the default export, and projects canonical Meta without calling `build`. `@forgeax/engine-pack/source-node` accepts a host executor with `load` and optional `dispose`; `timeoutMs` bounds module initialization and `buildTimeoutMs` bounds one `build(reader)` call. A build timeout returns one structured `pack-source-load-failed` Result with `detail.phase: 'build'`, the configured `timeoutMs`, and deterministic cleanup of the isolated worker and compile root.
+
+The default worker executes the complete relative TypeScript module closure on the supported Node floor, including Node 22 hosts that do not load `.ts` files directly. It transpiles that closure into a disposable ESM directory, resolves bare imports through the source project's nearest `node_modules`, then falls back to the worker's packaged dependency graph for desktop games that intentionally have no local `node_modules`. The disposable directory is removed when the worker is disposed. Bulk producers use the internal `createScriptablePackModuleExecutorPool()` with two recyclable workers; a pooled lease is released after metadata projection or one build, so a generation never retains one live Worker-backed definition per source.
+
+> [!IMPORTANT]
+> Source authoring is an explicit Node contract. Every gateway call carries a caller-minted `requestId`; mutations may carry `expectedRevision` for SHA-256 CAS. The filesystem port confines paths to one game root and atomically replaces only `canonical-v1` scaffolds. Arbitrary valid TypeScript remains inspectable and rebuildable, but unsupported structural edits fail closed with stable `pack-source-*` errors.
+
+`SOURCE_AUTHORING_OPERATION_DESCRIPTORS` is the producer-owned structured capability manifest for tools. The existing `asset.preflight` operation returns the current revision, canonical Meta, incoming references, and shape-derived mutation capabilities before any write.
 
 ```typescript
 import { AssetGuid } from "@forgeax/engine-pack/guid";
-import { scan } from "@forgeax/engine-pack/scanner";
+import { scan, scanInventory } from "@forgeax/engine-pack/scanner";
 
 // Runtime: resolve a known GUID at build time
 const result = AssetGuid.parse("cbe42beb-8975-5096-b3a1-3dda4cb4c077");
@@ -74,6 +207,11 @@ const guid = result.value;
 const scanResult = await scan(["apps/hello/cube/assets"]);
 if (!scanResult.ok) throw scanResult.error; // PackError with .code/.hint/.detail
 console.log(scanResult.value); // PackEntry[]
+
+// Build hosts can retain one validated inventory and project paths from it.
+const inventory = await scanInventory(["apps/hello/cube/assets"]);
+if (!inventory.ok) throw inventory.error;
+console.log(inventory.value.paths, inventory.value.scriptablePackMeta);
 ```
 
 ## Schema shapes
@@ -129,8 +267,7 @@ Two sidecar JSON files live next to each source file in an asset directory:
 Both package schemas accept producer-owned `packageId`, `provenance`,
 `revision`, and structured `diagnostics`. Asset/output rows may declare a
 stable `sourceKey`; `sourceIndex` is positional evidence only. The runtime
-function `diffTopology(previous, next)` (also exported as
-`calculateTopologyDiff`) preserves GUIDs by `sourceKey`, reports additions,
+function `diffTopology(previous, next)` preserves GUIDs by `sourceKey`, reports additions,
 removals, and kind changes, and marks multi-output source-index-only matching
 as ambiguous.
 
@@ -188,7 +325,7 @@ When `kind: 'material'`, the `payload` object carries `passes[]` + `values` (fea
 | `values` | `Record<string, unknown>` | Child-owned values, including per-slot texture coordinates. |
 | `parent` | `AssetGuid` | Optional serialized parent edge. |
 
-**Validation** is performed by the material schema and build-time cook. The cook resolves the parent chain, validates values and pass programs, and emits the effective record, artifact, references, and receipt. Runtime reports a structured missing-cook error instead of compiling a material.
+**Validation** is performed by the material schema and build-time cook. The cook resolves the parent chain, validates values and pass programs, and emits a `material-cook/3` record, artifact, references, and receipt. The receipt keeps material, source, layout, program, pipeline, publication, and cook identities together with compiler/WASM provenance and generation counters. Runtime reports a structured missing-cook error instead of compiling a material; stale generations are recooked by the producer.
 
 ## `AssetGuid` API
 
@@ -255,10 +392,30 @@ The `verify` subcommand runs a fail-fast 7-step chain:
 
 ## Mesh-binary artifact contract
 
-`MESH_BIN_VERSION` and `MESH_BIN_HEADER_V2_BYTES` are the Pack-owned facts for
-the v2 `<guid>.bin` mesh artifact. The import encoder and assets-runtime decoder
-consume them from the package root; independent test fixtures intentionally keep
-literal header values so they remain wire-format oracles.
+`MESH_BIN_VERSION` and `MESH_BIN_HEADER_V4_BYTES` are the Pack-owned facts for
+the v4 `<guid>.bin` mesh artifact. The header carries the geometry projection
+version, attribute mask, stride, digest, cardinality, and payload byte lengths;
+the import encoder and assets-runtime decoder consume those facts from the
+package root. Independent test fixtures may keep literal header values only as
+wire-format oracles, never as a second layout table.
+
+> [!WARNING]
+> v4 is the only accepted and emitted mesh-binary version. A v2/v3 artifact is
+> a closed load error, not a compatibility input. Preserve the last-known-good
+> catalog row, repair the source plus its `.meta.json` sidecar, then re-run the
+> owning build-time importer/native cooker and `lookup/verify --guid --project
+> --catalog --json` before publishing the replacement.
+
+## Owner product and inventory contract
+
+`scanInventory(...)` is the Pack-owned source inventory boundary. It preserves
+GUID identity, source revision, source key, and source index before importer
+work begins.
+
+`finalizePackageProduct(...)` accepts the terminal producer product, validates
+one receipt per GUID, validates asset-local artifact paths and bytes, and emits
+the deterministic package URL and digest. Producers provide policy through the
+finalizer sink; Pack owns package serialization and publication facts.
 
 ## Entry subpaths
 

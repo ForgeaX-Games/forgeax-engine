@@ -1,4 +1,5 @@
 import { type World } from '@forgeax/engine-ecs';
+import { buildMeshAttributeMapForUvSets } from '@forgeax/engine-geometry';
 import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
@@ -42,8 +43,9 @@ function greenLineList(): MeshAsset {
   return {
     kind: 'mesh',
     vertices,
-    attributes: { position: positionAttr },
-    submeshes: [{ indexOffset: 0, indexCount: 0, vertexCount, topology: 'line-list' }],
+    attributes: { ...buildMeshAttributeMapForUvSets(1), position: positionAttr },
+    submeshes: [{ indexOffset: 0, indexCount: 0, vertexCount, topology: 'line-list', materialSlot: 0 }],
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 
@@ -78,8 +80,9 @@ function blueLineStrip(): MeshAsset {
   return {
     kind: 'mesh',
     vertices,
-    attributes: { position: positionAttr },
-    submeshes: [{ indexOffset: 0, indexCount: 0, vertexCount, topology: 'line-list' }],
+    attributes: { ...buildMeshAttributeMapForUvSets(1), position: positionAttr },
+    submeshes: [{ indexOffset: 0, indexCount: 0, vertexCount, topology: 'line-list', materialSlot: 0 }],
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 

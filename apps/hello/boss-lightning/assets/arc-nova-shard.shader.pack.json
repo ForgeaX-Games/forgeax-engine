@@ -6,6 +6,7 @@
       "guid": "cd16a32c-0fd2-4c02-861d-a5537baaa793",
       "kind": "material",
       "sourceKey": "arc-nova-shard.wgsl",
+      "execution": "cooked",
       "payload": {
         "kind": "material",
         "passes": [

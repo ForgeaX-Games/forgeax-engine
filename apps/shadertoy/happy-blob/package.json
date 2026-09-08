@@ -51,6 +51,7 @@
     "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/engine-shader-compiler": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "vite": "8.0.10",
     "webgpu": "^0.4.0",

@@ -5,7 +5,39 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["caseId", "width", "height", "background", "framing", "artifacts"],
+  "allOf": [
+    {
+      "if": { "properties": { "evidenceKind": { "const": "vertex-color" } } },
+      "then": {
+        "required": ["evidenceKind", "colorDomain", "frameCount", "epsilon", "sourceFixtureHash", "producers"],
+        "properties": {
+          "colorDomain": { "enum": ["linearHdr", "displayEncoded"] },
+          "frameCount": { "const": 300 },
+          "epsilon": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["rgb", "alpha"],
+            "properties": {
+              "rgb": { "type": "number", "minimum": 0, "maximum": 0.05 },
+              "alpha": { "type": "number", "minimum": 0, "maximum": 0.05 }
+            }
+          },
+          "sourceFixtureHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "producers": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["forgeax", "three"],
+            "properties": {
+              "forgeax": { "allOf": [{ "$ref": "#/$defs/producer" }, { "properties": { "implementation": { "const": "forgeax" } } }] },
+              "three": { "allOf": [{ "$ref": "#/$defs/producer" }, { "properties": { "implementation": { "const": "three" }, "version": { "const": "r184" } } }] }
+            }
+          }
+        }
+      }
+    }
+  ],
   "properties": {
+    "evidenceKind": { "enum": ["vertex-color"] },
     "caseId": { "type": "string", "minLength": 1 },
     "width": { "type": "integer", "minimum": 1 },
     "height": { "type": "integer", "minimum": 1 },
@@ -20,6 +52,11 @@
       "items": false
     },
     "framing": { "type": "string", "minLength": 1 },
+    "colorDomain": { "enum": ["linearHdr", "displayEncoded"] },
+    "frameCount": { "type": "integer", "minimum": 0 },
+    "epsilon": { "type": "object" },
+    "sourceFixtureHash": { "type": "string" },
+    "producers": { "type": "object" },
     "artifacts": {
       "type": "array",
       "minItems": 3,
@@ -27,6 +64,19 @@
     }
   },
   "$defs": {
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implementation", "version", "renderer", "adapterId", "pinnedCommit", "buildIdentity"],
+      "properties": {
+        "implementation": { "enum": ["forgeax", "three"] },
+        "version": { "type": "string", "minLength": 1 },
+        "renderer": { "const": "webgpu" },
+        "adapterId": { "type": "string", "minLength": 1 },
+        "pinnedCommit": { "type": "string", "minLength": 1 },
+        "buildIdentity": { "type": "string", "minLength": 1 }
+      }
+    },
     "artifact": {
       "type": "object",
       "additionalProperties": false,

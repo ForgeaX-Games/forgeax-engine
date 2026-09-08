@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // bevy-lines headless dawn smoke — proves Bevy 3d/lines:
 // green line-list + blue line-strip render via unlit material.
 // Browser and smoke share the same src/lines.ts scene.
@@ -108,32 +109,27 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  renderer = await createSmokeRenderer(createRenderer, mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 }
-console.log(`[bevy-lines] backend=${renderer.backend}`);
+console.log(`[bevy-lines] backend=${rendererBackend(renderer)}`);
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+subscribeSmokeErrors(renderer, (err) => errors.push({ code: err.code, hint: err.hint }));
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 const { buildLinesWorld } = await import(resolve(here, '..', 'src', 'lines.ts'));
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 buildLinesWorld(world);
 
 // --- render at SMOKE_MIN_FRAMES ---
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   world.update().unwrap();
-  await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  await drawSmokeFrame(renderer, world);
 }
 await delay(50);
 
@@ -165,7 +161,7 @@ writeFileSync(refPngPath, writeReferencePng(pixels, WIDTH, HEIGHT));
 
 // --- results ---
 const checks = [
-  ['backend=webgpu', renderer.backend === 'webgpu'],
+  ['backend=webgpu', rendererBackend(renderer) === 'webgpu'],
   ['not-black', notBlack],
   ['has-color', hasColor],
   ['has-green', hasGreen],
@@ -184,5 +180,5 @@ if (!allPass) {
   process.exit(1);
 }
 
-console.log(`[smoke] PASS - ${SMOKE_MIN_FRAMES} frames, green=${hasGreen}(${greenCount}px), blue=${hasBlue}(${blueCount}px), backend=${renderer.backend}`);
+console.log(`[smoke] PASS - ${SMOKE_MIN_FRAMES} frames, green=${hasGreen}(${greenCount}px), blue=${hasBlue}(${blueCount}px), backend=${rendererBackend(renderer)}`);
 process.exit(0);

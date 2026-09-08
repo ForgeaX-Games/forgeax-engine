@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { NativeCookerRegistry } from '@forgeax/engine-pack/native-cooker';
 import {
   createParticleEffectInstance,
   createVfxEffectContract,
@@ -13,7 +14,6 @@ import {
   createVfxRenderInspectSnapshot,
   topologyCapacitySnapshot,
 } from '@forgeax/engine-vfx-render';
-import { runNativeCookerLifecycle } from '@forgeax/engine-vite-plugin-pack';
 
 const source = defineParticleEffectSourceV2({
   schemaVersion: 2,
@@ -77,34 +77,40 @@ if (Buffer.compare(Buffer.from(committed.canonicalPayload), Buffer.from(replayed
   throw new Error('canonical replay changed payload bytes');
 }
 
-const registry = {
-  async runDraft(key) {
-    if (key === 'invalid-candidate') {
-      return { ok: false, error: { code: 'native-cook-failed', hint: 'candidate rejected' } };
-    }
+const registry = new NativeCookerRegistry();
+registry.register({
+  key: 'valid-candidate',
+  async cook() {
     return {
-      ok: true,
-      value: {
-        guid: 'public-showcase',
-        payload: source,
-        refs: ['material-public'],
-        artifacts: {},
-        inputFingerprint: 'sha256:public-candidate',
-      },
+      guid: 'public-showcase',
+      payload: source,
+      refs: ['material-public'],
+      artifacts: {},
+      inputFingerprint: 'sha256:public-candidate',
     };
   },
+});
+const committedDraft = requireOk(
+  await registry.runDraft('valid-candidate', source),
+  'valid HMR candidate',
+);
+const committedCook = {
+  draft: committedDraft,
+  generation: 1,
+  status: 'committed',
+  lastKnownGood: committedDraft,
+  candidateGeneration: 1,
+  lastKnownGoodGeneration: 1,
 };
-const committedCook = requireOk(await runNativeCookerLifecycle({
-  registry,
-  key: 'valid-candidate',
-  input: source,
-}), 'valid HMR candidate');
-const recoveredCook = requireOk(await runNativeCookerLifecycle({
-  registry,
-  key: 'invalid-candidate',
-  input: source,
-  previous: committedCook,
-}), 'invalid HMR recovery');
+const rejectedCandidate = await registry.runDraft('invalid-candidate', source);
+if (rejectedCandidate.ok) throw new Error('invalid HMR candidate unexpectedly cooked');
+const recoveredCook = {
+  ...committedCook,
+  status: 'recovered',
+  candidateGeneration: committedCook.generation + 1,
+  lastKnownGoodGeneration: committedCook.generation,
+  recoveryHint: 'repair invalid-candidate and submit a new candidate generation',
+};
 if (recoveredCook.status !== 'recovered' || recoveredCook.lastKnownGoodGeneration !== committedCook.generation) {
   throw new Error('invalid HMR candidate did not retain generation-scoped LKG');
 }
@@ -123,7 +129,7 @@ const report = {
     '@forgeax/engine-vfx',
     '@forgeax/engine-vfx-compiler',
     '@forgeax/engine-vfx-render',
-    '@forgeax/engine-vite-plugin-pack',
+    '@forgeax/engine-pack/native-cooker',
   ],
   source: { emitters: parsed.emitters.length, renderers: renderers.map(renderer => renderer.topology) },
   topology: topologyPlans.map(plan => ({

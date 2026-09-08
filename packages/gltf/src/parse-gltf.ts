@@ -6,15 +6,28 @@
 // the main path uses internally.
 
 import { mat4, quat, vec3 } from '@forgeax/engine-math';
-import { checkExtensions, type GltfExtensionsJson } from './check-extensions.js';
-import { dataUriBase64Payload, decodeBase64 } from './data-uri.js';
+import {
+  IMPORT_ERROR_HINTS,
+  ImportError,
+  MESH_MATERIAL_SLOT_SOURCE_OVERRIDE_PAYLOAD_SCHEMA,
+  type MeshMaterialSlotTopologyEntry,
+  reconcileMeshMaterialSlotTopology,
+} from '@forgeax/engine-types';
 import {
   type AccessorJson,
   type BufferViewJson,
   COMPONENT_TYPE,
   decodeAccessor,
-} from './decode-accessor.js';
+} from './accessor/decode-accessor.js';
+import { decodeColorAccessor } from './accessor/decode-color.js';
+import { checkExtensions, type GltfExtensionsJson } from './check-extensions.js';
+import { Base64DecodeError, dataUriBase64Payload, decodeBase64 } from './data-uri.js';
 import { err, type GltfError, gltfErr, ok, type Result } from './errors.js';
+import {
+  type GltfBufferViewDecodeCapability,
+  type MeshoptBufferViewJson,
+  projectMeshoptBufferViews,
+} from './meshopt-decode.js';
 import { type GltfAnimationClipRecord, parseAnimation } from './parse-animation.js';
 import { parseGlbChunks } from './parse-glb-chunks.js';
 import { parseGltfHeader } from './parse-gltf-header.js';
@@ -38,6 +51,7 @@ export interface MeshPrimitiveJson {
 
 export interface MeshJson {
   readonly name?: string;
+  readonly weights?: readonly number[];
   readonly primitives: readonly MeshPrimitiveJson[];
 }
 
@@ -218,10 +232,18 @@ export interface GltfMeshIr {
   /** TEXCOORD_7 per-vertex UV set 7 (Float32Array, 2 per vertex). */
   readonly texcoord7?: Float32Array;
   readonly tangents?: Float32Array;
+  /** COLOR_0 importer carrier; bridge projects it to the canonical color attribute. */
+  readonly colors0?: Float32Array;
   /** JOINTS_0 per-vertex joint indices (Uint16Array, 4 per vertex). UBYTE source is width-converted to U16 at parse time (D-3). */
   readonly joints0?: Uint16Array;
   /** WEIGHTS_0 per-vertex skin weights (Float32Array, 4 per vertex). */
   readonly weights0?: Float32Array;
+  readonly morphTargets?: readonly {
+    readonly position?: Float32Array;
+    readonly normal?: Float32Array;
+    readonly tangent?: Float32Array;
+  }[];
+  readonly morphWeights?: Float32Array;
   /**
    * Optional per-glTF-spec: when omitted, primitive declares non-indexed
    * geometry (vertex buffer is consumed in vertex order, every 3 verts =
@@ -345,6 +367,8 @@ export interface GltfNodeIr {
   readonly name?: string;
   readonly transform: DecomposedTransform;
   readonly meshIndex: number | null;
+  /** Node-authored morph weights override mesh defaults at instantiation. */
+  readonly morphWeights?: Float32Array;
   /** Valid when node carries `skin` reference. Null when no skin. */
   readonly skinIndex: number | null;
   readonly children: readonly number[];
@@ -443,6 +467,7 @@ interface RootGltfJson extends GltfExtensionsJson {
     readonly translation?: readonly number[];
     readonly rotation?: readonly number[];
     readonly scale?: readonly number[];
+    readonly weights?: readonly number[];
     readonly extensions?: {
       readonly KHR_lights_punctual?: {
         readonly light?: number;
@@ -588,6 +613,39 @@ interface ParseGltfInternalsContext {
   readonly externalLoader: ExternalLoader;
   readonly binChunk?: Uint8Array;
   readonly filePath: string;
+  readonly meshopt?: GltfBufferViewDecodeCapability;
+}
+
+type GltfParseError = GltfError | ImportError;
+
+function invalidBufferDataUriError(
+  filePath: string,
+  bufferIndex: number,
+  cause: Base64DecodeError,
+): ImportError {
+  return new ImportError({
+    code: 'source-validation-failed',
+    expected: `glTF buffer ${bufferIndex} data URI to contain a valid base64 payload`,
+    hint: IMPORT_ERROR_HINTS['source-validation-failed'],
+    detail: {
+      diagnostics: [
+        {
+          code: 'gltf-buffer-data-uri-invalid',
+          severity: 'error',
+          sourcePath: filePath,
+          sourceRange: { start: 0, end: 0, line: 1, column: 1 },
+          rule: 'gltf-buffer-data-uri-base64',
+          expected: 'a valid base64 payload after ;base64,',
+          actual: `buffer ${bufferIndex}: ${cause.message}`,
+          hint: 'repair the buffer data URI or provide a valid external .bin sibling',
+        },
+      ],
+    },
+  });
+}
+
+export interface GltfParseOptions {
+  readonly meshopt?: GltfBufferViewDecodeCapability;
 }
 
 function parsePunctualLights(
@@ -652,7 +710,7 @@ function parsePunctualLights(
 async function parseGltfWithBin(
   json: RootGltfJson,
   ctx: ParseGltfInternalsContext,
-): Promise<Result<GltfDoc, GltfError>> {
+): Promise<Result<GltfDoc, GltfParseError>> {
   const headerResult = parseGltfHeader(json, ctx.filePath);
   if (!headerResult.ok) return err(headerResult.error);
 
@@ -673,7 +731,10 @@ async function parseGltfWithBin(
     try {
       const bytes = await resolveBuffer(bufJson, ctx.externalLoader, ctx.binChunk);
       buffers.push(bytes);
-    } catch (_e) {
+    } catch (e) {
+      if (e instanceof Base64DecodeError) {
+        return err(invalidBufferDataUriError(ctx.filePath, i, e));
+      }
       return err(
         gltfErr('gltf-malformed-header', {
           filePath: ctx.filePath,
@@ -684,7 +745,16 @@ async function parseGltfWithBin(
   }
 
   const accessors = json.accessors ?? [];
-  const bufferViews = json.bufferViews ?? [];
+  const rawBufferViews = json.bufferViews ?? [];
+  const projected = await projectMeshoptBufferViews(
+    rawBufferViews as readonly MeshoptBufferViewJson[],
+    buffers,
+    json.extensionsRequired ?? [],
+    ctx.meshopt,
+  );
+  if (!projected.ok) return err(projected.error);
+  const bufferViews = projected.value.bufferViews;
+  buffers.splice(0, buffers.length, ...projected.value.buffers);
 
   const meshes: GltfMeshIr[] = [];
   // feat-20260608 round-2: surface the original-glTF-mesh primitive counts so
@@ -761,6 +831,51 @@ async function parseGltfWithBin(
       // Missing attributes leave the GltfMeshIr field undefined.
       const attrs = prim.attributes ?? {};
 
+      let colors0: Float32Array | undefined;
+      const colorIdx = attrs.COLOR_0;
+      if (colorIdx !== undefined) {
+        const colorAccessor = accessors[colorIdx];
+        const colorBufferView = bufferViews[colorAccessor?.bufferView ?? -1];
+        if (colorAccessor === undefined || colorBufferView === undefined) {
+          return err(
+            gltfErr('gltf-color-accessor-malformed', {
+              semantic: 'COLOR_0',
+              accessorIndex: colorIdx,
+              reason: 'reference',
+            }),
+          );
+        }
+        const colorBuffer = buffers[colorBufferView.buffer];
+        if (colorBuffer === undefined) {
+          return err(
+            gltfErr('gltf-color-accessor-malformed', {
+              semantic: 'COLOR_0',
+              accessorIndex: colorIdx,
+              reason: 'reference',
+            }),
+          );
+        }
+        const decoded = decodeColorAccessor({
+          accessorIndex: colorIdx,
+          accessor: colorAccessor,
+          bufferView: colorBufferView,
+          buffer: colorBuffer,
+          bufferIndex: colorBufferView.buffer,
+          semantic: 'COLOR_0',
+        });
+        if (!decoded.ok) return err(decoded.error);
+        if (decoded.value.length !== (positions.length / 3) * 4) {
+          return err(
+            gltfErr('gltf-color-accessor-malformed', {
+              semantic: 'COLOR_0',
+              accessorIndex: colorIdx,
+              reason: 'count',
+            }),
+          );
+        }
+        colors0 = decoded.value;
+      }
+
       let normals: Float32Array | undefined;
       const normalIdx = attrs.NORMAL;
       if (normalIdx !== undefined) {
@@ -836,6 +951,91 @@ async function parseGltfWithBin(
             tangents = owned;
           }
         }
+      }
+
+      const rawTargets = prim.targets ?? [];
+      for (const target of rawTargets) {
+        const colorTarget = target.COLOR_0;
+        if (colorTarget !== undefined) {
+          return err(
+            gltfErr('gltf-color-accessor-unsupported', {
+              semantic: 'COLOR_0',
+              accessorIndex: colorTarget,
+              reason: 'morph',
+            }),
+          );
+        }
+      }
+      const morphAttributeCount = rawTargets.reduce(
+        (count, target) =>
+          count +
+          (target.POSITION === undefined ? 0 : 1) +
+          (target.NORMAL === undefined ? 0 : 1) +
+          (target.TANGENT === undefined ? 0 : 1),
+        0,
+      );
+      const morphError = (
+        reason:
+          | 'target-count-exceeded'
+          | 'attribute-count-exceeded'
+          | 'attribute-length-mismatch'
+          | 'weights-length-mismatch'
+          | 'sparse-or-unsupported-accessor',
+      ) =>
+        err(
+          gltfErr('gltf-morph-invalid', {
+            meshIndex,
+            primitiveIndex: meshJson.primitives.indexOf(prim),
+            reason,
+            targetCount: rawTargets.length,
+            attributeCount: morphAttributeCount,
+            vertexCount: positions.length / 3,
+          }),
+        );
+      if (rawTargets.length > 8) return morphError('target-count-exceeded');
+      if (morphAttributeCount > 8) return morphError('attribute-count-exceeded');
+
+      const morphTargets: {
+        readonly position?: Float32Array;
+        readonly normal?: Float32Array;
+        readonly tangent?: Float32Array;
+      }[] = [];
+      for (const target of rawTargets) {
+        const output: {
+          position?: Float32Array;
+          normal?: Float32Array;
+          tangent?: Float32Array;
+        } = {};
+        for (const [key, accessorIndex] of Object.entries(target)) {
+          if (key !== 'POSITION' && key !== 'NORMAL' && key !== 'TANGENT') continue;
+          const targetAccessor = accessors[accessorIndex];
+          if (targetAccessor === undefined) return morphError('attribute-length-mismatch');
+          const decoded = decodeAttributeAccessor(
+            accessorIndex,
+            targetAccessor,
+            bufferViews,
+            buffers,
+          );
+          if (!decoded.ok) {
+            return morphError(
+              decoded.error.code === 'gltf-accessor-type-mismatch'
+                ? 'sparse-or-unsupported-accessor'
+                : 'attribute-length-mismatch',
+            );
+          }
+          const expected = (positions.length / 3) * (key === 'TANGENT' ? 4 : 3);
+          if (decoded.value.length !== expected) return morphError('attribute-length-mismatch');
+          const owned = new Float32Array(decoded.value.length);
+          owned.set(decoded.value);
+          if (key === 'POSITION') output.position = owned;
+          else if (key === 'NORMAL') output.normal = owned;
+          else output.tangent = owned;
+        }
+        morphTargets.push(output);
+      }
+      const meshWeights = meshJson.weights;
+      if (meshWeights !== undefined && meshWeights.length !== rawTargets.length) {
+        return morphError('weights-length-mismatch');
       }
 
       // JOINTS_0 / WEIGHTS_0 (feat-20260611 M1 w1): paired skinning attributes.
@@ -998,8 +1198,11 @@ async function parseGltfWithBin(
         ...(texcoord6 === undefined ? {} : { texcoord6 }),
         ...(texcoord7 === undefined ? {} : { texcoord7 }),
         ...(tangents === undefined ? {} : { tangents }),
+        ...(colors0 === undefined ? {} : { colors0 }),
         ...(joints0 === undefined ? {} : { joints0 }),
         ...(weights0 === undefined ? {} : { weights0 }),
+        ...(morphTargets.length === 0 ? {} : { morphTargets }),
+        ...(meshWeights === undefined ? {} : { morphWeights: new Float32Array(meshWeights) }),
         ...(indices === undefined ? {} : { indices }),
         materialIndex: prim.material ?? null,
         meshIndex,
@@ -1152,6 +1355,8 @@ async function parseGltfWithBin(
       if (!instancingResult.ok) return err(instancingResult.error);
       instancing = instancingResult.value;
     }
+    const nodeMorphWeights =
+      nodeJson.weights === undefined ? undefined : new Float32Array(nodeJson.weights);
     nodes.push({
       ...(nodeJson.name === undefined ? {} : { name: nodeJson.name }),
       transform,
@@ -1161,6 +1366,7 @@ async function parseGltfWithBin(
       camera: nodeJson.camera ?? null,
       lightIndex: nodeJson.extensions?.KHR_lights_punctual?.light ?? null,
       ...(instancing === undefined ? {} : { instancing }),
+      ...(nodeMorphWeights === undefined ? {} : { morphWeights: nodeMorphWeights }),
     });
   }
 
@@ -1213,11 +1419,12 @@ async function parseGltfWithBin(
  * Pure function modulo `externalLoader` (caller-provided I/O is the
  * only side effect). No global state, no fs / network direct call.
  */
-export async function parseGltf(
+export async function parseGltfForImporter(
   json: unknown,
   externalLoader: ExternalLoader,
   filePath: string,
-): Promise<Result<GltfDoc, GltfError>> {
+  options: GltfParseOptions = {},
+): Promise<Result<GltfDoc, GltfParseError>> {
   if (json === null || typeof json !== 'object') {
     return err(
       gltfErr('gltf-malformed-header', {
@@ -1229,7 +1436,30 @@ export async function parseGltf(
   return parseGltfWithBin(json as RootGltfJson, {
     externalLoader,
     filePath,
+    ...(options.meshopt === undefined ? {} : { meshopt: options.meshopt }),
   });
+}
+
+function legacyParseResult(
+  result: Result<GltfDoc, GltfParseError>,
+  filePath: string,
+  byteOffset: number,
+): Result<GltfDoc, GltfError> {
+  if (result.ok) return ok(result.value);
+  if (result.error instanceof ImportError) {
+    return err(gltfErr('gltf-malformed-header', { filePath, byteOffset }));
+  }
+  return err(result.error);
+}
+
+export async function parseGltf(
+  json: unknown,
+  externalLoader: ExternalLoader,
+  filePath: string,
+  options: GltfParseOptions = {},
+): Promise<Result<GltfDoc, GltfError>> {
+  const result = await parseGltfForImporter(json, externalLoader, filePath, options);
+  return legacyParseResult(result, filePath, 0);
 }
 
 /**
@@ -1237,10 +1467,11 @@ export async function parseGltf(
  * `parseGlbChunks`, then run the JSON document through `parseGltf` with
  * the BIN chunk wired in as buffer-0 backing storage.
  */
-export async function parseGlb(
+export async function parseGlbForImporter(
   buffer: ArrayBuffer,
   filePath: string,
-): Promise<Result<GltfDoc, GltfError>> {
+  options: GltfParseOptions = {},
+): Promise<Result<GltfDoc, GltfParseError>> {
   const chunksResult = parseGlbChunks(buffer, filePath);
   if (!chunksResult.ok) return err(chunksResult.error);
   let json: unknown;
@@ -1269,7 +1500,17 @@ export async function parseGlb(
     externalLoader,
     ...(chunksResult.value.binChunk === undefined ? {} : { binChunk: chunksResult.value.binChunk }),
     filePath,
+    ...(options.meshopt === undefined ? {} : { meshopt: options.meshopt }),
   });
+}
+
+export async function parseGlb(
+  buffer: ArrayBuffer,
+  filePath: string,
+  options: GltfParseOptions = {},
+): Promise<Result<GltfDoc, GltfError>> {
+  const result = await parseGlbForImporter(buffer, filePath, options);
+  return legacyParseResult(result, filePath, 12);
 }
 
 export interface GltfAssetPack {
@@ -1385,12 +1626,87 @@ export function toAssetPack(
 
   const reuse = reimportReuseMeta(items, existingMeta);
   if (!reuse.ok) return reuse;
+  const subAssetByKindIndex = new Map(
+    reuse.value.subAssets.map((entry) => [`${entry.kind}:${entry.sourceIndex}`, entry]),
+  );
+  const sourceOverrides: Record<string, Readonly<Record<string, unknown>>> = {
+    ...(existingMeta?.sourceOverrides ?? {}),
+  };
+  for (const meshIndex of seenMeshIndices) {
+    const meshOutput = subAssetByKindIndex.get(`mesh:${meshIndex}`);
+    if (meshOutput?.sourceKey === undefined) continue;
+    const materialSlots: MeshMaterialSlotTopologyEntry[] = [];
+    const slotByMaterial = new Map<number | null, number>();
+    const usedNames = new Set<string>();
+    const uniqueName = (raw: string): string => {
+      const base = raw.trim() || 'Material';
+      let candidate = base;
+      let suffix = 2;
+      while (usedNames.has(candidate)) candidate = `${base}_${suffix++}`;
+      usedNames.add(candidate);
+      return candidate;
+    };
+    for (const primitive of doc.meshes.filter((mesh) => mesh.meshIndex === meshIndex)) {
+      const materialIndex = primitive.materialIndex;
+      if (slotByMaterial.has(materialIndex)) continue;
+      const materialOutput =
+        materialIndex === null ? undefined : subAssetByKindIndex.get(`material:${materialIndex}`);
+      slotByMaterial.set(materialIndex, materialSlots.length);
+      materialSlots.push({
+        slotName: uniqueName(
+          materialIndex === null
+            ? 'Default'
+            : (doc.materials[materialIndex]?.name ?? `Material_${materialIndex}`),
+        ),
+        sourceKey:
+          materialIndex === null
+            ? 'gltf:default'
+            : (materialOutput?.sourceKey ?? `gltf:material:${materialIndex}`),
+        ...(materialOutput === undefined ? {} : { defaultMaterialGuid: materialOutput.guid }),
+      });
+    }
+    const previousPayload = existingMeta?.sourceOverrides?.[meshOutput.sourceKey];
+    const previousRaw = previousPayload?.materialSlots;
+    const previous = Array.isArray(previousRaw)
+      ? previousRaw.filter(
+          (slot): slot is MeshMaterialSlotTopologyEntry =>
+            slot !== null &&
+            typeof slot === 'object' &&
+            !Array.isArray(slot) &&
+            typeof (slot as { slotName?: unknown }).slotName === 'string',
+        )
+      : [];
+    const reconciled = reconcileMeshMaterialSlotTopology(materialSlots, previous);
+    if (!reconciled.ok) {
+      return err({
+        code: 'mesh-material-slot-topology-change',
+        expected: `unambiguous material slot identity for mesh ${meshOutput.guid}`,
+        hint: reconciled.error.hint,
+        detail: {
+          sourceIndices: reconciled.error.nextIndices,
+          previousIndices: reconciled.error.previousIndices,
+        },
+      });
+    }
+    sourceOverrides[meshOutput.sourceKey] = {
+      ...(previousPayload ?? {}),
+      materialSlots: reconciled.slots,
+    };
+  }
   const meta: GltfMetaJson = {
     schemaVersion: 1,
     kind: 'external-asset-package',
     importer: 'gltf',
     source,
     subAssets: reuse.value.subAssets,
+    ...(Object.keys(sourceOverrides).length === 0 ? {} : { sourceOverrides }),
+    sourceOverrideDescriptors: reuse.value.subAssets
+      .filter((entry) => entry.kind === 'mesh' && entry.sourceKey !== undefined)
+      .map((entry) => ({
+        sourceKey: entry.sourceKey as string,
+        semantic: 'mesh-material-slot-defaults' as const,
+        payloadSchema: MESH_MATERIAL_SLOT_SOURCE_OVERRIDE_PAYLOAD_SCHEMA,
+      })),
     importSettings: {
       defaultSceneIndex: doc.defaultSceneIndex,
       ...(typeof existingMeta?.importSettings.standardMaterialGuid === 'string'

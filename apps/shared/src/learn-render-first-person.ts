@@ -18,11 +18,18 @@ import { Time, Update } from '@forgeax/engine-ecs';
 import type { App, BundlerOptions, CanvasAppError } from '@forgeax/engine-app';
 import { createApp, inputPlugin } from '@forgeax/engine-app';
 import { World } from '@forgeax/engine-ecs';
-import { INPUT_BACKEND_KEY, type InputBackend } from '@forgeax/engine-input';
+import {
+  INPUT_BACKEND_KEY,
+  INPUT_SNAPSHOT_RESOURCE_KEY,
+  type InputBackend,
+  type InputSnapshot,
+} from '@forgeax/engine-input';
 import { quat, vec3 } from '@forgeax/engine-math';
 import { Camera, SpotLight } from '@forgeax/engine-render';
 import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
+
+export { captureCanvasPixels } from './canvas-capture';
 
 // -------------------------------------------------------------------
 // Constants
@@ -139,11 +146,7 @@ export interface FirstPersonOptions {
 const FORWARD_LOCAL: Readonly<[number, number, number]> = [0, 0, -1];
 const RIGHT_LOCAL: Readonly<[number, number, number]> = [1, 0, 0];
 
-export function addFirstPersonSystem(
-  world: App['world'],
-  renderer: App['renderer'],
-  opts: FirstPersonOptions,
-): void {
+export function addFirstPersonSystem(world: App['world'], opts: FirstPersonOptions): void {
   let yaw = -Math.PI / 2;
   let pitch = 0;
 
@@ -151,7 +154,7 @@ export function addFirstPersonSystem(
   const forwardTmp = vec3.create();
   const rightTmp = vec3.create();
 
-  const tick = (dt: number, snapshot: NonNullable<ReturnType<typeof renderer.input.snapshot>>) => {
+  const tick = (dt: number, snapshot: InputSnapshot) => {
     yaw += snapshot.mouse.movementDelta.x * MOUSE_SENSITIVITY;
     pitch -= snapshot.mouse.movementDelta.y * MOUSE_SENSITIVITY;
     if (pitch > PITCH_CLAMP_RAD) pitch = PITCH_CLAMP_RAD;
@@ -184,7 +187,7 @@ export function addFirstPersonSystem(
       after: ['input-frame-start-scan'],
       queries: [{ write: [Transform], with: [Camera] }, { write: [Transform, SpotLight] }],
       fn: (world, queries) => {
-        const snapshot = renderer.input.snapshot(world);
+        const snapshot = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
         if (snapshot === undefined) return;
         const time = world.getResource(Time);
         const dt = time.delta;
@@ -214,7 +217,7 @@ export function addFirstPersonSystem(
       after: ['input-frame-start-scan'],
       queries: [{ write: [Transform], with: [Camera] }],
       fn: (world, queries) => {
-        const snapshot = renderer.input.snapshot(world);
+        const snapshot = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
         if (snapshot === undefined) return;
         const time = world.getResource(Time);
         const dt = time.delta;
@@ -244,12 +247,23 @@ export async function createFirstPersonControls(
   bundler: BundlerOptions,
 ): Promise<{ ok: true; value: App } | { ok: false; error: CanvasAppError }> {
   try {
-    const renderer = await createRenderer(target, {}, bundler);
+    const created = await createRenderer(target, {}, bundler);
+    if (!created.ok) {
+      if (created.error instanceof EngineEnvironmentError) {
+        return { ok: false, error: created.error };
+      }
+      return {
+        ok: false,
+        error: new EngineEnvironmentError('renderer construction failed', {
+          webgpuError: created.error,
+        }),
+      };
+    }
     const world = new World();
     // M3 (w17): host pre-injects input backend BEFORE createApp so
     // inputPlugin.build finds INPUT_BACKEND_KEY and registers the scan system.
     world.insertResource(INPUT_BACKEND_KEY, overrideBackend);
-    return createApp({ renderer, world, plugins: [inputPlugin()] });
+    return createApp({ renderer: created.value, world, plugins: [inputPlugin()] });
   } catch (error: unknown) {
     if (error instanceof EngineEnvironmentError) {
       return { ok: false, error };

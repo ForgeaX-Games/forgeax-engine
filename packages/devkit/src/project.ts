@@ -1,14 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
+import { type GameProjectPluginEntry, GameProjectSchema } from '@forgeax/engine-project';
 import type { CommandError, CommandResult, ProjectFacts } from './types.js';
-
-interface ForgeManifest {
-  readonly id?: unknown;
-  readonly name?: unknown;
-  readonly entry?: unknown;
-  readonly physics?: unknown;
-  readonly defaultScene?: unknown;
-}
 
 function projectError(
   code: string,
@@ -21,6 +14,32 @@ function projectError(
 
 async function readJson(path: string): Promise<unknown> {
   return JSON.parse(await readFile(path, 'utf8')) as unknown;
+}
+
+function firstUnsupportedStandaloneRealm(
+  entries: readonly GameProjectPluginEntry[],
+  inheritedRealm: GameProjectPluginEntry['realm'] = 'engine',
+): { readonly id: string; readonly realm: 'host' | 'build' } | undefined {
+  for (const entry of entries) {
+    const realm = entry.realm ?? inheritedRealm ?? 'engine';
+    if (realm !== 'engine') return { id: entry.id, realm };
+    if (entry.group === true) {
+      const unsupported = firstUnsupportedStandaloneRealm(
+        entry.config as readonly GameProjectPluginEntry[],
+        realm,
+      );
+      if (unsupported !== undefined) return unsupported;
+    }
+  }
+  return undefined;
+}
+
+function pluginModuleNames(entries: readonly GameProjectPluginEntry[]): string[] {
+  return entries.flatMap((entry) =>
+    entry.group === true
+      ? pluginModuleNames(entry.config as readonly GameProjectPluginEntry[])
+      : [entry.name],
+  );
 }
 
 export async function readProjectFacts(
@@ -58,20 +77,37 @@ export async function readProjectFacts(
       { root },
     );
   }
-  const forge = forgeValue as ForgeManifest;
+  const parsedForge = GameProjectSchema.safeParse(forgeValue);
+  if (!parsedForge.success) {
+    return projectError(
+      'project-manifest-invalid',
+      'forge.json to satisfy @forgeax/engine-project GameProjectSchema',
+      'Repair the fields reported by the authoritative project schema.',
+      { root, issues: parsedForge.error.issues },
+    );
+  }
+  const forge = parsedForge.data;
   if (
-    typeof forge.id !== 'string' ||
     forge.id.length === 0 ||
-    typeof forge.name !== 'string' ||
     forge.name.length === 0 ||
-    typeof forge.entry !== 'string' ||
+    forge.entry === undefined ||
     forge.entry.length === 0
   ) {
     return projectError(
       'project-manifest-invalid',
-      'forge.json to declare non-empty id, name, and entry strings',
-      'Repair the project facts in forge.json.',
+      'forge.json to declare id, name, and entry',
+      'Restore the project entry; plugin Entries remain optional additions.',
       { root },
+    );
+  }
+  const plugins = forge.plugins ?? [];
+  const unsupportedRealm = firstUnsupportedStandaloneRealm(plugins);
+  if (unsupportedRealm !== undefined) {
+    return projectError(
+      'project-plugin-realm-unsupported',
+      'the standalone Devkit host to contain only engine-realm plugin Entries',
+      'Move Host or build plugins to a host that owns that physical realm.',
+      { root, ...unsupportedRealm },
     );
   }
   const entryPath = isAbsolute(forge.entry) ? forge.entry : resolve(root, forge.entry);
@@ -95,11 +131,31 @@ export async function readProjectFacts(
     Array.isArray(configuredRoots) && configuredRoots.every((value) => typeof value === 'string')
       ? configuredRoots
       : ['assets'];
+  const configuredImporters =
+    forgeax !== null && typeof forgeax === 'object'
+      ? (forgeax as { assets?: { importers?: unknown } }).assets?.importers
+      : undefined;
+  const assetImporters =
+    Array.isArray(configuredImporters) &&
+    configuredImporters.every((value) => typeof value === 'string')
+      ? configuredImporters
+      : [];
+  const configuredPublicDir =
+    forgeax !== null && typeof forgeax === 'object'
+      ? (forgeax as { assets?: { publicDir?: unknown } }).assets?.publicDir
+      : undefined;
+  const assetPublicDir = typeof configuredPublicDir === 'string' ? configuredPublicDir : undefined;
   const physics = forge.physics === '2d' || forge.physics === '3d' ? forge.physics : undefined;
   const defaultScene =
     typeof forge.defaultScene === 'string' && forge.defaultScene.length > 0
       ? forge.defaultScene
       : undefined;
+  const normalizedEntry = forge.entry.startsWith('./') ? forge.entry : `./${forge.entry}`;
+  const bootstrapEntry = pluginModuleNames(plugins)
+    .map((name) => (name.startsWith('./') ? name : `./${name}`))
+    .includes(normalizedEntry)
+    ? undefined
+    : forge.entry;
   return {
     ok: true,
     value: {
@@ -107,9 +163,13 @@ export async function readProjectFacts(
       id: forge.id,
       name: forge.name,
       entry: forge.entry,
+      ...(bootstrapEntry === undefined ? {} : { bootstrapEntry }),
+      plugins,
       ...(physics === undefined ? {} : { physics }),
       ...(defaultScene === undefined ? {} : { defaultScene }),
       assetRoots,
+      ...(assetImporters.length === 0 ? {} : { assetImporters }),
+      ...(assetPublicDir === undefined ? {} : { assetPublicDir }),
       packageJson,
     },
   };

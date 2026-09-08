@@ -181,7 +181,7 @@ if (!appResult.ok) {
   process.exit(1);
 }
 const app = appResult.value;
-console.log(`[hello-app] backend=${app.renderer.backend}`);
+console.log(`[hello-app] backend=${app.renderer.inspect().capabilities.backendKind}`);
 // Camera + DirectionalLight only (no cube): RenderSystem clears the
 // framebuffer with clearColor and the center pixel reads the clear
 // value without geometry contamination (R-5 dual-zero precondition).
@@ -207,11 +207,6 @@ app.world.spawn({
 const onErrorEvents = [];
 app.onError((err) => onErrorEvents.push({ code: err.code, hint: err.hint, detail: err.detail }));
 
-const ready = await app.renderer.ready;
-if (!ready.ok) {
-  originalConsoleError(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 // Monkey-patch performance.now BEFORE app.start() so the frame-loop's
 // initial lastTimestamp reads the fake value, not a large real timestamp.

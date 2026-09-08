@@ -1,5 +1,6 @@
 // Reproduce Bevy's `gltf/load_gltf` example through the canonical glTF asset path.
 
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
 import {
   gltfDocToSceneAsset,
@@ -9,9 +10,10 @@ import {
 } from '@forgeax/engine-gltf';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { DirectionalLight } from '@forgeax/engine-render';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset, MeshAsset, SceneAsset } from '@forgeax/engine-types';
+
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import boxGltfUrl from '../../../hello/gltf/assets/box.gltf?url';
 import metaJson from '../../../hello/gltf/assets/box.gltf.meta.json' with { type: 'json' };
@@ -28,7 +30,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appResult = await createApp(
     target,
     { pointerLockAllowed: () => false },
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appResult.ok) {
     const message = appResult.error instanceof EngineEnvironmentError
@@ -39,8 +41,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   const app = appResult.value;
-  const assets = app.renderer.assets;
-  assets.configurePackIndex('/pack-index.json');
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[bevy-load-gltf] assets unavailable');
+    return;
+  }
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
   const world = app.world;
 
   const source = await fetch(boxGltfUrl);
@@ -65,7 +71,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  const mesh = meshIrToMeshAsset(doc.meshes);
+  const meshResult = meshIrToMeshAsset(doc.meshes);
+  if (!meshResult.ok) {
+    console.error(`[bevy-load-gltf] mesh bridge failed: ${meshResult.error.code}`);
+    return;
+  }
+  const mesh = meshResult.value;
   const materialIr = doc.materials[0];
   if (materialIr === undefined) {
     console.error('[bevy-load-gltf] glTF has no material');

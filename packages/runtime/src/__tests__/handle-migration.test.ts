@@ -13,14 +13,14 @@ import {
   resolveAssetHandle,
 } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
-import { GpuResourceStore } from '@forgeax/engine-render/internal';
 import { handleSlot, pack } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { GpuResidencyCache } from '../../../render/src/device/gpu-residency';
 
 describe('M5 handle-migration', () => {
   describe('GPU store Map key uses handleSlot (AC-09)', () => {
     it('textureGpuHandles: slot-based key — gen>0 and gen=0 for same slot hit same entry', () => {
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
       const slot = 1050;
       const mockGpuTexture = { isDestroyed: false, destroy: () => ({ ok: true }) } as any;
       const mockEntry = { texture: mockGpuTexture, view: undefined };
@@ -34,7 +34,7 @@ describe('M5 handle-migration', () => {
     });
 
     it('meshGpuHandles: slot-based key — different gen handles hit same entry', () => {
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
       const slot = 1055;
       const mockEntry = {
         vertexBuffer: { isDestroyed: false, destroy: () => ({ ok: true }) },
@@ -59,7 +59,7 @@ describe('M5 handle-migration', () => {
     });
 
     it('cubemapGpuHandles: slot-based key — different gen handles hit same cubemap entry', () => {
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
       const slot = 1060;
       const mockEntry = {
         texture: { isDestroyed: false, destroy: () => ({ ok: true }) },
@@ -76,7 +76,7 @@ describe('M5 handle-migration', () => {
     });
 
     it('delete path uses handleSlot — gen>0 eviction removes entry stored under slot key', () => {
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
       const slot = 1070;
       const mockGpuTexture = { isDestroyed: false, destroy: () => ({ ok: true }) } as any;
       const mockEntry = { texture: mockGpuTexture, view: undefined };

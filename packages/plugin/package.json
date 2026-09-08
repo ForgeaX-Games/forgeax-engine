@@ -5,11 +5,16 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Thin protocol-layer package for Plugin interface + PluginError; sits above @forgeax/engine-ecs and below capability packages.",
+  "description": "ForgeaX entry point for the DeepSeek Cordis plugin runtime.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
+      "browser": "./dist/browser.mjs",
       "import": "./dist/index.mjs"
+    },
+    "./loader": {
+      "types": "./dist/loader.d.ts",
+      "import": "./dist/loader.mjs"
     },
     "./package.json": "./package.json"
   },
@@ -26,7 +31,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@forgeax/engine-ecs": "workspace:*"
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.2",
+    "@forgeax/engine-tool-runtime": "workspace:*"
   },
   "forgeax": {
     "metrics": {
@@ -41,7 +48,7 @@
       },
       "bench": {
         "enabled": false,
-        "reason": "zero runtime logic; correctness verified by unit tests"
+        "reason": "Cordis integration is exercised by lifecycle and engine composition tests"
       },
       "gate": {
         "enabled": false,

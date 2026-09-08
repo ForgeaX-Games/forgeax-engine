@@ -1,5 +1,17 @@
 # @forgeax/engine-shader
 
+## MaterialAsset 唯一成功路径
+
+`paramSchema -> derive -> compile/reflect -> cook/load -> extract/record`
+贯穿 shader 与 material。WGSL producer 只声明与 schema 对应的字段；纹理槽
+携带 `coordinateSet`、transform 与 `physicalUvScale`，cook 后由
+`layoutIdentity` 绑定 shader artifact。identity 失效时修 source 或 cook 输入，
+再执行 recook/load。
+
+> [!IMPORTANT]
+> Runtime 只查找已发布的 content-addressed artifact；恢复沿 producer、cook
+> 与 catalog 的 owner 边界进行，不在 app 侧复制 shader artifact。
+
 > [!IMPORTANT]
 > A custom material starts as WGSL source plus one `MaterialAsset` contract. The build manifest publishes the composed module and the material cook publishes the resolved record, artifact bytes, references, and receipt. Runtime resolves those facts from the catalog; application code does not install or duplicate shader artifacts. The recovery route is always source or cook repair.
 
@@ -35,8 +47,16 @@ lookup boundary, not an authoring store.
 |:--|:--|:--|
 | `ShaderRegistry.loadManifest()` | `() => Promise<Result<void, ShaderError>>` | Load and validate the manifest |
 | `ShaderRegistry.get(hash)` | `(string) => Result<ShaderModule, RhiError \| ShaderError>` | Resolve an engine module by content hash |
+| `ShaderRegistry.entries()` | `() => IterableIterator<ManifestEntry>` | Enumerate published content-addressed modules in manifest order |
+| `ShaderRegistry.materialShaderManifestEntries()` | `() => IterableIterator<MaterialShaderManifestEntry>` | Enumerate validated material shader manifest rows |
 | `ShaderRegistry.findMaterialArtifact(id)` | `(string) => Result<MaterialArtifact, ShaderError>` | Find the published module selected by a cooked material |
 | `ShaderRegistry.materialShaderIdentifiers()` | `() => IterableIterator<string>` | Enumerate published material module identifiers |
+
+`loadManifest()` validates the complete document before publication. A malformed
+entry or material shader row returns one `manifest-malformed` error and leaves
+`entries()`, `materialShaderManifestEntries()`, and lazy `get()` resolution
+unchanged. Repair the same source and retry on the same registry; a successful
+load publishes rows in source order and a later call is idempotent.
 
 The WGSL-level module and the RHI GPU handle are different concepts. This
 package owns the former; `@forgeax/engine-rhi` owns the latter.
@@ -64,6 +84,33 @@ code-specific `detail` and `hint`:
 
 Never hide one of these errors by creating an app-local artifact or changing a
 demo's material shape.
+
+## Points and Lines shader contract
+
+Points and Lines use the engine-owned `forgeax::points-lines` material shader
+manifest row. The row is a content-addressed runtime artifact selected by the
+same `MaterialAsset` and `Materials.unlit` route as other built-in materials.
+The Standard renderer binds the Points/Lines view at group 0, binding 10, then
+uses the prepared expansion geometry in the active main geometry pass.
+
+The runtime contract is compiler-free: it loads a published artifact and never
+imports Naga, a shader compiler, or WGSL authoring helpers. `paramSchema`
+remains the single source for derived layout and uniform shape. Manifest
+validation is atomic; a malformed or stale row leaves the prior published
+catalog unchanged and returns a structured error.
+
+| Evidence | Meaning |
+|:--|:--|
+| shader manifest row | `forgeax::points-lines` is published and content-addressed |
+| runtime isolation triple | no Naga in dist, no runtime shader compiler dependency, and no compiler import |
+| graph contract | points-lines uses the existing Standard main pass and material binding path |
+| lane contract | direct WebGPU is the focused runtime route; clustered unlit and WebGL2 restrictions are structural contracts unless a lane-specific runtime probe is available |
+
+When lookup or reflection fails, inspect `.code`, `.expected`, `.hint`, and the
+code-specific `.detail`; repair the source or cook input and republish through
+the build-time producer. Do not create an app-local WGSL module, bypass the
+manifest, or add a backend-specific shader branch. The same retained/prepared
+state supplies render inspection and recovery evidence.
 
 ## Built-in PBR contract
 

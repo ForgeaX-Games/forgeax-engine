@@ -55,9 +55,9 @@ function makeFile(name, duration, assertionResults) {
 function makeIt(duration = 10) {
   return {
     ancestorTitles: [],
-    fullName: `test ${Math.random()}`,
+    fullName: 'test case',
     status: 'passed',
-    title: `case ${Math.random().toString(36).slice(2, 8)}`,
+    title: 'case',
     duration,
     failureMessages: [],
   };
@@ -150,6 +150,75 @@ test('corrupted JSON line: parse error', async () => {
   // on corrupted JSON input (round-2 fix-up of round-1 reviewer minor: the
   // prior `errored || true` assertion was vacuous and false-passed).
   assert.equal(errored, true, 'guard should fail on corrupted JSON');
+});
+
+test('empty input fails closed instead of passing as zero work', () => {
+  const results = runGuard([]);
+  assert.equal(results.exitCode, 2);
+  assert.match(results.stderr, /report shape invalid/i);
+});
+
+test('missing report testResults fails closed', () => {
+  const results = runGuard([{}]);
+  assert.equal(results.exitCode, 2);
+  assert.match(results.stderr, /testResults/);
+});
+
+test('partial test-file fields fail closed', () => {
+  for (const testResult of [
+    { name: 'missing-duration.test.ts', assertionResults: [makeIt()] },
+    { name: 'missing-assertions.test.ts', duration: 10 },
+    { duration: 10, assertionResults: [makeIt()] },
+    { name: 'missing-status.test.ts', duration: 10, assertionResults: [{}] },
+  ]) {
+    const results = runGuard([{ testResults: [testResult] }]);
+    assert.equal(results.exitCode, 2);
+    assert.match(results.stderr, /report shape invalid/i);
+  }
+});
+
+test('derives omitted file duration from valid Vitest timestamps', () => {
+  const results = runGuard([
+    {
+      testResults: [
+        {
+          name: 'packages/foo/src/__tests__/slow-tiny.test.ts',
+          startTime: 1000,
+          endTime: 1500,
+          assertionResults: [makeIt(500)],
+        },
+      ],
+    },
+  ]);
+  assert.equal(results.exitCode, 1, 'derived duration should still enforce the budget');
+  assert.match(results.stdout, /slow-tiny/);
+});
+
+test('invalid explicit duration does not fall back to timestamps', () => {
+  const results = runGuard([
+    {
+      testResults: [
+        {
+          name: 'packages/foo/src/__tests__/invalid-duration.test.ts',
+          startTime: 1000,
+          endTime: 1010,
+          duration: null,
+          assertionResults: [makeIt()],
+        },
+      ],
+    },
+  ]);
+  assert.equal(results.exitCode, 2);
+  assert.match(results.stderr, /report shape invalid/i);
+});
+
+test('a partial ndjson report fails closed instead of being skipped', () => {
+  const results = runGuard([
+    { testResults: [makeFile('packages/foo/src/__tests__/valid.test.ts', 10, [makeIt()])] },
+    { testResults: null },
+  ]);
+  assert.equal(results.exitCode, 2);
+  assert.match(results.stderr, /testResults/);
 });
 
 test('@perf-budget-skip comment in file: pass', async () => {

@@ -11,6 +11,9 @@ import { dirname, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
+import { buildFrameModel, decodeTape, openReplay } from '@forgeax/engine-rhi-debug';
+import { bootstrapDawn } from '../../shared/scripts/rhi-debug-verify.mjs';
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(HERE, '..');
 const REPO_ROOT = resolve(APP_ROOT, '..', '..');
@@ -76,6 +79,11 @@ function resolveArtifact(path) {
 
 function countLiveTextures(report, matches) {
   const live = new Set();
+  for (const resource of report.bootstrap ?? []) {
+    if (resource.kind === 'texture' && matches(resource.create?.desc)) {
+      live.add(resource.handleId);
+    }
+  }
   for (const event of report.events) {
     const handleId = event.handleId ?? event.id;
     if (handleId === undefined || handleId === null) continue;
@@ -100,34 +108,6 @@ async function waitForVite(proc) {
   while (url === undefined && Date.now() < deadline) await sleep(200);
   if (url === undefined) throw new Error('vite did not become ready in 30s');
   return url;
-}
-
-async function bootstrapDawn(recordedCaps) {
-  const { create, globals } = await import('webgpu');
-  Object.assign(globalThis, globals);
-  if (globalThis.navigator === undefined) {
-    Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true, writable: true });
-  }
-  const gpu = create([]);
-  Object.defineProperty(globalThis.navigator, 'gpu', { value: gpu, configurable: true, writable: true });
-  gpu.getPreferredCanvasFormat = () => 'rgba8unorm';
-  const rhiWebgpu = await import('@forgeax/engine-rhi-webgpu');
-  const adapter = await rhiWebgpu.rhi.requestAdapter();
-  if (!adapter.ok) throw new Error(`Dawn requestAdapter failed: ${adapter.error.code}`);
-  const requiredFeatures = [
-    [recordedCaps.textureCompressionBc, 'texture-compression-bc'],
-    [recordedCaps.textureCompressionEtc2, 'texture-compression-etc2'],
-    [recordedCaps.textureCompressionAstc, 'texture-compression-astc'],
-  ]
-    .filter(([recorded]) => recorded)
-    .map(([, feature]) => feature)
-    .filter((feature) => adapter.value.features.has(feature));
-  const device = await adapter.value.requestDevice({
-    requiredFeatures,
-    requiredLimits: { maxUniformBufferBindingSize: 262144 },
-  });
-  if (!device.ok) throw new Error(`Dawn requestDevice failed: ${device.error.code}`);
-  return { device: device.value, rhiWebgpu };
 }
 
 const viteProc = spawn(process.execPath, [
@@ -243,22 +223,36 @@ try {
     for (const element of elements) element.style.visibility = 'hidden';
   });
   await page.screenshot({ path: resolve(ARTIFACT_DIR, 'custom-live.png'), clip: box });
-  const captured = await page.evaluate(async ({ falsifyPipeline: shouldFalsify, shouldSwitchVariant, shouldSwitchPost, selectedVariant: startupVariant, selectedPost: startupPost, resizeHistory: capturedResizeHistory }) => ({
-    pipeline: document.querySelector('#pipeline-status')?.textContent ?? '',
-    variant: document.querySelector('#variant-status')?.textContent ?? '',
-    post: document.querySelector('#post-status')?.textContent ?? '',
-    selectedVariant: startupVariant,
-    selectedPost: startupPost,
-    texture: document.querySelector('#texture-status')?.textContent ?? '',
-    antialias: document.querySelector('#antialias-status')?.textContent ?? '',
-    canvas: { width: document.querySelector('#app')?.width ?? 0, height: document.querySelector('#app')?.height ?? 0 },
-    resizeHistory: capturedResizeHistory,
-    pipelineSwitchedAfterResize: true,
-    variantSwitchedAfterPipeline: shouldSwitchVariant,
-    postSwitchedAfterPipeline: shouldSwitchPost,
-    falsifyPipeline: shouldFalsify,
-    tape: await globalThis.__forgeax?.captureFrame(1),
-  }), { falsifyPipeline, shouldSwitchVariant: switchVariantAfterPipeline, shouldSwitchPost: switchPostAfterPipeline, selectedVariant, selectedPost: initialPostStatus, resizeHistory });
+  const captured = await page.evaluate(async ({ falsifyPipeline: shouldFalsify, shouldSwitchVariant, shouldSwitchPost, selectedVariant: startupVariant, selectedPost: startupPost, resizeHistory: capturedResizeHistory }) => {
+    const result = {
+      pipeline: document.querySelector('#pipeline-status')?.textContent ?? '',
+      variant: document.querySelector('#variant-status')?.textContent ?? '',
+      post: document.querySelector('#post-status')?.textContent ?? '',
+      selectedVariant: startupVariant,
+      selectedPost: startupPost,
+      texture: document.querySelector('#texture-status')?.textContent ?? '',
+      antialias: document.querySelector('#antialias-status')?.textContent ?? '',
+      canvas: { width: document.querySelector('#app')?.width ?? 0, height: document.querySelector('#app')?.height ?? 0 },
+      resizeHistory: capturedResizeHistory,
+      pipelineSwitchedAfterResize: true,
+      variantSwitchedAfterPipeline: shouldSwitchVariant,
+      postSwitchedAfterPipeline: shouldSwitchPost,
+      falsifyPipeline: shouldFalsify,
+    };
+    const captureFrame = globalThis.__forgeax?.captureFrame;
+    if (typeof captureFrame !== 'function') throw new Error('window.__forgeax.captureFrame is unavailable');
+    const capture = await captureFrame();
+    if (!capture?.ok) throw new Error(`captureFrame failed: ${JSON.stringify(capture?.error)}`);
+    const runId = `m3-rhi-${Date.now()}-${crypto.randomUUID().replaceAll('-', '')}`;
+    const response = await fetch(`${location.origin}/__forgeax-debug/tape?runId=${runId}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-forgeax-rhitape' },
+      body: capture.value.bytes,
+    });
+    const artifact = await response.json();
+    if (!response.ok) throw new Error(`raw tape upload failed: ${JSON.stringify(artifact)}`);
+    return { ...result, tape: { ...artifact, runId } };
+  }, { falsifyPipeline, shouldSwitchVariant: switchVariantAfterPipeline, shouldSwitchPost: switchPostAfterPipeline, selectedVariant, selectedPost: initialPostStatus, resizeHistory });
   writeFileSync(resolve(ARTIFACT_DIR, 'capture.json'), `${JSON.stringify(captured, null, 2)}\n`);
   await browser.close();
   browser = undefined;
@@ -286,12 +280,21 @@ try {
   }
   const tape = captured.tape;
   if (tape === undefined || typeof tape !== 'object') throw new Error('captureFrame returned no tape result');
-  const tapePath = resolveArtifact(tape.tapePath);
-  const reportPath = resolveArtifact(tape.reportPath);
-  if (!existsSync(tapePath) || !existsSync(reportPath)) {
-    throw new Error(`capture artifacts missing: tape=${tapePath} report=${reportPath}`);
+  if (typeof tape.path !== 'string' || typeof tape.digest !== 'string') {
+    throw new Error(`captureFrame returned no raw tape artifact: ${JSON.stringify(tape)}`);
   }
-  const report = JSON.parse(readFileSync(reportPath, 'utf8'));
+  const tapePath = resolveArtifact(tape.path);
+  if (!existsSync(tapePath)) throw new Error(`capture artifact missing: tape=${tapePath}`);
+  const tapeBlob = new Uint8Array(readFileSync(tapePath));
+  const digest = `sha256:${createHash('sha256').update(tapeBlob).digest('hex')}`;
+  if (tape.digest !== digest) throw new Error(`raw tape digest mismatch: ${tape.digest} != ${digest}`);
+  const deserialized = decodeTape(tapeBlob);
+  if (!deserialized.ok) throw new Error(`strict v7 decode failed: ${deserialized.error.code}`);
+  const parsedTape = deserialized.value;
+  const model = buildFrameModel(parsedTape);
+  if (model.works.length === 0) throw new Error('decoded tape has no work entries');
+  const report = { header: parsedTape.header, bootstrap: parsedTape.bootstrap, events: parsedTape.events };
+  const reportPath = resolve(ARTIFACT_DIR, 'frame-0.report.json');
   const textureResourceCount = countLiveTextures(
     report,
     (desc) => desc?.size?.width === 2 && desc?.size?.height === 2,
@@ -312,27 +315,47 @@ try {
     throw new Error(`capture report has no recorded MSAA resolve target: ${resolveTargetCount}`);
   }
   copyFileSync(tapePath, resolve(ARTIFACT_DIR, 'frame-0.tape.bin'));
-  copyFileSync(reportPath, resolve(ARTIFACT_DIR, 'frame-0.report.json'));
-  const tapeJson = JSON.stringify({ header: report.header, events: report.events });
-  const tapeBlob = new Uint8Array(readFileSync(tapePath));
-  const { deserializeTape, createReplay } = await import('@forgeax/engine-rhi-debug');
-  const deserialized = deserializeTape(tapeJson, tapeBlob);
-  if (!deserialized.ok) throw new Error(`deserializeTape failed: ${deserialized.error.code}`);
-  const parsedTape = deserialized.value;
+  writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
   const drawCount = parsedTape.events.filter((event) => event.kind === 'draw' || event.kind === 'drawIndexed').length;
   const minimumDraws = falsifyPipeline ? 1 : 2;
   if (drawCount < minimumDraws) {
     throw new Error(`pipeline tape has only ${drawCount} draw calls; expected at least ${minimumDraws}`);
   }
-  const { device, rhiWebgpu } = await bootstrapDawn(parsedTape.rhiCapsRecorded);
-  const replayResult = createReplay(parsedTape, device, rhiWebgpu.createShaderModule);
-  if (!replayResult.ok) throw new Error(`createReplay failed: ${replayResult.error.code}`);
+  const { freshDevice, rhiWebgpu } = await bootstrapDawn('m3-browser-rhi');
+  const replayResult = await openReplay(parsedTape, {
+    device: freshDevice,
+    createShaderModule: rhiWebgpu.createShaderModule,
+  });
+  if (!replayResult.ok) {
+    freshDevice.destroy?.();
+    throw new Error(`openReplay failed: ${replayResult.error.code}`);
+  }
   const replay = replayResult.value;
-  const stepped = await replay.stepTo(parsedTape.events.length - 1);
-  if (!stepped.ok) throw new Error(`replay.stepTo failed: ${stepped.error.code}`);
-  const dawnReadbackResult = await replay.readbackRt();
-  if (!dawnReadbackResult.ok) throw new Error(`replay.readbackRt failed: ${dawnReadbackResult.error.code}`);
-  const dawnPixels = dawnReadbackResult.value.pixels;
+  const workIndexes = [...new Set([0, model.works.length - 1])];
+  const inspections = [];
+  let finalInspection;
+  for (const workIndex of workIndexes) {
+    const inspected = await replay.inspectWork(workIndex, ['bindings', 'pixels']);
+    if (!inspected.ok) {
+      await replay.dispose();
+      freshDevice.destroy?.();
+      throw new Error(`inspect work ${workIndex} failed: ${inspected.error.code}`);
+    }
+    const value = inspected.value;
+    if (value.attachment === undefined) {
+      await replay.dispose();
+      freshDevice.destroy?.();
+      throw new Error(`inspect work ${workIndex} missing render-target evidence`);
+    }
+    finalInspection = value;
+    inspections.push({
+      workIndex: value.workIndex,
+      bindings: parsedTape.events.filter((event) => event.kind === 'setBindGroup').length,
+      hasWork: true,
+      hasRenderTarget: true,
+    });
+  }
+  const dawnPixels = finalInspection.attachment.bytes;
   let nonBlackPixelCount = 0;
   let rgbTotal = 0;
   for (let index = 0; index < dawnPixels.length; index += 4) {
@@ -344,28 +367,18 @@ try {
   }
   const dawnReadbackSha256 = createHash('sha256').update(dawnPixels).digest('hex');
   const dawnReadback = {
-    width: dawnReadbackResult.value.width,
-    height: dawnReadbackResult.value.height,
+    width: finalInspection.attachment.width,
+    height: finalInspection.attachment.height,
     byteLength: dawnPixels.byteLength,
     nonBlackPixelCount,
-    meanRgb: rgbTotal / (dawnReadbackResult.value.width * dawnReadbackResult.value.height * 3),
+    meanRgb: rgbTotal / (finalInspection.attachment.width * finalInspection.attachment.height * 3),
     sha256: dawnReadbackSha256,
     source: 'fresh-dawn-replay.readbackRt',
   };
   writeFileSync(resolve(ARTIFACT_DIR, 'dawn-readback.rgba'), dawnPixels);
   writeFileSync(resolve(ARTIFACT_DIR, 'dawn-readback.json'), `${JSON.stringify(dawnReadback, null, 2)}\n`);
-  const { inspectDrawJson } = await import('@forgeax/engine-rhi-debug/inspect-core');
-  const inspections = [];
-  for (const drawIdx of [...new Set([0, drawCount - 1])]) {
-    const inspected = await inspectDrawJson(replay, drawIdx, parsedTape.events, device);
-    if (!inspected.ok) throw new Error(`inspect draw ${drawIdx} failed: ${inspected.error.code}`);
-    const value = inspected.value;
-    if (value.bindings.length === 0 || value.drawCall === undefined || value.rt === undefined) {
-      throw new Error(`inspect draw ${drawIdx} missing binding/draw/rt evidence`);
-    }
-    inspections.push({ drawIdx, bindings: value.bindings.length, hasDrawCall: true, hasRenderTarget: true });
-  }
-  device.destroy?.();
+  await replay.dispose();
+  freshDevice.destroy?.();
   const result = {
     pipeline: captured.pipeline,
     variant: captured.variant,
@@ -382,8 +395,10 @@ try {
     falsifyPipeline: captured.falsifyPipeline,
     runId: tape.runId,
     eventCount: parsedTape.events.length,
-    blobCount: parsedTape.blobPool.size,
+    blobCount: parsedTape.blobs.length,
     drawCount,
+    workCount: model.works.length,
+    passCount: model.passes.length,
     inspections,
     dawnReadback,
     screenshot: resolve(ARTIFACT_DIR, 'custom-live.png'),

@@ -56,7 +56,9 @@
 // abstraction — same world.{has,get,insert}Resource KV API as every
 // other engine resource consumer).
 
-import { err, ok, ResourceInvalidValueError, type Result, type World } from '@forgeax/engine-ecs';
+import type { World } from '@forgeax/engine-ecs';
+import { ResourceInvalidValueError } from '@forgeax/engine-ecs/projection';
+import { err, ok, type Result } from '@forgeax/engine-types';
 
 // ────────────────────────────────────────────────────────────────────────────
 // POD interface + KV key + 3 named mode constants
@@ -79,6 +81,20 @@ export interface TransparentSortConfig {
   readonly yzAlpha: number;
 }
 
+/** Extract-stage POD consumed by the transparent-sort owner. */
+export interface TransparentEntry {
+  readonly entityIndex: number;
+  readonly materialHandle: number;
+  readonly layer: number;
+  readonly posX: number;
+  readonly posY: number;
+  readonly posZ: number;
+  readonly pivotY: number;
+  readonly sizeY: number;
+  readonly sortKey?: number | undefined;
+  readonly renderableIndex?: number | undefined;
+}
+
 /** World resource key for `TransparentSortConfig` KV entry. */
 export const TRANSPARENT_SORT_CONFIG_KEY = 'TransparentSortConfig' as const;
 
@@ -93,6 +109,15 @@ export const TRANSPARENT_SORT_MODE_LAYER_YZ = 2;
 
 /** 3D distance: sortValue = -(dist^2) to cameraPos, back-to-front (far first). */
 export const TRANSPARENT_SORT_MODE_DISTANCE = 3;
+
+/** Grouped authoring values and the single configuration operation. */
+export const TransparentSort = Object.freeze({
+  layerZ: TRANSPARENT_SORT_MODE_LAYER_Z,
+  layerY: TRANSPARENT_SORT_MODE_LAYER_Y,
+  layerYZ: TRANSPARENT_SORT_MODE_LAYER_YZ,
+  distance: TRANSPARENT_SORT_MODE_DISTANCE,
+  configure: setTransparentSortConfig,
+} as const);
 
 // ────────────────────────────────────────────────────────────────────────────
 // Internal: silent default + mode validity check
@@ -204,6 +229,5 @@ export function setTransparentSortConfig(
     mode: cfg.mode,
     yzAlpha: cfg.yzAlpha,
   });
-  world.registerSimulationTransientResource(TRANSPARENT_SORT_CONFIG_KEY);
   return ok(undefined);
 }

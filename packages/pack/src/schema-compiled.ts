@@ -121,6 +121,28 @@ export function buildSceneAssetValidator(
         type: 'array',
         items: mountOverrideSchema,
       },
+      publicationFence: {
+        type: 'object',
+        additionalProperties: false,
+        required: [
+          'schemaVersion',
+          'sourcePath',
+          'sourceRevision',
+          'publicationGeneration',
+          'outputDigest',
+          'outputSetDigest',
+          'receiptIdentity',
+        ],
+        properties: {
+          schemaVersion: { type: 'string', const: 'scene-publication-fence/1' },
+          sourcePath: { type: 'string', minLength: 1 },
+          sourceRevision: { type: 'string', minLength: 1 },
+          publicationGeneration: { type: 'integer', minimum: 1 },
+          outputDigest: { type: 'string', minLength: 1 },
+          outputSetDigest: { type: 'string', minLength: 1 },
+          receiptIdentity: { type: 'string', minLength: 1 },
+        },
+      },
     },
   };
 

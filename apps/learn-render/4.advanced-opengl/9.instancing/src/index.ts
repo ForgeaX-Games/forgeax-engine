@@ -24,13 +24,14 @@
 //   "// 3. bootstrap"       entry point wiring (1)+(2)
 
 // 1. engine usage
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { mat4, quat } from '@forgeax/engine-math';
 import { createApp } from '@forgeax/engine-app';
 import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import { createDevImportTransport } from '@forgeax/engine-runtime';
+
 import { Materials } from '@forgeax/engine-render';
 import { Instances } from '@forgeax/engine-render';
 
@@ -39,7 +40,7 @@ import type {
   MeshAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
-import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
+import { unwrapHandle } from '@forgeax/engine-types';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
@@ -48,9 +49,6 @@ import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-
 
 // The runtime binding provides the scoped GUID -> URL map in dev and the
 // single-game catalog emitted to dist/ at build time.
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-4-9-instancing',
-);
 
 // Asteroid belt form. The belt is a torus of ASTEROID_COUNT rocks orbiting a
 // central planet, mirroring LO 9.instancing's `amount = 1000` ring.
@@ -145,25 +143,28 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 4.9 instancing] createApp failed:', appRes.error);
     return;
   }
   const app = appRes.value;
-  const renderer = app.renderer;
   const world = app.world;
   app.onError((error) => {
     console.error('[learn-render 4.9 instancing] app.onError:', error.code, error.hint);
     const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;
     if (bus !== undefined) bus.push({ code: error.code, hint: error.hint });
   });
-  const assets = renderer.assets;
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[learn-render 4.9 instancing] asset owner is unavailable');
+    return;
+  }
 
   // Wire the scoped catalog: loadByGuid fast-path checks the in-memory map
   // first; the binding also supplies the scoped package and import endpoints.
-  assets.configureRuntimeBinding(runtimeBinding);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   // --- load vendored planet mesh + mars.png texture ---
 
@@ -294,7 +295,7 @@ const appRes = await createApp(
     },
   );
 
-  addFirstPersonSystem(world, renderer, {
+  addFirstPersonSystem(world, {
     name: 'learn-render-4.9-instancing-first-person',
     overrideBackend: undefined,
   });
@@ -304,7 +305,7 @@ const appRes = await createApp(
     console.error('[learn-render 4.9 instancing] app.start failed:', startRes.error);
     return;
   }
-  console.warn(`[learn-render 4.9 instancing] backend=${renderer.backend}`);
+  console.warn('[learn-render 4.9 instancing] Standard pipeline active');
 
   // Positive "bootstrap ran to completion" marker for the onerror-gate
   // tripwire (#426). Reaching here means every loadByGuid resolved and the

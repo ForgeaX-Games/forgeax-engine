@@ -57,42 +57,14 @@
 // surface + section AC-04 / AC-05 / AC-09 + section 7 boundary table;
 // charter P3 + P4 + P5 + F1.
 
-import {
-  Entity,
-  type EntityHandle,
-  err,
-  ok,
-  type Result,
-  SpriteAnimationInvalidError,
-  Time,
-  type World,
-} from '@forgeax/engine-ecs';
+import { type EntityHandle, Time, type World } from '@forgeax/engine-ecs';
+import { SpriteAnimationInvalidError } from '@forgeax/engine-ecs/projection';
 import {
   SpriteAnimation,
   SpriteRegionOverride,
   spritePlaybackModeFromU32,
 } from '@forgeax/engine-render/authoring';
-
-// Engine-internal hooks the tick system uses to walk archetype rows and read
-// each row's full Entity handle from the essential id=0 `Entity` column —
-// same shape already reached for in `render-system-extract.ts`. Accessing
-// through the `_xxx` `@internal` umbrella keeps these handles invisible to
-// IDE-autocomplete-driven AI users (they wire the tick system via the
-// barrel-exported `spriteAnimationTickSystem`).
-interface TableView {
-  readonly size: number;
-  readonly components: ReadonlyArray<{ readonly id: number }>;
-  readonly storage: ReadonlyMap<
-    number,
-    { readonly fields: ReadonlyMap<string, { readonly view: ArrayLike<number> }> }
-  >;
-}
-
-/** @internal */
-interface WorldInternalView {
-  /** @internal */
-  _getGraph(): { readonly tables: ReadonlyArray<TableView | undefined> };
-}
+import { err, ok, type Result } from '@forgeax/engine-types';
 
 /**
  * Walk every entity carrying `SpriteAnimation`, advance its dt
@@ -142,18 +114,16 @@ interface WorldInternalView {
 export function spriteAnimationTickSystem(world: World): Result<void, SpriteAnimationInvalidError> {
   const dt = world.getResource(Time).delta;
 
-  const worldInternal = world as unknown as WorldInternalView;
-  // `SpriteAnimation.id` is the global token.id. Archetypes lacking the
-  // SpriteAnimation column are skipped by the `componentIds.includes(saId)`
-  // guard in `collectAnimEntities`, so a World that never spawned the
-  // component naturally yields an empty entity set (the pass is a no-op).
+  // Query filters entities carrying SpriteAnimation, so a World that never
+  // spawned the component naturally yields an empty entity set (the pass is a
+  // no-op).
   // Two-pass to avoid mid-iteration archetype migration. The auto-add
   // of `SpriteRegionOverride` migrates the entity into a new archetype
-  // (SA + SRO) which a single-pass `for (const arch of graph.archetypes)`
-  // would re-visit later in the SAME pass — yielding double-advance
+  // (SA + SRO) which a single-pass query would re-visit later in the same
+  // pass — yielding double-advance
   // for any entity that did not yet carry the override. Collecting
   // every Entity handle first gives each entity a single tick.
-  const entities = collectAnimEntities(worldInternal, SpriteAnimation.id);
+  const entities = collectAnimEntities(world);
 
   let firstError: SpriteAnimationInvalidError | null = null;
   for (const entity of entities) {
@@ -170,25 +140,15 @@ export function spriteAnimationTickSystem(world: World): Result<void, SpriteAnim
 }
 
 /**
- * First pass: walk the archetype graph and collect every Entity handle
- * that carries `SpriteAnimation`, read directly from each row's essential
- * id=0 `Entity` column (`self` field). Entity handles remain valid across
- * subsequent migrations because Entity is an index+generation pair, not an
- * archetype-row pointer (the record table redirects via slot+gen on every
- * world.get / set).
+ * First pass: collect every Entity handle from the ECS Query projection.
+ * Handles remain valid across subsequent migrations because they are stable
+ * index+generation identities, not archetype-row pointers.
  */
-function collectAnimEntities(worldInternal: WorldInternalView, saId: number): EntityHandle[] {
-  const graph = worldInternal._getGraph();
+function collectAnimEntities(world: World): EntityHandle[] {
+  const queryResult = world.query({ with: [SpriteAnimation] });
+  if (!queryResult.ok) return [];
   const entities: EntityHandle[] = [];
-  for (const table of graph.tables) {
-    if (!table || table.size === 0) continue;
-    if (!table.components.some((c) => c.id === saId)) continue;
-    const selfCol = table.storage.get(Entity.id)?.fields.get('self')?.view;
-    if (selfCol === undefined) continue;
-    for (let i = 0; i < table.size; i++) {
-      entities.push((selfCol[i] ?? 0) as EntityHandle);
-    }
-  }
+  for (const row of queryResult.value) entities.push(row.entity);
   return entities;
 }
 

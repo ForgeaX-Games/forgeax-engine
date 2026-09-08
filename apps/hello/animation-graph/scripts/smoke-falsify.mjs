@@ -24,30 +24,33 @@
 
 import process from 'node:process';
 
-const { World } = await import('@forgeax/engine-ecs');
+const { createWorldContext, World } = await import('@forgeax/engine-ecs');
 const { animationPlugin, defineAnimationGraph, AnimationPlayer } = await import('@forgeax/engine-animation');
 
 let failCount = 0;
 let unexpectedPassCount = 0;
 
-function makeWorld() {
+async function makeWorld() {
+  const clips = new Map();
   const world = new World();
-  animationPlugin().build(world);
-  return world;
+  await createWorldContext(world, [animationPlugin((guid) => clips.get(guid))]);
+  return { world, clips };
 }
 
-function registerClip(world, duration) {
-  return world.allocSharedRef('AnimationClip', { kind: 'animation-clip', duration, channels: [] });
+function registerClip(clips, duration) {
+  const guid = `test/animation-clip-${clips.size}`;
+  clips.set(guid, { kind: 'animation-clip', duration, channels: [] });
+  return guid;
 }
 
 function readWeights(world, ent) {
   return world.get(ent, AnimationPlayer).unwrap().weights;
 }
 
-function buildFullDag(world) {
-  const survey = registerClip(world, 8);
-  const walk = registerClip(world, 12);
-  const run = registerClip(world, 7);
+function buildFullDag(world, clips) {
+  const survey = registerClip(clips, 8);
+  const walk = registerClip(clips, 12);
+  const run = registerClip(clips, 7);
   const gr = defineAnimationGraph((b) => {
     const surveyBase = b.clip(survey);
     const walkLeaf = b.clip(walk);
@@ -84,8 +87,8 @@ function assertWrong(label, value, wrong, tolerance = 0.01) {
 // --- Variant A: overlay OFF, assert sum IS 1.3 (wrong: actual = 1.0) ---
 
 {
-  const world = makeWorld();
-  const graphH = buildFullDag(world);
+  const { world, clips } = await makeWorld();
+  const graphH = buildFullDag(world, clips);
   const ent = world
     .spawn({
       component: AnimationPlayer,
@@ -113,8 +116,8 @@ function assertWrong(label, value, wrong, tolerance = 0.01) {
 // --- Variant B: locomotion=0, assert Walk=0.25 and Run=0.25 (wrong: actual = 0, 0) ---
 
 {
-  const world = makeWorld();
-  const graphH = buildFullDag(world);
+  const { world, clips } = await makeWorld();
+  const graphH = buildFullDag(world, clips);
   const ent = world
     .spawn({
       component: AnimationPlayer,

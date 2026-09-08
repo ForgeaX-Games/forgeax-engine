@@ -5,15 +5,18 @@
 //  - view matrix at offsets 0..15 (float indices).
 //  - projection matrix at offsets 16..31.
 //  - inverseProjection matrix at offsets 32..47.
-//  - intensityPad vec4 at offsets 48..51 (x = intensity, y/z/w padding).
+//  - intensityPad vec4 at offsets 48..51 (x = intensity, y = radius, z = bias, w = padding).
 //  - Matches plan-strategy D-1 + D-C: host write order aligns with WGSL
 //    struct declaration; intensity scalar carried at end of UBO.
 //  - SSAO uniform is separate from View UBO (plan-strategy D-1 invariant).
 //
 // AC-03 anchor: uniform byte-layout matches WGSL struct.
 
-import { SSAO_UNIFORM_BYTES, SSAO_UNIFORM_INTENSITY_OFFSET } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
+import {
+  SSAO_UNIFORM_BYTES,
+  SSAO_UNIFORM_INTENSITY_OFFSET,
+} from '../../../render/src/ssao-buffers';
 
 const FLOATS_PER_MAT4 = 16;
 const MAT4_COUNT = 3;
@@ -149,11 +152,13 @@ describe('SSAO uniform layout', () => {
   it('w30 — intensity write 1.0 reads back 1.0', () => {
     const payload = new Float32Array(64); // 256 bytes
     payload[INTENSITY_PAD_OFFSET] = 1.0;
+    payload[INTENSITY_PAD_OFFSET + 1] = 0.5;
+    payload[INTENSITY_PAD_OFFSET + 2] = 0.025;
     // The vec4 padding must not bleed into the matrices.
-    payload[INTENSITY_PAD_OFFSET + 1] = 0;
-    payload[INTENSITY_PAD_OFFSET + 2] = 0;
     payload[INTENSITY_PAD_OFFSET + 3] = 0;
     expect(payload[INTENSITY_PAD_OFFSET]).toBe(1.0);
+    expect(payload[INTENSITY_PAD_OFFSET + 1]).toBe(0.5);
+    expect(payload[INTENSITY_PAD_OFFSET + 2]).toBeCloseTo(0.025, 6);
     expect(payload.byteLength).toBe(256);
   });
 

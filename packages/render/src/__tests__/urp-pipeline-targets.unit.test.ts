@@ -1,23 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { urpPipeline } from '../urp-pipeline';
+import { resolveStandardRenderFeatureTargets } from '../features/targets';
 
 function targets(
   tonemap: 'none' | 'aces-filmic',
   antialias: 'none' | 'fxaa' | 'msaa',
   storageBuffer: boolean,
 ) {
-  return urpPipeline.getRenderFeatureTargets?.({
-    camera: { tonemap, antialias },
+  return resolveStandardRenderFeatureTargets({
+    tonemap,
+    antialias,
     colorAttachmentFormat: 'bgra8unorm-srgb',
-    backendKind: 'wgpu-native',
     storageBuffer,
+    multisample: true,
   });
 }
 
 describe('urp render feature targets', () => {
   it('publishes the linear-LDR target used by native no-tonemap frames', () => {
     expect(targets('none', 'none', true)?.[0]).toMatchObject({
-      resource: 'ldrColor',
+      kind: 'scene-color',
       format: 'rgba16float',
       sampleCount: 1,
     });
@@ -25,7 +26,7 @@ describe('urp render feature targets', () => {
 
   it('publishes the MSAA linear-LDR target with the graph sample count', () => {
     expect(targets('none', 'msaa', true)?.[0]).toMatchObject({
-      resource: 'msaaColor',
+      kind: 'scene-color',
       format: 'rgba16float',
       sampleCount: 4,
     });
@@ -33,7 +34,7 @@ describe('urp render feature targets', () => {
 
   it('keeps the surface target for non-storage-buffer LDR frames', () => {
     expect(targets('none', 'none', false)?.[0]).toMatchObject({
-      resource: 'swapchain',
+      kind: 'scene-color',
       format: 'bgra8unorm-srgb',
       sampleCount: 1,
     });

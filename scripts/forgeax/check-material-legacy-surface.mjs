@@ -32,6 +32,8 @@ const CHANNELS = [
 
 const SKIPPED_DIRECTORIES = new Set(['.git', '.forgeax-harness', 'dist', 'node_modules']);
 const INVENTORY_FILES = new Set([
+  'scripts/check-material-contract-inventory.mjs',
+  'scripts/material-contract-inventory.json',
   'scripts/forgeax/check-material-legacy-surface.mjs',
   'scripts/__tests__/material-legacy-inventory.test.mjs',
   'scripts/__tests__/material-legacy-zero.test.mjs',

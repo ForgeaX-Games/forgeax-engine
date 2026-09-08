@@ -116,12 +116,9 @@ const mockCanvas = {
 // --- 3. Drive engine ECS path ---
 
 const { World } = await import('@forgeax/engine-ecs');
-const enginePkg = await import('@forgeax/engine-runtime');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const geometryPkg = await import('@forgeax/engine-geometry');
 const mathPkg = await import('@forgeax/engine-math');
-const {
-  createRenderer,
-} = enginePkg;
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const { quat } = mathPkg;
@@ -144,29 +141,29 @@ const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
 
 let renderer;
+let renderDiagnostics;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  renderDiagnostics = constructed.value.debugDrawHost;
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 
-console.log(`[culling] backend=${renderer.backend}`);
+console.log(`[culling] backend=${renderer.inspect().capabilities.backendKind}`);
 
 const errors = [];
-renderer.onError((err) => {
-  errors.push({ code: err.code, hint: err.hint, detail: err.detail });
+renderer.subscribe((event) => {
+  if (event.kind !== 'error') return;
+  errors.push({ code: event.error.code, hint: event.error.hint, detail: event.error.detail });
 });
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 // Register a custom cube mesh with a known AABB through the renderer's
 // asset registry. The built-in HANDLE_CUBE uses engine-internal handle
@@ -242,10 +239,15 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
   });
 
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = renderer.draw({
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
 
-  const stats = renderer.frustumStats;
+  // Low-level host diagnostics prove culling; public Renderer inspection is POD-only.
+  const stats = renderDiagnostics.frustumStats;
   if (stats.culled > maxCulled) maxCulled = stats.culled;
   const visible = stats.total - stats.culled;
   if (visible > maxVisible) maxVisible = visible;
@@ -325,7 +327,7 @@ const dist = distance(ndcCenter, BLACK);
 const VISIBLE_RATIO_CEILING = 0.20;
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (renderer.inspect().capabilities.backendKind !== 'webgpu') failures.push(`(a) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (dist <= SMOKE_PIXEL_THRESHOLD) {
   failures.push(`(c) NDC-center pixel ${JSON.stringify(ndcCenter)} too close to black (distance ${dist.toFixed(4)} <= ${SMOKE_PIXEL_THRESHOLD})`);

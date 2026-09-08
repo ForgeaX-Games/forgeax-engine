@@ -1,4 +1,5 @@
 import { type World } from '@forgeax/engine-ecs';
+import { buildMeshAttributeMapForUvSets } from '@forgeax/engine-geometry';
 import type { InputSnapshot } from '@forgeax/engine-input';
 import { Transform } from '@forgeax/engine-scene';
 
@@ -42,8 +43,9 @@ function wireframeCube(half: number): MeshAsset {
   return {
     kind: 'mesh',
     vertices,
-    attributes: { position: pos },
-    submeshes: [{ indexOffset: 0, indexCount: 0, vertexCount: vc, topology: 'line-list' }],
+    attributes: { ...buildMeshAttributeMapForUvSets(1), position: pos },
+    submeshes: [{ indexOffset: 0, indexCount: 0, vertexCount: vc, topology: 'line-list', materialSlot: 0 }],
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 

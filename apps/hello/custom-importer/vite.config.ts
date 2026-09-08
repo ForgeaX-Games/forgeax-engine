@@ -1,6 +1,6 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
+import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { defineConfig } from 'vite';
@@ -35,7 +35,16 @@ const runtimeBinding = createStandaloneRuntimeAssetBinding('hello-custom-importe
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
-    pluginPack({ roots: [localAssets], importers: [reelGameBlobImporter()], runtimeBinding }),
+    pluginPack({
+      ddc: {
+        buildCacheRoot: resolve(monorepoRoot, 'shared-build-inputs', 'ddc'),
+        projectDdcRoot: resolve(here, '.forgeax', 'ddc', 'v2'),
+      },
+      roots: [localAssets],
+      importers: [reelGameBlobImporter()],
+      refresh: reloadAssetHost(),
+      runtimeBinding,
+    }),
   ],
   server: {
     port: 5196,

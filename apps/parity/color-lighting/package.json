@@ -16,7 +16,8 @@
     "build": "vite build",
     "dev": "vite",
     "preview": "vite preview --host 127.0.0.1",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "falsify:hdrp-spot-shadow": "node scripts/falsify-hdrp-spot-shadow.mjs"
   },
   "parityMatrix": {
     "statusIndex": "report/color-lighting-parity/status-index.json",
@@ -33,8 +34,11 @@
     }
   },
   "dependencies": {
+    "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-geometry": "workspace:*",
+    "@forgeax/engine-rhi": "workspace:*",
+    "@forgeax/engine-rhi-debug": "workspace:*",
     "@forgeax/engine-render-graph": "workspace:*",
     "@forgeax/engine-render": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",

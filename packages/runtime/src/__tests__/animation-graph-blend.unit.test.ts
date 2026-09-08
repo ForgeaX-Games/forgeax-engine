@@ -25,6 +25,12 @@ function registerClip(world: World, duration: number) {
   return world.allocSharedRef('AnimationClip', clip);
 }
 
+const lookupClip = (_guid: string): AnimationClip => ({
+  kind: 'animation-clip',
+  duration: 10,
+  channels: [],
+});
+
 function readWeights(world: World, e: EntityHandle): Float32Array {
   return (world.get(e, AnimationPlayer).unwrap() as unknown as { weights: Float32Array }).weights;
 }
@@ -32,12 +38,12 @@ function readWeights(world: World, e: EntityHandle): Float32Array {
 describe('evaluateAnimationGraph — Blend normalization (M3 / w17)', () => {
   it('Blend(Walk@1, Run@1) yields weights ~= [0.5, 0.5]', () => {
     const world = new World();
-    const walk = registerClip(world, 10);
-    const run = registerClip(world, 10);
+    registerClip(world, 10);
+    registerClip(world, 10);
 
     const built = defineAnimationGraph((b) => {
-      const walkNode = b.clip(walk); // static weight default 1
-      const runNode = b.clip(run); // static weight default 1
+      const walkNode = b.clip('test/animation-clip-walk'); // static weight default 1
+      const runNode = b.clip('test/animation-clip-run'); // static weight default 1
       return b.blend([walkNode, runNode]);
     });
     expect(built.ok).toBe(true);
@@ -48,7 +54,7 @@ describe('evaluateAnimationGraph — Blend normalization (M3 / w17)', () => {
       .spawn({ component: AnimationPlayer, data: { graph: graphH } })
       .unwrap() as EntityHandle;
 
-    evaluateAnimationGraph(world, 0);
+    evaluateAnimationGraph(world, 0, lookupClip);
 
     const weights = readWeights(world, e);
     expect(weights.length).toBe(2);

@@ -190,7 +190,7 @@ import { type ComponentIntrospectionDescriptor, type ConsoleHandle, startServer 
       });
     });
 
-    it('components.errors carries all 4 RemoteErrorCode members', async () => {
+    it('components.errors carries all 5 RemoteErrorCode members', async () => {
       await withServer(async (handle) => {
         const ws = await connect(handle.port);
         const resp = await send(ws, { jsonrpc: '2.0', method: 'introspect', id: 12 });
@@ -206,6 +206,28 @@ import { type ComponentIntrospectionDescriptor, type ConsoleHandle, startServer 
         expect(errCodes.has(-32002)).toBe(true);
         expect(errCodes.has(-32003)).toBe(true);
         expect(errCodes.has(-32004)).toBe(true);
+        expect(errCodes.has(-32005)).toBe(true);
+        ws.close();
+      });
+    });
+
+    it('components.errors preserves exact message projection and key order', async () => {
+      await withServer(async (handle) => {
+        const ws = await connect(handle.port);
+        const resp = await send(ws, { jsonrpc: '2.0', method: 'introspect', id: 12 });
+        const doc = resp.result as {
+          components: { errors: Record<string, { code: number; message: string }> };
+        };
+        expect(Object.entries(doc.components.errors)).toEqual([
+          ['script-syntax-error', { code: -32001, message: 'Script syntax error' }],
+          ['script-runtime-error', { code: -32002, message: 'Script runtime error' }],
+          ['server-startup-failed', { code: -32003, message: 'Server startup failed' }],
+          ['server-not-running', { code: -32004, message: 'Server not reachable' }],
+          [
+            'eval-result-not-serializable',
+            { code: -32005, message: 'Eval result not serializable' },
+          ],
+        ]);
         ws.close();
       });
     });
@@ -249,7 +271,7 @@ import { type ComponentIntrospectionDescriptor, type ConsoleHandle, startServer 
         };
         expect(doc.methods.map((method) => method.name)).toEqual(['eval', 'introspect']);
         expect(doc.components.schemas.Visibility).toEqual(descriptors[0]);
-        expect(Object.keys(doc.components.errors)).toHaveLength(4);
+        expect(Object.keys(doc.components.errors)).toHaveLength(5);
         expect(doc.components.errors).toHaveProperty('script-runtime-error');
         expect(doc.components.errors).toHaveProperty('server-not-running');
         ws.close();
@@ -373,14 +395,18 @@ import { type ComponentIntrospectionDescriptor, type ConsoleHandle, startServer 
     });
 
     it('renderer read returns real field value', async () => {
-      const stubRenderer = { backend: 'webgpu', isReady: true };
+      const stubRenderer = {
+        backend: 'webgpu',
+        isReady: true,
+        inspect: () => ({ capabilities: { backendKind: 'webgpu' } }),
+      };
       await withServer(
         async (handle) => {
           const ws = await connect(handle.port);
           const resp = await send(ws, {
             jsonrpc: '2.0',
             method: 'eval',
-            params: { script: 'renderer.backend' },
+            params: { script: 'renderer.inspect().capabilities.backendKind' },
             id: 21,
           });
           expect(resp.result).toBe('webgpu');
@@ -417,6 +443,36 @@ import { type ComponentIntrospectionDescriptor, type ConsoleHandle, startServer 
         });
         expect(resp.error).toBeDefined();
         expect(resp.error?.code).toBe(-32002);
+        ws.close();
+      });
+    });
+
+    it('JSON-RPC error envelopes preserve exact human messages', async () => {
+      await withServer(async (handle) => {
+        const ws = await connect(handle.port);
+        const syntax = await send(ws, {
+          jsonrpc: '2.0',
+          method: 'eval',
+          params: { script: 'world.inspect((' },
+          id: 24,
+        });
+        expect(syntax.error).toMatchObject({
+          code: -32001,
+          message: 'Script syntax error',
+          data: { code: 'script-syntax-error' },
+        });
+
+        const runtime = await send(ws, {
+          jsonrpc: '2.0',
+          method: 'eval',
+          params: { script: 'throw new Error("boom")' },
+          id: 25,
+        });
+        expect(runtime.error).toMatchObject({
+          code: -32002,
+          message: 'Script runtime error',
+          data: { code: 'script-runtime-error' },
+        });
         ws.close();
       });
     });
@@ -495,13 +551,19 @@ import { type ComponentIntrospectionDescriptor, type ConsoleHandle, startServer 
           const resp = await send(ws, {
             jsonrpc: '2.0',
             method: 'eval',
-            params: { script: 'renderer.backend' },
+            params: { script: 'renderer.inspect().capabilities.backendKind' },
             id: 52,
           });
           expect(resp.result).toBe('webgpu');
           ws.close();
         },
-        { world: {}, renderer: { backend: 'webgpu' } },
+        {
+          world: {},
+          renderer: {
+            backend: 'webgpu',
+            inspect: () => ({ capabilities: { backendKind: 'webgpu' } }),
+          },
+        },
       );
     });
   });

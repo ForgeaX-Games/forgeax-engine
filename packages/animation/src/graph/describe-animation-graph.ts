@@ -9,7 +9,7 @@
 //
 // AI users discover a graph's structure (nodes / topology / root / per-node
 // static weights) WITHOUT reading implementation source -- mirroring the
-// getRegisteredComponents reflection idiom (research Finding H, charter F1/P1).
+// World-local component catalog reflection (research Finding H, charter F1/P1).
 //
 // Presentation order matches the graph POD construction order so that
 // `desc.nodes[i].index === i` aligns with runtime `nodeWeights[i]` /

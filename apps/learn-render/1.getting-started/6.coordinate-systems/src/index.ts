@@ -84,6 +84,7 @@
 // MeshFilter / MeshRenderer). createApp owns the rAF frame-loop +
 // Time resource + auto input attach (charter P4; OOS-9 / OOS-11 -- the
 // demo never touches raw mat4 math or the browser raw rAF API).
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
 import type { CanvasAppError } from '@forgeax/engine-app';
 import { quat, vec3 } from '@forgeax/engine-math';
@@ -92,10 +93,10 @@ import { HANDLE_CUBE, resolveAssetHandle } from '@forgeax/engine-assets-runtime'
 import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 
 import type { MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
-import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
+import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import materialPackJson from '../assets/material-wood.pack.json';
 
@@ -121,13 +122,10 @@ import materialPackJson from '../assets/material-wood.pack.json';
 const WOOD_TEXTURE_GUID = '019e3969-1d46-773e-988c-a10e305ff2a4';
 const CUBE_MESH_GUID = '019e3968-6007-71ae-856e-1fd6c9728cfb';
 const CUBE_MATERIAL_GUID = '019e4906-23e9-771c-afd1-1896daeaa11e';
-// Stable across dev (configureServer middleware) + prod (generateBundle
-// emit) per @forgeax/engine-vite-plugin-pack (charter P4 consistent
-// abstraction).
-const PACK_INDEX_URL = '/pack-index.json';
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-1-6-coordinate-systems',
-);
+// Dev uses the binding's scoped catalog route; build emits the static
+// `/pack-index.json` file. `configureRuntimeAssetCatalog` selects the route
+// for the current Vite mode.
+
 
 // LO 1.6 cubePositions[] array (verbatim translation; the LO source
 // uses `glm::vec3(...)` literals, here they map onto the per-entity
@@ -206,14 +204,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {},
     // four-verb redesign 2026-06-06: dev lazy-import transport for
     // raw-source texture rows.
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     reportBootstrapError(appRes.error);
     return;
   }
   const app = appRes.value;
-  const renderer = app.renderer;
   const world = app.world;
 
   app.onError((e) => {
@@ -222,9 +219,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     if (bus !== undefined) bus.push({ code: e.code, hint: e.hint });
   });
 
-  const assets = renderer.assets;
-  assets.configureRuntimeBinding(runtimeBinding);
-  assets.configurePackIndex(PACK_INDEX_URL);
+  const assets = app.assets;
+  if (assets === undefined) throw new Error('[learn-render 1.6 coordinate-systems] asset host is unavailable');
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   // Parse the 3 GUID literals once (charter F1 single-grep entry).
   const woodGuidRes = AssetGuid.parse(WOOD_TEXTURE_GUID);
@@ -238,7 +235,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   // The texture handle resolves through the production fetch chain
-  // (configurePackIndex -> /pack-index.json -> container.jpg ->
+  // (catalog configuration -> container.jpg ->
   // parseImage -> uploadTexture); the cube handle resolves through the
   // Map fast-path seeded by registerWithGuid below (alias to engine-
   // builtin HANDLE_CUBE); the material handle resolves through the
@@ -360,7 +357,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[learn-render 1.6 coordinate-systems] app.start failed:', startRes.error);
     return;
   }
-  console.warn(`[learn-render 1.6 coordinate-systems] backend=${renderer.backend}`);
+  console.warn('[learn-render 1.6 coordinate-systems] Standard pipeline active');
 }
 
 function reportBootstrapError(err: CanvasAppError): void {

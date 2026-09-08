@@ -2,17 +2,20 @@ import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
+import { gltfImporter } from '@forgeax/engine-gltf';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
+import { optionalAssetPack } from '../../../shared/src/optional-asset-pack.js';
 
 // learn-render section-1.7 camera vite config.
 // 1.7 covers first-person WASD + mouse yaw/pitch + scroll-wheel FoV
 // zoom via @forgeax/engine-input atop a 10 textured cube scene (LO 7.3
 // `cubePositions[]` carried verbatim, container.jpg sRGB material). The
-// `pluginPack()` factory wires the asset catalog at `/pack-index.json`
-// (dev configureServer middleware + build generateBundle emit). Local
-// assets/ holds material-container.pack.json; the container.jpg sidecar
+// `pluginPack()` wires the scoped dev catalog (configureServer middleware)
+// and emits `/pack-index.json` at build time. The app's
+// `configureRuntimeAssetCatalog` helper selects the source. Local assets/
+// holds material-container.pack.json; the container.jpg sidecar
 // + cube-mesh.stub.meta.json sidecar live in the forgeax-engine-assets/
 // learn-opengl submodule subtree (charter F1 single-grep + P4
 // consistent abstraction).
@@ -22,21 +25,19 @@ import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
+const assetRoots = [
+  resolve(here, 'assets'),
+  resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures'),
+  resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'meshes'),
+];
 const runtimeBinding = createStandaloneRuntimeAssetBinding('learn-render-1-7-camera');
 
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
-    pluginPack({
-      runtimeBinding,
-      refresh: reloadAssetHost(),
-      importers: [imageImporter],
-      roots: [
-        resolve(here, 'assets'),
-        resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures'),
-        resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'meshes'),
-      ],
-    }),
+    ...optionalAssetPack(assetRoots, () =>
+      pluginPack({ runtimeBinding, refresh: reloadAssetHost(), importers: [imageImporter, gltfImporter], roots: assetRoots }),
+    ),
   ],
   server: {
     port: 5186,

@@ -98,7 +98,7 @@ export function compareParamSchemaSuperset(
   }
 
   const actualByBinding = flattenByBinding(actualBgls);
-  const expectedParamByBinding = paramNameByBinding(schema, derived);
+  const expectedParamByBinding = paramNameByBinding(derived);
 
   for (const expected of derived.bglEntries) {
     const actual = actualByBinding.get(expected.binding);
@@ -138,72 +138,25 @@ function flattenByBinding(
 }
 
 /**
- * Map binding number to the paramSchema entry name that produced it. The
- * merged UBO at the head of bglEntries has no single owning name (one binding
- * carries all numeric entries); for it we report the first numeric param name
- * so AI users get a useful pointer.
+ * Map each derived binding to the producer-owned parameter or resource name.
+ * The derived interface already contains the binding facts, including the
+ * coordinate UBO that texture-only schemas allocate before their resources.
+ * Walking those facts avoids a second binding cursor in the compiler.
  */
-function paramNameByBinding(
-  schema: readonly ParamSchemaEntry[],
-  derived: ReturnType<typeof derive>,
-): Map<number, string> {
+function paramNameByBinding(derived: ReturnType<typeof derive>): Map<number, string> {
   const out = new Map<number, string>();
-  // First pass: walk the schema in declaration order and assign each
-  // non-numeric entry its own binding slot. Numeric entries collapse onto a
-  // single binding (the merged UBO at the head of derived.bglEntries when at
-  // least one numeric entry exists).
-  let nextBindingCursor = 0;
-  let mergedUboBinding: number | null = null;
-  let firstNumericName: string | null = null;
-  for (const entry of schema) {
-    if (isNumericType(entry.type)) {
-      if (mergedUboBinding === null) {
-        mergedUboBinding = nextBindingCursor;
-        firstNumericName = entry.name;
-        nextBindingCursor += 1;
-      }
-      continue;
-    }
-    if (isTextureViewType(entry.type)) {
-      // Sampler-first per §D-4: auto-paired sampler at binding N, then
-      // texture at binding N+1 (matches derive() emission order).
-      out.set(nextBindingCursor, `${entry.name}_sampler`);
-      nextBindingCursor += 1; // auto-paired sampler
-      out.set(nextBindingCursor, entry.name);
-      nextBindingCursor += 1; // texture
-      continue;
-    }
-    // sampler / sampler_comparison / storage_buffer
-    out.set(nextBindingCursor, entry.name);
-    nextBindingCursor += 1;
+  const numericMembers = derived.numericMembers ?? [];
+  const coordinateRecords = derived.coordinateRecords ?? [];
+  const resourceBindings = derived.resourceBindings ?? [];
+  const uniformEntry = derived.bglEntries.find((entry) => entry.buffer?.type === 'uniform');
+  if (uniformEntry !== undefined) {
+    const owner = numericMembers[0]?.name ?? coordinateRecords[0]?.parameter;
+    if (owner !== undefined) out.set(uniformEntry.binding, owner);
   }
-  if (mergedUboBinding !== null && firstNumericName !== null) {
-    out.set(mergedUboBinding, firstNumericName);
+  for (const resource of resourceBindings) {
+    out.set(resource.binding, resource.name);
   }
-  // Sanity: derived.bglEntries cardinality must match the cursor we walked.
-  void derived;
   return out;
-}
-
-function isNumericType(t: string): boolean {
-  return (
-    t === 'f32' ||
-    t === 'i32' ||
-    t === 'u32' ||
-    t === 'vec2' ||
-    t === 'vec3' ||
-    t === 'vec4' ||
-    t === 'color'
-  );
-}
-
-function isTextureViewType(t: string): boolean {
-  return (
-    t === 'texture2d' ||
-    t === 'texture_cube' ||
-    t === 'texture_depth_2d' ||
-    t === 'texture_cube_array'
-  );
 }
 
 function resourceKindCompatible(

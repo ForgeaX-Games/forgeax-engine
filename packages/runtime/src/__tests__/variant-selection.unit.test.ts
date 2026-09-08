@@ -1,5 +1,5 @@
-import { variantSetFromDefines } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
+import { variantSetFromDefines } from '../../../render/src/record/helpers';
 
 describe('material pass variant selection', () => {
   it('uses the manifest key order without mutating the pass map', () => {

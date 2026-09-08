@@ -1,15 +1,12 @@
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
-import {
-  Camera,
-  extractFrames,
-  MeshFilter,
-  MeshRenderer,
-  Visibility,
-  VisibilityStateValue,
-} from '@forgeax/engine-render/internal';
 import { registerPropagateTransforms, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
+import { Camera } from '../components/camera';
+import { MeshFilter } from '../components/mesh-filter';
+import { MeshRenderer } from '../components/mesh-renderer';
+import { Visibility, VisibilityStateValue } from '../components/visibility';
+import { extractFrames } from '../render-system-extract';
 
 function spawnCamera(world: World): void {
   world

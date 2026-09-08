@@ -166,6 +166,10 @@ function setNavigatorGpu(gpu: unknown): void {
         restoreMocks();
       });
 
+      afterEach(() => {
+        vi.unstubAllGlobals();
+      });
+
       test('instance.createSurface succeeds => returns ok(RhiCanvasContext)', async () => {
         const { acquireCanvasContext } = await import('../index');
         const mockCanvas = { width: 800, height: 600 } as unknown as HTMLCanvasElement;
@@ -264,6 +268,34 @@ function setNavigatorGpu(gpu: unknown): void {
 
         expect(present).toHaveBeenCalledOnce();
         expect(fakeWasmSurface.unconfigure).toHaveBeenCalledTimes(2);
+      });
+
+      test('presents the acquired wasm surface texture after the submit call stack', async () => {
+        const callbacks: VoidFunction[] = [];
+        vi.stubGlobal('queueMicrotask', (callback: VoidFunction) => {
+          callbacks.push(callback);
+        });
+        const present = vi.fn();
+        (fakeWasmSurface.getCurrentTexture as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          getTexture: () => ({}),
+          present,
+        });
+
+        const { acquireCanvasContext } = await import('../index');
+        const result = acquireCanvasContext(fakeWasmInstance, {
+          width: 800,
+          height: 600,
+        } as unknown as HTMLCanvasElement);
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new Error('acquireCanvasContext should succeed');
+
+        expect(result.value.getCurrentTexture().ok).toBe(true);
+        expect(present).not.toHaveBeenCalled();
+        expect(callbacks).toHaveLength(1);
+        callbacks[0]?.();
+        callbacks[0]?.();
+
+        expect(present).toHaveBeenCalledOnce();
       });
 
       test('returned RhiCanvasContext.getConfiguration delegates to wasm surface', async () => {

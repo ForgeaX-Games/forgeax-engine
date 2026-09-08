@@ -2,14 +2,28 @@ import {
   type ImportContext,
   ImportError,
   type ImportedArtifactBody,
+  type ImportProductFinalizeOptions,
+  type ImportProductFinalizeResult,
   type ImportResult,
 } from '@forgeax/engine-types';
 import type { UiAsset } from '../asset.js';
 import { classifyUiAuthoring, validateUiAuthoring } from '../authoring/validate.js';
 import { cssAssetUrls } from './css.js';
+import { finalizeUiArtifact } from './finalize.js';
 import { htmlAssetUrls } from './html.js';
 
 export { cssAssetUrls, validateCssSource } from './css.js';
+export {
+  finalizeUiArtifact,
+  rewriteUiSourceTokens,
+  type UiArtifactFinalizeError,
+  type UiArtifactFinalizeOptions,
+  type UiArtifactFinalizeResult,
+  type UiArtifactPayload,
+  type UiFinalizedArtifact,
+  type UiFinalizedAsset,
+  uiArtifactMimeType,
+} from './finalize.js';
 export { htmlAssetUrls, validateHtmlSource } from './html.js';
 
 export interface UiSource {
@@ -95,6 +109,10 @@ export function importUiSource(source: UiSource): ImportResult<UiAsset> {
 }
 export function createUiImporter(): {
   import(context: ImportContext): Promise<ImportResult<UiAsset>>;
+  finalize(
+    product: import('@forgeax/engine-types').ImportProduct<unknown>,
+    options: ImportProductFinalizeOptions,
+  ): ImportProductFinalizeResult;
 } {
   return {
     async import(context) {
@@ -161,6 +179,9 @@ export function createUiImporter(): {
           sourceDependencies: dependencies,
         },
       };
+    },
+    finalize(product, options) {
+      return finalizeUiArtifact(product, options);
     },
   };
 }

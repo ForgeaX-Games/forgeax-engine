@@ -11,9 +11,10 @@
 // unused-directive error and turn this file red.
 
 import { World } from '@forgeax/engine-ecs';
-import { GlyphText, Tilemap } from '@forgeax/engine-render/authoring';
-import { Camera } from '@forgeax/engine-render/internal';
+import { Camera } from '@forgeax/engine-render';
 import { describe, it } from 'vitest';
+import { GlyphText } from '../../../render/src/components/glyph-text';
+import { Tilemap } from '../../../render/src/components/tilemap';
 
 describe('w12 -- residual per-axis M3 keys are compile errors (AC-04)', () => {
   it('Camera rejects residual clearR at spawn call-site', () => {

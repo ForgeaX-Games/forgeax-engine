@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "morph-visual-evidence/1",
+  "featureId": "feat-20260812-format-classification-tier1",
+  "generatedAt": "2026-08-24T18:39:27.259Z",
+  "source": {
+    "csvSha256": "a87159400f5de776ce46304540999c2e7f84cec07defceaa661d0a0926a9c2d5",
+    "sourceCodeSha": "1f8a0cef49cc3f6c5ac131e95b7d5b24a26d9b50"
+  },
+  "environment": {
+    "name": "format-tier1-morph-dawn",
+    "platform": "darwin-arm64",
+    "runtime": "v24.13.0",
+    "backend": "dawn"
+  },
+  "requiredFrames": 300,
+  "framesObserved": 300,
+  "phases": {
+    "standardFrames": 300,
+    "baseWeightFrames": 100,
+    "zeroWeightFrames": 100,
+    "animatedFrames": 100
+  },
+  "readback": {
+    "status": "pass",
+    "path": "ECS MorphWeights -> MeshFilter/MeshRenderer -> Standard CPU deformation -> Renderer.draw -> observe(FrameReceipt)",
+    "maxAbsError": null
+  },
+  "falsifiers": {
+    "zeroWeights": "pass",
+    "standardLane": "pass",
+    "staleWeights": "pass"
+  },
+  "producer": {
+    "status": "pass",
+    "kind": "imported-loadByGuid",
+    "source": {
+      "gltf": {
+        "path": "/Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/feat-20260822-render-core-80-percent-architecture-reduction/apps/hello/format-tier1/fixtures/animated-morph-cube.gltf",
+        "sha256": "ecba02b3d2bf3b74fa1c1889e4d1bc7c7c50892157706a70044c23403550e8dd",
+        "importer": "gltfImporter -> Pack -> AssetRegistry.loadByGuid"
+      },
+      "fbx": {
+        "path": "/Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/feat-20260822-render-core-80-percent-architecture-reduction/apps/hello/format-tier1/fixtures/multi-target-morph.fbx",
+        "sha256": "23a43a5330b3fce133d295ef4e74f7df6e9fe0f2ff5986f71e4c0ea6ea9af448",
+        "importer": "fbxImporter -> Pack -> AssetRegistry.loadByGuid",
+        "animation": "static fixture"
+      }
+    }
+  },
+  "observed": "Dawn executed the imported mesh through ECS MorphWeights and the Standard MeshFilter/MeshRenderer lane for 300 receipt-bound frames.",
+  "verdict": "pass",
+  "confidence": "high"
+}

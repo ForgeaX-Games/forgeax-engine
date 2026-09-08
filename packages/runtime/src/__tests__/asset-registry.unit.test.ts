@@ -104,8 +104,15 @@ function makeMeshFixture(): MeshAsset {
     vertices: new Float32Array(36),
     indices: new Uint16Array([0, 1, 2]),
     attributes: {},
+    materialSlots: [{ slotName: 'Default' }],
     submeshes: [
-      { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' as const },
+      {
+        indexOffset: 0,
+        indexCount: 3,
+        vertexCount: 3,
+        materialSlot: 0,
+        topology: 'triangle-list' as const,
+      },
     ],
   } as unknown as MeshAsset;
 }

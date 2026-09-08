@@ -120,7 +120,15 @@ function processPackageJson(rel) {
   const pkg = JSON.parse(raw);
   let mutated = false;
 
-  if (typeof pkg.name === 'string') {
+  const isEngineRootManagedByCurrentLayout =
+    rel === path.join('packages', 'engine', 'package.json') &&
+    pkg.name === '@forgeax/engine' &&
+    (pkg.private === true ||
+      (pkg.private === false &&
+        pkg.scripts?.build === 'node scripts/build.mjs' &&
+        pkg.exports?.['.'] !== undefined));
+
+  if (typeof pkg.name === 'string' && !isEngineRootManagedByCurrentLayout) {
     let nextName;
     if (rel === TEMPLATE_NAME_OVERRIDE.path && pkg.name === TEMPLATE_NAME_OVERRIDE.oldName) {
       nextName = TEMPLATE_NAME_OVERRIDE.newName;

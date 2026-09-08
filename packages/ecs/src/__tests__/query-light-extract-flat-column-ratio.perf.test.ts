@@ -34,6 +34,7 @@
 import { describe, expect, it } from 'vitest';
 import { defineComponent } from '../component';
 import { World } from '../world';
+import { worldInternal } from '../world-internal';
 
 const N = 10_000;
 const ROUNDS = 5;
@@ -216,17 +217,17 @@ describe('M5 -- wide table versus sparse tag-flip trend', () => {
       const wide = makeWideComponent(width);
       const tableWorld = new World();
       const tableEntity = tableWorld.spawn({ component: wide, data: {} as never }).unwrap();
-      const tableBefore = tableWorld._getGraph().tables[0];
+      const tableBefore = tableWorld[worldInternal].getGraph().tables[0];
       if (tableBefore === undefined) throw new Error('source table missing');
       tableCopiedBytes.push(bytesIn(tableBefore));
       tableWorld.addComponent(tableEntity, { component: TableFlipTag, data: {} }).unwrap();
 
       const sparseWorld = new World();
       const sparseEntity = sparseWorld.spawn({ component: wide, data: {} as never }).unwrap();
-      const sparseBefore = sparseWorld._getGraph().tables[0];
+      const sparseBefore = sparseWorld[worldInternal].getGraph().tables[0];
       if (sparseBefore === undefined) throw new Error('source table missing');
       sparseWorld.addComponent(sparseEntity, { component: SparseFlipTag, data: {} }).unwrap();
-      const sparseAfter = sparseWorld._getGraph().tables[0];
+      const sparseAfter = sparseWorld[worldInternal].getGraph().tables[0];
       sparseCopiedBytes.push(sparseAfter === sparseBefore ? 0 : bytesIn(sparseBefore));
     }
 

@@ -1,9 +1,6 @@
-import type {
-  PreparedKind,
-  RenderFeatureErrorCode,
-  RenderFeatureErrorDescriptor,
-  RenderFeatureRecovery,
-} from '../index';
+import type { RenderFeatureErrorDescriptor } from '../errors/render';
+import type { RenderFeatureErrorCode } from '../features/types';
+import type { PreparedKind, RenderFeatureRecovery } from '../features/vocabulary';
 
 function describeGraphicsError(error: RenderFeatureErrorDescriptor): string {
   switch (error.code) {

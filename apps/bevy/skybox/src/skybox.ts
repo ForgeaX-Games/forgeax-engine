@@ -8,7 +8,7 @@ import {
   Skylight,
   perspective,
 } from '@forgeax/engine-render';
-import { SKYBOX_MODE_CUBEMAP, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render/internal';
+import { SKYBOX_MODE_CUBEMAP, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
 import type { Handle } from '@forgeax/engine-types';
 import { quat } from '@forgeax/engine-math';
 import { Transform } from '@forgeax/engine-scene';

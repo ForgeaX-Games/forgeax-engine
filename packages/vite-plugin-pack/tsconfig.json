@@ -15,11 +15,13 @@
   "references": [
     { "path": "../codec" },
     { "path": "../ddc" },
+    { "path": "../gltf" },
     { "path": "../image" },
     { "path": "../pack" },
     { "path": "../types" },
     { "path": "../import" },
-    { "path": "../shader-compiler" },
-    { "path": "../ui" }
+    { "path": "../ui" },
+    { "path": "../vfx-compiler" },
+    { "path": "../vfx-render" }
   ]
 }

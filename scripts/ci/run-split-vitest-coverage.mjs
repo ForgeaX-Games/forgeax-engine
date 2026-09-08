@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -15,10 +15,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { coverageGroupConcurrency, runnerResources } from '../lib/runner-resources.mjs';
+
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(scriptDir, '../..');
 const defaultGroupSize = 4;
 const defaultMaxWorkers = 1;
+const maxGroupConcurrency = 3;
+const maxChildOutputBytes = 64 * 1024 * 1024;
 const coverageThresholds = [
   '--coverage.thresholds.lines=0',
   '--coverage.thresholds.functions=0',
@@ -46,11 +50,20 @@ function parsePositiveInt(value, name, { max = Number.POSITIVE_INFINITY } = {}) 
 }
 
 function parseArgs(argv) {
+  const valueOptions = new Set([
+    '--project',
+    '--group-size',
+    '--group-concurrency',
+    '--max-workers',
+    '--coverage-dir',
+    '--output-file',
+  ]);
   const options = {
     coverage: true,
     coverageDir: 'coverage',
     dryRun: false,
     groupSize: defaultGroupSize,
+    groupConcurrency: 1,
     maxWorkers: defaultMaxWorkers,
     outputFile: 'vitest-coverage-out.json',
     projects: [],
@@ -67,7 +80,7 @@ function parseArgs(argv) {
       continue;
     }
     const [key, inlineValue] = argument.split('=', 2);
-    const value = inlineValue ?? argv[++index];
+    const value = inlineValue ?? (valueOptions.has(key) ? argv[++index] : undefined);
     if (key === '--project') {
       if (options.coverage) {
         if (!value) throw new Error('--project requires a value');
@@ -78,6 +91,11 @@ function parseArgs(argv) {
       }
     } else if (key === '--group-size') {
       options.groupSize = parsePositiveInt(value, '--group-size', { max: 12 });
+    } else if (key === '--group-concurrency') {
+      options.groupConcurrency =
+        value === 'auto'
+          ? 'auto'
+          : parsePositiveInt(value, '--group-concurrency', { max: maxGroupConcurrency });
     } else if (key === '--max-workers') {
       options.maxWorkers = parsePositiveInt(value, '--max-workers', { max: 6 });
     } else if (key === '--coverage-dir') {
@@ -145,7 +163,38 @@ function readReport(reportPath) {
   }
 }
 
-function runGroup({ cliPath, group, groupIndex, maxWorkers, coverage, vitestArgs }) {
+function runChild(args) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, args, {
+      cwd: rootDir,
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const stdout = [];
+    const stderr = [];
+    let outputBytes = 0;
+    let outputError = null;
+    const collect = (chunks) => (chunk) => {
+      outputBytes += chunk.length;
+      if (outputBytes > maxChildOutputBytes) {
+        outputError ??= new Error(
+          `Vitest child output exceeded ${maxChildOutputBytes} bytes; refusing to buffer unbounded concurrent logs`,
+        );
+        child.kill('SIGTERM');
+        return;
+      }
+      chunks.push(chunk);
+    };
+    child.stdout.on('data', collect(stdout));
+    child.stderr.on('data', collect(stderr));
+    child.on('error', (error) => resolve({ error, status: null, signal: null, stdout, stderr }));
+    child.on('close', (status, signal) =>
+      resolve({ error: outputError, status, signal, stdout, stderr }),
+    );
+  });
+}
+
+async function runGroup({ cliPath, group, groupIndex, maxWorkers, coverage, vitestArgs }) {
   const tempDir = coverage ? mkdtempSync(path.join(os.tmpdir(), 'forgeax-vitest-coverage-')) : null;
   const coverageDir = tempDir === null ? null : path.join(tempDir, 'coverage');
   const reportPath = tempDir === null ? null : path.join(tempDir, 'vitest.json');
@@ -169,14 +218,9 @@ function runGroup({ cliPath, group, groupIndex, maxWorkers, coverage, vitestArgs
       '--reporter=json',
       `--outputFile=${reportPath}`,
     );
-  const child = spawnSync(process.execPath, args, {
-    cwd: rootDir,
-    encoding: 'utf8',
-    env: process.env,
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  const stdout = child.stdout ?? '';
-  const stderr = child.stderr ?? '';
+  const child = await runChild(args);
+  const stdout = Buffer.concat(child.stdout).toString('utf8');
+  const stderr = Buffer.concat(child.stderr).toString('utf8');
   const log = `${stdout}${stderr}`;
   if (logPath !== null) writeFileSync(logPath, log);
   process.stdout.write(stdout);
@@ -218,6 +262,30 @@ function runGroup({ cliPath, group, groupIndex, maxWorkers, coverage, vitestArgs
     );
   }
   return { coveragePath, report, tempDir };
+}
+
+export async function runGroups({ groups, concurrency, runGroupImpl }) {
+  const results = Array(groups.length);
+  let nextIndex = 0;
+  let firstError = null;
+
+  async function worker() {
+    while (firstError === null) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= groups.length) return;
+      try {
+        results[index] = await runGroupImpl(groups[index], index);
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+  }
+
+  const workerCount = Math.min(concurrency, groups.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  if (firstError !== null) throw firstError;
+  return results;
 }
 
 function mergeReports(reports) {
@@ -299,14 +367,27 @@ function assertRootThresholds(summary) {
     throw new Error(`aggregate coverage threshold failed: ${failures.join(', ')}`);
 }
 
-function main() {
+async function main() {
   const options = parseArgs(process.argv.slice(2));
   const discovered = allProjectNames();
   const projects = options.projects.length ? options.projects : discovered;
   const unknown = projects.filter((project) => !discovered.includes(project));
   if (unknown.length) throw new Error(`unknown Vitest project(s): ${unknown.join(', ')}`);
   const groups = chunk(projects, options.groupSize);
+  const resources = runnerResources();
+  const groupConcurrency =
+    options.groupConcurrency === 'auto'
+      ? coverageGroupConcurrency(resources)
+      : options.groupConcurrency;
+  if (groupConcurrency > 1 && options.maxWorkers > 1) {
+    throw new Error(
+      'concurrent groups require --max-workers=1 to preserve the isolated coverage memory bound',
+    );
+  }
   if (options.dryRun) {
+    process.stderr.write(
+      `[vitest] group concurrency=${groupConcurrency} (requested=${options.groupConcurrency}, cpus=${resources.cpus}, memoryBytes=${resources.memoryBytes})\n`,
+    );
     for (const [index, group] of groups.entries()) {
       process.stdout.write(`group-${String(index + 1).padStart(2, '0')}: ${group.join(', ')}\n`);
     }
@@ -314,23 +395,33 @@ function main() {
   }
 
   const cliPath = resolveCliPath();
-  const groupResults = [];
+  let groupResults = [];
   try {
-    for (const [index, group] of groups.entries()) {
-      process.stderr.write(
-        `[vitest] ${options.coverage ? 'coverage' : 'bounded unit'} group ${index + 1}/${groups.length}: ${group.join(', ')}\n`,
-      );
-      groupResults.push(
-        runGroup({
+    process.stderr.write(
+      `[vitest] group concurrency=${groupConcurrency} (requested=${options.groupConcurrency}, cpus=${resources.cpus}, memoryBytes=${resources.memoryBytes})\n`,
+    );
+    groupResults = await runGroups({
+      groups,
+      concurrency: groupConcurrency,
+      runGroupImpl: async (group, index) => {
+        const startedAt = Date.now();
+        process.stderr.write(
+          `[vitest] ${options.coverage ? 'coverage' : 'bounded unit'} group ${index + 1}/${groups.length}: ${group.join(', ')}\n`,
+        );
+        const result = await runGroup({
           cliPath,
           group,
           groupIndex: index + 1,
           maxWorkers: options.maxWorkers,
           coverage: options.coverage,
           vitestArgs: options.vitestArgs,
-        }),
-      );
-    }
+        });
+        process.stderr.write(
+          `[vitest] group ${index + 1}/${groups.length} passed in ${((Date.now() - startedAt) / 1000).toFixed(2)}s\n`,
+        );
+        return result;
+      },
+    });
 
     if (!options.coverage) {
       process.stdout.write(
@@ -358,10 +449,12 @@ function main() {
   }
 }
 
-try {
-  main();
-} catch (error) {
-  process.stderr.write(`[vitest] split coverage failed: ${error.message}\n`);
-  if (error.signal) process.kill(process.pid, error.signal);
-  process.exitCode = 1;
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    await main();
+  } catch (error) {
+    process.stderr.write(`[vitest] split coverage failed: ${error.message}\n`);
+    if (error.signal) process.kill(process.pid, error.signal);
+    process.exitCode = 1;
+  }
 }

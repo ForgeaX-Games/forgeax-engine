@@ -5,6 +5,7 @@
     {
       "guid": "f150593f-bdb8-5204-b75c-3f3fda283d83",
       "kind": "material",
+      "execution": "cooked",
       "sourceKey": "fractal-pyramid.wgsl",
       "payload": {
         "kind": "material",

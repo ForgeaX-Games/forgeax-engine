@@ -1,6 +1,11 @@
-import type { CatalogDelta, CatalogEntry } from '@forgeax/engine-types';
-
-export const CATALOG_DELTA_EVENT = 'forgeax:catalog-delta';
+import {
+  type CatalogDelta,
+  type CatalogEntry,
+  catalogDeltaDigest,
+  validateCatalogDelta,
+} from '@forgeax/engine-types';
+import { CATALOG_DELTA_EVENT } from './catalog-transport.js';
+import { createPluginPackFailure } from './errors.js';
 
 export interface CatalogHotChannel {
   on(event: string, listener: (data: unknown) => void): void;
@@ -10,39 +15,73 @@ export interface CatalogHotChannel {
 export interface CatalogClient {
   enumerate(): Promise<readonly CatalogEntry[]>;
   subscribe(listener: (delta: CatalogDelta) => void): () => void;
+  readonly desynchronized: () => boolean;
 }
-
-export interface AssetHostRefreshServer {
-  readonly ws?: { send(payload: { type: 'full-reload' }): void } | undefined;
-}
-
-export type AssetHostRefreshPolicy = (server: AssetHostRefreshServer) => void;
-
-/** Returns the explicit policy used by hosts that need a full page refresh. */
-export function reloadAssetHost(): AssetHostRefreshPolicy {
-  return (server) => server.ws?.send({ type: 'full-reload' });
-}
-
-/** Adapts Vite's custom-event transport to the neutral catalog source shape. */
 export function createCatalogClient(
   enumerate: () => Promise<readonly CatalogEntry[]>,
   hot: CatalogHotChannel | undefined,
 ): CatalogClient {
+  const listeners = new Set<(delta: CatalogDelta) => void>();
+  let desynchronized = false;
+  let lastDigest: string | undefined;
+
+  const readSnapshot = async (): Promise<readonly CatalogEntry[]> => {
+    const entries = await enumerate();
+    const validation = validateCatalogDelta({ added: entries, changed: [], removed: [] });
+    if (!validation.ok) {
+      desynchronized = true;
+      throw createPluginPackFailure({
+        ...validation.error,
+        code: 'route-failed',
+        detail: { stage: 'route', subject: 'catalog-enumeration' },
+        cause: validation.error,
+      });
+    }
+    desynchronized = false;
+    return entries;
+  };
+
+  const publish = (delta: CatalogDelta): void => {
+    const digest = catalogDeltaDigest(delta);
+    if (digest === lastDigest) return;
+    lastDigest = digest;
+    for (const listener of [...listeners]) {
+      try {
+        listener(delta);
+      } catch (error) {
+        console.error('[forgeax-pack] catalog subscriber failure', error);
+      }
+    }
+  };
+
+  const recover = (): void => {
+    desynchronized = true;
+    void readSnapshot().catch((error: unknown) => {
+      console.error('[forgeax-pack] catalog re-enumeration failure', error);
+    });
+  };
+
   return {
-    enumerate,
+    enumerate: readSnapshot,
     subscribe(listener): () => void {
-      if (hot === undefined) return () => {};
+      listeners.add(listener);
+      if (hot === undefined) return () => listeners.delete(listener);
       const onDelta = (data: unknown): void => {
-        if (isCatalogDelta(data)) listener(data);
+        const validation = validateCatalogDelta(data);
+        if (!validation.ok) {
+          recover();
+          return;
+        }
+        const delta = validation.value;
+        desynchronized = false;
+        publish(delta);
       };
       hot.on(CATALOG_DELTA_EVENT, onDelta);
-      return () => hot.off(CATALOG_DELTA_EVENT, onDelta);
+      return () => {
+        hot.off(CATALOG_DELTA_EVENT, onDelta);
+        listeners.delete(listener);
+      };
     },
+    desynchronized: () => desynchronized,
   };
-}
-
-function isCatalogDelta(value: unknown): value is CatalogDelta {
-  if (typeof value !== 'object' || value === null) return false;
-  const delta = value as Partial<CatalogDelta>;
-  return Array.isArray(delta.added) && Array.isArray(delta.changed) && Array.isArray(delta.removed);
 }

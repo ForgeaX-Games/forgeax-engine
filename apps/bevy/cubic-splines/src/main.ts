@@ -37,7 +37,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = appResult.value;
-  console.warn(`[bevy-cubic-splines] backend=${app.renderer.backend}`);
+  console.warn(`[bevy-cubic-splines] state=${app.renderer.inspect().state}`);
 
   buildCubicSplinesWorld(app.world);
 

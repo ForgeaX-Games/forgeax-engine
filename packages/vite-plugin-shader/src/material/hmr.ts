@@ -1,6 +1,14 @@
 export class MaterialHmrGraph {
   private readonly reverseDeps = new Map<string, Set<string>>();
 
+  replace(importer: string, dependencies: readonly string[]): void {
+    for (const [dependency, importers] of this.reverseDeps) {
+      importers.delete(importer);
+      if (importers.size === 0) this.reverseDeps.delete(dependency);
+    }
+    this.record(importer, dependencies);
+  }
+
   record(importer: string, dependencies: readonly string[]): void {
     for (const dependency of dependencies) {
       let importers = this.reverseDeps.get(dependency);

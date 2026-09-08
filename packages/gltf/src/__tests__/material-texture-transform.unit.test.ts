@@ -1,4 +1,6 @@
+import type { Handle } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { toMaterialAsset } from '../bridge.js';
 import { parseGltf } from '../parse-gltf.js';
 
 const noopLoader = async (_uri: string) => new ArrayBuffer(0);
@@ -8,6 +10,8 @@ describe('glTF KHR_texture_transform per-slot parsing', () => {
     const result = await parseGltf(
       {
         asset: { version: '2.0' },
+        extensionsRequired: ['KHR_texture_transform'],
+        extensionsUsed: ['KHR_texture_transform'],
         textures: [
           { source: 0, sampler: 0 },
           { source: 1, sampler: 1 },
@@ -70,6 +74,32 @@ describe('glTF KHR_texture_transform per-slot parsing', () => {
       offset: [-0.25, -0.5],
       rotation: -0.75,
       scale: [4, 5],
+    });
+
+    const materialIr = result.value.materials[0];
+    expect(materialIr).toBeDefined();
+    if (materialIr === undefined) return;
+    const projected = toMaterialAsset(materialIr, {
+      textureHandles: new Map([
+        [0, 100],
+        [1, 101],
+      ]) as unknown as ReadonlyMap<number, Handle<'TextureAsset', 'shared'>>,
+    });
+    expect(projected.values).toMatchObject({
+      baseColorTexture: {
+        texture: 100,
+        coordinates: {
+          set: 6,
+          transform: { offset: [0.25, 0.5], rotation: 0.75, scale: [2, 3] },
+        },
+      },
+      metallicRoughnessTexture: {
+        texture: 101,
+        coordinates: {
+          set: 7,
+          transform: { offset: [-0.25, -0.5], rotation: -0.75, scale: [4, 5] },
+        },
+      },
     });
   });
 });

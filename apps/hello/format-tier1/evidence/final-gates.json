@@ -1,0 +1,794 @@
+{
+  "schemaVersion": "format-tier1-final-gates/1",
+  "featureId": "feat-20260812-format-classification-tier1",
+  "generatedAt": "2026-08-14T10:27:00.474Z",
+  "source": {
+    "csvPath": ".forgeax-harness/docs/forgeax-format-classification.csv",
+    "csvSha256": "a87159400f5de776ce46304540999c2e7f84cec07defceaa661d0a0926a9c2d5",
+    "firstTierRows": [
+      8,
+      18,
+      26
+    ],
+    "sourceCodeSha": "f36c48e59618cef2d679b91737de337cdcb8b718"
+  },
+  "provenance": {
+    "testedRevision": "f36c48e59618cef2d679b91737de337cdcb8b718",
+    "publicationHead": "f36c48e59618cef2d679b91737de337cdcb8b718",
+    "sourceCodeSha": "f36c48e59618cef2d679b91737de337cdcb8b718",
+    "evidenceOnlyPublication": false,
+    "priorPublication": {
+      "testedRevision": "e6517abf36b57355e78b63b8a47c51f8b01a17f2",
+      "publicationHead": "95ef21b1c6aa4e69562fb823e040635c7e710dfd",
+      "evidenceOnlyPublication": true
+    }
+  },
+  "environment": {
+    "name": "format-tier1-final-gates",
+    "platform": "darwin-arm64",
+    "runtime": "v26.4.0",
+    "backend": "dawn plus feature-owned browser visual producer"
+  },
+  "commands": [
+    {
+      "id": "source-matrix-baseline",
+      "command": "node apps/hello/format-tier1/evidence/__tests__/format-support-matrix.schema.test.mjs",
+      "result": "pass",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 45,
+      "stdout": "✔ matrix schema and initial artifact preserve source provenance (3.093833ms)\n✔ matrix validation rejects missing provenance and evidence contract fields (1.145791ms)\n✔ matrix validation rejects a supported claim without complete evidence (0.772625ms)\nℹ tests 3\nℹ suites 0\nℹ pass 3\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 7.28125",
+      "stderr": ""
+    },
+    {
+      "id": "migration-audit",
+      "command": "node apps/hello/format-tier1/scripts/migration-audit.mjs",
+      "result": "pass",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 115,
+      "stdout": "{\n  \"schemaVersion\": \"format-tier1-migration-audit/1\",\n  \"featureId\": \"feat-20260812-format-classification-tier1\",\n  \"current\": {\n    \"ref\": \"HEAD\",\n    \"sha\": \"f36c48e59618cef2d679b91737de337cdcb8b718\",\n    \"mainRef\": \"main\",\n    \"mainSha\": \"6f7ecf6ecdfa103ba3096852b2ba74310326f90a\",\n    \"baselineAligned\": true\n  },\n  \"candidate\": {\n    \"branch\": \"codex/feat-20260810-format-classification-tier1\",\n    \"sha\": null,\n    \"status\": \"unavailable\",\n    \"candidateOnlyPaths\": [],\n    \"oldPathHits\": [],\n    \"passMarkers\": [],\n    \"pngArtifacts\": [],\n    \"supportClaims\": []\n  },\n  \"warnings\": [\n    {\n      \"code\": \"candidate-ref-unavailable\",\n      \"detail\": \"Candidate ref codex/feat-20260810-format-classification-tier1 is not available in this checkout; candidate evidence remains audit-only and was not treated as support.\",\n      \"paths\": []\n    }\n  ],\n  \"errors\": [],\n  \"status\": \"audit-only\"\n}",
+      "stderr": "fatal: Needed a single revision"
+    },
+    {
+      "id": "meshopt-importer",
+      "command": "pnpm exec vitest run --project @forgeax/engine-gltf packages/gltf/src/__tests__/meshopt-decode.unit.test.ts packages/gltf/src/__tests__/meshopt-falsifier.unit.test.ts packages/gltf/src/__tests__/meshopt-real-matrix.integration.test.ts",
+      "result": "pass",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 1675,
+      "stdout": "RUN  v4.1.5 /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/feat-20260812-format-classification-tier1\n\n\n Test Files  3 passed (3)\n      Tests  11 passed (11)\nType Errors  no errors\n   Start at  18:26:14\n   Duration  624ms (transform 524ms, setup 0ms, import 754ms, tests 13ms, environment 0ms)",
+      "stderr": "Testing types with tsc and vue-tsc is an experimental feature.\nBreaking changes might not follow SemVer, please pin Vitest's version when using it.\nTesting types with tsc and vue-tsc is an experimental feature.\nBreaking changes might not follow SemVer, please pin Vitest's version when using it."
+    },
+    {
+      "id": "meshopt-dawn-reference",
+      "command": "node apps/hello/format-tier1/scripts/smoke-meshopt-dawn.mjs",
+      "result": "pass",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 176,
+      "stdout": "{\"schemaVersion\":\"format-tier1-meshopt-gpu/1\",\"featureId\":\"feat-20260812-format-classification-tier1\",\"generatedAt\":\"2026-08-14T10:26:15.418Z\",\"sourceCodeSha\":\"f36c48e59618cef2d679b91737de337cdcb8b718\",\"fixture\":{\"path\":\"apps/hello/format-tier1/fixtures/meshopt-triangle.gltf\",\"sha256\":\"66a62c6baddfcbb6042a53266335823334094a190d6e6484a8ed4b8a46bddae0\"},\"reference\":{\"path\":\"apps/hello/format-tier1/fixtures/meshopt-triangle-reference.json\",\"sha256\":\"914646407d97c2fcd3ea3a577c821480e0126553222bf7da67bf0ce91ac5d3b8\"},\"status\":\"pass\",\"consumer\":\"Dawn reference buffer upload and MAP_READ readback\",\"decoded\":{\"topology\":\"triangle-list\",\"attributes\":[\"position\",\"normal\",\"uv\",\"tangent\"],\"vertexCount\":3,\"indexCount\":3,\"attributeReadback\":{\"position\":{\"status\":\"pass\",\"maxAbsError\":0,\"threshold\":0.000001,\"actualLength\":9,\"referenceLength\":9},\"normal\":{\"status\":\"pass\",\"maxAbsError\":0,\"threshold\":0.000001,\"actualLength\":9,\"referenceLength\":9},\"uv\":{\"status\":\"pass\",\"maxAbsError\":0,\"threshold\":0.000001,\"actualLength\":6,\"referenceLength\":6},\"tangent\":{\"status\":\"pass\",\"maxAbsError\":0,\"threshold\":0.000001,\"actualLength\":12,\"referenceLength\":12}},\"indexReadback\":{\"status\":\"pass\",\"maxAbsError\":0,\"threshold\":0.000001,\"actualLength\":3,\"referenceLength\":3}},\"malformed\":{\"status\":\"refused\",\"error\":{\"code\":\"gltf-meshopt-decode-failed\",\"expected\":\"damaged EXT_meshopt_compression input is rejected\",\"hint\":\"repair the compressed artifact or inspect the decoder detail\",\"detail\":\"{\\\"bufferView\\\":4,\\\"actual\\\":\\\"compressed range out of bounds\\\",\\\"mode\\\":\\\"TRIANGLES\\\",\\\"filter\\\":\\\"NONE\\\"}\"}}}",
+      "stderr": ""
+    },
+    {
+      "id": "ktx2-basis-capability",
+      "command": "pnpm exec vitest run --project @forgeax/engine-codec packages/codec/src/__tests__/ktx2-basis-capability-matrix.unit.test.ts",
+      "result": "pass",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 1471,
+      "stdout": "RUN  v4.1.5 /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/feat-20260812-format-classification-tier1\n\n\n Test Files  1 passed (1)\n      Tests  8 passed (8)\nType Errors  no errors\n   Start at  18:26:16\n   Duration  435ms (transform 62ms, setup 0ms, import 37ms, tests 323ms, environment 0ms)",
+      "stderr": "Testing types with tsc and vue-tsc is an experimental feature.\nBreaking changes might not follow SemVer, please pin Vitest's version when using it.\nTesting types with tsc and vue-tsc is an experimental feature.\nBreaking changes might not follow SemVer, please pin Vitest's version when using it."
+    },
+    {
+      "id": "ktx2-basis-source",
+      "command": "pnpm exec vitest run --project @forgeax/engine-image packages/image/src/__tests__/ktx2-basis-importer.unit.test.ts",
+      "result": "pass",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 1495,
+      "stdout": "RUN  v4.1.5 /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/feat-20260812-format-classification-tier1\n\n\n Test Files  1 passed (1)\n      Tests  2 passed (2)\nType Errors  no errors\n   Start at  18:26:17\n   Duration  467ms (transform 95ms, setup 0ms, import 85ms, tests 311ms, environment 0ms)",
+      "stderr": "Testing types with tsc and vue-tsc is an experimental feature.\nBreaking changes might not follow SemVer, please pin Vitest's version when using it.\nTesting types with tsc and vue-tsc is an experimental feature.\nBreaking changes might not follow SemVer, please pin Vitest's version when using it."
+    },
+    {
+      "id": "ktx2-basis-runtime",
+      "command": "pnpm exec vitest run --project @forgeax/engine-assets-runtime packages/assets-runtime/src/__tests__/pack-basis-load.integration.test.ts",
+      "result": "pass",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 1369,
+      "stdout": "RUN  v4.1.5 /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/feat-20260812-format-classification-tier1\n\n\n Test Files  1 passed (1)\n      Tests  3 passed (3)\nType Errors  no errors\n   Start at  18:26:19\n   Duration  381ms (transform 92ms, setup 0ms, import 68ms, tests 240ms, environment 0ms)",
+      "stderr": "Testing types with tsc and vue-tsc is an experimental feature.\nBreaking changes might not follow SemVer, please pin Vitest's version when using it.\nTesting types with tsc and vue-tsc is an experimental feature.\nBreaking changes might not follow SemVer, please pin Vitest's version when using it."
+    },
+    {
+      "id": "ktx2-basis-runtime-matrix",
+      "command": "pnpm exec vitest run --project @forgeax/engine-runtime packages/runtime/src/__tests__/basis-catalog-dispatch.integration.test.ts",
+      "result": "pass",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 1743,
+      "stdout": "RUN  v4.1.5 /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/feat-20260812-format-classification-tier1\n\n\n Test Files  1 passed (1)\n      Tests  3 passed (3)\n   Start at  18:26:20\n   Duration  773ms (transform 328ms, setup 0ms, import 378ms, tests 323ms, environment 0ms)",
+      "stderr": "Testing types with tsc and vue-tsc is an experimental feature.\nBreaking changes might not follow SemVer, please pin Vitest's version when using it."
+    },
+    {
+      "id": "ktx2-basis-gpu-matrix",
+      "command": "pnpm exec vitest run --project dawn packages/render/src/__tests__/ktx2-basis-gpu-consumer.dawn.test.ts",
+      "result": "pass",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 2252,
+      "stdout": "RUN  v4.1.5 /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/feat-20260812-format-classification-tier1\n\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  18:26:22\n   Duration  1.03s (transform 397ms, setup 26ms, import 474ms, tests 449ms, environment 0ms)",
+      "stderr": "Testing types with tsc and vue-tsc is an experimental feature.\nBreaking changes might not follow SemVer, please pin Vitest's version when using it."
+    },
+    {
+      "id": "morph-source-animation",
+      "command": "pnpm exec vitest run --project @forgeax/engine-animation packages/animation/src/__tests__/morph-weights.unit.test.ts packages/animation/src/__tests__/morph-weights-playback.integration.test.ts",
+      "result": "pass",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 1545,
+      "stdout": "RUN  v4.1.5 /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/feat-20260812-format-classification-tier1\n\n\n Test Files  2 passed (2)\n      Tests  6 passed (6)\n   Start at  18:26:24\n   Duration  498ms (transform 447ms, setup 0ms, import 426ms, tests 161ms, environment 0ms)",
+      "stderr": "Testing types with tsc and vue-tsc is an experimental feature.\nBreaking changes might not follow SemVer, please pin Vitest's version when using it."
+    },
+    {
+      "id": "morph-importers",
+      "command": "pnpm exec vitest run --project @forgeax/engine-gltf packages/gltf/src/__tests__/morph-import.unit.test.ts packages/gltf/src/__tests__/morph-import.integration.test.ts",
+      "result": "pass",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 1497,
+      "stdout": "RUN  v4.1.5 /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/feat-20260812-format-classification-tier1\n\n\n Test Files  2 passed (2)\n      Tests  3 passed (3)\nType Errors  no errors\n   Start at  18:26:26\n   Duration  490ms (transform 517ms, setup 0ms, import 661ms, tests 14ms, environment 0ms)",
+      "stderr": "Testing types with tsc and vue-tsc is an experimental feature.\nBreaking changes might not follow SemVer, please pin Vitest's version when using it.\nTesting types with tsc and vue-tsc is an experimental feature.\nBreaking changes might not follow SemVer, please pin Vitest's version when using it."
+    },
+    {
+      "id": "morph-fbx",
+      "command": "pnpm exec vitest run --project @forgeax/engine-fbx packages/fbx/src/__tests__/blendshape-import.unit.test.ts packages/fbx/src/__tests__/blendshape-import.integration.test.ts",
+      "result": "pass",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 1561,
+      "stdout": "RUN  v4.1.5 /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/feat-20260812-format-classification-tier1\n\n\n Test Files  2 passed (2)\n      Tests  5 passed (5)\n   Start at  18:26:27\n   Duration  515ms (transform 603ms, setup 0ms, import 791ms, tests 26ms, environment 0ms)",
+      "stderr": "Testing types with tsc and vue-tsc is an experimental feature.\nBreaking changes might not follow SemVer, please pin Vitest's version when using it."
+    },
+    {
+      "id": "morph-gpu-dawn",
+      "command": "node apps/hello/format-tier1/scripts/smoke-dawn.mjs",
+      "result": "pass",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 186,
+      "stdout": "{\"backend\":\"dawn\",\"requiredFrames\":300,\"framesObserved\":300,\"phases\":{\"zero\":100,\"culled\":100,\"reentry\":1,\"staleClears\":1},\"readback\":{\"status\":\"pass\",\"path\":\"GPUBuffer.copyBufferToBuffer -> MAP_READ:morph.output\",\"actual\":[-0.009999999776482582,0.009999998845160007,0.009999999776482582,1,0.009999996051192284,0.01000000350177288,0.009999999776482582,1,0.010000000707805157,-0.005266865249723196,0.009999999776482582,1,-0.009999999776482582,-0.005266867112368345,0.009999999776482582,1,-0.010000004433095455,0.009999994188547134,-0.009999999776482582,1,-0.00999999325722456,-0.00526687316596508,-0.009999999776482582,1,0.01000000350177288,-0.005266863387078047,-0.009999999776482582,1,0.009999998845160007,0.009999999776482582,-0.009999999776482582,1,-0.009999999776482582,0.009999998845160007,0.009999999776482582,1,-0.009999999776482582,-0.005266867112368345,0.009999999776482582,1,-0.00999999325722456,-0.00526687316596508,-0.009999999776482582,1,-0.010000004433095455,0.009999994188547134,-0.009999999776482582,1,-0.009999999776482582,-0.005266867112368345,0.009999999776482582,1,0.010000000707805157,-0.005266865249723196,0.009999999776482582,1,0.01000000350177288,-0.005266863387078047,-0.009999999776482582,1,-0.00999999325722456,-0.00526687316596508,-0.009999999776482582,1,0.010000000707805157,-0.005266865249723196,0.009999999776482582,1,0.009999996051192284,0.01000000350177288,0.009999999776482582,1,0.009999998845160007,0.009999999776482582,-0.009999999776482582,1,0.01000000350177288,-0.005266863387078047,-0.009999999776482582,1,-0.010000004433095455,0.009999994188547134,-0.009999999776482582,1,0.009999998845160007,0.009999999776482582,-0.009999999776482582,1,0.009999996051192284,0.01000000350177288,0.009999999776482582,1,-0.009999999776482582,0.009999998845160007,0.009999999776482582,1],\"expected\":[-0.009999999776482582,0.009999998845160007,0.009999999776482582,1,0.009999996051192284,0.01000000350177288,0.009999999776482582,1,0.010000000707805157,-0.005266865249723196,0.009999999776482582,1,-0.009999999776482582,-0.005266867112368345,0.009999999776482582,1,-0.010000004433095455,0.009999994188547134,-0.009999999776482582,1,-0.00999999325722456,-0.00526687316596508,-0.009999999776482582,1,0.01000000350177288,-0.005266863387078047,-0.009999999776482582,1,0.009999998845160007,0.009999999776482582,-0.009999999776482582,1,-0.009999999776482582,0.009999998845160007,0.009999999776482582,1,-0.009999999776482582,-0.005266867112368345,0.009999999776482582,1,-0.00999999325722456,-0.00526687316596508,-0.009999999776482582,1,-0.010000004433095455,0.009999994188547134,-0.009999999776482582,1,-0.009999999776482582,-0.005266867112368345,0.009999999776482582,1,0.010000000707805157,-0.005266865249723196,0.009999999776482582,1,0.01000000350177288,-0.005266863387078047,-0.009999999776482582,1,-0.00999999325722456,-0.00526687316596508,-0.009999999776482582,1,0.010000000707805157,-0.005266865249723196,0.009999999776482582,1,0.009999996051192284,0.01000000350177288,0.009999999776482582,1,0.009999998845160007,0.009999999776482582,-0.009999999776482582,1,0.01000000350177288,-0.005266863387078047,-0.009999999776482582,1,-0.010000004433095455,0.009999994188547134,-0.009999999776482582,1,0.009999998845160007,0.009999999776482582,-0.009999999776482582,1,0.009999996051192284,0.01000000350177288,0.009999999776482582,1,-0.009999999776482582,0.009999998845160007,0.009999999776482582,1],\"maxAbsError\":0},\"screenshot\":{\"status\":\"captured\",\"path\":\".forgeax-harness/forgeax-loop/feat-20260812-format-classification-tier1/evidence/format-tier1-morph-static-animation-output.png\",\"reason\":\"M7 feature-owned browser capture was produced and read.\"},\"falsifiers\":{\"zeroWeights\":\"pass\",\"cullReentry\":\"pass\",\"staleWeights\":\"pass\"},\"producer\":{\"status\":\"pass\",\"kind\":\"imported-loadByGuid\",\"source\":{\"gltf\":{\"path\":\"apps/hello/format-tier1/fixtures/animated-morph-cube.gltf\",\"sha256\":\"ecba02b3d2bf3b74fa1c1889e4d1bc7c7c50892157706a70044c23403550e8dd\",\"importer\":\"gltfImporter -> runImport -> Pack -> AssetRegistry.catalog -> loadByGuid\",\"meshGuid\":\"11111111-1111-4111-8111-111111111111\",\"morphTargetCount\":2,\"morphWeightLength\":2,\"animation\":{\"property\":\"weights\",\"keyframes\":2,\"outputLength\":4}},\"fbx\":{\"path\":\"apps/hello/format-tier1/fixtures/multi-target-morph.fbx\",\"sha256\":\"23a43a5330b3fce133d295ef4e74f7df6e9fe0f2ff5986f71e4c0ea6ea9af448\",\"importer\":\"fbxImporter -> ufbx WASM -> Pack -> AssetRegistry.catalog -> loadByGuid\",\"morphTargetCount\":2,\"animation\":{\"status\":\"blocked\",\"reason\":\"The checked-in FBX fixture has no animation clip.\"}}}},\"observed\":\"Dawn consumed the glTF importer Pack payload through AssetRegistry.loadByGuid and executed the imported multi-target morph asset for 300 frames.\",\"verdict\":\"pass\",\"confidence\":\"high\",\"capabilityRefusal\":{\"stage\":\"browser-visual-consumer\",\"code\":\"format-tier1-browser-gpu-consumer-blocked\",\"expected\":\"The browser MorphFeature consumer renders canonical imported Morph output\",\"hint\":\"Wire the browser MorphFeature consumer before promoting visual evidence to pass.\",\"detail\":\"The browser capture exists and was read, but its Morph GPU consumer expectation remains blocked.\"}}",
+      "stderr": ""
+    },
+    {
+      "id": "recovery",
+      "command": "node --test apps/hello/format-tier1/evidence/__tests__/recovery-scenarios.test.mjs",
+      "result": "pass",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 138,
+      "stdout": "✔ format-tier1 recovery preserves identity, LKG, and structured producer actions (64.281708ms)\nℹ tests 1\nℹ suites 0\nℹ pass 1\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 105.488708",
+      "stderr": ""
+    },
+    {
+      "id": "typecheck",
+      "command": "pnpm run typecheck",
+      "result": "pass",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 31250,
+      "stdout": "Scope: 208 of 265 workspace projects\napps/bevy/2d-rotation typecheck$ tsc --noEmit\napps/bevy/2d-screen-shake typecheck$ tsc --noEmit\napps/bevy/2d-shapes typecheck$ tsc --noEmit\napps/bevy/2d-top-down-camera typecheck$ tsc --noEmit\napps/bevy/3d-shapes typecheck$ tsc --noEmit\napps/bevy/3d-scene typecheck$ tsc --noEmit\napps/bevy/3d-rotation typecheck$ tsc --noEmit\napps/bevy/alter-mesh typecheck$ tsc --noEmit\napps/bevy/animate-shader typecheck$ tsc --noEmit\napps/bevy/animated-material typecheck$ tsc --noEmit\napps/bevy/animated-transform typecheck$ tsc --noEmit\napps/bevy/3d-scene typecheck: Done\napps/bevy/3d-shapes typecheck: Done\napps/bevy/anti-aliasing typecheck$ tsc --noEmit\napps/bevy/audio typecheck$ tsc --noEmit\napps/bevy/2d-top-down-camera typecheck: Done\napps/bevy/audio-control typecheck$ tsc --noEmit\napps/bevy/2d-screen-shake typecheck: Done\napps/bevy/axes typecheck$ tsc --noEmit\napps/bevy/animate-shader typecheck: Done\napps/bevy/blend-modes typecheck$ tsc --noEmit\napps/bevy/3d-rotation typecheck: Done\napps/bevy/bloom typecheck$ tsc --noEmit\napps/bevy/animated-material typecheck: Done\napps/bevy/bloom-2d typecheck$ tsc --noEmit\napps/bevy/alter-mesh typecheck: Done\napps/bevy/bounding-2d typecheck$ tsc --noEmit\napps/bevy/animated-transform typecheck: Done\napps/bevy/camera-orbit typecheck$ tsc --noEmit\napps/bevy/2d-shapes typecheck: Done\napps/bevy/camera-pan typecheck$ tsc --noEmit\napps/bevy/2d-rotation typecheck: Done\napps/bevy/camera-zoom typecheck$ tsc --noEmit\napps/bevy/audio-control typecheck: Done\napps/bevy/change-detection typecheck$ tsc --noEmit\napps/bevy/anti-aliasing typecheck: Done\napps/bevy/clear-color typecheck$ tsc --noEmit\napps/bevy/audio typecheck: Done\napps/bevy/clearcoat typecheck$ tsc --noEmit\napps/bevy/bloom typecheck: Done\napps/bevy/axes typecheck: Done\napps/bevy/component-hooks typecheck$ tsc --noEmit\napps/bevy/contiguous-query typecheck$ tsc --noEmit\napps/bevy/blend-modes typecheck: Done\napps/bevy/cubic-splines typecheck$ tsc --noEmit\napps/bevy/bounding-2d typecheck: Done\napps/bevy/custom-skinned-mesh typecheck$ tsc --noEmit\napps/bevy/camera-orbit typecheck: Done\napps/bevy/delayed-commands typecheck$ tsc --noEmit\napps/bevy/camera-pan typecheck: Done\napps/bevy/depth-of-field typecheck$ tsc --noEmit\napps/bevy/camera-zoom typecheck: Done\napps/bevy/eased-motion typecheck$ tsc --noEmit\napps/bevy/bloom-2d typecheck: Done\napps/bevy/easing typecheck$ tsc --noEmit\napps/bevy/clearcoat typecheck: Done\napps/bevy/empty typecheck$ tsc --noEmit\napps/bevy/change-detection typecheck: Done\napps/bevy/entity-disabling typecheck$ tsc --noEmit\napps/bevy/contiguous-query typecheck: Done\napps/bevy/fixed-timestep typecheck$ tsc --noEmit\napps/bevy/cubic-splines typecheck: Done\napps/bevy/fog typecheck$ tsc --noEmit\napps/bevy/clear-color typecheck: Done\napps/bevy/free-camera typecheck$ tsc --noEmit\napps/bevy/delayed-commands typecheck: Done\napps/bevy/fullscreen-material typecheck$ tsc --noEmit\napps/bevy/component-hooks typecheck: Done\napps/bevy/gamepad-input typecheck$ tsc --noEmit\napps/bevy/custom-skinned-mesh typecheck: Done\napps/bevy/generate-custom-mesh typecheck$ tsc --noEmit\napps/bevy/gamepad-input typecheck: Done\napps/bevy/generic-system typecheck$ tsc --noEmit\napps/bevy/eased-motion typecheck: Done\napps/bevy/iter-combinations typecheck$ tsc --noEmit\napps/bevy/easing typecheck: Done\napps/bevy/keyboard-input typecheck$ tsc --noEmit\napps/bevy/empty typecheck: Done\napps/bevy/keyboard-modifiers typecheck$ tsc --noEmit\napps/bevy/fixed-timestep typecheck: Done\napps/bevy/lighting typecheck$ tsc --noEmit\napps/bevy/entity-disabling typecheck: Done\napps/bevy/lines typecheck$ tsc --noEmit\napps/bevy/keyboard-modifiers typecheck: Done\napps/bevy/load-gltf typecheck$ tsc --noEmit\napps/bevy/fullscreen-material typecheck: Done\napps/bevy/logs typecheck$ tsc --noEmit\napps/bevy/free-camera typecheck: Done\napps/bevy/mesh-picking typecheck$ tsc --noEmit\napps/bevy/depth-of-field typecheck: Done\napps/bevy/mesh2d typecheck$ tsc --noEmit\napps/bevy/fog typecheck: Done\napps/bevy/mesh2d-alpha-mode typecheck$ tsc --noEmit\napps/bevy/generate-custom-mesh typecheck: Done\napps/bevy/mesh2d-arcs typecheck$ tsc --noEmit\napps/bevy/generic-system typecheck: Done\napps/bevy/mouse-input typecheck$ tsc --noEmit\napps/bevy/iter-combinations typecheck: Done\napps/bevy/move-sprite typecheck$ tsc --noEmit\napps/bevy/mouse-input typecheck: Done\napps/bevy/orthographic typecheck$ tsc --noEmit\napps/bevy/keyboard-input typecheck: Done\napps/bevy/parallax-mapping typecheck$ tsc --noEmit\napps/bevy/lines typecheck: Done\napps/bevy/parenting typecheck$ tsc --noEmit\napps/bevy/logs typecheck: Done\napps/bevy/pbr typecheck$ tsc --noEmit\napps/bevy/lighting typecheck: Done\napps/bevy/physics-fixed-loop typecheck$ tsc --noEmit\napps/bevy/load-gltf typecheck: Done\napps/bevy/play-sound-effect typecheck$ tsc --noEmit\napps/bevy/mesh-picking typecheck: Done\napps/bevy/plugin typecheck$ tsc --noEmit\napps/bevy/orthographic typecheck: Done\napps/bevy/plugin-group typecheck$ tsc --noEmit\napps/bevy/mesh2d-alpha-mode typecheck: Done\napps/bevy/random-sampling typecheck$ tsc --noEmit\napps/bevy/mesh2d typecheck: Done\napps/bevy/rotate-environment-map typecheck$ tsc --noEmit\napps/bevy/parallax-mapping typecheck: Done\napps/bevy/rotate-to-cursor typecheck$ tsc --noEmit\napps/bevy/mesh2d-arcs typecheck: Done\napps/bevy/run-conditions typecheck$ tsc --noEmit\napps/bevy/pbr typecheck: Done\napps/bevy/scale typecheck$ tsc --noEmit\napps/bevy/parenting typecheck: Done\napps/bevy/physics-fixed-loop typecheck: Done\napps/bevy/shader-defs typecheck$ tsc --noEmit\napps/bevy/screenshot typecheck$ tsc --noEmit\napps/bevy/move-sprite typecheck: Done\napps/bevy/shader-material typecheck$ tsc --noEmit\napps/bevy/plugin typecheck: Done\napps/bevy/shader-material-2d typecheck$ tsc --noEmit\napps/bevy/play-sound-effect typecheck: Done\napps/bevy/shadow-biases typecheck$ tsc --noEmit\napps/bevy/plugin-group typecheck: Done\napps/bevy/shadow-caster-receiver typecheck$ tsc --noEmit\napps/bevy/random-sampling typecheck: Done\napps/bevy/skybox typecheck$ tsc --noEmit\napps/bevy/rotate-environment-map typecheck: Done\napps/bevy/smooth-follow typecheck$ tsc --noEmit\napps/bevy/rotate-to-cursor typecheck: Done\napps/bevy/soundtrack typecheck$ tsc --noEmit\napps/bevy/run-conditions typecheck: Done\napps/bevy/spatial-audio-2d typecheck$ tsc --noEmit\napps/bevy/scale typecheck: Done\napps/bevy/spatial-audio-3d typecheck$ tsc --noEmit\napps/bevy/screenshot typecheck: Done\napps/bevy/specular-tint typecheck$ tsc --noEmit\napps/bevy/shader-defs typecheck: Done\napps/bevy/spotlight typecheck$ tsc --noEmit\napps/bevy/shader-material typecheck: Done\napps/bevy/sprite typecheck$ tsc --noEmit\napps/bevy/shader-material-2d typecheck: Done\napps/bevy/sprite-animation typecheck$ tsc --noEmit\napps/bevy/shadow-caster-receiver typecheck: Done\napps/bevy/sprite-flipping typecheck$ tsc --noEmit\napps/bevy/shadow-biases typecheck: Done\napps/bevy/sprite-sheet typecheck$ tsc --noEmit\napps/bevy/skybox typecheck: Done\napps/bevy/sprite-slice typecheck$ tsc --noEmit\napps/bevy/smooth-follow typecheck: Done\napps/bevy/ssao typecheck$ tsc --noEmit\napps/bevy/spatial-audio-2d typecheck: Done\napps/bevy/states typecheck$ tsc --noEmit\napps/bevy/soundtrack typecheck: Done\napps/bevy/system-closure typecheck$ tsc --noEmit\napps/bevy/specular-tint typecheck: Done\napps/bevy/system-param typecheck$ tsc --noEmit\napps/bevy/spatial-audio-3d typecheck: Done\napps/bevy/text2d typecheck$ tsc --noEmit\napps/bevy/sprite typecheck: Done\napps/bevy/texture typecheck$ tsc --noEmit\napps/bevy/spotlight typecheck: Done\napps/bevy/texture-atlas typecheck$ tsc --noEmit\napps/bevy/sprite-flipping typecheck: Done\napps/bevy/time-elapsed typecheck$ tsc --noEmit\napps/bevy/sprite-slice typecheck: Done\napps/bevy/timers typecheck$ tsc --noEmit\napps/bevy/states typecheck: Done\napps/bevy/tonemapping typecheck$ tsc --noEmit\napps/bevy/sprite-animation typecheck: Done\napps/bevy/touch-input typecheck$ tsc --noEmit\napps/bevy/sprite-sheet typecheck: Done\napps/bevy/transform typecheck$ tsc --noEmit\napps/bevy/system-closure typecheck: Done\napps/bevy/translation typecheck$ tsc --noEmit\napps/bevy/touch-input typecheck: Done\napps/bevy/transparency-2d typecheck$ tsc --noEmit\napps/bevy/system-param typecheck: Done\napps/bevy/transparency-3d typecheck$ tsc --noEmit\napps/bevy/texture typecheck: Done\napps/bevy/update-gltf-scene typecheck$ tsc --noEmit\napps/bevy/texture-atlas typecheck: Done\napps/bevy/viewport-to-world typecheck$ tsc --noEmit\napps/bevy/text2d typecheck: Done\napps/bevy/window-resizing typecheck$ tsc --noEmit\napps/bevy/time-elapsed typecheck: Done\napps/collectathon typecheck$ tsc --noEmit\napps/bevy/timers typecheck: Done\napps/hello-multi-uv typecheck$ tsc --noEmit\napps/bevy/ssao typecheck: Done\napps/hello/2d-flashlight typecheck$ tsc --noEmit\napps/bevy/tonemapping typecheck: Done\napps/hello/animation-graph typecheck$ tsc --noEmit\napps/bevy/transform typecheck: Done\napps/hello/app typecheck$ tsc --noEmit\napps/bevy/translation typecheck: Done\napps/hello/asi-world typecheck$ tsc --noEmit\napps/bevy/transparency-3d typecheck: Done\napps/hello/audio typecheck$ tsc --noEmit\napps/bevy/viewport-to-world typecheck: Done\napps/hello/bloom typecheck$ tsc --noEmit\napps/bevy/window-resizing typecheck: Done\napps/hello/boss-lightning typecheck$ tsc --noEmit\napps/bevy/update-gltf-scene typecheck: Done\napps/hello/character typecheck$ tsc --noEmit\napps/hello/2d-flashlight typecheck: Done\napps/hello/compressed-texture typecheck$ tsc --noEmit\napps/hello-multi-uv typecheck: Done\napps/hello/cube typecheck$ tsc --noEmit\napps/bevy/transparency-2d typecheck: Done\napps/hello/culling typecheck$ tsc --noEmit\napps/hello/animation-graph typecheck: Done\napps/hello/custom-importer typecheck$ tsc --noEmit\napps/hello/bloom typecheck: Done\napps/hello/custom-shader typecheck$ tsc --noEmit\napps/collectathon typecheck: Done\napps/hello/debug-draw typecheck$ tsc --noEmit\napps/hello/audio typecheck: Done\napps/hello/entity-visibility typecheck$ tsc --noEmit\napps/hello/asi-world typecheck: Done\napps/hello/fbx-cube typecheck$ tsc --noEmit\napps/hello/character typecheck: Done\napps/hello/fbx-skin typecheck$ tsc --noEmit\napps/hello/app typecheck: Done\napps/hello/format-tier1 typecheck$ tsc --noEmit\napps/hello/compressed-texture typecheck: Done\napps/hello/fxaa typecheck$ tsc --noEmit\napps/hello/boss-lightning typecheck: Done\napps/hello/gltf typecheck$ tsc --noEmit\napps/hello/cube typecheck: Done\napps/hello/gltf-instancing typecheck$ tsc --noEmit\napps/hello/debug-draw typecheck: Done\napps/hello/hdrp-lighting typecheck$ tsc --noEmit\napps/hello/entity-visibility typecheck: Done\napps/hello/level-switch typecheck$ tsc --noEmit\napps/hello/culling typecheck: Done\napps/hello/m1-composition typecheck$ tsc --noEmit\napps/hello/custom-importer typecheck: Done\napps/hello/m3-programmable-rendering typecheck$ tsc --noEmit\napps/hello/fxaa typecheck: Done\napps/hello/m8-integrated-capstone typecheck$ tsc --noEmit\napps/hello/fbx-cube typecheck: Done\napps/hello/multi-material typecheck$ tsc --noEmit\napps/hello/fbx-skin typecheck: Done\napps/hello/multi-world typecheck$ tsc --noEmit\napps/hello/format-tier1 typecheck: Done\napps/hello/multithreaded-execution typecheck$ tsc --noEmit\napps/hello/custom-shader typecheck: Done\napps/hello/physics typecheck$ tsc --noEmit\napps/hello/hdrp-lighting typecheck: Done\napps/hello/picking typecheck$ tsc --noEmit\napps/hello/gltf typecheck: Done\napps/hello/room typecheck$ tsc --noEmit\napps/hello/gltf-instancing typecheck: Done\napps/hello/scene-nesting typecheck$ tsc --noEmit\napps/hello/level-switch typecheck: Done\napps/hello/shadow-opt-out typecheck$ tsc --noEmit\napps/hello/m1-composition typecheck: Done\napps/hello/skin typecheck$ tsc --noEmit\napps/hello/m3-programmable-rendering typecheck: Done\napps/hello/sprite typecheck$ tsc --noEmit\napps/hello/multi-world typecheck: Done\napps/hello/sprite-atlas typecheck$ tsc --noEmit\napps/hello/multi-material typecheck: Done\napps/hello/sprite-lit typecheck$ tsc --noEmit\napps/hello/physics typecheck: Done\napps/hello/text typecheck$ tsc --noEmit\napps/hello/multithreaded-execution typecheck: Done\napps/hello/tilemap typecheck$ tsc --noEmit\napps/hello/scene-nesting typecheck: Done\napps/hello/tilemap-object-layer typecheck$ tsc --noEmit\napps/hello/m8-integrated-capstone typecheck: Done\napps/hello/room typecheck: Done\napps/hello/topology typecheck$ tsc --noEmit\napps/hello/tonemap typecheck$ tsc --noEmit\napps/hello/sprite typecheck: Done\napps/hello/transform-hierarchy typecheck$ tsc --noEmit\napps/hello/sprite-lit typecheck: Done\napps/hello/triangle typecheck$ tsc --noEmit\napps/hello/sprite-atlas typecheck: Done\napps/hello/video-cutscene typecheck$ tsc --noEmit\napps/hello/skin typecheck: Done\napps/hello/video-texture typecheck$ tsc --noEmit\napps/hello/text typecheck: Done\n.../1.getting-started/1.hello-window typecheck$ tsc --noEmit\napps/hello/picking typecheck: Done\n.../1.getting-started/2.hello-triangle typecheck$ tsc --noEmit\napps/hello/shadow-opt-out typecheck: Done\n.../1.getting-started/3.shaders typecheck$ tsc --noEmit\napps/hello/tonemap typecheck: Done\n.../1.getting-started/4.textures typecheck$ tsc --noEmit\napps/hello/topology typecheck: Done\n.../1.getting-started/5.transformations typecheck$ tsc --noEmit\napps/hello/transform-hierarchy typecheck: Done\n.../6.coordinate-systems typecheck$ tsc --noEmit\napps/hello/triangle typecheck: Done\n.../1.getting-started/7.camera typecheck$ tsc --noEmit\napps/hello/video-cutscene typecheck: Done\napps/learn-render/2.lighting/1.colors typecheck$ tsc --noEmit\napps/hello/tilemap typecheck: Done\n.../2.lighting/2.basic-lighting typecheck$ tsc --noEmit\napps/hello/video-texture typecheck: Done\napps/learn-render/2.lighting/3.materials typecheck$ tsc --noEmit\napps/hello/tilemap-object-layer typecheck: Done\n.../2.lighting/4.lighting-maps typecheck$ tsc --noEmit\n.../1.getting-started/1.hello-window typecheck: Done\n.../2.lighting/5.light-casters typecheck$ tsc --noEmit\n.../1.getting-started/2.hello-triangle typecheck: Done\n.../2.lighting/6.multiple-lights typecheck$ tsc --noEmit\n.../1.getting-started/3.shaders typecheck: Done\n.../3.model-loading/1.model-loading typecheck$ tsc --noEmit\n.../1.getting-started/5.transformations typecheck: Done\n.../4.advanced-opengl/1.depth-testing typecheck$ tsc --noEmit\n.../6.coordinate-systems typecheck: Done\n.../10.anti-aliasing-msaa typecheck$ tsc --noEmit\n.../1.getting-started/7.camera typecheck: Done\n.../4.advanced-opengl/2.stencil-testing typecheck$ tsc --noEmit\n.../1.getting-started/4.textures typecheck: Done\n.../4.advanced-opengl/3.blending typecheck$ tsc --noEmit\napps/learn-render/2.lighting/3.materials typecheck: Done\n.../4.advanced-opengl/4.face-culling typecheck$ tsc --noEmit\napps/learn-render/2.lighting/1.colors typecheck: Done\n.../4.advanced-opengl/5.framebuffers typecheck$ tsc --noEmit\n.../2.lighting/2.basic-lighting typecheck: Done\n.../4.advanced-opengl/6.cubemaps typecheck$ tsc --noEmit\n.../2.lighting/4.lighting-maps typecheck: Done\n.../7.advanced-glsl-ubo typecheck$ tsc --noEmit\n.../2.lighting/5.light-casters typecheck: Done\n.../4.advanced-opengl/9.instancing typecheck$ tsc --noEmit\n.../3.model-loading/1.model-loading typecheck: Done\n.../1.advanced-lighting typecheck$ tsc --noEmit\n.../2.lighting/6.multiple-lights typecheck: Done\n.../2.gamma-correction typecheck$ tsc --noEmit\n.../4.advanced-opengl/1.depth-testing typecheck: Done\n.../3.1.shadow-mapping/3.full typecheck$ tsc --noEmit\n.../10.anti-aliasing-msaa typecheck: Done\n.../3.2.point-shadows typecheck$ tsc --noEmit\n.../4.advanced-opengl/2.stencil-testing typecheck: Done\n.../5.advanced-lighting/3.3.csm typecheck$ tsc --noEmit\n.../4.advanced-opengl/3.blending typecheck: Done\n.../5.advanced-lighting/4.normal-mapping typecheck$ tsc --noEmit\n.../4.advanced-opengl/4.face-culling typecheck: Done\n.../5.parallax-mapping typecheck$ tsc --noEmit\n.../4.advanced-opengl/5.framebuffers typecheck: Done\n.../5.advanced-lighting/6.hdr typecheck$ tsc --noEmit\n.../4.advanced-opengl/6.cubemaps typecheck: Done\n.../5.advanced-lighting/7.bloom typecheck$ tsc --noEmit\n.../7.advanced-glsl-ubo typecheck: Done\n.../8.deferred-shading typecheck$ tsc --noEmit\n.../4.advanced-opengl/9.instancing typecheck: Done\n.../5.advanced-lighting/9.ssao typecheck$ tsc --noEmit\n.../2.gamma-correction typecheck: Done\napps/learn-render/6.pbr/2.ibl-irradiance typecheck$ tsc --noEmit\n.../1.advanced-lighting typecheck: Done\napps/learn-render/6.pbr/3.ibl-specular typecheck$ tsc --noEmit\n.../3.1.shadow-mapping/3.full typecheck: Done\napps/multiplayer-snake typecheck$ tsc --noEmit\n.../3.2.point-shadows typecheck: Done\napps/parity/color-lighting typecheck$ tsc --noEmit\n.../5.advanced-lighting/4.normal-mapping typecheck: Done\napps/parity/forgeax typecheck$ tsc --noEmit\n.../5.advanced-lighting/3.3.csm typecheck: Done\napps/parity/instancing-static typecheck$ tsc --noEmit\n.../5.advanced-lighting/6.hdr typecheck: Done\napps/parity/urp-vs-hdrp typecheck$ tsc --noEmit\n.../8.deferred-shading typecheck: Done\napps/perf/10k-cubes-lights typecheck$ tsc --noEmit\n.../5.advanced-lighting/7.bloom typecheck: Done\napps/preview typecheck$ tsc --noEmit\n.../5.parallax-mapping typecheck: Done\napps/remote-demo typecheck$ tsc --noEmit\n.../5.advanced-lighting/9.ssao typecheck: Done\napps/rhi-debug-viewer typecheck$ tsc --noEmit\napps/parity/instancing-static typecheck: Done\napps/shadertoy/fractal-pyramid typecheck$ tsc --noEmit\napps/parity/forgeax typecheck: Done\napps/shadertoy/happy-blob typecheck$ tsc --noEmit\napps/parity/urp-vs-hdrp typecheck: Done\napps/tetris typecheck$ tsc --noEmit\napps/learn-render/6.pbr/2.ibl-irradiance typecheck: Done\napps/multiplayer-snake typecheck: Done\napps/learn-render/6.pbr/3.ibl-specular typecheck: Done\napps/shadertoy/fractal-pyramid typecheck: Done\napps/perf/10k-cubes-lights typecheck: Done\napps/parity/color-lighting typecheck: Done\napps/shadertoy/happy-blob typecheck: Done\napps/tetris typecheck: Done\napps/remote-demo typecheck: Done\napps/preview typecheck: Done\napps/rhi-debug-viewer typecheck: Done",
+      "stderr": "$ node node_modules/typescript/bin/tsc -b && node node_modules/typescript/bin/tsc -p scripts/tsconfig.json && node scripts/typecheck-apps.mjs\n[typecheck] 64GB / 12 cpu (host) -> --workspace-concurrency=11"
+    },
+    {
+      "id": "layout",
+      "command": "pnpm test:layout",
+      "result": "pass",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "durationMs": 468,
+      "stdout": "test layout: 1687 test-like files valid (1682 under __tests__, 5 under bench)",
+      "stderr": "$ node scripts/check-test-layout.mjs"
+    }
+  ],
+  "morphEvidence": {
+    "sourceCodeSha": "f36c48e59618cef2d679b91737de337cdcb8b718",
+    "readback": "pass",
+    "falsifiers": {
+      "zeroWeights": "pass",
+      "cullReentry": "pass",
+      "staleWeights": "pass"
+    },
+    "stale": false
+  },
+  "supportMatrix": {
+    "result": "supported",
+    "sourceCodeSha": "f36c48e59618cef2d679b91737de337cdcb8b718",
+    "failures": []
+  },
+  "visual": {
+    "id": "browser-visual",
+    "result": "pass",
+    "target": {
+      "id": "format-tier1-dogfood",
+      "url": "http://127.0.0.1:5173/"
+    },
+    "sourceCodeSha": "f36c48e59618cef2d679b91737de337cdcb8b718",
+    "browser": {
+      "engine": "chromium",
+      "webgpu": "captured-for-current-code-revision",
+      "console": {
+        "errors": [],
+        "warnings": []
+      }
+    },
+    "expectations": [
+      {
+        "id": "meshopt-gpu-output",
+        "screenshot": ".forgeax-harness/forgeax-loop/feat-20260812-format-classification-tier1/evidence/format-tier1-meshopt-gpu-output.png",
+        "observed": "The live Chromium dogfood page shows the real EXT_meshopt fixture reaching the standard MeshFilter/MeshRenderer consumer; the current screenshot was captured and read.",
+        "verdict": "pass",
+        "confidence": "high"
+      },
+      {
+        "id": "ktx2-basis-matrix-output",
+        "screenshot": ".forgeax-harness/forgeax-loop/feat-20260812-format-classification-tier1/evidence/format-tier1-ktx2-basis-matrix-output.png",
+        "observed": "The current Chromium matrix screenshot presents ETC1S, UASTC LDR, UASTC HDR, and raw Basis results backed by the 20-cell Dawn sampling witness.",
+        "verdict": "pass",
+        "confidence": "high"
+      },
+      {
+        "id": "morph-static-animation-output",
+        "screenshot": ".forgeax-harness/forgeax-loop/feat-20260812-format-classification-tier1/evidence/format-tier1-morph-static-animation-output.png",
+        "observed": "The live Chromium canvas visibly renders the imported Morph fixture. The feature is active for static, animated, and zero-weight states; compositor readPixels remains explicitly diagnostic-only and the read screenshot is the visual authority.",
+        "verdict": "pass",
+        "confidence": "high"
+      },
+      {
+        "id": "morph-zero-weight-output",
+        "screenshot": ".forgeax-harness/forgeax-loop/feat-20260812-format-classification-tier1/evidence/format-tier1-morph-zero-weight-output.png",
+        "observed": "The live Chromium canvas visibly renders the imported Morph fixture. The feature is active for static, animated, and zero-weight states; compositor readPixels remains explicitly diagnostic-only and the read screenshot is the visual authority.",
+        "verdict": "pass",
+        "confidence": "high"
+      }
+    ],
+    "observed": "The current live Chromium target was captured and read after the Meshopt, KTX2/Basis, and Morph GPU witnesses passed on the same source revision.",
+    "verdict": "pass",
+    "confidence": "high",
+    "error": null
+  },
+  "witnesses": {
+    "result": "pass",
+    "failures": [],
+    "meshopt": {
+      "schemaVersion": "format-tier1-meshopt-gpu/1",
+      "featureId": "feat-20260812-format-classification-tier1",
+      "generatedAt": "2026-08-14T10:26:15.418Z",
+      "sourceCodeSha": "f36c48e59618cef2d679b91737de337cdcb8b718",
+      "fixture": {
+        "path": "apps/hello/format-tier1/fixtures/meshopt-triangle.gltf",
+        "sha256": "66a62c6baddfcbb6042a53266335823334094a190d6e6484a8ed4b8a46bddae0"
+      },
+      "reference": {
+        "path": "apps/hello/format-tier1/fixtures/meshopt-triangle-reference.json",
+        "sha256": "914646407d97c2fcd3ea3a577c821480e0126553222bf7da67bf0ce91ac5d3b8"
+      },
+      "status": "pass",
+      "consumer": "Dawn reference buffer upload and MAP_READ readback",
+      "decoded": {
+        "topology": "triangle-list",
+        "attributes": [
+          "position",
+          "normal",
+          "uv",
+          "tangent"
+        ],
+        "vertexCount": 3,
+        "indexCount": 3,
+        "attributeReadback": {
+          "position": {
+            "status": "pass",
+            "maxAbsError": 0,
+            "threshold": 0.000001,
+            "actualLength": 9,
+            "referenceLength": 9
+          },
+          "normal": {
+            "status": "pass",
+            "maxAbsError": 0,
+            "threshold": 0.000001,
+            "actualLength": 9,
+            "referenceLength": 9
+          },
+          "uv": {
+            "status": "pass",
+            "maxAbsError": 0,
+            "threshold": 0.000001,
+            "actualLength": 6,
+            "referenceLength": 6
+          },
+          "tangent": {
+            "status": "pass",
+            "maxAbsError": 0,
+            "threshold": 0.000001,
+            "actualLength": 12,
+            "referenceLength": 12
+          }
+        },
+        "indexReadback": {
+          "status": "pass",
+          "maxAbsError": 0,
+          "threshold": 0.000001,
+          "actualLength": 3,
+          "referenceLength": 3
+        }
+      },
+      "malformed": {
+        "status": "refused",
+        "error": {
+          "code": "gltf-meshopt-decode-failed",
+          "expected": "damaged EXT_meshopt_compression input is rejected",
+          "hint": "repair the compressed artifact or inspect the decoder detail",
+          "detail": "{\"bufferView\":4,\"actual\":\"compressed range out of bounds\",\"mode\":\"TRIANGLES\",\"filter\":\"NONE\"}"
+        }
+      }
+    },
+    "ktx2": {
+      "schemaVersion": "format-tier1-ktx2-gpu/1",
+      "featureId": "feat-20260812-format-classification-tier1",
+      "generatedAt": "2026-08-14T10:26:23.694Z",
+      "sourceCodeSha": "f36c48e59618cef2d679b91737de337cdcb8b718",
+      "status": "complete",
+      "rows": [
+        {
+          "source": "ktx2-etc1s",
+          "guid": "40000000-0000-4000-8000-000000000001",
+          "arm": "rgba",
+          "selected": "rgba8unorm-srgb",
+          "selection": "fallback",
+          "colorSpace": "srgb",
+          "status": "pass",
+          "readbackBytes": 64,
+          "normalized": {
+            "status": "pass",
+            "maxAbsError": 0.00784313725490196,
+            "threshold": 0.05,
+            "verdict": "pass"
+          },
+          "reference": {
+            "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+            "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+            "byteLength": 64
+          }
+        },
+        {
+          "source": "ktx2-etc1s",
+          "guid": "40000000-0000-4000-8000-000000000002",
+          "arm": "astc",
+          "selected": "astc-4x4-unorm-srgb",
+          "selection": "selected",
+          "colorSpace": "srgb",
+          "status": "pass",
+          "readbackBytes": 64,
+          "normalized": {
+            "status": "pass",
+            "maxAbsError": 0.00784313725490196,
+            "threshold": 0.05,
+            "verdict": "pass"
+          },
+          "reference": {
+            "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+            "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+            "byteLength": 64
+          }
+        },
+        {
+          "source": "ktx2-etc1s",
+          "guid": "40000000-0000-4000-8000-000000000003",
+          "arm": "bc",
+          "selected": "bc7-rgba-unorm-srgb",
+          "selection": "selected",
+          "colorSpace": "srgb",
+          "status": "pass",
+          "readbackBytes": 64,
+          "normalized": {
+            "status": "pass",
+            "maxAbsError": 0.00784313725490196,
+            "threshold": 0.05,
+            "verdict": "pass"
+          },
+          "reference": {
+            "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+            "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+            "byteLength": 64
+          }
+        },
+        {
+          "source": "ktx2-etc1s",
+          "guid": "40000000-0000-4000-8000-000000000004",
+          "arm": "etc",
+          "selected": "etc2-rgba8unorm-srgb",
+          "selection": "selected",
+          "colorSpace": "srgb",
+          "status": "pass",
+          "readbackBytes": 64,
+          "normalized": {
+            "status": "pass",
+            "maxAbsError": 0.00784313725490196,
+            "threshold": 0.05,
+            "verdict": "pass"
+          },
+          "reference": {
+            "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+            "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+            "byteLength": 64
+          }
+        },
+        {
+          "source": "ktx2-etc1s",
+          "guid": "40000000-0000-4000-8000-000000000005",
+          "arm": "all",
+          "selected": "bc7-rgba-unorm-srgb",
+          "selection": "selected",
+          "colorSpace": "srgb",
+          "status": "pass",
+          "readbackBytes": 64,
+          "normalized": {
+            "status": "pass",
+            "maxAbsError": 0.00784313725490196,
+            "threshold": 0.05,
+            "verdict": "pass"
+          },
+          "reference": {
+            "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+            "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+            "byteLength": 64
+          }
+        },
+        {
+          "source": "ktx2-uastc-ldr",
+          "guid": "40000000-0000-4000-8000-000000000006",
+          "arm": "rgba",
+          "selected": "rgba8unorm-srgb",
+          "selection": "fallback",
+          "colorSpace": "srgb",
+          "status": "pass",
+          "readbackBytes": 64,
+          "normalized": {
+            "status": "pass",
+            "maxAbsError": 0,
+            "threshold": 0.05,
+            "verdict": "pass"
+          },
+          "reference": {
+            "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+            "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+            "byteLength": 64
+          }
+        },
+        {
+          "source": "ktx2-uastc-ldr",
+          "guid": "40000000-0000-4000-8000-000000000007",
+          "arm": "astc",
+          "selected": "astc-4x4-unorm-srgb",
+          "selection": "selected",
+          "colorSpace": "srgb",
+          "status": "pass",
+          "readbackBytes": 64,
+          "normalized": {
+            "status": "pass",
+            "maxAbsError": 0,
+            "threshold": 0.05,
+            "verdict": "pass"
+          },
+          "reference": {
+            "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+            "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+            "byteLength": 64
+          }
+        },
+        {
+          "source": "ktx2-uastc-ldr",
+          "guid": "40000000-0000-4000-8000-000000000008",
+          "arm": "bc",
+          "selected": "bc7-rgba-unorm-srgb",
+          "selection": "selected",
+          "colorSpace": "srgb",
+          "status": "pass",
+          "readbackBytes": 64,
+          "normalized": {
+            "status": "pass",
+            "maxAbsError": 0,
+            "threshold": 0.05,
+            "verdict": "pass"
+          },
+          "reference": {
+            "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+            "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+            "byteLength": 64
+          }
+        },
+        {
+          "source": "ktx2-uastc-ldr",
+          "guid": "40000000-0000-4000-8000-000000000009",
+          "arm": "etc",
+          "selected": "etc2-rgba8unorm-srgb",
+          "selection": "selected",
+          "colorSpace": "srgb",
+          "status": "pass",
+          "readbackBytes": 64,
+          "normalized": {
+            "status": "pass",
+            "maxAbsError": 0.00784313725490196,
+            "threshold": 0.05,
+            "verdict": "pass"
+          },
+          "reference": {
+            "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+            "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+            "byteLength": 64
+          }
+        },
+        {
+          "source": "ktx2-uastc-ldr",
+          "guid": "40000000-0000-4000-8000-000000000010",
+          "arm": "all",
+          "selected": "bc7-rgba-unorm-srgb",
+          "selection": "selected",
+          "colorSpace": "srgb",
+          "status": "pass",
+          "readbackBytes": 64,
+          "normalized": {
+            "status": "pass",
+            "maxAbsError": 0,
+            "threshold": 0.05,
+            "verdict": "pass"
+          },
+          "reference": {
+            "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+            "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+            "byteLength": 64
+          }
+        },
+        {
+          "source": "ktx2-uastc-hdr",
+          "guid": "40000000-0000-4000-8000-000000000011",
+          "arm": "rgba",
+          "selected": "rgba16float",
+          "selection": "fallback",
+          "colorSpace": "linear",
+          "status": "pass",
+          "readbackBytes": 128,
+          "normalized": {
+            "status": "pass",
+            "maxAbsError": 0,
+            "threshold": 0.05,
+            "verdict": "pass"
+          },
+          "reference": {
+            "source": "format-tier1-authored-4x4-rgba16-pattern-v1",
+            "sha256": "3e1b24d558ee3363f60d8d3857a0b61bd74a77093dc68af71fb72ab860ce28fd",
+            "byteLength": 128
+          }
+        },
+        {
+          "source": "ktx2-uastc-hdr",
+          "guid": "40000000-0000-4000-8000-000000000012",
+          "arm": "astc",
+          "selected": "rgba16float",
+          "selection": "fallback",
+          "colorSpace": "linear",
+          "status": "pass",
+          "readbackBytes": 128,
+          "normalized": {
+            "status": "pass",
+            "maxAbsError": 0,
+            "threshold": 0.05,
+            "verdict": "pass"
+          },
+          "reference": {
+            "source": "format-tier1-authored-4x4-rgba16-pattern-v1",
+            "sha256": "3e1b24d558ee3363f60d8d3857a0b61bd74a77093dc68af71fb72ab860ce28fd",
+            "byteLength": 128
+          }
+        },
+        {
+          "source": "ktx2-uastc-hdr",
+          "guid": "40000000-0000-4000-8000-000000000013",
+          "arm": "bc",
+          "selected": "bc6h-rgb-ufloat",
+          "selection": "selected",
+          "colorSpace": "linear",
+          "status": "pass",
+          "readbackBytes": 128,
+          "normalized": {
+            "status": "pass",
+            "maxAbsError": 0,
+            "threshold": 0.05,
+            "verdict": "pass"
+          },
+          "reference": {
+            "source": "format-tier1-authored-4x4-rgba16-pattern-v1",
+            "sha256": "3e1b24d558ee3363f60d8d3857a0b61bd74a77093dc68af71fb72ab860ce28fd",
+            "byteLength": 128
+          }
+        },
+        {
+          "source": "ktx2-uastc-hdr",
+          "guid": "40000000-0000-4000-8000-000000000014",
+          "arm": "etc",
+          "selected": "rgba16float",
+          "selection": "fallback",
+          "colorSpace": "linear",
+          "status": "pass",
+          "readbackBytes": 128,
+          "normalized": {
+            "status": "pass",
+            "maxAbsError": 0,
+            "threshold": 0.05,
+            "verdict": "pass"
+          },
+          "reference": {
+            "source": "format-tier1-authored-4x4-rgba16-pattern-v1",
+            "sha256": "3e1b24d558ee3363f60d8d3857a0b61bd74a77093dc68af71fb72ab860ce28fd",
+            "byteLength": 128
+          }
+        },
+        {
+          "source": "ktx2-uastc-hdr",
+          "guid": "40000000-0000-4000-8000-000000000015",
+          "arm": "all",
+          "selected": "bc6h-rgb-ufloat",
+          "selection": "selected",
+          "colorSpace": "linear",
+          "status": "pass",
+          "readbackBytes": 128,
+          "normalized": {
+            "status": "pass",
+            "maxAbsError": 0,
+            "threshold": 0.05,
+            "verdict": "pass"
+          },
+          "reference": {
+            "source": "format-tier1-authored-4x4-rgba16-pattern-v1",
+            "sha256": "3e1b24d558ee3363f60d8d3857a0b61bd74a77093dc68af71fb72ab860ce28fd",
+            "byteLength": 128
+          }
+        },
+        {
+          "source": "basis-uastc-ldr",
+          "guid": "40000000-0000-4000-8000-000000000016",
+          "arm": "rgba",
+          "selected": "rgba8unorm-srgb",
+          "selection": "fallback",
+          "colorSpace": "srgb",
+          "status": "pass",
+          "readbackBytes": 64,
+          "normalized": {
+            "status": "pass",
+            "maxAbsError": 0,
+            "threshold": 0.05,
+            "verdict": "pass"
+          },
+          "reference": {
+            "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+            "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+            "byteLength": 64
+          }
+        },
+        {
+          "source": "basis-uastc-ldr",
+          "guid": "40000000-0000-4000-8000-000000000017",
+          "arm": "astc",
+          "selected": "astc-4x4-unorm-srgb",
+          "selection": "selected",
+          "colorSpace": "srgb",
+          "status": "pass",
+          "readbackBytes": 64,
+          "normalized": {
+            "status": "pass",
+            "maxAbsError": 0,
+            "threshold": 0.05,
+            "verdict": "pass"
+          },
+          "reference": {
+            "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+            "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+            "byteLength": 64
+          }
+        },
+        {
+          "source": "basis-uastc-ldr",
+          "guid": "40000000-0000-4000-8000-000000000018",
+          "arm": "bc",
+          "selected": "bc7-rgba-unorm-srgb",
+          "selection": "selected",
+          "colorSpace": "srgb",
+          "status": "pass",
+          "readbackBytes": 64,
+          "normalized": {
+            "status": "pass",
+            "maxAbsError": 0,
+            "threshold": 0.05,
+            "verdict": "pass"
+          },
+          "reference": {
+            "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+            "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+            "byteLength": 64
+          }
+        },
+        {
+          "source": "basis-uastc-ldr",
+          "guid": "40000000-0000-4000-8000-000000000019",
+          "arm": "etc",
+          "selected": "etc2-rgba8unorm-srgb",
+          "selection": "selected",
+          "colorSpace": "srgb",
+          "status": "pass",
+          "readbackBytes": 64,
+          "normalized": {
+            "status": "pass",
+            "maxAbsError": 0.00784313725490196,
+            "threshold": 0.05,
+            "verdict": "pass"
+          },
+          "reference": {
+            "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+            "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+            "byteLength": 64
+          }
+        },
+        {
+          "source": "basis-uastc-ldr",
+          "guid": "40000000-0000-4000-8000-000000000020",
+          "arm": "all",
+          "selected": "bc7-rgba-unorm-srgb",
+          "selection": "selected",
+          "colorSpace": "srgb",
+          "status": "pass",
+          "readbackBytes": 64,
+          "normalized": {
+            "status": "pass",
+            "maxAbsError": 0,
+            "threshold": 0.05,
+            "verdict": "pass"
+          },
+          "reference": {
+            "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+            "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+            "byteLength": 64
+          }
+        }
+      ]
+    }
+  },
+  "observed": "All executable importer, runtime, recovery, type, layout, Dawn, and feature-owned browser visual gates were run from the current feature worktree. Meshopt includes Pack/Catalog/loadByGuid and a Dawn/reference readback witness, KTX2/Basis includes raw Basis runtime loading, 20 GPU cells, normalized comparisons, and malformed KTX2 refusal, imported Morph includes glTF Pack/Catalog/loadByGuid and a static/no-animation FBX importer boundary, and unsupported GPU or browser-consumer cells remain fail-closed.",
+  "verdict": "supported",
+  "confidence": "high",
+  "falsifiers": {
+    "staleSourceCodeSha": false,
+    "browserVisualMissing": false,
+    "browserVisualExpectationBlocked": false,
+    "commandFailure": false,
+    "supportMatrixFailure": false,
+    "gpuWitnessFailure": false,
+    "morphProducerNotSupported": false
+  }
+}

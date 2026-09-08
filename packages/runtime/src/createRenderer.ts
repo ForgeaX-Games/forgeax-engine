@@ -1,58 +1,49 @@
 // Runtime is the host assembly facade. Concrete Renderer construction and
-// frame interpretation live in @forgeax/engine-render/internal.
-import type { BundlerOptions, Renderer, RendererOptions } from '@forgeax/engine-render/internal';
-import { constructRenderer } from '@forgeax/engine-render/internal/construct-renderer';
+// frame interpretation live in the render owner assembly.
+import type { RenderError, Renderer, RendererOptions } from '@forgeax/engine-render';
+import type { BundlerOptions } from '@forgeax/engine-render/internal/construct-renderer';
+import { err, ok, type Result } from '@forgeax/engine-types';
 import { EngineEnvironmentError } from './errors/environment';
+import { constructRuntimeRendererHost } from './renderer-host';
 
+/**
+ * Assemble the sole public renderer host.
+ *
+ * Runtime owns backend selection and partial-construction cleanup. Render owns
+ * the scene/frame contract; successful construction returns the host that
+ * exposes attach, draw, inspect, observe, and recover. Expected failures are
+ * structured Result errors at the owning boundary; environment failures retain
+ * EngineEnvironmentError recovery guidance for the caller.
+ */
 export async function createRenderer(
   canvas: HTMLCanvasElement | OffscreenCanvas,
   options?: RendererOptions,
   bundler?: BundlerOptions,
-): Promise<Renderer> {
+): Promise<Result<Renderer, EngineEnvironmentError | RenderError>> {
   if (options !== undefined && 'rhi' in options && options.rhi === undefined) {
-    throw new EngineEnvironmentError('no usable rendering backend');
+    return err(new EngineEnvironmentError('no usable rendering backend'));
   }
   const rendererOptions: RendererOptions | undefined =
     options === undefined
       ? undefined
       : {
           ...(options.rhi === undefined ? {} : { rhi: options.rhi }),
-          ...(options.rawDeviceForContextConfigure === undefined
-            ? {}
-            : { rawDeviceForContextConfigure: options.rawDeviceForContextConfigure }),
           ...(options.features === undefined ? {} : { features: options.features }),
           ...(options.profiler === undefined ? {} : { profiler: options.profiler }),
-          ...(options.membershipTiming === undefined
+          ...(options.rhiInstrumentation === undefined
             ? {}
-            : { membershipTiming: options.membershipTiming }),
+            : { rhiInstrumentation: options.rhiInstrumentation }),
+          ...(options.standardProfile === undefined
+            ? {}
+            : { standardProfile: options.standardProfile }),
         };
   try {
-    return await constructRenderer(canvas, rendererOptions, bundler);
+    const constructed = await constructRuntimeRendererHost(canvas, rendererOptions, bundler);
+    if (!constructed.ok) return err(constructed.error);
+    return ok(constructed.value.renderer);
   } catch (cause) {
-    if (isStructuredRenderError(cause)) throw cause;
-    if (cause instanceof EngineEnvironmentError) throw cause;
+    if (cause instanceof EngineEnvironmentError) return err(cause);
     const detail = cause instanceof Error ? cause : new Error(String(cause));
-    throw new EngineEnvironmentError('renderer construction failed', { webgpuError: detail });
+    return err(new EngineEnvironmentError('renderer construction failed', { webgpuError: detail }));
   }
-}
-
-function isStructuredRenderError(value: unknown): value is Error & {
-  readonly code: string;
-  readonly expected: string;
-  readonly hint: string;
-  readonly detail: unknown;
-} {
-  if (!(value instanceof Error)) return false;
-  const candidate = value as Partial<{
-    code: unknown;
-    expected: unknown;
-    hint: unknown;
-    detail: unknown;
-  }>;
-  return (
-    typeof candidate.code === 'string' &&
-    typeof candidate.expected === 'string' &&
-    typeof candidate.hint === 'string' &&
-    candidate.detail !== undefined
-  );
 }

@@ -11,7 +11,7 @@ Sponza is the canonical large-model stress test for a real-time PBR pipeline. Th
 2. **DirectionalLight with castShadow** -- 1 warm-sun directional light casts PCF shadows across the atrium (`mapSize=2048`, `shadowDistance=36`, `depthBias=0.005`).
 3. **4 PointLight cap** -- 4 point lights (warm yellow, cyan, magenta, neutral white) placed in the atrium demonstrate the forgeax 4-point-light rendering cap (charter F4: demo failures route to engine fixes).
 4. **Skylight IBL** -- HDR equirectangular newport_loft.hdr is loaded as an `EquirectAsset` via `loadByGuid<EquirectAsset>` and handed to `Skylight{ equirect }`; the engine projects the irradiance + specular cubemap internally (lazy, in the render record arm) to feed the PBR indirect diffuse + specular terms. No manual cubemap upload call.
-5. **4-step recipe** -- `configurePackIndex` -> `loadByGuid<SceneAsset>` -> `assets.instantiate` -> `app.start()`, identical to hello-gltf (charter P4 consistent abstraction).
+5. **4-step recipe** -- `configureRuntimeAssetCatalog` -> `loadByGuid<SceneAsset>` -> `assets.instantiate` -> `app.start()`, identical to hello-gltf (charter P4 consistent abstraction). The helper selects the scoped Vite catalog in development and the emitted `/pack-index.json` in a production build.
 
 ## Asset provenance
 
@@ -103,7 +103,7 @@ pnpm --filter @forgeax/app-learn-render-3-model-loading-1-model-loading dev
 | `dev` | Browser WebGPU | N/A (interactive) | 4-step recipe end-to-end (thin gltf entry catalog, feat-20260523) |
 
 > [!NOTE]
-> Dev / build / smoke paths all render Sponza end-to-end as of feat-20260523 (ticket-142 done — `build-catalog.ts` gltf arm now folds mesh/material/scene subAssets into thin catalog rows; dev `/__pack/lookup/:guid` and build `pack-index.json` cover all 129 entries). Run `pnpm dev` from the demo directory (or `pnpm --filter @forgeax/app-learn-render-3-model-loading-1-model-loading dev` from the repo root) to spawn the vite server and view the browser-rendered Sponza.
+> Dev / build / smoke paths all render Sponza end-to-end as of feat-20260523 (ticket-142 done — `build-catalog.ts` gltf arm now folds mesh/material/scene subAssets into thin catalog rows; the scoped dev catalog and build `pack-index.json` cover all 129 entries). Run `pnpm dev` from the demo directory (or `pnpm --filter @forgeax/app-learn-render-3-model-loading-1-model-loading dev` from the repo root) to spawn the vite server and view the browser-rendered Sponza.
 
 ## Out of scope (OOS)
 
@@ -136,5 +136,5 @@ See `requirements.md` section 4 (out-of-scope) for the full rationale per item.
 
 1. **P1 (Progressive disclosure)**: This README exposes layers from one-line summary -> scene stats -> light layout -> run commands -> OOS boundary -> charter alignment. Each layer is independently indexable.
 2. **P3 (Explicit failure > silent behavior)**: `parseGltf` errors are closed-union `GltfErrorCode` (9 members as of Tier-C); `renderer.onError` fires structured `{ code, hint, detail }` -- AI user does not parse string messages.
-3. **P4 (Consistent abstraction > exposing implementation)**: The 4-step recipe (`configurePackIndex` -> `loadByGuid` -> `assets.instantiate` -> `app.start()`) is byte-for-byte identical to hello-gltf. The Sponza demo differs only in which `pack-index.json` it points to and how many primitives/materials there are. AI users do not learn a different API surface for "large model" vs "small model."
+3. **P4 (Consistent abstraction > exposing implementation)**: The 4-step recipe (`configureRuntimeAssetCatalog` -> `loadByGuid` -> `assets.instantiate` -> `app.start()`) is byte-for-byte identical to hello-gltf. The helper keeps dev scope routing and the production `pack-index.json` projection behind one call, so AI users do not learn a different API surface for "large model" vs "small model."
 4. **P5 (Tool produce/consume by role)**: Screenshots (if any) are produced by playwright (subagent), consumed by orchestrator (main session reading PNG). No subagent claims "image observed" self-report; all visual evidence flows through orchestrator reads.

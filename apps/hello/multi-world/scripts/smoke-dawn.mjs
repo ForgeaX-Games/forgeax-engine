@@ -151,7 +151,7 @@ const mockCanvas = {
 // ── build worlds (mirror src/main.ts; owner camera carries the clearColor) ────
 const { World } = await import('@forgeax/engine-ecs');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
-const { createRenderer } = await import('@forgeax/engine-runtime');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Materials } = await import('@forgeax/engine-render');
 const { perspective } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
@@ -202,28 +202,27 @@ const manifestUrl = `data:application/json,${encodeURIComponent(readFileSync(man
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: manifestUrl });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: manifestUrl });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = ambientRequestAdapter;
 }
-const worldAttachment1 = renderer.attachWorld(worldA);
+const worldAttachment1 = renderer.attach(worldA);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
-const worldAttachment2 = renderer.attachWorld(worldB);
+const worldAttachment2 = renderer.attach(worldB);
 if (!worldAttachment2.ok) throw worldAttachment2.error;
 
-console.log(`[multi-world] backend=${renderer.backend}`);
+console.log(`[multi-world] backend=${renderer.inspect().capabilities.backendKind}`);
 
 const rhiErrors = [];
-renderer.onError((err) => rhiErrors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') rhiErrors.push({ code: event.error.code, hint: event.error.hint });
+});
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 // ── frame loop: composite both worlds, owner = index 0 ────────────────────────
 const targetFrames = Math.max(MIN_FRAMES, Math.ceil(DURATION_MS / 16.67));
@@ -231,7 +230,11 @@ let frames = 0;
 for (let i = 0; i < targetFrames; i++) {
   worldB.update().unwrap();
   worldA.update().unwrap();
-  const r = renderer.draw([worldA, worldB], { cameraOwner: 0, resourceOwner: 0 });
+  const r = renderer.draw({
+    leases: [worldAttachment1.value, worldAttachment2.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   frames++;
 }
@@ -312,7 +315,7 @@ console.log(`[smoke] probes=${JSON.stringify(probes)}`);
 
 // ── verdict ───────────────────────────────────────────────────────────────────
 const fail = [];
-if (renderer.backend !== 'webgpu') fail.push(`(1) backend=${renderer.backend} (expected webgpu)`);
+if (renderer.inspect().capabilities.backendKind !== 'webgpu') fail.push(`(1) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
 if (frames < MIN_FRAMES) fail.push(`(2) frames=${frames} < ${MIN_FRAMES}`);
 if (rhiErrors.length > 0) fail.push(`(3) Renderer.onError fired ${rhiErrors.length}x: [${rhiErrors.map((e) => e.code).join(', ')}]`);
 if (dist(probeA, clearRgb) <= NON_CLEAR_EPS) {

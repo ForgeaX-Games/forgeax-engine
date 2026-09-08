@@ -2,18 +2,45 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 export const CATALOG_HOSTS = [
+  'apps/bevy/animate-shader/vite.config.ts',
+  'apps/bevy/audio-control/vite.config.ts',
+  'apps/bevy/audio/vite.config.ts',
+  'apps/bevy/clearcoat/vite.config.ts',
+  'apps/bevy/load-gltf/vite.config.ts',
+  'apps/bevy/parallax-mapping/vite.config.ts',
+  'apps/bevy/play-sound-effect/vite.config.ts',
+  'apps/bevy/rotate-environment-map/vite.config.ts',
+  'apps/bevy/shader-defs/vite.config.ts',
+  'apps/bevy/shader-material-2d/vite.config.ts',
+  'apps/bevy/shader-material/vite.config.ts',
   'apps/bevy/skybox/vite.config.ts',
+  'apps/bevy/soundtrack/vite.config.ts',
+  'apps/bevy/spatial-audio-2d/vite.config.ts',
+  'apps/bevy/spatial-audio-3d/vite.config.ts',
+  'apps/bevy/specular-tint/vite.config.ts',
+  'apps/bevy/text2d/vite.config.ts',
+  'apps/bevy/update-gltf-scene/vite.config.ts',
   'apps/collectathon/vite.config.ts',
+  'apps/hello-multi-uv/vite.config.ts',
   'apps/hello/animation-graph/vite.config.ts',
   'apps/hello/audio/vite.config.ts',
+  'apps/hello/boss-lightning/vite.config.ts',
   'apps/hello/compressed-texture/vite.config.ts',
   'apps/hello/custom-importer/vite.config.ts',
+  'apps/hello/custom-shader/vite.config.ts',
   'apps/hello/fbx-cube/vite.config.ts',
   'apps/hello/fbx-skin/vite.config.ts',
+  'apps/hello/format-tier1/vite.config.ts',
   'apps/hello/skin/vite.config.ts',
   'apps/hello/sprite-atlas/vite.config.ts',
   'apps/hello/sprite/vite.config.ts',
   'apps/hello/text/vite.config.ts',
+  'apps/hello/gltf-instancing/vite.config.ts',
+  'apps/hello/gltf/vite.config.ts',
+  'apps/hello/m8-integrated-capstone/vite.config.ts',
+  'apps/hello/room/vite.config.ts',
+  'apps/hello/scene-nesting/vite.config.ts',
+  'apps/hello/shadow-opt-out/vite.config.ts',
   'apps/learn-render/1.getting-started/4.textures/vite.config.ts',
   'apps/learn-render/1.getting-started/5.transformations/vite.config.ts',
   'apps/learn-render/1.getting-started/6.coordinate-systems/vite.config.ts',
@@ -43,6 +70,8 @@ export const CATALOG_HOSTS = [
   'apps/learn-render/6.pbr/2.ibl-irradiance/vite.config.ts',
   'apps/learn-render/6.pbr/3.ibl-specular/vite.config.ts',
   'apps/preview/vite.config.ts',
+  'apps/shadertoy/fractal-pyramid/vite.config.ts',
+  'apps/shadertoy/happy-blob/vite.config.ts',
 ];
 
 function pluginPackCalls(source) {
@@ -88,7 +117,9 @@ export async function checkCatalogHostInventory(root) {
   const errors = [
     ...missingPolicy,
     ...missing.map((host) => `${host}: inventory host disappeared`),
-    ...unexpected.map((host) => `${host}: new pluginPack host is not in the 41-host inventory`),
+    ...unexpected.map(
+      (host) => `${host}: new pluginPack host is not in the ${CATALOG_HOSTS.length}-host inventory`,
+    ),
   ];
   return {
     ok: errors.length === 0,

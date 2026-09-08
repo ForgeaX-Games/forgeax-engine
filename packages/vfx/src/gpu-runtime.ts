@@ -1,13 +1,5 @@
-import {
-  Entity,
-  type EntityHandle,
-  err,
-  FixedTime,
-  FixedUpdate,
-  ok,
-  type World,
-} from '@forgeax/engine-ecs';
-import { type Plugin, PluginError } from '@forgeax/engine-plugin';
+import { Entity, type EntityHandle, FixedTime, FixedUpdate, type World } from '@forgeax/engine-ecs';
+import type { Plugin } from '@forgeax/engine-plugin';
 import { type Handle, toShared } from '@forgeax/engine-types';
 import type { ParticleEventSource } from './code-source.js';
 import type { VfxValueMap } from './effect-contract.js';
@@ -88,6 +80,7 @@ export interface VfxGpuEmitterInspectSnapshot {
   readonly sessionEnabled: boolean;
   readonly phaseTick: number | null;
   readonly tick: number | null;
+  readonly playCycle: number | null;
   readonly spawnCount: number;
   readonly firstParticleId: number;
   readonly reset: boolean;
@@ -103,16 +96,33 @@ export interface VfxGpuEmitterInspectSnapshot {
   readonly dataInterfaces: readonly string[];
 }
 
+export interface VfxGpuCommittedInspectSnapshot {
+  readonly sequence: number;
+  readonly tick: number;
+  readonly phaseTick: number;
+  readonly playCycle: number;
+  readonly spawnCount: number;
+  readonly firstParticleId: number;
+  readonly reset: boolean;
+  readonly instanceGeneration: number;
+  readonly instancePatchCount: number;
+}
+
 export interface VfxGpuPlayerInspectSnapshot {
   readonly player: EntityHandle;
   readonly assetGuid: string;
   readonly programFingerprint: string;
+  readonly seed: number;
+  readonly fixedDelta: number;
   readonly playing: boolean;
   readonly values: {
     readonly layoutFingerprint: string;
     readonly generation: number;
     readonly pendingPatchCount: number;
   };
+  readonly queuedIntents: number;
+  readonly queuedTicks: number;
+  readonly lastCommitted: VfxGpuCommittedInspectSnapshot | null;
   readonly channels: VfxChannelCounters;
   readonly emitters: readonly VfxGpuEmitterInspectSnapshot[];
   readonly diagnostics: readonly VfxGpuRuntimeDiagnostic[];
@@ -236,16 +246,42 @@ export class VfxGpuRuntime {
     const layoutFingerprint =
       state.emitters.find((emitter) => emitter.reflection.layout !== undefined)?.reflection.layout
         ?.fingerprint ?? state.programFingerprint;
+    const lastCommitted = this.#lastCommitted.get(player);
+    const queuedTicks = new Set<number>();
+    let queuedIntents = 0;
+    for (const intent of this.#intents) {
+      if (intent.player !== player) continue;
+      queuedIntents += 1;
+      queuedTicks.add(intent.tick);
+    }
     return Object.freeze({
       player,
       assetGuid: state.assetGuid,
       programFingerprint: state.programFingerprint,
+      seed: lastIntent?.seed ?? state.seed,
+      fixedDelta: lastIntent?.fixedDelta ?? 0,
       playing: state.playing,
       values: Object.freeze({
         layoutFingerprint,
         generation: instance?.generation ?? lastIntent?.instanceGeneration ?? 0,
         pendingPatchCount: instance?.pendingPatchCount ?? 0,
       }),
+      queuedIntents,
+      queuedTicks: queuedTicks.size,
+      lastCommitted:
+        lastCommitted === undefined
+          ? null
+          : Object.freeze({
+              sequence: lastCommitted.sequence,
+              tick: lastCommitted.tick,
+              phaseTick: lastCommitted.phaseTick,
+              playCycle: lastCommitted.playCycle,
+              spawnCount: lastCommitted.spawnCount,
+              firstParticleId: lastCommitted.firstParticleId,
+              reset: lastCommitted.reset,
+              instanceGeneration: lastCommitted.instanceGeneration,
+              instancePatchCount: lastCommitted.instancePatchCount,
+            }),
       channels: this.eventCounters(player),
       emitters: Object.freeze(
         state.emitters.map((emitter, index) => {
@@ -258,6 +294,7 @@ export class VfxGpuRuntime {
             sessionEnabled: this.isEmitterSessionEnabled(player, emitter.id),
             phaseTick: intent?.phaseTick ?? null,
             tick: intent?.tick ?? null,
+            playCycle: intent?.playCycle ?? null,
             spawnCount: intent?.spawnCount ?? 0,
             firstParticleId: intent?.firstParticleId ?? 0,
             reset: intent?.reset ?? false,
@@ -351,6 +388,9 @@ export class VfxGpuRuntime {
 
   /** Restart from tick zero without changing authored `ParticleEffectPlayer.playing`. */
   replay(player: EntityHandle, input?: VfxReplayInput<VfxValueMap>): void {
+    this.#discardQueuedIntents(player);
+    this.#clearDiagnostics(player, 'vfx-intent-queue-overflow');
+    this.#replayInputs.delete(player);
     if (input === undefined) {
       this.#instances.delete(player);
     } else {
@@ -383,6 +423,8 @@ export class VfxGpuRuntime {
   }
 
   reset(player: EntityHandle): void {
+    this.#discardQueuedIntents(player);
+    this.#clearDiagnostics(player);
     this.#players.delete(player);
     this.#instances.delete(player);
     this.#replayRequests.delete(player);
@@ -421,8 +463,10 @@ export class VfxGpuRuntime {
   }
 
   #report(diagnostic: VfxGpuRuntimeDiagnostic): void {
-    const prior = this.#diagnostics.at(-1);
-    if (prior?.code === diagnostic.code && prior.detail.player === diagnostic.detail.player) return;
+    const alreadyActive = this.#diagnostics.some(
+      (prior) => prior.code === diagnostic.code && prior.detail.player === diagnostic.detail.player,
+    );
+    if (alreadyActive) return;
     if (this.#diagnostics.length === 64) this.#diagnostics.shift();
     this.#diagnostics.push(diagnostic);
   }
@@ -437,6 +481,17 @@ export class VfxGpuRuntime {
         this.#diagnostics.splice(index, 1);
       }
     }
+  }
+
+  #discardQueuedIntents(player: EntityHandle): void {
+    let retained = 0;
+    for (const intent of this.#intents) {
+      if (intent.player !== player) {
+        this.#intents[retained] = intent;
+        retained += 1;
+      }
+    }
+    this.#intents.length = retained;
   }
 
   advance(
@@ -710,54 +765,43 @@ export function vfxGpuRuntimePlugin(options: VfxGpuRuntimeOptions = {}): Plugin 
   }[] = [];
   return {
     name: 'vfx-gpu-runtime',
-    build(world) {
+    inject: ['world'],
+    apply(ctx) {
+      const world = ctx.world;
       if (world.hasResource(VFX_GPU_RUNTIME_RESOURCE_KEY)) {
-        return err(
-          new PluginError({
-            code: 'plugin-build-failed',
-            expected: 'one VFX GPU runtime per World',
-            hint: 'reuse the attached VFX host or detach it before installing another',
-            detail: {
-              pluginName: 'vfx-gpu-runtime',
-              cause: `${VFX_GPU_RUNTIME_RESOURCE_KEY} already exists`,
-            },
-          }),
-        );
+        throw new TypeError(`${VFX_GPU_RUNTIME_RESOURCE_KEY} already exists`);
       }
       const runtime = new VfxGpuRuntime(options);
-      world.registerSimulationTransientResource(VFX_GPU_RUNTIME_RESOURCE_KEY);
-      world.insertResource(VFX_GPU_RUNTIME_RESOURCE_KEY, runtime);
-      const added = world.addSystem(FixedUpdate, {
-        name: 'vfx-gpu-runtime',
-        queries: [{ with: [Entity, ParticleEffectPlayer] }],
-        fn: (world, queryResults) => {
-          rows.length = 0;
-          for (const row of queryResults[0]) {
-            const player = row.get(ParticleEffectPlayer);
-            rows.push({
-              player: row.entity,
-              effect: toShared<'ParticleEffectAsset'>(player.effect),
-              playing: player.playing,
-              seed: player.seed,
-              timeScale: player.timeScale,
-            });
-          }
-          const fixed = world.getResource(FixedTime);
-          runtime.advance(world, fixed.tick, fixed.delta, rows);
-        },
-      });
-      if (!added.ok) {
-        world.removeResource(VFX_GPU_RUNTIME_RESOURCE_KEY);
-        return err(
-          new PluginError({
-            code: 'plugin-build-failed',
-            expected: 'the VFX GPU FixedUpdate system name to be available',
-            hint: 'remove the conflicting system before attaching the VFX host',
-            detail: { pluginName: 'vfx-gpu-runtime', cause: added.error.code },
-          }),
-        );
-      }
-      return ok(undefined);
+      ctx.effect(() => {
+        world.insertResource(VFX_GPU_RUNTIME_RESOURCE_KEY, runtime);
+        return () => {
+          world.removeResource(VFX_GPU_RUNTIME_RESOURCE_KEY);
+        };
+      }, 'vfx/runtime-resource');
+      ctx.effect(() => {
+        world
+          .addSystem(FixedUpdate, {
+            name: 'vfx-gpu-runtime',
+            queries: [{ with: [Entity, ParticleEffectPlayer] }],
+            fn: (world, queryResults) => {
+              rows.length = 0;
+              for (const row of queryResults[0]) {
+                const player = row.get(ParticleEffectPlayer);
+                rows.push({
+                  player: row.entity,
+                  effect: toShared<'ParticleEffectAsset'>(player.effect),
+                  playing: player.playing,
+                  seed: player.seed,
+                  timeScale: player.timeScale,
+                });
+              }
+              const fixed = world.getResource(FixedTime);
+              runtime.advance(world, fixed.tick, fixed.delta, rows);
+            },
+          })
+          .unwrap();
+        return () => world.removeSystem(FixedUpdate, 'vfx-gpu-runtime');
+      }, 'vfx/tick-system');
     },
   };
 }

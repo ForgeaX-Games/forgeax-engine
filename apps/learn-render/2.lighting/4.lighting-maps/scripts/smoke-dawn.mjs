@@ -228,9 +228,7 @@ if (
 const { World } = await import('@forgeax/engine-ecs');
 const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
 const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  createRenderer,
-} = enginePkg;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Camera, MeshFilter, MeshRenderer, PointLight } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const {
@@ -258,6 +256,7 @@ const EMPTY_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stri
 
 let debugInst;
 let renderer;
+let assets;
 try {
   let rendererOptions = {};
   if (RHI_DEBUG_DAWN_CAPTURE || RHI_DEBUG_DAWN_IDLE) {
@@ -290,31 +289,31 @@ try {
     }
     rendererOptions = { rhi: debugInst };
   }
-  renderer = await createRenderer(mockCanvas, rendererOptions, { shaderManifestUrl: EMPTY_MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(
+    mockCanvas,
+    rendererOptions,
+    { shaderManifestUrl: EMPTY_MANIFEST_URL },
+  );
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  assets = constructed.value.assets;
 } catch (err) {
   console.error(
-    `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
+    `[smoke] FAIL - constructRuntimeRendererHost failed: ${err instanceof Error ? err.message : String(err)}`,
   );
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[learn-render-lighting-maps] backend=${renderer.backend}`);
-
-const assets = renderer.assets;
+console.log(`[learn-render-lighting-maps] backend=${renderer.inspect().capabilities.backendKind}`);
 if (!assets) {
   console.error('[smoke] FAIL - AssetRegistry is null');
   process.exit(1);
 }
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => { if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint }); });
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code}`);
-  process.exit(1);
-}
 
 const diffuseGuidRes = AssetGuid.parse(diffuseMeta.guid);
 const specularGuidRes = AssetGuid.parse(specularMeta.guid);
@@ -326,8 +325,9 @@ if (!diffuseGuidRes.ok || !specularGuidRes.ok || !cubeGuidRes.ok || !matGuidRes.
 }
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const lease = worldAttachment1.value;
 
 const mkTex = (decoded) => ({
   kind: 'texture',
@@ -433,8 +433,17 @@ if (debugInst !== undefined) {
       process.exit(1);
     }
     world.update().unwrap();
-    const captureDraw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    if (!captureDraw.ok) console.error(`[smoke] draw capture frame error: ${captureDraw.error.code}`);
+    const captureDraw = renderer.draw({
+      leases: [lease],
+      camera: { lease },
+      environment: { lease },
+    });
+    if (!captureDraw.ok) {
+      console.error(`[smoke] draw capture frame error: ${captureDraw.error.code}`);
+    } else {
+      const completed = await captureDraw.value.completed;
+      if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+    }
     debugInst.onFrameEnd();
     const queueWaitStart = performance.now();
     await sharedDevice.queue.onSubmittedWorkDone();
@@ -502,8 +511,17 @@ if (debugInst !== undefined) {
 }
 for (let i = framesObserved; i < TARGET_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-  if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  const r = renderer.draw({
+    leases: [lease],
+    camera: { lease },
+    environment: { lease },
+  });
+  if (!r.ok) {
+    console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  } else {
+    const completed = await r.value.completed;
+    if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+  }
   framesObserved++;
 }
 const device = sharedDevice;
@@ -568,8 +586,8 @@ console.log(`[smoke] wallTotalMs=${wallTotalMs} (budget=${SMOKE_WALL_BUDGET_MS})
 void matGuidRes;
 
 const failures = [];
-if (renderer.backend !== 'webgpu')
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (renderer.inspect().capabilities.backendKind !== 'webgpu')
+  failures.push(`(a) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES)
   failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (meshedRenderCount < 1) {

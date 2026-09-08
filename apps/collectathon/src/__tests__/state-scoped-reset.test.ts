@@ -14,13 +14,7 @@
 //
 // This test fails until resources.ts exports resetProgress.
 
-import {
-  type Component,
-  defineComponent,
-  type EntityHandle,
-  resolveComponent,
-  World,
-} from '@forgeax/engine-ecs';
+import { type Component, defineComponent, type EntityHandle, World } from '@forgeax/engine-ecs';
 import {
   defineState,
   despawnOnExit,
@@ -46,15 +40,16 @@ const GameState = defineState('CollectathonResetTestState', [
   'Lose',
 ] as const);
 
-// A stand-in Play entity tag so the scoped despawn is observable via resolveComponent.
+// A stand-in Play entity tag so the scoped despawn is observable via the
+// world-local component lease.
 const PlayThing = defineComponent('CollectathonResetTestPlayThing', {});
 
 // The per-token ScopedTo component the state plugin registers for GameState.
-// resolveComponent returns it once registerStatesPlugin + a despawnOnExit call
-// have created it; throw (rather than non-null assert) if absent so a wiring
-// regression fails loudly.
-function scopedComponent(): Component {
-  const c = resolveComponent('__scopedTo__CollectathonResetTestState');
+// World.components.resolve returns it once registerStatesPlugin + a
+// despawnOnExit call have created it; throw (rather than non-null assert) if
+// absent so a wiring regression fails loudly.
+function scopedComponent(world: World): Component {
+  const c = world.components.resolve('__scopedTo__CollectathonResetTestState');
   if (c === undefined) throw new Error('scoped component not registered');
   return c;
 }
@@ -119,7 +114,7 @@ describe('Play -> Title -> Play replay leaves no leftover entities (AC-11)', () 
       despawnOnExit(world, e, GameState, 'Play');
       scoped.push(e);
     }
-    const Scoped = scopedComponent();
+    const Scoped = scopedComponent(world);
     // All five are alive + scoped before leaving Play.
     expect(scoped.every((e) => world.get(e, Scoped).ok)).toBe(true);
 
@@ -150,7 +145,7 @@ describe('Play -> Title -> Play replay leaves no leftover entities (AC-11)', () 
     // Run 2: enter Play again. The new run must see none of run1's entities.
     setNextState(world, GameState, 'Play');
     world.update(1 / 60).unwrap();
-    const Scoped = scopedComponent();
+    const Scoped = scopedComponent(world);
     expect(run1.some((e) => world.get(e, Scoped).ok)).toBe(false);
 
     // And the scoreboard is fresh for run 2.

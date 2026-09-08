@@ -16,6 +16,7 @@ import {
   type ComputePassDescriptor,
   ok,
   type QuerySet,
+  type RenderPassDescriptor,
   type Result,
   type RhiCommandEncoder,
   type RhiComputePassEncoder,
@@ -106,7 +107,7 @@ class RhiWgpuCommandEncoderImpl implements RhiCommandEncoder {
     this.raw = raw;
   }
 
-  beginRenderPass(desc: GPURenderPassDescriptor): RhiRenderPassEncoder {
+  beginRenderPass(desc: RenderPassDescriptor): RhiRenderPassEncoder {
     if (this.raw.beginRenderPass === undefined) {
       // M2 baseline — surface a stub encoder that no-ops; the actual error
       // surfaces at encoder.finish() when the underlying raw handle is

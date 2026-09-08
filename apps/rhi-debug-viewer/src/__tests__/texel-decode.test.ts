@@ -126,7 +126,34 @@ describe('decodeToRgba8 — unsupported formats return null', () => {
   it('compressed bc7 -> null', () => {
     expect(decodeToRgba8(new Uint8Array(16), 'bc7-rgba-unorm', 4, 4)).toBeNull();
   });
-  it('depth -> null', () => {
-    expect(decodeToRgba8(new Uint8Array(4), 'depth32float', 1, 1)).toBeNull();
+  it('combined depth-stencil without an explicit aspect -> null', () => {
+    expect(decodeToRgba8(new Uint8Array(4), 'depth24plus-stencil8', 1, 1)).toBeNull();
+  });
+});
+
+describe('decodeToRgba8 — Sponza tape depth closure', () => {
+  it('maps depth32float to grayscale', () => {
+    const out = decodeToRgba8(f32Bytes([0.5]), 'depth32float', 1, 1, 'depth-only');
+    expect(out && [...out]).toEqual([128, 128, 128, 255]);
+  });
+
+  it('maps the depth plane of depth24plus-stencil8 to grayscale', () => {
+    const out = decodeToRgba8(f32Bytes([0.25]), 'depth24plus-stencil8', 1, 1, 'depth-only');
+    expect(out && [...out]).toEqual([64, 64, 64, 255]);
+  });
+
+  it('maps the stencil plane of depth24plus-stencil8 to grayscale', () => {
+    const out = decodeToRgba8(new Uint8Array([37]), 'depth24plus-stencil8', 1, 1, 'stencil-only');
+    expect(out && [...out]).toEqual([37, 37, 37, 255]);
+  });
+
+  it.each([
+    ['bgra8unorm', new Uint8Array([0, 0, 0, 255])],
+    ['rg16float', u16Bytes([0, 0])],
+    ['rgba16float', u16Bytes([0, 0, 0, 0x3c00])],
+    ['rgba8unorm', new Uint8Array([0, 0, 0, 255])],
+    ['rgba8unorm-srgb', new Uint8Array([0, 0, 0, 255])],
+  ])('decodes Sponza color format %s', (format, bytes) => {
+    expect(decodeToRgba8(bytes, format, 1, 1)).not.toBeNull();
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { describeVfxGpuEffect, isVfxGpuEffectAsset } from '../authoring-descriptor.js';
 import type { VfxGpuEffectAsset } from '../gpu-program.js';
+import { VFX_GPU_PROGRAM_ARTIFACT_KEY, VFX_GPU_PROGRAM_FORMAT } from '../gpu-program.js';
 
 const effect: VfxGpuEffectAsset = {
   guid: 'effect-guid',
@@ -80,6 +81,13 @@ const effect: VfxGpuEffectAsset = {
 };
 
 describe('VFX authoring descriptor', () => {
+  it('keeps the complete program format and asset-local artifact key canonical', () => {
+    expect(VFX_GPU_PROGRAM_FORMAT).toBe('forgeax-vfx-program-2');
+    expect(VFX_GPU_PROGRAM_ARTIFACT_KEY).toBe('particle-effect/program.json');
+    expect(effect.program.format).toBe(VFX_GPU_PROGRAM_FORMAT);
+    expect(effect.programFingerprint).toMatch(/^sha256:/);
+  });
+
   it('owns the cooked asset type guard at the producer boundary', () => {
     expect(isVfxGpuEffectAsset(effect)).toBe(true);
     expect(

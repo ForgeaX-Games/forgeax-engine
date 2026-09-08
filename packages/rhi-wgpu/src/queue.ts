@@ -23,10 +23,12 @@
 import {
   type Buffer,
   type CommandBuffer,
+  type ExternalImageTextureDestination,
   ok,
   type Result,
   type RhiError,
   type RhiQueue,
+  type TextureWriteDestination,
 } from '@forgeax/engine-rhi';
 import { unwrapBuffer } from './buffer';
 import { queueSubmitFailed, webgpuRuntimeError } from './errors';
@@ -188,7 +190,7 @@ class RhiWgpuQueueImpl implements RhiQueue {
   }
 
   writeTexture(
-    destination: GPUTexelCopyTextureInfo,
+    destination: TextureWriteDestination,
     data: ArrayBufferView | ArrayBuffer,
     dataLayout: GPUTexelCopyBufferLayout,
     size: GPUExtent3DStrict,
@@ -238,7 +240,7 @@ class RhiWgpuQueueImpl implements RhiQueue {
 
   copyExternalImageToTexture(
     source: GPUCopyExternalImageSourceInfo,
-    destination: GPUCopyExternalImageDestInfo,
+    destination: ExternalImageTextureDestination,
     copySize: GPUExtent3DStrict,
   ): Result<void, RhiError> {
     if (this.raw.copyExternalImageToTexture === undefined) {
@@ -247,7 +249,21 @@ class RhiWgpuQueueImpl implements RhiQueue {
       );
     }
     try {
-      this.raw.copyExternalImageToTexture.call(this.raw, source, destination, copySize);
+      this.raw.copyExternalImageToTexture.call(
+        this.raw,
+        source,
+        {
+          texture: destination.texture as unknown as GPUTexture,
+          ...(destination.mipLevel === undefined ? {} : { mipLevel: destination.mipLevel }),
+          ...(destination.origin === undefined ? {} : { origin: destination.origin }),
+          ...(destination.aspect === undefined ? {} : { aspect: destination.aspect }),
+          ...(destination.colorSpace === undefined ? {} : { colorSpace: destination.colorSpace }),
+          ...(destination.premultipliedAlpha === undefined
+            ? {}
+            : { premultipliedAlpha: destination.premultipliedAlpha }),
+        },
+        copySize,
+      );
       return ok(undefined);
     } catch (e) {
       return webgpuRuntimeError(e);

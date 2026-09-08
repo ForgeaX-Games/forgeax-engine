@@ -1,16 +1,6 @@
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { frustum } from '@forgeax/engine-math';
-import {
-  RENDER_FEATURE_VERTEX_LAYOUTS,
-  type RenderFeature,
-  type RenderFeatureDrawRecord,
-  type RenderFeatureGpuBindingsRef,
-  type RenderFeatureGpuBufferRef,
-  type RenderFeatureGpuProgramRef,
-  type RenderFeaturePreparationFailedError,
-  RenderFeatureStageFailedError,
-  type RenderFeatureTargetHandle,
-} from '@forgeax/engine-render';
+import type { RenderFeature, RenderFeaturePlan } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { err, type MaterialAsset, type MeshAsset, ok } from '@forgeax/engine-types';
 import type { ParticleRendererSource } from '@forgeax/engine-vfx';
@@ -19,6 +9,8 @@ import {
   type VfxGpuRuntime,
   type VfxGpuTickIntent,
 } from '@forgeax/engine-vfx';
+import { RenderFeatureStageFailedError } from '../../../render/src/errors/render';
+import { RENDER_FEATURE_VERTEX_LAYOUTS } from '../../../render/src/features/prepared-graphics';
 import type { VfxDataInterfaceRegistry } from '../host/data-interface-providers.js';
 import type { ParticleRenderCamera } from './camera.js';
 import {
@@ -33,15 +25,11 @@ import {
   createTopologyResourcePlan,
   PARTICLE_SHADER_IDENTIFIERS,
   particleMaterialPass,
+  particleMaterialSceneDepthBinding,
   particleMaterialUsesBindings,
 } from './particle-resources.js';
-import {
-  observeStagePlan,
-  stageDispatches,
-  type VfxStageReadiness,
-  type VfxValidatedStagePlan,
-  validatedStagePlan,
-} from './stage-plan.js';
+import type { VfxStagePlanObservation, VfxValidatedStagePlan } from './stage-plan.js';
+import { validatedStagePlan } from './stage-plan.js';
 
 const IDENTITY = 'forgeax.vfx-render.gpu-particles';
 const WORKGROUP_SIZE = 256;
@@ -50,24 +38,48 @@ const BILLBOARD_INSTANCE_BYTES = 31 * 4;
 const MESH_INSTANCE_BYTES = 28 * 4;
 const COUNTERS_BYTES = 24;
 const RUNTIME_BYTES = 72 * 4;
-const MAX_TICK_RINGS = 8;
 const IDENTITY_MATRIX = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 
-export interface VfxRenderInspectInput {
-  readonly topology: 'billboard' | 'mesh' | 'ribbon' | 'trail' | 'beam';
-  readonly capacity: number;
-  readonly produced: number;
-  readonly dropped: number;
+type ParticleRendererKind = ParticleRendererSource['kind'];
+type ParticleTopologyRenderer = Extract<ParticleRendererSource, { readonly capacity: number }>;
+type ParticleTopologyKind = ParticleTopologyRenderer['kind'];
+type VfxStageOutput = VfxStagePlanObservation['stageOutput'];
+
+interface VfxRenderStageState {
+  readonly stageOutput: VfxStageOutput;
+}
+
+interface VfxRenderInspectSnapshot extends VfxRenderStageState {
+  readonly topology: ParticleRendererKind;
+  readonly counters: {
+    readonly capacity: number;
+    readonly produced: number;
+    readonly dropped: number;
+  };
   readonly stageReadiness: readonly unknown[];
   readonly providerReadiness: unknown;
   readonly gpuTiming: unknown;
 }
 
-export function createVfxRenderInspectSnapshot(input: VfxRenderInspectInput) {
+export interface VfxRenderInspectInput {
+  readonly topology: ParticleRendererKind;
+  readonly capacity: number;
+  readonly produced: number;
+  readonly dropped: number;
+  readonly stageReadiness: readonly unknown[];
+  readonly stageOutput?: VfxStageOutput;
+  readonly providerReadiness: unknown;
+  readonly gpuTiming: unknown;
+}
+
+export function createVfxRenderInspectSnapshot(
+  input: VfxRenderInspectInput,
+): VfxRenderInspectSnapshot {
   return {
     topology: input.topology,
     counters: { capacity: input.capacity, produced: input.produced, dropped: input.dropped },
     stageReadiness: input.stageReadiness,
+    stageOutput: input.stageOutput ?? 'empty',
     providerReadiness: input.providerReadiness,
     gpuTiming: input.gpuTiming,
   } as const;
@@ -121,7 +133,7 @@ export function resolveBillboardAdvancedState(
 }
 
 export function topologyRecoveryHint(
-  topology: 'ribbon' | 'trail' | 'beam',
+  topology: ParticleTopologyKind,
   reason: 'capacity' | 'broken' | 'degenerate' | 'device',
 ): string {
   if (reason === 'capacity')
@@ -138,6 +150,9 @@ interface GpuParticleFeatureOptions {
   readonly dataInterfaces?: Pick<VfxDataInterfaceRegistry, 'resolve'>;
   readonly material?: { read(world: World, guid: string): MaterialAsset | undefined };
   readonly mesh?: { read(world: World, guid: string): MeshAsset | undefined };
+  readonly playerConsumption?: {
+    readonly isEnabled: (world: World, player: EntityHandle) => boolean;
+  };
 }
 
 interface ExtractedWorld {
@@ -150,55 +165,6 @@ interface ExtractedWorld {
 interface ExtractedFrame {
   readonly worlds: readonly ExtractedWorld[];
   readonly frameNumber: number;
-}
-
-interface GpuRefs {
-  readonly program: RenderFeatureGpuProgramRef;
-  readonly particles: RenderFeatureGpuBufferRef;
-  readonly aliveIndices: RenderFeatureGpuBufferRef;
-  readonly counters: RenderFeatureGpuBufferRef;
-  readonly indirect: RenderFeatureGpuBufferRef;
-  readonly scratch: RenderFeatureGpuBufferRef;
-  readonly billboardInstances: RenderFeatureGpuBufferRef;
-  readonly eventInputs: RenderFeatureGpuBufferRef;
-  readonly events: RenderFeatureGpuBufferRef;
-}
-
-interface TickRing {
-  readonly runtime: RenderFeatureGpuBufferRef;
-  readonly bindings: RenderFeatureGpuBindingsRef;
-}
-
-interface RendererProjection {
-  readonly kind: ParticleRendererSource['kind'];
-  readonly ring: TickRing;
-  readonly instances: RenderFeatureGpuBufferRef;
-  readonly workgroups: number;
-  readonly historyWorkgroups?: number;
-  readonly sorting?: 'none' | 'emitter' | 'back-to-front';
-}
-
-interface EmitterState {
-  readonly world: World;
-  readonly player: EntityHandle;
-  readonly emitterId: string;
-  readonly fingerprint: string;
-  readonly capacity: number;
-  readonly names: string;
-  refs?: GpuRefs;
-  rings: TickRing[];
-  projections: RendererProjection[];
-  colorTarget: RenderFeatureTargetHandle | undefined;
-  depthTarget: RenderFeatureTargetHandle | undefined;
-  indirectInitialized: boolean;
-  culled: boolean;
-  lastIntent?: VfxGpuTickIntent;
-  draws: RenderFeatureDrawRecord[];
-  depthSampledDraws: RenderFeatureDrawRecord[];
-  stagePlan?: VfxValidatedStagePlan;
-  lastKnownGoodStage?: VfxValidatedStagePlan;
-  stageReadiness: readonly VfxStageReadiness[];
-  stageOutput: 'active' | 'last-known-good' | 'empty';
 }
 
 function finite(value: unknown, fallback: number): number {
@@ -318,64 +284,66 @@ function resetData(size: number): Uint8Array {
   return new Uint8Array(size);
 }
 
-function target(
-  targets: readonly RenderFeatureTargetHandle[],
-  kind: 'scene-color' | 'scene-depth',
-): RenderFeatureTargetHandle | undefined {
-  return targets.find((entry) => entry.kind === kind);
-}
-
 function requiresSceneDepth(intent: VfxGpuTickIntent): boolean {
   return (intent.emitter.reflection.dataInterfaces ?? []).some(
     (requirement) => requirement.kind === 'scene-depth',
   );
 }
 
+function planFailure(): RenderFeatureStageFailedError {
+  return new RenderFeatureStageFailedError(IDENTITY, -1, 'plan', 'next-frame');
+}
+
+type PlanResource = RenderFeaturePlan['resources'][number];
+type PlanPass = RenderFeaturePlan['passes'][number];
+
+function planName(value: string, maxLength = 24): string {
+  const normalized = value.toLowerCase().replaceAll(/[^a-z0-9.-]/g, '-');
+  return (normalized.length === 0 ? 'unnamed' : normalized).slice(0, maxLength);
+}
+
+function computeBindingEntries(
+  intent: VfxGpuTickIntent,
+  resources: Readonly<Record<number, string>>,
+): readonly { readonly binding: number; readonly resource: string }[] {
+  const declared = new Set(
+    (intent.emitter.reflection.bindings[0]?.entries ?? [])
+      .filter((entry) => entry.buffer !== undefined)
+      .map((entry) => entry.binding),
+  );
+  return Object.entries(resources).flatMap(([binding, resource]) =>
+    declared.has(Number(binding)) ? [{ binding: Number(binding), resource }] : [],
+  );
+}
+
+function simulationDispatches(
+  intent: VfxGpuTickIntent,
+  stages: VfxValidatedStagePlan,
+): Extract<PlanPass, { readonly kind: 'compute' }>['dispatches'] {
+  const groups = Math.max(1, Math.ceil(intent.emitter.capacity / WORKGROUP_SIZE));
+  return [
+    { kind: 'direct', entryPoint: 'forgeax_vfx_spawn_main', workgroups: [groups] },
+    { kind: 'direct', entryPoint: 'forgeax_vfx_update_main', workgroups: [groups] },
+    ...stages.stages.map((stage) => ({
+      kind: 'direct' as const,
+      entryPoint: stage.entryPoint,
+      workgroups: [groups] as const,
+    })),
+    { kind: 'direct', entryPoint: 'forgeax_vfx_scan_blocks_main', workgroups: [groups] },
+    { kind: 'direct', entryPoint: 'forgeax_vfx_scan_block_offsets_main', workgroups: [1] },
+    { kind: 'direct', entryPoint: 'forgeax_vfx_add_offsets_main', workgroups: [groups] },
+    { kind: 'direct', entryPoint: 'forgeax_vfx_compact_main', workgroups: [groups] },
+    {
+      kind: 'direct',
+      entryPoint: 'forgeax_vfx_event_main',
+      workgroups: [Math.max(1, Math.ceil(eventInputCapacity(intent.emitter) / 64))],
+    },
+  ];
+}
+
 export function gpuParticleRenderFeature(
   options: GpuParticleFeatureOptions,
 ): RenderFeature<ExtractedFrame> {
-  const worldIds = new WeakMap<World, number>();
-  let nextWorldId = 0;
-  const states = new Map<string, EmitterState>();
-  const keyOf = (world: World, intent: VfxGpuTickIntent): string => {
-    let worldId = worldIds.get(world);
-    if (worldId === undefined) {
-      worldId = nextWorldId++;
-      worldIds.set(world, worldId);
-    }
-    return `${worldId}:${intent.player}:${intent.emitter.id}`;
-  };
-  const stateFor = (world: World, intent: VfxGpuTickIntent): EmitterState => {
-    const key = keyOf(world, intent);
-    let state = states.get(key);
-    if (state !== undefined && state.fingerprint !== intent.programFingerprint) {
-      states.delete(key);
-      state = undefined;
-    }
-    if (state !== undefined) return state;
-    const fingerprint = intent.programFingerprint.slice(0, 12).replaceAll(':', '_');
-    state = {
-      world,
-      player: intent.player,
-      emitterId: intent.emitter.id,
-      fingerprint: intent.programFingerprint,
-      capacity: intent.emitter.capacity,
-      names: `gpu.${key.replaceAll(':', '.')}.${fingerprint}`,
-      rings: [],
-      projections: [],
-      draws: [],
-      depthSampledDraws: [],
-      colorTarget: undefined,
-      depthTarget: undefined,
-      indirectInitialized: false,
-      culled: false,
-      stageReadiness: [],
-      stageOutput: 'empty',
-    };
-    states.set(key, state);
-    return state;
-  };
-
   return {
     identity: IDENTITY,
     requiredCapabilities: ['compute', 'indirectDrawing'],
@@ -388,9 +356,10 @@ export function gpuParticleRenderFeature(
         if (camera === undefined) continue;
         const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
         const intents = runtime.snapshot().filter((intent) => {
+          if (options.playerConsumption?.isEnabled(world, intent.player) === false) return false;
           const requirements = intent.emitter.reflection.dataInterfaces ?? [];
-          if (requirements.length === 0) return true;
           return (
+            requirements.length === 0 ||
             options.dataInterfaces?.resolve(requirements, intent.instanceGeneration).ok === true
           );
         });
@@ -398,732 +367,462 @@ export function gpuParticleRenderFeature(
       }
       return ok({ worlds: extracted, frameNumber: context.frameNumber });
     },
-    prepare: (frame, context) => {
-      const gpu = context.gpu;
-      if (gpu === undefined) {
-        return err(new RenderFeatureStageFailedError(IDENTITY, -1, 'prepare', 'renderer-recover'));
-      }
-      // Kick every newly observed WGSL module before awaiting the next frame.
-      // Shader-module creation is asynchronous in the browser RHI; returning on
-      // the first pending module serialized effect startup across emitters and
-      // could outlive a short authored burst on a slow runner.
-      let pendingProgramError: RenderFeaturePreparationFailedError | undefined;
-      const preparedIntents: Array<{
-        readonly entry: ExtractedWorld;
-        readonly intent: VfxGpuTickIntent;
-        readonly state: EmitterState;
-      }> = [];
-      for (const entry of frame.worlds) {
-        for (const intent of entry.intents) {
-          const key = keyOf(entry.world, intent);
-          let state = states.get(key);
-          const candidate = validatedStagePlan(
+    plan: (frame, context) => {
+      const resources: PlanResource[] = [];
+      const passes: PlanPass[] = [];
+      const dispatchedIntents = new Set<VfxGpuTickIntent>();
+      const colorTarget =
+        context.targets.find((candidate) => candidate.kind === 'color') ??
+        context.targets.find((candidate) => candidate.kind === 'swapchain');
+      const depthTarget = context.targets.find((candidate) => candidate.kind === 'depth');
+
+      for (const [worldIndex, entry] of frame.worlds.entries()) {
+        for (const [intentIndex, intent] of entry.intents.entries()) {
+          if (!entry.runtime.isEmitterSessionEnabled(intent.player, intent.emitter.id)) continue;
+          const localToWorld = emitterTransform(entry.world, intent);
+          const visible = emitterVisible(intent, entry.camera, localToWorld);
+          entry.runtime.setEmitterCameraVisibility(intent.player, intent.emitter.id, visible);
+          if (!visible) continue;
+          if (requiresSceneDepth(intent) && depthTarget === undefined) continue;
+
+          const stagePlan = validatedStagePlan(
             intent.emitter.reflection.stages,
             intent.instanceGeneration,
           );
-          if (!candidate.ok) {
-            if (state === undefined) {
-              return err(new RenderFeatureStageFailedError(IDENTITY, -1, 'prepare', 'next-frame'));
-            }
-            const observation = observeStagePlan(
-              candidate,
-              intent.instanceGeneration,
-              state.lastKnownGoodStage,
-            );
-            state.stagePlan = observation.validatedStagePlan;
-            state.stageReadiness = observation.stageReadiness;
-            state.stageOutput = observation.stageOutput;
-            continue;
-          }
-          if (state !== undefined && state.fingerprint !== intent.programFingerprint) {
-            states.delete(key);
-            state = undefined;
-          }
-          state ??= stateFor(entry.world, intent);
-          const observation = observeStagePlan(
-            candidate,
-            intent.instanceGeneration,
-            state.lastKnownGoodStage,
-          );
-          state.stagePlan = observation.validatedStagePlan;
-          state.lastKnownGoodStage = candidate.value;
-          state.stageReadiness = observation.stageReadiness;
-          state.stageOutput = observation.stageOutput;
-          const program = gpu.prepareProgram(`${state.names}.program`, {
-            wgsl: intent.emitter.wgsl,
-            entryPoints: intent.emitter.reflection.entryPoints,
-            bindings: intent.emitter.reflection.bindings,
-          });
-          if (!program.ok) {
-            if (
-              program.error.code !== 'render-feature-preparation-failed' ||
-              program.error.detail.recovery !== 'next-frame'
-            ) {
-              return program;
-            }
-            pendingProgramError ??= program.error;
-          }
-          preparedIntents.push({ entry, intent, state });
-        }
-      }
-      if (pendingProgramError !== undefined) return err(pendingProgramError);
-      let pendingGraphicsError: RenderFeaturePreparationFailedError | undefined;
-      for (const { entry, intent, state } of preparedIntents) {
-        if (intent.reset) state.indirectInitialized = false;
-        state.lastIntent = intent;
-        const base = state.names;
-        const program = gpu.prepareProgram(`${base}.program`, {
-          wgsl: intent.emitter.wgsl,
-          entryPoints: intent.emitter.reflection.entryPoints,
-          bindings: intent.emitter.reflection.bindings,
-        });
-        if (!program.ok) return program;
-        const prepare = (
-          name: string,
-          size: number,
-          usage: readonly ('storage' | 'uniform' | 'indirect' | 'vertex')[],
-          data?: ArrayBufferView,
-        ) =>
-          gpu.prepareBuffer(`${base}.${name}`, {
-            size,
-            usage,
-            ...(data === undefined ? {} : { data }),
-          });
-        const particles = prepare(
-          'particles',
-          state.capacity * PARTICLE_BYTES,
-          ['storage'],
-          intent.reset ? resetData(state.capacity * PARTICLE_BYTES) : undefined,
-        );
-        if (!particles.ok) return particles;
-        const aliveIndices = prepare('alive-indices', state.capacity * 4, ['storage']);
-        if (!aliveIndices.ok) return aliveIndices;
-        const counters = prepare(
-          'counters',
-          COUNTERS_BYTES,
-          ['storage'],
-          intent.reset ? resetData(COUNTERS_BYTES) : undefined,
-        );
-        if (!counters.ok) return counters;
-        const indirect = prepare('indirect', Math.max(1, intent.emitter.renderers.length) * 20, [
-          'storage',
-          'indirect',
-        ]);
-        if (!indirect.ok) return indirect;
-        const scratchBytes = (state.capacity * 2 + Math.ceil(state.capacity / WORKGROUP_SIZE)) * 4;
-        const scratch = prepare(
-          'scratch',
-          scratchBytes,
-          ['storage'],
-          intent.reset ? resetData(scratchBytes) : undefined,
-        );
-        if (!scratch.ok) return scratch;
-        const billboardInstances = prepare(
-          'billboard-instances',
-          state.capacity * Math.max(BILLBOARD_INSTANCE_BYTES, MESH_INSTANCE_BYTES),
-          ['storage', 'vertex'],
-        );
-        if (!billboardInstances.ok) return billboardInstances;
-        const events = prepare(
-          'events',
-          eventCapacity(intent.emitter) * VFX_EVENT_BYTES,
-          ['storage'],
-          intent.reset ? resetData(eventCapacity(intent.emitter) * VFX_EVENT_BYTES) : undefined,
-        );
-        if (!events.ok) return events;
-        const initialEventInputs = prepare(
-          'event-inputs',
-          eventInputCapacity(intent.emitter) * VFX_EVENT_INPUT_BYTES,
-          ['storage'],
-          encodeEventInputs(intent),
-        );
-        if (!initialEventInputs.ok) return initialEventInputs;
-        state.refs = {
-          program: program.value,
-          particles: particles.value,
-          aliveIndices: aliveIndices.value,
-          counters: counters.value,
-          indirect: indirect.value,
-          scratch: scratch.value,
-          billboardInstances: billboardInstances.value,
-          eventInputs: initialEventInputs.value,
-          events: events.value,
-        };
-        const ringIndex = intent.tick % MAX_TICK_RINGS;
-        const runtime = gpu.prepareBuffer(`${base}.runtime.${ringIndex}`, {
-          size: RUNTIME_BYTES,
-          usage: ['uniform'],
-          data: runtimeData(intent, entry.camera, undefined, emitterTransform(entry.world, intent)),
-        });
-        if (!runtime.ok) return runtime;
-        const refs = state.refs;
-        const updatedEventInputs = gpu.prepareBuffer(`${base}.event-inputs`, {
-          size: eventInputCapacity(intent.emitter) * VFX_EVENT_INPUT_BYTES,
-          usage: ['storage'],
-          data: encodeEventInputs(intent),
-        });
-        if (!updatedEventInputs.ok) return updatedEventInputs;
-        const bindings = gpu.prepareBindings(`${base}.bindings.${ringIndex}`, {
-          program: refs.program,
-          entries: [
-            { binding: 0, buffer: refs.particles },
-            { binding: 1, buffer: runtime.value },
-            { binding: 2, buffer: refs.aliveIndices },
-            { binding: 3, buffer: refs.counters },
-            { binding: 4, buffer: refs.indirect },
-            { binding: 5, buffer: refs.scratch },
-            { binding: 6, buffer: refs.billboardInstances },
-            { binding: 8, buffer: updatedEventInputs.value },
-            { binding: 9, buffer: refs.events },
-          ],
-        });
-        if (!bindings.ok) return bindings;
-        state.rings[ringIndex] = {
-          runtime: runtime.value,
-          bindings: bindings.value,
-        };
-      }
+          if (!stagePlan.ok) return err(planFailure());
 
-      for (const [key, state] of states) {
-        const extracted = frame.worlds.find((entry) => entry.world === state.world);
-        if (extracted === undefined || !extracted.runtime.hasPlayer(state.player)) {
-          states.delete(key);
-          continue;
-        }
-        const intent = state.lastIntent;
-        const refs = state.refs;
-        if (intent === undefined || refs === undefined) continue;
-        const retained = gpu.retainBindings([
-          ...state.rings.flatMap((ring) => (ring === undefined ? [] : [ring.bindings])),
-          ...state.projections.map((projection) => projection.ring.bindings),
-        ]);
-        if (!retained.ok) return retained;
-        if (!extracted.runtime.isEmitterSessionEnabled(state.player, state.emitterId)) {
-          // Session isolation is transient preview state, not a resource
-          // lifetime boundary. Keep prepared bindings warm while suppressing
-          // every contribution: a paused player may be re-enabled without a
-          // fresh simulation intent that could rebuild those bindings.
-          state.projections = [];
-          state.draws = [];
-          state.depthSampledDraws = [];
-          continue;
-        }
-        const renderers = intent.emitter.renderers;
-        if (renderers.length === 0) continue;
-        const localToWorld = emitterTransform(state.world, intent);
-        const visible = emitterVisible(intent, extracted.camera, localToWorld);
-        extracted.runtime.setEmitterCameraVisibility(state.player, state.emitterId, visible);
-        const currentIntents = extracted.intents.filter(
-          (candidate) =>
-            candidate.player === state.player && candidate.emitter.id === state.emitterId,
-        );
-        if (!visible) {
-          state.culled = true;
-          state.projections = [];
-          state.draws = [];
-          state.depthSampledDraws = [];
-          continue;
-        }
-        if (
-          state.culled &&
-          intent.emitter.simulationWhenCulled === 'restart-on-visible' &&
-          !currentIntents.some((candidate) => candidate.reset)
-        ) {
-          state.projections = [];
-          state.draws = [];
-          state.depthSampledDraws = [];
-          continue;
-        }
-        state.culled = false;
-        const colorTarget = target(context.targets, 'scene-color');
-        const depthTarget = target(context.targets, 'scene-depth');
-        const softParticle = requiresSceneDepth(intent);
-        if (softParticle && depthTarget === undefined) continue;
-        const eventRing = state.rings[intent.tick % MAX_TICK_RINGS];
-        if (eventRing === undefined) continue;
-        const meshes = renderers.map((renderer) =>
-          renderer.kind === 'mesh' ? options.mesh?.read(state.world, renderer.mesh) : undefined,
-        );
-        if (
-          renderers.some(
-            (renderer, index) =>
-              renderer.kind === 'mesh' &&
-              meshes[index]?.submeshes[renderer.submesh ?? 0] === undefined,
-          )
-        ) {
-          return err(new RenderFeatureStageFailedError(IDENTITY, -1, 'prepare', 'next-frame'));
-        }
-        const indirectWords = new Uint32Array(renderers.length * 5);
-        for (const [index, renderer] of renderers.entries()) {
-          const mesh = meshes[index];
-          const submesh =
-            renderer.kind === 'mesh' ? mesh?.submeshes[renderer.submesh ?? 0] : undefined;
-          const topologyPlan =
-            renderer.kind === 'ribbon' || renderer.kind === 'trail' || renderer.kind === 'beam'
-              ? createTopologyResourcePlan(renderer)
-              : undefined;
-          if (topologyPlan !== undefined && !topologyPlan.ok)
-            return err(new RenderFeatureStageFailedError(IDENTITY, -1, 'prepare', 'next-frame'));
-          indirectWords[index * 5] =
-            renderer.kind === 'billboard'
-              ? 6
-              : renderer.kind === 'ribbon' || renderer.kind === 'trail' || renderer.kind === 'beam'
-                ? 6
-                : mesh?.indices === undefined
+          const prefix = `vfx.w-${worldIndex}.i-${intentIndex}.${planName(intent.emitter.id)}`;
+          const program = `${prefix}.compute-program`;
+          const particles = `${prefix}.particles`;
+          const runtime = `${prefix}.runtime`;
+          const aliveIndices = `${prefix}.alive-indices`;
+          const counters = `${prefix}.counters`;
+          const indirect = `${prefix}.indirect`;
+          const scratch = `${prefix}.scratch`;
+          const sharedInstances = `${prefix}.shared-instances`;
+          const eventInputs = `${prefix}.event-inputs`;
+          const events = `${prefix}.events`;
+          const bindings = `${prefix}.simulation-bindings`;
+          const capacity = intent.emitter.capacity;
+          const renderers = intent.emitter.renderers;
+          const meshes = renderers.map((renderer) =>
+            renderer.kind === 'mesh' ? options.mesh?.read(entry.world, renderer.mesh) : undefined,
+          );
+          const indirectWords = new Uint32Array(Math.max(1, renderers.length) * 5);
+
+          for (const [rendererIndex, renderer] of renderers.entries()) {
+            const mesh = meshes[rendererIndex];
+            const submesh =
+              renderer.kind === 'mesh' ? mesh?.submeshes[renderer.submesh ?? 0] : undefined;
+            if (renderer.kind === 'mesh' && submesh === undefined) return err(planFailure());
+            if (
+              (renderer.kind === 'ribbon' ||
+                renderer.kind === 'trail' ||
+                renderer.kind === 'beam') &&
+              !createTopologyResourcePlan(renderer).ok
+            ) {
+              return err(planFailure());
+            }
+            indirectWords[rendererIndex * 5] =
+              renderer.kind === 'mesh'
+                ? mesh?.indices === undefined
                   ? (submesh?.vertexCount ?? 0)
-                  : (submesh?.indexCount ?? 0);
-          indirectWords[index * 5 + 2] =
-            renderer.kind === 'mesh' && mesh?.indices !== undefined
-              ? (submesh?.indexOffset ?? 0)
-              : 0;
-        }
-        const indirectInit = gpu.prepareBuffer(`${state.names}.indirect`, {
-          size: Math.max(1, renderers.length) * 20,
-          usage: ['storage', 'indirect'],
-          ...(state.indirectInitialized ? {} : { data: indirectWords }),
-        });
-        if (!indirectInit.ok) return indirectInit;
-        state.indirectInitialized = true;
-        const draws: RenderFeatureDrawRecord[] = [];
-        const depthSampledDraws: RenderFeatureDrawRecord[] = [];
-        const projections: RendererProjection[] = [];
-        for (const [rendererIndex, renderer] of renderers.entries()) {
-          const isBillboard = renderer.kind === 'billboard';
-          const isTopology =
-            renderer.kind === 'ribbon' || renderer.kind === 'trail' || renderer.kind === 'beam';
-          const topologyPlan = isTopology ? createTopologyResourcePlan(renderer) : undefined;
-          if (topologyPlan !== undefined && !topologyPlan.ok)
-            return err(new RenderFeatureStageFailedError(IDENTITY, -1, 'prepare', 'next-frame'));
-          const mesh = meshes[rendererIndex];
-          const submesh =
-            renderer.kind === 'mesh' ? mesh?.submeshes[renderer.submesh ?? 0] : undefined;
-          const indexFormat =
-            mesh?.indices instanceof Uint32Array ? ('uint32' as const) : ('uint16' as const);
-          const material = options.material?.read(state.world, renderer.material);
-          const materialPass = particleMaterialPass(renderer.kind, material);
-          const particleBlend = renderer.kind === 'billboard' ? renderer.blend : 'alpha';
-          const projectionInstances = gpu.prepareBuffer(
-            `${state.names}.renderer.${rendererIndex}.instances`,
+                  : (submesh?.indexCount ?? 0)
+                : 6;
+            indirectWords[rendererIndex * 5 + 2] =
+              renderer.kind === 'mesh' && mesh?.indices !== undefined
+                ? (submesh?.indexOffset ?? 0)
+                : 0;
+          }
+
+          const scratchBytes = (capacity * 2 + Math.ceil(capacity / WORKGROUP_SIZE)) * 4;
+          const eventInputBytes = Math.max(
+            4,
+            eventInputCapacity(intent.emitter) * VFX_EVENT_INPUT_BYTES,
+          );
+          const eventBytes = Math.max(4, eventCapacity(intent.emitter) * VFX_EVENT_BYTES);
+          resources.push(
             {
-              size: isTopology
-                ? topologyPlan?.ok
-                  ? topologyPlan.value.vertexBytes
-                  : 0
-                : state.capacity * (isBillboard ? BILLBOARD_INSTANCE_BYTES : MESH_INSTANCE_BYTES),
+              kind: 'compute-program',
+              name: program,
+              program: {
+                wgsl: intent.emitter.wgsl,
+                entryPoints: intent.emitter.reflection.entryPoints,
+                bindings: intent.emitter.reflection.bindings,
+              },
+            },
+            {
+              kind: 'buffer',
+              name: particles,
+              size: capacity * PARTICLE_BYTES,
+              usage: ['storage'],
+              ...(intent.reset ? { data: resetData(capacity * PARTICLE_BYTES) } : {}),
+            },
+            { kind: 'buffer', name: aliveIndices, size: capacity * 4, usage: ['storage'] },
+            {
+              kind: 'buffer',
+              name: counters,
+              size: COUNTERS_BYTES,
+              usage: ['storage'],
+              ...(intent.reset ? { data: resetData(COUNTERS_BYTES) } : {}),
+            },
+            {
+              kind: 'buffer',
+              name: indirect,
+              size: indirectWords.byteLength,
+              usage: ['storage', 'indirect'],
+              data: indirectWords,
+            },
+            {
+              kind: 'buffer',
+              name: scratch,
+              size: scratchBytes,
+              usage: ['storage'],
+              ...(intent.reset ? { data: resetData(scratchBytes) } : {}),
+            },
+            {
+              kind: 'buffer',
+              name: sharedInstances,
+              size: capacity * Math.max(BILLBOARD_INSTANCE_BYTES, MESH_INSTANCE_BYTES),
               usage: ['storage', 'vertex'],
             },
-          );
-          if (!projectionInstances.ok) return projectionInstances;
-          const projectionHistory = gpu.prepareBuffer(
-            `${state.names}.renderer.${rendererIndex}.history`,
             {
-              size:
-                renderer.kind === 'trail'
-                  ? Math.max(16, renderer.capacity * renderer.historyLength * 16)
-                  : 16,
+              kind: 'buffer',
+              name: eventInputs,
+              size: eventInputBytes,
               usage: ['storage'],
-              ...(intent.reset
-                ? {
-                    data: resetData(
-                      renderer.kind === 'trail'
-                        ? Math.max(16, renderer.capacity * renderer.historyLength * 16)
-                        : 16,
-                    ),
-                  }
-                : {}),
+              data: encodeEventInputs(intent),
             },
-          );
-          if (!projectionHistory.ok) return projectionHistory;
-          const projectionRuntime = gpu.prepareBuffer(
-            `${state.names}.renderer.${rendererIndex}.runtime`,
             {
+              kind: 'buffer',
+              name: events,
+              size: eventBytes,
+              usage: ['storage'],
+              ...(intent.reset ? { data: resetData(eventBytes) } : {}),
+            },
+            {
+              kind: 'buffer',
+              name: runtime,
               size: RUNTIME_BYTES,
               usage: ['uniform'],
-              data: runtimeData(
-                { ...intent, fixedDelta: 0, spawnCount: 0 },
-                extracted.camera,
-                material,
-                localToWorld,
-                renderer,
-                rendererIndex,
-              ),
+              data: runtimeData(intent, entry.camera, undefined, localToWorld),
             },
-          );
-          if (!projectionRuntime.ok) return projectionRuntime;
-          const projectionBindings = gpu.prepareBindings(
-            `${state.names}.renderer.${rendererIndex}.bindings`,
             {
-              program: refs.program,
-              entries: [
-                { binding: 0, buffer: refs.particles },
-                { binding: 1, buffer: projectionRuntime.value },
-                { binding: 2, buffer: refs.aliveIndices },
-                { binding: 3, buffer: refs.counters },
-                { binding: 4, buffer: refs.indirect },
-                { binding: 5, buffer: projectionHistory.value },
-                { binding: 6, buffer: projectionInstances.value },
-                { binding: 8, buffer: refs.eventInputs },
-                { binding: 9, buffer: refs.events },
-              ],
+              kind: 'compute-bindings',
+              name: bindings,
+              program,
+              entries: computeBindingEntries(intent, {
+                0: particles,
+                1: runtime,
+                2: aliveIndices,
+                3: counters,
+                4: indirect,
+                5: scratch,
+                6: sharedInstances,
+                8: eventInputs,
+                9: events,
+              }),
             },
           );
-          if (!projectionBindings.ok) return projectionBindings;
-          projections.push({
-            kind: renderer.kind,
-            instances: projectionInstances.value,
-            ring: {
-              runtime: projectionRuntime.value,
-              bindings: projectionBindings.value,
-            },
-            workgroups: Math.ceil(
-              (renderer.kind === 'trail'
-                ? renderer.capacity * Math.max(1, renderer.historyLength - 1)
-                : renderer.kind === 'ribbon' || renderer.kind === 'beam'
-                  ? renderer.capacity
-                  : state.capacity) / WORKGROUP_SIZE,
-            ),
-            ...(renderer.kind === 'trail'
-              ? { historyWorkgroups: Math.ceil(renderer.capacity / WORKGROUP_SIZE) }
-              : {}),
-            ...(renderer.kind === 'billboard' ? { sorting: renderer.sorting ?? 'none' } : {}),
-          });
-          const pipeline = context.graphics.preparePipeline(
-            `${state.names}.renderer.${rendererIndex}.${renderer.kind}.pipeline`,
-            {
-              shader: materialPass.shader,
-              vertexLayout: isBillboard
-                ? RENDER_FEATURE_VERTEX_LAYOUTS.billboardMaterialInstance
-                : isTopology
-                  ? RENDER_FEATURE_VERTEX_LAYOUTS.topologySegmentInstance
-                  : RENDER_FEATURE_VERTEX_LAYOUTS.meshGeometryMaterialInstance,
-              colorFormats: [colorTarget?.format ?? 'rgba8unorm-srgb'],
-              ...(depthTarget === undefined ? {} : { depthFormat: depthTarget.format }),
-              sampleCount: colorTarget?.sampleCount ?? 1,
-              topology: submesh?.topology ?? 'triangle-list',
-              ...(mesh?.indices === undefined ? {} : { indexFormat }),
-              ...(materialPass.renderState !== undefined
-                ? { renderState: materialPass.renderState }
-                : isBillboard || isTopology
-                  ? {
-                      renderState: {
-                        cullMode: 'none',
-                        depthCompare: 'less-equal',
-                        depthWriteEnabled:
-                          softParticle || isTopology ? false : particleBlend === 'opaque-cutout',
-                        ...(particleBlend === 'opaque-cutout'
-                          ? {}
-                          : {
-                              blend: {
-                                color: {
-                                  srcFactor: 'one',
-                                  dstFactor:
-                                    particleBlend === 'additive' ? 'one' : 'one-minus-src-alpha',
-                                  operation: 'add',
-                                },
-                                alpha: {
-                                  srcFactor: 'one',
-                                  dstFactor: 'one-minus-src-alpha',
-                                  operation: 'add',
-                                },
-                              },
-                            }),
-                      },
-                    }
-                  : {}),
-            },
+
+          const entryPoints = new Set(intent.emitter.reflection.entryPoints);
+          const dispatches = simulationDispatches(intent, stagePlan.value).filter((dispatch) =>
+            entryPoints.has(dispatch.entryPoint),
           );
-          if (!pipeline.ok) {
-            if (
-              pipeline.error.code !== 'render-feature-preparation-failed' ||
-              pipeline.error.detail.recovery !== 'next-frame'
-            ) {
-              return pipeline;
-            }
-            pendingGraphicsError ??= pipeline.error;
-            continue;
+          if (dispatches.length > 0) {
+            passes.push({
+              kind: 'compute',
+              name: `${prefix}.simulate`,
+              program,
+              bindings,
+              dispatches,
+            });
+            dispatchedIntents.add(intent);
           }
-          const graphicsBindings = context.graphics.prepareBindings(
-            `${state.names}.renderer.${rendererIndex}.${renderer.kind}.binding`,
-            {
-              pipeline: pipeline.value,
-              values: {
-                group: 0,
-                ...(isBillboard && depthTarget !== undefined ? { sceneDepth: depthTarget } : {}),
-              },
-            },
-          );
-          if (!graphicsBindings.ok) return graphicsBindings;
-          const materialBindings = !particleMaterialUsesBindings(material)
-            ? undefined
-            : context.graphics.prepareBindings(
-                `${state.names}.renderer.${rendererIndex}.${renderer.kind}.material-binding`,
-                {
-                  pipeline: pipeline.value,
-                  values: {
-                    group: 1,
-                    material: {
-                      world: frame.worlds.findIndex((entry) => entry.world === state.world),
-                      guid: renderer.material,
-                    },
-                  },
-                },
-              );
-          if (materialBindings !== undefined && !materialBindings.ok) return materialBindings;
-          const drawBindings = [
-            graphicsBindings.value,
-            ...(materialBindings === undefined ? [] : [materialBindings.value]),
-          ];
-          if (isBillboard || isTopology) {
-            const vertexData = context.graphics.prepareVertexData(
-              `${state.names}.${isTopology ? renderer.kind : 'billboard'}.vertices`,
+
+          for (const [rendererIndex, renderer] of renderers.entries()) {
+            const rendererPrefix = `${prefix}.renderer-${rendererIndex}`;
+            const isBillboard = renderer.kind === 'billboard';
+            const isTopology =
+              renderer.kind === 'ribbon' || renderer.kind === 'trail' || renderer.kind === 'beam';
+            const topologyPlan = isTopology ? createTopologyResourcePlan(renderer) : undefined;
+            if (topologyPlan !== undefined && !topologyPlan.ok) return err(planFailure());
+            const material = options.material?.read(entry.world, renderer.material);
+            const materialPass = particleMaterialPass(renderer.kind, material);
+            const mesh = meshes[rendererIndex];
+            const submesh =
+              renderer.kind === 'mesh' ? mesh?.submeshes[renderer.submesh ?? 0] : undefined;
+            const indexFormat = mesh?.indices instanceof Uint32Array ? 'uint32' : 'uint16';
+            const sceneDepthBinding = isBillboard
+              ? particleMaterialSceneDepthBinding(
+                  context.materialShaderBindingContract?.(materialPass.shader) ??
+                    (materialPass.shader === PARTICLE_SHADER_IDENTIFIERS.billboard
+                      ? 'view-and-scene-depth'
+                      : undefined),
+                )
+              : undefined;
+            const instances = `${rendererPrefix}.instances`;
+            const history = `${rendererPrefix}.history`;
+            const projectionRuntime = `${rendererPrefix}.runtime`;
+            const projectionBindings = `${rendererPrefix}.compute-bindings`;
+            const vertexLayout = isBillboard
+              ? RENDER_FEATURE_VERTEX_LAYOUTS.billboardMaterialInstance
+              : isTopology
+                ? RENDER_FEATURE_VERTEX_LAYOUTS.topologySegmentInstance
+                : RENDER_FEATURE_VERTEX_LAYOUTS.meshGeometryMaterialInstance;
+            const instanceBytes = isTopology
+              ? (topologyPlan?.value.vertexBytes ?? 16)
+              : capacity * (isBillboard ? BILLBOARD_INSTANCE_BYTES : MESH_INSTANCE_BYTES);
+            const historyBytes =
+              renderer.kind === 'trail'
+                ? Math.max(16, renderer.capacity * renderer.historyLength * 16)
+                : 16;
+
+            resources.push(
               {
-                layout: isTopology
-                  ? RENDER_FEATURE_VERTEX_LAYOUTS.topologySegmentInstance
-                  : RENDER_FEATURE_VERTEX_LAYOUTS.billboardMaterialInstance,
-                buffer: projectionInstances.value,
+                kind: 'buffer',
+                name: instances,
+                size: instanceBytes,
+                usage: ['storage', 'vertex'],
+              },
+              {
+                kind: 'buffer',
+                name: history,
+                size: historyBytes,
+                usage: ['storage'],
+                ...(intent.reset ? { data: resetData(historyBytes) } : {}),
+              },
+              {
+                kind: 'buffer',
+                name: projectionRuntime,
+                size: RUNTIME_BYTES,
+                usage: ['uniform'],
+                data: runtimeData(
+                  { ...intent, fixedDelta: 0, spawnCount: 0 },
+                  entry.camera,
+                  material,
+                  localToWorld,
+                  renderer,
+                  rendererIndex,
+                ),
+              },
+              {
+                kind: 'compute-bindings',
+                name: projectionBindings,
+                program,
+                entries: computeBindingEntries(intent, {
+                  0: particles,
+                  1: projectionRuntime,
+                  2: aliveIndices,
+                  3: counters,
+                  4: indirect,
+                  5: history,
+                  6: instances,
+                  8: eventInputs,
+                  9: events,
+                }),
               },
             );
-            if (!vertexData.ok) return vertexData;
-            const draw: RenderFeatureDrawRecord = {
-              kind: 'draw-indirect',
-              pipeline: pipeline.value,
-              bindings: drawBindings,
-              vertexData: [{ slot: 0, resource: vertexData.value }],
-              command: { buffer: refs.indirect, offset: rendererIndex * 20 },
+
+            const projectionDispatches: Extract<
+              PlanPass,
+              { readonly kind: 'compute' }
+            >['dispatches'][number][] = [];
+            const pushProjection = (entryPoint: string, workgroups: number): void => {
+              if (!entryPoints.has(entryPoint)) return;
+              projectionDispatches.push({
+                kind: 'direct',
+                entryPoint,
+                workgroups: [Math.max(1, workgroups)],
+              });
             };
-            (isBillboard ? depthSampledDraws : draws).push(draw);
-            continue;
-          }
-          if (mesh === undefined) {
-            return err(new RenderFeatureStageFailedError(IDENTITY, -1, 'prepare', 'next-frame'));
-          }
-          const geometryData = canonicalMeshVertices(mesh);
-          const geometryBuffer = gpu.prepareBuffer(
-            `${state.names}.renderer.${rendererIndex}.mesh.geometry-buffer`,
-            {
-              size: geometryData.byteLength,
-              usage: ['vertex'],
-              data: geometryData,
-            },
-          );
-          if (!geometryBuffer.ok) return geometryBuffer;
-          const geometry = context.graphics.prepareVertexData(
-            `${state.names}.renderer.${rendererIndex}.mesh.geometry`,
-            {
-              layout: RENDER_FEATURE_VERTEX_LAYOUTS.meshGeometryMaterialInstance,
-              buffer: geometryBuffer.value,
-            },
-          );
-          if (!geometry.ok) return geometry;
-          const instances = context.graphics.prepareVertexData(
-            `${state.names}.renderer.${rendererIndex}.mesh.instances`,
-            {
-              layout: RENDER_FEATURE_VERTEX_LAYOUTS.meshGeometryMaterialInstance,
-              buffer: projectionInstances.value,
-            },
-          );
-          if (!instances.ok) return instances;
-          const indexBuffer =
-            mesh.indices === undefined
-              ? undefined
-              : gpu.prepareBuffer(`${state.names}.renderer.${rendererIndex}.mesh.index-buffer`, {
-                  size: mesh.indices.byteLength,
-                  usage: ['index'],
-                  data: mesh.indices,
-                });
-          if (indexBuffer !== undefined && !indexBuffer.ok) return indexBuffer;
-          const indices =
-            indexBuffer === undefined
-              ? undefined
-              : context.graphics.prepareIndexData(
-                  `${state.names}.renderer.${rendererIndex}.mesh.indices`,
+            if (isBillboard && renderer.sorting === 'back-to-front') {
+              pushProjection('forgeax_vfx_sort_main', 1);
+            }
+            if (renderer.kind === 'trail') {
+              pushProjection(
+                'forgeax_vfx_trail_history_main',
+                Math.ceil(renderer.capacity / WORKGROUP_SIZE),
+              );
+            }
+            const projectionCount =
+              renderer.kind === 'trail'
+                ? renderer.capacity * Math.max(1, renderer.historyLength - 1)
+                : isTopology
+                  ? renderer.capacity
+                  : capacity;
+            pushProjection(
+              renderer.kind === 'billboard'
+                ? 'forgeax_vfx_billboard_main'
+                : renderer.kind === 'mesh'
+                  ? 'forgeax_vfx_mesh_main'
+                  : `forgeax_vfx_${renderer.kind}_main`,
+              Math.ceil(projectionCount / WORKGROUP_SIZE),
+            );
+            if (projectionDispatches.length > 0) {
+              passes.push({
+                kind: 'compute',
+                name: `${rendererPrefix}.project`,
+                program,
+                bindings: projectionBindings,
+                dispatches: projectionDispatches,
+              });
+            }
+
+            const graphicsProgram = `${rendererPrefix}.graphics-program`;
+            const graphicsBindings = `${rendererPrefix}.graphics-bindings`;
+            const vertexData = `${rendererPrefix}.vertex-data`;
+            const renderState =
+              isBillboard && depthTarget !== undefined
+                ? { ...(materialPass.renderState ?? {}), depthWriteEnabled: false }
+                : materialPass.renderState;
+            resources.push(
+              {
+                kind: 'graphics-program',
+                name: graphicsProgram,
+                program: {
+                  shader: materialPass.shader,
+                  vertexLayout,
+                  colorFormats: [colorTarget?.format ?? 'rgba8unorm-srgb'],
+                  ...(depthTarget === undefined ? {} : { depthFormat: depthTarget.format }),
+                  sampleCount: colorTarget?.sampleCount ?? 1,
+                  topology: submesh?.topology ?? 'triangle-list',
+                  ...(mesh?.indices === undefined ? {} : { indexFormat }),
+                  ...(renderState === undefined ? {} : { renderState }),
+                },
+              },
+              {
+                kind: 'graphics-bindings',
+                name: graphicsBindings,
+                program: graphicsProgram,
+                values: {
+                  group: 0,
+                  runtime: projectionRuntime,
+                  instances,
+                  ...(sceneDepthBinding === undefined ? {} : { sceneDepthBinding }),
+                },
+                ...(sceneDepthBinding !== undefined && depthTarget !== undefined
+                  ? { logicalTargets: { sceneDepth: depthTarget.name } }
+                  : {}),
+              },
+              { kind: 'vertex-data', name: vertexData, layout: vertexLayout, buffer: instances },
+            );
+            const drawBindings = [graphicsBindings];
+            if (particleMaterialUsesBindings(material)) {
+              const materialBindings = `${rendererPrefix}.material-bindings`;
+              resources.push({
+                kind: 'graphics-bindings',
+                name: materialBindings,
+                program: graphicsProgram,
+                values: {
+                  group: 1,
+                  material: { world: worldIndex, guid: renderer.material },
+                },
+              });
+              drawBindings.push(materialBindings);
+            }
+
+            const vertexBindings: { readonly slot: number; readonly resource: string }[] = [];
+            let indexData:
+              | { readonly resource: string; readonly format: 'uint16' | 'uint32' }
+              | undefined;
+            if (renderer.kind === 'mesh') {
+              if (mesh === undefined) return err(planFailure());
+              const geometryBuffer = `${rendererPrefix}.geometry-buffer`;
+              const geometry = `${rendererPrefix}.geometry`;
+              const geometryData = canonicalMeshVertices(mesh);
+              resources.push(
+                {
+                  kind: 'buffer',
+                  name: geometryBuffer,
+                  size: geometryData.byteLength,
+                  usage: ['vertex'],
+                  data: geometryData,
+                },
+                {
+                  kind: 'vertex-data',
+                  name: geometry,
+                  layout: vertexLayout,
+                  buffer: geometryBuffer,
+                },
+              );
+              vertexBindings.push(
+                { slot: 0, resource: geometry },
+                { slot: 1, resource: vertexData },
+              );
+              if (mesh.indices !== undefined) {
+                const indexBuffer = `${rendererPrefix}.index-buffer`;
+                const indices = `${rendererPrefix}.indices`;
+                resources.push(
                   {
+                    kind: 'buffer',
+                    name: indexBuffer,
+                    size: mesh.indices.byteLength,
+                    usage: ['index'],
+                    data: mesh.indices,
+                  },
+                  {
+                    kind: 'index-data',
+                    name: indices,
                     format: indexFormat,
-                    buffer: indexBuffer.value,
+                    buffer: indexBuffer,
                   },
                 );
-          if (indices !== undefined && !indices.ok) return indices;
-          const vertexData = [
-            { slot: 0, resource: geometry.value },
-            { slot: 1, resource: instances.value },
-          ];
-          draws.push(
-            indices === undefined
-              ? {
-                  kind: 'draw-indirect',
-                  pipeline: pipeline.value,
-                  bindings: drawBindings,
-                  vertexData,
-                  command: { buffer: refs.indirect, offset: rendererIndex * 20 },
-                }
-              : {
-                  kind: 'draw-indexed-indirect',
-                  pipeline: pipeline.value,
-                  bindings: drawBindings,
-                  vertexData,
-                  indexData: { resource: indices.value, format: indexFormat },
-                  command: { buffer: refs.indirect, offset: rendererIndex * 20 },
+                indexData = { resource: indices, format: indexFormat };
+              }
+            } else {
+              vertexBindings.push({ slot: 0, resource: vertexData });
+            }
+
+            passes.push({
+              kind: 'raster',
+              name: `${rendererPrefix}.raster`,
+              colorAttachments: [
+                {
+                  target: colorTarget?.name ?? 'swapchain',
+                  loadOp: 'load',
+                  storeOp: 'store',
                 },
-          );
-        }
-        state.projections = projections;
-        state.draws = draws;
-        state.depthSampledDraws = depthSampledDraws;
-        state.colorTarget = colorTarget;
-        state.depthTarget = depthTarget;
-      }
-      if (pendingGraphicsError !== undefined) return err(pendingGraphicsError);
-      return ok(undefined);
-    },
-    contribute: (frame, context) => {
-      for (const state of states.values()) {
-        const refs = state.refs;
-        const firstProjection = state.projections[0];
-        if (refs === undefined) continue;
-        const extracted = frame.worlds.find((entry) => entry.world === state.world);
-        if (extracted === undefined) continue;
-        if (!extracted.runtime.isEmitterSessionEnabled(state.player, state.emitterId)) continue;
-        const currentIntents = extracted.intents.filter(
-          (intent) => intent.player === state.player && intent.emitter.id === state.emitterId,
-        );
-        const intents = currentIntents.some(
-          (intent) => intent.programFingerprint === state.fingerprint,
-        )
-          ? currentIntents.filter((intent) => intent.programFingerprint === state.fingerprint)
-          : state.lastIntent === undefined
-            ? []
-            : [state.lastIntent];
-        const groups = Math.ceil(state.capacity / WORKGROUP_SIZE);
-        const dispatches = intents.flatMap((intent) => {
-          const bindings = state.rings[intent.tick % MAX_TICK_RINGS]?.bindings;
-          if (bindings === undefined) return [];
-          return [
-            { entryPoint: 'forgeax_vfx_spawn_main', workgroups: [groups] as const, bindings },
-            { entryPoint: 'forgeax_vfx_update_main', workgroups: [groups] as const, bindings },
-            ...stageDispatches(
-              state.stagePlan ?? {
-                stages: [],
-                fingerprint: '',
-                generation: intent.instanceGeneration,
-              },
-              groups,
-              bindings,
-            ),
-            { entryPoint: 'forgeax_vfx_scan_blocks_main', workgroups: [groups] as const, bindings },
-            {
-              entryPoint: 'forgeax_vfx_scan_block_offsets_main',
-              workgroups: [1] as const,
-              bindings,
-            },
-            { entryPoint: 'forgeax_vfx_add_offsets_main', workgroups: [groups] as const, bindings },
-            { entryPoint: 'forgeax_vfx_compact_main', workgroups: [groups] as const, bindings },
-            {
-              entryPoint: 'forgeax_vfx_event_main',
-              workgroups: [Math.ceil(eventInputCapacity(intent.emitter) / 64)] as const,
-              bindings,
-            },
-          ];
-        });
-        for (const projection of state.projections) {
-          if (projection.kind === 'billboard' && projection.sorting === 'back-to-front') {
-            dispatches.push({
-              entryPoint: 'forgeax_vfx_sort_main',
-              workgroups: [1],
-              bindings: projection.ring.bindings,
-            });
-          }
-          if (projection.kind === 'trail') {
-            dispatches.push({
-              entryPoint: 'forgeax_vfx_trail_history_main',
-              workgroups: [projection.historyWorkgroups ?? 1],
-              bindings: projection.ring.bindings,
-            });
-          }
-          dispatches.push({
-            entryPoint:
-              projection.kind === 'billboard'
-                ? 'forgeax_vfx_billboard_main'
-                : projection.kind === 'mesh'
-                  ? 'forgeax_vfx_mesh_main'
-                  : `forgeax_vfx_${projection.kind}_main`,
-            workgroups: [projection.workgroups],
-            bindings: projection.ring.bindings,
-          });
-        }
-        const passBindings =
-          firstProjection?.ring.bindings ??
-          intents
-            .map((intent) => state.rings[intent.tick % MAX_TICK_RINGS]?.bindings)
-            .find((bindings) => bindings !== undefined);
-        if (passBindings === undefined || dispatches.length === 0) continue;
-        const computePassIdentity = `${state.names}.simulate-and-project`;
-        const compute = context.staging.addComputePass(computePassIdentity, {
-          program: refs.program,
-          bindings: passBindings,
-          dispatches,
-        });
-        if (!compute.ok) return compute;
-        for (const intent of intents) {
-          extracted.runtime.markEventDispatched(state.player, intent.eventCounters);
-        }
-        for (const [drawKind, passDraws] of [
-          ['regular', state.draws],
-          ['depth-sampled', state.depthSampledDraws],
-        ] as const) {
-          if (passDraws.length === 0) continue;
-          const samplesDepth = drawKind === 'depth-sampled';
-          const draw = context.staging.addGraphicsPass(
-            `${state.names}.draw.${drawKind}`,
-            {
-              attachments: {
-                colors: [
-                  {
-                    resource: state.colorTarget ?? 'swapchain',
-                    format: state.colorTarget?.format ?? 'rgba8unorm-srgb',
-                    loadOp: 'load',
-                    storeOp: 'store',
-                  },
-                ],
-                ...(state.depthTarget === undefined
-                  ? {}
-                  : {
-                      depthStencil: {
-                        resource: state.depthTarget,
-                        format: state.depthTarget.format,
-                        depthLoadOp: 'load' as const,
-                        depthStoreOp: 'store' as const,
-                      },
-                    }),
-              },
-              ...(state.depthTarget === undefined || !samplesDepth
+              ],
+              ...(depthTarget === undefined
                 ? {}
-                : { sampledTargets: [state.depthTarget] }),
-              draws: passDraws,
-            },
-            { dependsOn: [{ featureIdentity: IDENTITY, passIdentity: computePassIdentity }] },
-          );
-          if (!draw.ok) return draw;
+                : {
+                    depthStencilAttachment: {
+                      target: depthTarget.name,
+                      depthLoadOp: 'load',
+                      depthStoreOp: 'store',
+                    },
+                  }),
+              ...(sceneDepthBinding !== undefined && depthTarget !== undefined
+                ? { sampledTargets: [depthTarget.name] }
+                : {}),
+              draws: [
+                {
+                  program: graphicsProgram,
+                  bindings: drawBindings,
+                  vertexData: vertexBindings,
+                  ...(indexData === undefined ? {} : { indexData }),
+                  draw: {
+                    kind: indexData === undefined ? 'draw-indirect' : 'draw-indexed-indirect',
+                    resource: indirect,
+                    offset: rendererIndex * 20,
+                  },
+                },
+              ],
+            });
+          }
         }
       }
       for (const entry of frame.worlds) {
-        const last = entry.intents.at(-1);
-        if (last !== undefined) entry.runtime.commit(last.sequence);
+        for (const intent of entry.intents) {
+          if (dispatchedIntents.has(intent)) {
+            entry.runtime.markEventDispatched(intent.player, intent.eventCounters);
+          }
+        }
+        const lastIntent = entry.intents.at(-1);
+        if (lastIntent !== undefined) entry.runtime.commit(lastIntent.sequence);
       }
-      return ok(undefined);
-    },
-    recover: () => {
-      const runtimes = new Set<VfxGpuRuntime>();
-      for (const state of states.values()) {
-        if (!state.world.hasResource(VFX_GPU_RUNTIME_RESOURCE_KEY)) continue;
-        runtimes.add(state.world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY));
-      }
-      for (const runtime of runtimes) runtime.recover();
-      states.clear();
-      return ok(undefined);
-    },
-    dispose: () => {
-      states.clear();
-      return ok(undefined);
+      return ok<RenderFeaturePlan>({ resources, passes });
     },
   };
 }

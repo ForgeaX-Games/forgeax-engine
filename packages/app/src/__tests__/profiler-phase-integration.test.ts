@@ -1,6 +1,7 @@
 import { World } from '@forgeax/engine-ecs';
+import { createRenderReadLease } from '@forgeax/engine-ecs/projection';
 import { createProfiler } from '@forgeax/engine-profiler';
-import type { DrawOwnerOptions, Renderer } from '@forgeax/engine-render';
+import type { Renderer, RenderFrameInput } from '@forgeax/engine-render';
 import { describe, expect, it } from 'vitest';
 
 import { createFrameLoop } from '../internal/frame-loop';
@@ -24,18 +25,14 @@ function makeScheduler() {
   };
 }
 
-function makeRenderer(draw: (options: DrawOwnerOptions) => void): Renderer {
+function makeRenderer(draw: (profileFrame: unknown) => void): Renderer {
   return {
-    backend: 'webgpu',
-    ready: Promise.resolve({ ok: true, value: undefined }),
-    attachWorld: () => ({ ok: true, value: undefined }),
-    detachWorld: () => {},
-    draw: (_worlds: World[], options: DrawOwnerOptions) => {
-      draw(options);
+    attach: (world: World) => ({ ok: true, value: createRenderReadLease(world) }),
+    draw: (request: RenderFrameInput) => {
+      draw(request.profileFrame);
       return { ok: true, value: undefined };
     },
-    onError: () => () => {},
-    onLost: () => () => {},
+    subscribe: () => () => {},
     dispose: () => {},
   } as unknown as Renderer;
 }
@@ -63,7 +60,7 @@ describe('App and Render profiler integration', () => {
     const profiler = createProfiler();
     start(profiler);
     const scheduler = makeScheduler();
-    const drawOptions: DrawOwnerOptions[] = [];
+    const drawOptions: unknown[] = [];
     const loop = createFrameLoop({
       world: new World(),
       renderer: makeRenderer((options) => drawOptions.push(options)),
@@ -81,9 +78,11 @@ describe('App and Render profiler integration', () => {
     expect(capture.records.filter((record) => record.source === 'app')).toHaveLength(5);
     expect(capture.records.every((record) => record.frameId === 1)).toBe(true);
     expect(drawOptions[0]).toMatchObject({
-      profileFrame: { captureId: capture.captureId, frameId: 1 },
+      captureId: capture.captureId,
+      frameId: 1,
     });
     expect(capture.phaseCatalog.app).toEqual(APP_PHASE_CATALOG);
+    expect(profiler.phaseCatalog.app).toEqual([]);
   });
 
   it('isolates a renderer failure while the host frame loop continues', () => {

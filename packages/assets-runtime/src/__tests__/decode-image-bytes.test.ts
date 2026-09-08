@@ -49,9 +49,9 @@ describe('decodeImageBytes structured failure surface (AC-04 / AC-08 / AC-09)', 
     expect(result.ok).toBe(false);
     if (result.ok) return;
     const expected =
-      "mime is one of ['image/png', 'image/jpeg']; texture format <-> colorSpace family agrees";
+      "mime is one of ['image/png', 'image/jpeg', 'image/x-tga']; texture format <-> colorSpace family agrees";
     const hint =
-      'v1 supports PNG / JPG only; convert with: cwebp / magick convert <input> <output>.png; check importSettings.colorSpace consistency with format family if formatColorSpaceConflict present';
+      'supports PNG / JPG / TGA true-color sources; convert unsupported formats with: magick convert <input> <output>.png; check importSettings.colorSpace consistency with format family if formatColorSpaceConflict present';
     expect(result.error.code).toBe('image-format-unsupported');
     expect(result.error.detail).toEqual({
       code: 'image-format-unsupported',

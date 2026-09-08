@@ -1,6 +1,7 @@
 // @forgeax/engine-vfx - runtime-safe code-first GPU VFX contract.
 
 export type { ParticleEffectAsset, ParticleEmitterDefinition } from '@forgeax/engine-types';
+export { particleEffectContribution } from './assets/particle-effect-decoder';
 export type {
   VfxAuthoringCapabilityDescriptor,
   VfxAuthoringDependencyDescriptor,
@@ -64,7 +65,11 @@ export type {
 } from './effect-contract.js';
 export { createVfxEffectContract, validateVfxEffectValues } from './effect-contract.js';
 export type { VfxGpuAssetError } from './gpu-loader.js';
-export { loadVfxGpuEffect, vfxGpuEffectPackLoader } from './gpu-loader.js';
+export {
+  loadVfxGpuEffect,
+  vfxGpuEffectContribution,
+  vfxGpuEffectPackLoader,
+} from './gpu-loader.js';
 export type {
   VfxGpuEffectAsset,
   VfxGpuEmitterProgram,

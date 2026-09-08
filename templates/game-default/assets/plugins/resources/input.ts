@@ -30,7 +30,6 @@ export const GAME_DEFAULT_INPUT_MAP: readonly ActionConfig[] = [
 /** Install the authored action map and expose a frame-zero-safe snapshot reader. */
 export function installGameplayInputMap(world: World): () => InputSnapshot {
   world.insertResource(INPUT_MAP_KEY, GAME_DEFAULT_INPUT_MAP);
-  world.registerSimulationTransientResource(INPUT_MAP_KEY);
   const empty = createInputSnapshot();
   return () => world.hasResource(INPUT_SNAPSHOT_RESOURCE_KEY)
     ? world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY)

@@ -55,7 +55,7 @@
 // responsibility migration): the legacy component-level
 // stride-declaration option (`{ transforms: 16 }` keyed on the retired
 // per-component stride defineComponent option key) was retired because:
-//   - The ECS layer no longer carries any per-component stride schema (M2 /
+//   - The ECS layer no longer carries a per-component stride schema (M2 /
 //     w9 dropped the option from `DefineComponentOptions` -- the SSOT
 //     moved to the RenderSystem entry + AI user set site).
 //   - Centralising the check at the consumer (RenderSystem extract) rather

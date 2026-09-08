@@ -4,6 +4,7 @@ import { parseKtx2 } from '@forgeax/engine-codec';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { BasisEncoderModule, BasisModuleFactory } from '../wasm/basis-types.js';
 
+// @perf-budget-skip: intentional large-source WASM encoder boundary gate.
 /**
  * Encoder source-pixel ceiling gate (CI-red fix, human decision).
  *

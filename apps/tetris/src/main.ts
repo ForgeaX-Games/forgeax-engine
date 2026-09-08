@@ -9,7 +9,7 @@
 // entities. Empty cells are hidden by collapsing the transform scale to 0
 // (vertices collapse to a single NDC point, no fragments emitted).
 
-import { type AssetRegistry, HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import {
   Camera,
@@ -20,7 +20,6 @@ import {
   perspective,
 } from '@forgeax/engine-render';
 import {
-  acquireCanvasContext,
   createRenderer,
   EngineEnvironmentError,
   type Handle,
@@ -190,34 +189,19 @@ function pushError(code: string, hint: string | undefined): void {
 }
 
 async function bootstrap(): Promise<void> {
-  const renderer = await createRenderer(canvas, {});
-  const worldAttachment1 = renderer.attachWorld(world);
+  const created = await createRenderer(canvas, {});
+  if (!created.ok) throw created.error;
+  const renderer = created.value;
+  const worldAttachment1 = renderer.attach(world);
   if (!worldAttachment1.ok) throw worldAttachment1.error;
-  renderer.onError((e) => {
-    console.error('[tetris] renderer.onError:', e.code, e.hint);
+  const lease = worldAttachment1.value;
+  renderer.subscribe((event) => {
+    if (event.kind !== 'error') return;
+    const e = event.error;
+    console.error('[tetris] renderer error:', e.code, e.hint);
     pushError(e.code, e.hint);
   });
-  const ctxResult = acquireCanvasContext(canvas);
-  if (ctxResult.ok) {
-    const cfgResult = ctxResult.value.configure({
-      device: renderer.device,
-      format: 'rgba8unorm',
-      usage: 0x10 | 0x01,
-    });
-    if (!cfgResult.ok) console.error('[tetris] canvasContext.configure failed:', cfgResult.error);
-  } else {
-    console.error('[tetris] acquireCanvasContext failed:', ctxResult.error);
-  }
-  console.warn(`[tetris] backend=${renderer.backend}`);
-  const ready = await renderer.ready;
-  if (!ready.ok) {
-    console.error('[tetris] renderer.ready failed:', ready.error);
-    pushError(ready.error.code, ready.error.hint);
-    return;
-  }
-  // Bind the AssetRegistry so paint() can lazy-register one MaterialAsset
-  // per distinct piece colour via the materialFor cache.
-  assetRegistry = renderer.assets;
+  console.warn(`[tetris] backend=${renderer.inspect().capabilities.backendKind}`);
 
   let last = performance.now();
   const frame = (now: number): void => {
@@ -227,7 +211,11 @@ async function bootstrap(): Promise<void> {
     paint();
     updateHud();
     world.update().unwrap();
-    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const r = renderer.draw({
+      leases: [lease],
+      camera: { lease },
+      environment: { lease },
+    });
     if (!r.ok) {
       console.error('[tetris] draw error:', r.error);
       pushError(r.error.code, r.error.hint);
@@ -263,7 +251,6 @@ function spawnGrid(w: World, count: number): EntityHandle[] {
 // reused thereafter via a Map keyed on the quantised RGB string. AI users
 // reading this pattern see one MaterialAsset per palette entry, not one
 // per cell — the AssetRegistry keeps the handle space bounded.
-let assetRegistry: AssetRegistry | null = null;
 const materialCache = new Map<string, Handle<'MaterialAsset', 'shared'>>();
 
 function colorKey(r: number, g: number, b: number): string {
@@ -276,7 +263,6 @@ function colorKey(r: number, g: number, b: number): string {
 }
 
 function materialFor(r: number, g: number, b: number): Handle<'MaterialAsset', 'shared'> | null {
-  if (assetRegistry === null) return null;
   const key = colorKey(r, g, b);
   const cached = materialCache.get(key);
   if (cached !== undefined) return cached;

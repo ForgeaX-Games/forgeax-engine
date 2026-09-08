@@ -5,7 +5,12 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { downloadAsset, getReleaseAsset, getReleaseByTag } from '../lib/fetch-wasm-lib.mjs';
+import {
+  downloadAsset,
+  getReleaseAsset,
+  getReleaseByTag,
+  tarExtractionArgs,
+} from '../lib/fetch-wasm-lib.mjs';
 
 const ENV = { GITHUB_TOKEN: 'test-token' };
 const RELEASE = {
@@ -43,6 +48,31 @@ afterEach(async () => {
 });
 
 describe('fetch-wasm native transport fallback', () => {
+  it('passes Windows drive paths to GNU tar as explicit local forward-slash paths', () => {
+    expect(
+      tarExtractionArgs(
+        'D:\\a\\forgeax-engine\\asset.tar.gz',
+        'D:\\a\\forgeax-engine\\pkg',
+        'win32',
+      ),
+    ).toEqual([
+      '--force-local',
+      '-xzf',
+      'D:/a/forgeax-engine/asset.tar.gz',
+      '-C',
+      'D:/a/forgeax-engine/pkg',
+    ]);
+  });
+
+  it('keeps POSIX tar extraction arguments unchanged', () => {
+    expect(tarExtractionArgs('/tmp/asset.tar.gz', '/tmp/pkg', 'linux')).toEqual([
+      '-xzf',
+      '/tmp/asset.tar.gz',
+      '-C',
+      '/tmp/pkg',
+    ]);
+  });
+
   it('recovers release metadata through gh when Node fetch fails at TLS', async () => {
     const calls = [];
     const logs = [];

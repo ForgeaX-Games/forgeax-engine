@@ -6,12 +6,8 @@
 // to read the snapshot. The system itself holds zero queries; it only
 // pulls one sample from the backend and writes the Resource.
 //
-// M2 (full resource-ification, D-2 / D-4): the backend is supplied via the
-// `InputBackend` World resource (INPUT_BACKEND_KEY) rather than a captured
-// closure. The system is a module-level `defineSystem` token with the real fn
-// body (no factory); `resources` declares the dependency so a missing backend
-// routes through the structured ParamValidation 'invalid' path instead of a
-// raw throw.
+// The backend is supplied via the `InputBackend` World resource rather than a
+// captured closure. Resource reads remain explicit in the system body.
 
 import { defineSystem, defineSystemSet, type SystemHandle } from '@forgeax/engine-ecs';
 import {
@@ -67,7 +63,6 @@ export const INPUT_BACKEND_KEY = 'InputBackend' as const;
 export const InputFrameStartScan: SystemHandle<readonly []> = defineSystem({
   name: FRAME_START_SCAN_SYSTEM_NAME,
   queries: [],
-  resources: [INPUT_BACKEND_KEY],
   fn: (world) => {
     const backend = world.getResource<InputBackend>(INPUT_BACKEND_KEY);
     const sample = backend.sample();
@@ -94,6 +89,5 @@ export const InputFrameStartScan: SystemHandle<readonly []> = defineSystem({
       : undefined;
     const snapshot = snapshotFromSample(sample, actionStates, inputMap, previousSnapshot);
     world.insertResource(INPUT_SNAPSHOT_RESOURCE_KEY, snapshot);
-    world.registerSimulationTransientResource(INPUT_SNAPSHOT_RESOURCE_KEY);
   },
 });

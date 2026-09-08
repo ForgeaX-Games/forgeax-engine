@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "learn-render LearnOpenGL section 5.advanced-lighting 8.deferred-shading -- HDRP deferred opaque + forward transparent with 32 point lights and 9-cube 3x3 grid.",
+  "description": "learn-render LearnOpenGL section 5.advanced-lighting 8.deferred-shading -- Standard deferred opaque + forward transparent with 32 point lights and a 9-cube 3x3 grid.",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",

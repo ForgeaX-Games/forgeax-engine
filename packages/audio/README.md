@@ -45,7 +45,7 @@ app.world.spawn(
 | `engine-worker` | `createAudioIntentBackend` batches POD intents with frame completion | `createHostAudioConsumer` owns decode, cache, nodes, and `AudioContext` |
 | `shared` | Same Engine Worker intent path | Same Host consumer; Kernel Workers never receive audio state |
 
-`AudioClipAsset` is `{ kind: 'audio', sourceKey, bytes }`. The first play intent for a `sourceKey` carries bytes; later plays reuse the Host decode cache. Intents cover play, stop, per-source volume, bus volume/mute, listener pose, and destroy. Stale async decode completion is fenced by the entity play epoch, so it cannot resurrect a stopped or replaced source.
+`AudioClipAsset` is `{ kind: 'audio', sourceKey, bytes }`. The first play intent for a `sourceKey` carries bytes; identical later plays reuse the Host decode cache, while changed bytes under the stable key are republished. Intents cover play, stop, per-source volume, bus volume/mute, listener pose, and destroy. Stale async decode completion is fenced by both the entity play epoch and the current source-key content, so it cannot resurrect a stopped, replaced, or superseded source.
 
 ## ECS component schema
 
@@ -92,7 +92,7 @@ Each error carries 4-field structured surface: `.code` / `.expected` / `.hint` /
 
 ## Known limitations
 
-- **gain.value direct assignment produces audible click** -- `setBusVolume` and `setVolume` directly assign `GainNode.gain.value`, which may produce an audible pop. Smooth ramp (e.g. `setTargetAtTime`) is deferred to a future feat (OOS-8).
+- **bounded live gain transitions** -- WebAudioEngine `setVolume`, `setBusVolume`, and `setBusMute` cancel prior automation at `AudioContext.currentTime` and schedule one 10 ms linear transition to each finite, non-negative target. Initial pre-start gain setup remains immediate.
 - **No nested bus routing** -- fixed two-bus topology only (OOS-2).
 - **No playback speed control** -- deferred (OOS-7).
 - **No audio-specific Inspector method** -- use `app.execution.report().audio` or the existing Remote execution root.

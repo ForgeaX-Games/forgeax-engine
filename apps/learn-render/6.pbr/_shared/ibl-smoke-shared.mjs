@@ -26,7 +26,7 @@
 // Verdict (verify mode):
 //   - backend === 'webgpu'
 //   - frames observed >= 300 (SMOKE_MIN_FRAMES)
-//   - renderer.onError fired 0 times
+//   - renderer.subscribe error count 0
 //   - mean abs delta between final-frame readback and reference PNG <= 0.05
 //
 // Bake mode: skips the diff and writes the final-frame readback to the
@@ -124,8 +124,10 @@ export async function runIblSmoke(opts) {
 
   // --- 2. Mock canvas with offscreen render target ---
   let renderTarget;
+  let renderTargetFormat = 'rgba8unorm';
   function ensureRenderTarget(device, format) {
     if (renderTarget) return renderTarget;
+    renderTargetFormat = format;
     renderTarget = device.createTexture({
       size: { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
       format,
@@ -141,6 +143,7 @@ export async function runIblSmoke(opts) {
       if (kind !== 'webgpu') return null;
       return {
         configure(desc) {
+          renderTargetFormat = desc.format ?? 'rgba8unorm';
           ensureRenderTarget(desc.device, desc.format ?? 'rgba8unorm');
         },
         unconfigure() {},
@@ -164,7 +167,9 @@ export async function runIblSmoke(opts) {
   const { World } = await import(engineDist('ecs'));
   const { createSphereGeometry } = await import(engineDist('geometry'));
   const { Camera, MeshFilter, MeshRenderer } = await import(engineDist('render'));
-  const { createRenderer } = await import(engineDist('runtime'));
+  const { constructRuntimeRendererHost } = await import(
+    engineDist('runtime', 'renderer-host.mjs'),
+  );
   const { SKYBOX_MODE_CUBEMAP, SkyboxBackground, Skylight } = await import(
     engineDist('render'),
   );
@@ -176,24 +181,29 @@ export async function runIblSmoke(opts) {
   const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
 
   let renderer;
+  let assets;
   try {
-    renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+    const host = await constructRuntimeRendererHost(
+      mockCanvas,
+      {},
+      { shaderManifestUrl: MANIFEST_URL },
+    );
+    if (!host.ok) throw host.error;
+    renderer = host.value.renderer;
+    assets = host.value.assets;
   } catch (err) {
-    fail(`createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
+    fail(`renderer host construction failed: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
   }
 
-  console.log(`[${demoId}] backend=${renderer.backend}`);
-
-  const assets = renderer.assets;
-  if (!assets) fail('AssetRegistry is null (renderer construction did not complete successfully)');
+  console.log(`[${demoId}] backend=${renderer.inspect().capabilities.backendKind}`);
 
   const errors = [];
-  renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+  renderer.subscribe((event) => {
+    if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint });
+  });
 
-  const ready = await renderer.ready;
-  if (!ready.ok) fail(`renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
 
   // --- 4. Load newport_loft.hdr through REAL production loadByGuid path ---
   // AC-07: No decodeHdr / registerWithGuid HDR bypass. The smoke serves the
@@ -287,8 +297,13 @@ export async function runIblSmoke(opts) {
 
   // --- 5. Build scene (3x3 sphere matrix) ---
   const world = new World();
-  const worldAttachment1 = renderer.attachWorld(world);
+  const worldAttachment1 = renderer.attach(world);
   if (!worldAttachment1.ok) throw worldAttachment1.error;
+  const frameRequest = {
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  };
 
   // Mint a user-tier handle for the equirect pod. The equirect->cubemap + IBL
   // projection is now INTERNAL to the engine (lazy, in the render record arm) --
@@ -346,8 +361,8 @@ export async function runIblSmoke(opts) {
   }
 
   const cameraData = demoKind === 'specular'
-    ? { fov: Math.PI / 3, aspect: WIDTH / HEIGHT, near: 0.1, far: 100, tonemap: TONEMAP_REINHARD_EXTENDED }
-    : { fov: Math.PI / 3, aspect: WIDTH / HEIGHT, near: 0.1, far: 100 };
+    ? { fov: Math.PI / 3, aspect: WIDTH / HEIGHT, near: 0.1, far: 100, tonemap: TONEMAP_REINHARD_EXTENDED, clearColor: [0.1, 0.1, 0.1, 1] }
+    : { fov: Math.PI / 3, aspect: WIDTH / HEIGHT, near: 0.1, far: 100, clearColor: [0.1, 0.1, 0.1, 1] };
 
   world.spawn(
     {
@@ -385,7 +400,7 @@ export async function runIblSmoke(opts) {
   let framesObserved = 0;
   for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
     world.update(1 / 60).unwrap();
-    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const r = renderer.draw(frameRequest);
     if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
     framesObserved++;
     // Drain the device queue + yield every few frames so the fire-and-forget IBL
@@ -406,7 +421,7 @@ export async function runIblSmoke(opts) {
   }
   for (let i = 0; i < 32; i++) {
     world.update(1 / 60).unwrap();
-    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const r = renderer.draw(frameRequest);
     if (!r.ok) console.error(`[smoke] post-settle draw frame ${i} error: ${r.error.code}`);
     framesObserved++;
     if (i % 8 === 7) {
@@ -448,24 +463,26 @@ export async function runIblSmoke(opts) {
   readbackBuffer.unmap();
   readbackBuffer.destroy();
 
-  // Convert padded BGRA to tightly packed RGBA for PNG storage.
+  // Convert padded readback to tightly packed RGBA for PNG storage. Dawn's
+  // smoke canvas pins the preferred format to rgba8unorm, but keep this
+  // format-aware for hosts that expose a BGRA swapchain.
+  const readbackIsBgra = renderTargetFormat.startsWith('bgra');
   const rgba = new Uint8Array(WIDTH * HEIGHT * 4);
   for (let y = 0; y < HEIGHT; y++) {
     for (let x = 0; x < WIDTH; x++) {
       const srcOff = y * bytesPerRow + x * bytesPerPixel;
       const dstOff = (y * WIDTH + x) * 4;
-      // BGRA -> RGBA
-      rgba[dstOff + 0] = padded[srcOff + 2] ?? 0;
+      rgba[dstOff + 0] = padded[srcOff + (readbackIsBgra ? 2 : 0)] ?? 0;
       rgba[dstOff + 1] = padded[srcOff + 1] ?? 0;
-      rgba[dstOff + 2] = padded[srcOff + 0] ?? 0;
+      rgba[dstOff + 2] = padded[srcOff + (readbackIsBgra ? 0 : 2)] ?? 0;
       rgba[dstOff + 3] = padded[srcOff + 3] ?? 255;
     }
   }
 
   // --- 8. Verdict / bake ---
   const failures = [];
-  if (renderer.backend !== 'webgpu')
-    failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+  if (renderer.inspect().capabilities.backendKind !== 'webgpu')
+    failures.push(`(a) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
   if (framesObserved < SMOKE_MIN_FRAMES)
     failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
   if (errors.length > 0) {

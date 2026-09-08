@@ -10,18 +10,28 @@
 //   7. HUD div shows the current state variant name
 
 import { createApp } from '@forgeax/engine-app';
-import { Update } from '@forgeax/engine-ecs';
+import { Entity, Update, type EntityHandle } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { Materials } from '@forgeax/engine-render';
 import type { MaterialAsset, SceneAsset } from '@forgeax/engine-types';
-import { defineState, setNextState, getState, addOnEnter, despawnOnExit } from '@forgeax/engine-state';
+import {
+  addOnEnter,
+  defineState,
+  despawnOnEnter,
+  despawnOnExit,
+  getPreviousState,
+  getState,
+  setNextState,
+  setNextStateForce,
+} from '@forgeax/engine-state';
 import type { StateTokenVariant } from '@forgeax/engine-state';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 export const LevelId = defineState('LevelId', ['main-menu', 'tutorial', 'street-a'] as const);
+export const SessionPhase = defineState('SessionPhase', ['boot', 'ready'] as const);
 
 // Scene GUIDs — scenes are catalogued inline below via assets.catalog
 // (parallel copy kept in sync with scripts/smoke-dawn.mjs); no sidecar files.
@@ -42,9 +52,9 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
   const app = appResult.value;
   const { world } = app;
 
-  console.log(`[hello-level-switch] backend=${app.renderer.backend}`);
+  console.log(`[hello-level-switch] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
-  const assets = app.renderer.assets;
+  const assets = app.assets;
   if (!assets) throw new Error('AssetRegistry is null');
 
   // Register scene materials. tutorial floor = orange unlit, street-a floor =
@@ -157,7 +167,12 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
     { component: MeshRenderer, data: { materials: [playerMatHandle] } },
   );
 
-  // OnEnter tutorial: instantiate scene, scope root for exit-cleanup.
+  let tutorialRoot: EntityHandle | undefined;
+
+  // OnEnter tutorial: instantiate scene, scope root for exit-cleanup. The
+  // liveness guard makes the consumer callback safe to re-fire after a
+  // forced same-state retry: the failed transition has already materialised
+  // this root before a later callback throws.
   // feat-20260614 D-17: loadByGuid returns the SceneAsset payload; mint a fresh
   // user-tier column handle per entry via world.allocSharedRef so re-entering
   // the state after a prior despawnOnExit release works (a stale handle whose
@@ -165,12 +180,16 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
   // re-entry). assets.instantiate resolves the scene's GUID-string component
   // fields to fresh handles.
   addOnEnter(LevelId, 'tutorial', (w) => {
+    if (tutorialRoot !== undefined && w.get(tutorialRoot, Entity).ok) {
+      return;
+    }
     const ir = assets.instantiate(w.allocSharedRef('SceneAsset', tutorialSceneRes.value), w);
     if (!ir.ok) {
       console.error(`[hello-level-switch] instantiate tutorial failed: ${ir.error.code}`);
       return;
     }
     const root = ir.value;
+    tutorialRoot = root;
     despawnOnExit(w, root, LevelId, 'tutorial');
     console.log(`[hello-level-switch] tutorial scene spawned, root=${root}`);
   });
@@ -243,6 +262,291 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
     }
   }
   window.addEventListener('keydown', onKeyDown);
+
+  // M29 real-consumer probe. It stays behind a narrow app-local diagnostic
+  // surface so the browser smoke can drive public state requests through the
+  // same App/World/page without rebuilding any runtime object.
+  const m29Errors: Array<{ code: string; causeMatches: boolean }> = [];
+  let m29Fault: Error | undefined;
+  let m29LastCause: unknown;
+  let m29FaultUnsubscribe: (() => void) | undefined;
+  let m29RepairRuns = 0;
+  let m29RepairScope: EntityHandle | undefined;
+  let m29RepairUnsubscribe: (() => void) | undefined;
+  let m29MainMenuExit: EntityHandle | undefined;
+  let m29TutorialEnter: EntityHandle | undefined;
+  const m41NextStateKey = `__nextState__${LevelId.name}`;
+  const m41InvalidVariant = String('m41-runtime-invalid');
+  let m41MainMenuExit: EntityHandle | undefined;
+  let m41TutorialEnter: EntityHandle | undefined;
+  let m41RepairScope: EntityHandle | undefined;
+  let m41CallbackRuns = 0;
+  let m41Unsubscribe: (() => void) | undefined;
+  let m41Cleaned = false;
+
+  app.onError((error) => {
+    if (error.code === 'app-system-update-failed') {
+      m29LastCause = error.detail.cause;
+    }
+    m29Errors.push({
+      code: error.code,
+      causeMatches: error.code === 'app-system-update-failed' && error.detail.cause === m29Fault,
+    });
+  });
+
+  function m29Alive(entity: EntityHandle | undefined): boolean {
+    return entity !== undefined && world.get(entity, Entity).ok;
+  }
+
+  function m29Variant(token: typeof LevelId | typeof SessionPhase): string {
+    const state = getState(world, token);
+    return state.ok ? state.value : `error:${state.error.code}`;
+  }
+
+  function m29Previous(token: typeof LevelId | typeof SessionPhase): string {
+    const state = getPreviousState(world, token);
+    return state.ok ? state.value : `error:${state.error.code}`;
+  }
+
+  function m29MeshCount(): number {
+    const query = world.query({ with: [MeshFilter] });
+    if (!query.ok) return -1;
+    let count = 0;
+    for (const _row of query.value) count += 1;
+    return count;
+  }
+
+  function m29Snapshot(): Record<string, unknown> {
+    return {
+      worldIdentity: world.identity,
+      level: m29Variant(LevelId),
+      previousLevel: m29Previous(LevelId),
+      session: m29Variant(SessionPhase),
+      previousSession: m29Previous(SessionPhase),
+      mainMenuExitAlive: m29Alive(m29MainMenuExit),
+      tutorialEnterAlive: m29Alive(m29TutorialEnter),
+      repairedScopeAlive: m29Alive(m29RepairScope),
+      repairedCallbackRuns: m29RepairRuns,
+      meshEntityCount: m29MeshCount(),
+      appErrorCount: m29Errors.length,
+      lastAppErrorCode: m29Errors.at(-1)?.code ?? null,
+      lastCauseMatches: m29LastCause === m29Fault,
+    };
+  }
+
+  function m41RequestResult(result: ReturnType<typeof setNextState>): Record<string, unknown> {
+    if (result.ok) return { ok: true };
+    if (result.error.code === 'invalid-variant') {
+      return {
+        ok: false,
+        code: result.error.code,
+        detail: {
+          code: result.error.detail.code,
+          name: result.error.detail.name,
+          got: result.error.detail.got,
+          valid: [...result.error.detail.valid],
+        },
+      };
+    }
+    return { ok: false, code: result.error.code, detail: result.error.detail };
+  }
+
+  function m41ExecutionSignature(): Record<string, unknown> {
+    const inspection = world.inspect();
+    return {
+      systems: inspection.systems.map((system) => ({ name: system.name, sets: [...system.sets] })),
+      schedules: inspection.schedules.map((schedule) => ({
+        name: schedule.schedule.name,
+        systems: schedule.systems.map((system) => ({ name: system.name, sets: [...system.sets] })),
+      })),
+      resourceKeys: [...inspection.resourceKeys].sort(),
+    };
+  }
+
+  function m41PendingNextState(): Record<string, unknown> | null {
+    const pending = world.getResource<{ value: number; force: boolean } | undefined>(m41NextStateKey);
+    return pending === undefined ? null : { value: pending.value, force: pending.force };
+  }
+
+  function m41Snapshot(): Record<string, unknown> {
+    const inspection = world.inspect();
+    return {
+      worldIdentity: world.identity,
+      level: m29Variant(LevelId),
+      previousLevel: m29Previous(LevelId),
+      session: m29Variant(SessionPhase),
+      previousSession: m29Previous(SessionPhase),
+      pendingNextState: m41PendingNextState(),
+      mainMenuExitAlive: m29Alive(m41MainMenuExit),
+      tutorialEnterAlive: m29Alive(m41TutorialEnter),
+      repairedScopeAlive: m29Alive(m41RepairScope),
+      callbackRuns: m41CallbackRuns,
+      entityCount: inspection.entityCount,
+      meshEntityCount: m29MeshCount(),
+      activeComponents: [...inspection.activeComponents].sort(),
+      execution: m41ExecutionSignature(),
+      appErrorCount: m29Errors.length,
+    };
+  }
+
+  function m41RunInvalid(): Record<string, unknown> {
+    if (m41Unsubscribe !== undefined || m41Cleaned) {
+      return { ok: false, reason: 'probe-already-used', snapshot: m41Snapshot() };
+    }
+    const paused = app.pause();
+    if (!paused.ok) {
+      return { ok: false, reason: `pause:${paused.error.code}`, snapshot: m41Snapshot() };
+    }
+
+    m41MainMenuExit = world.spawn().unwrap();
+    despawnOnExit(world, m41MainMenuExit, LevelId, 'main-menu');
+    m41TutorialEnter = world.spawn().unwrap();
+    despawnOnEnter(world, m41TutorialEnter, LevelId, 'tutorial');
+    m41CallbackRuns = 0;
+    m41RepairScope = undefined;
+    m41Unsubscribe = addOnEnter(LevelId, 'tutorial', (w) => {
+      m41CallbackRuns += 1;
+      m41RepairScope = w.spawn().unwrap();
+      despawnOnExit(w, m41RepairScope, LevelId, 'tutorial');
+    });
+
+    const before = m41Snapshot();
+    const request = setNextState(world, LevelId, m41InvalidVariant as never);
+    const forceRequest = setNextStateForce(world, LevelId, m41InvalidVariant as never);
+    const afterRequest = m41Snapshot();
+    const frame = app.stepFrame(1 / 60);
+    const afterFrame = m41Snapshot();
+    return {
+      ok: !request.ok && !forceRequest.ok && frame.ok,
+      request: m41RequestResult(request),
+      forceRequest: m41RequestResult(forceRequest),
+      frameCode: frame.ok ? null : frame.error.code,
+      before,
+      afterRequest,
+      afterFrame,
+    };
+  }
+
+  function m41Repair(): Record<string, unknown> {
+    if (m41Unsubscribe === undefined || m41Cleaned) {
+      return { ok: false, reason: 'probe-not-active', snapshot: m41Snapshot() };
+    }
+    const request = setNextState(world, LevelId, 'tutorial');
+    const frame = app.stepFrame(1 / 60);
+    return {
+      ok: request.ok && frame.ok,
+      request: m41RequestResult(request),
+      frameCode: frame.ok ? null : frame.error.code,
+      snapshot: m41Snapshot(),
+    };
+  }
+
+  function m41Cleanup(): Record<string, unknown> {
+    if (m41Cleaned) {
+      return { ok: true, reason: 'already-clean', snapshot: m41Snapshot() };
+    }
+    if (m41Unsubscribe === undefined) {
+      return { ok: false, reason: 'probe-not-active', snapshot: m41Snapshot() };
+    }
+
+    const cleanupRequest = setNextState(world, LevelId, 'main-menu');
+    const cleanupFrame = app.stepFrame(1 / 60);
+    const forceCleanupRequest = setNextStateForce(world, LevelId, 'main-menu');
+    const forceCleanupFrame = app.stepFrame(1 / 60);
+    const snapshot = m41Snapshot();
+    m41Unsubscribe();
+    m41Unsubscribe = undefined;
+    m41Cleaned = true;
+    const resumed = app.resume();
+    return {
+      ok: cleanupRequest.ok && cleanupFrame.ok && forceCleanupRequest.ok && forceCleanupFrame.ok && resumed.ok,
+      cleanupRequest: m41RequestResult(cleanupRequest),
+      cleanupFrameCode: cleanupFrame.ok ? null : cleanupFrame.error.code,
+      forceCleanupRequest: m41RequestResult(forceCleanupRequest),
+      forceCleanupFrameCode: forceCleanupFrame.ok ? null : forceCleanupFrame.error.code,
+      resumeCode: resumed.ok ? null : resumed.error.code,
+      snapshot,
+    };
+  }
+
+  function m29RunFault(): Record<string, unknown> {
+    if (m29FaultUnsubscribe !== undefined) {
+      return { ok: false, reason: 'fault-already-installed', snapshot: m29Snapshot() };
+    }
+    const paused = app.pause();
+    if (!paused.ok) {
+      return { ok: false, reason: `pause:${paused.error.code}`, snapshot: m29Snapshot() };
+    }
+
+    const mainMenuExit = world.spawn().unwrap();
+    m29MainMenuExit = mainMenuExit;
+    despawnOnExit(world, mainMenuExit, LevelId, 'main-menu');
+    const tutorialEnter = world.spawn().unwrap();
+    m29TutorialEnter = tutorialEnter;
+    despawnOnEnter(world, tutorialEnter, LevelId, 'tutorial');
+    const fault = new Error('m29-state-callback-fault');
+    m29Fault = fault;
+    m29FaultUnsubscribe = addOnEnter(LevelId, 'tutorial', () => {
+      throw fault;
+    });
+
+    const levelRequest = setNextState(world, LevelId, 'tutorial');
+    const sessionRequest = setNextState(world, SessionPhase, 'ready');
+    const frame = app.stepFrame(1 / 60);
+    return {
+      ok: levelRequest.ok && sessionRequest.ok && !frame.ok,
+      frameCode: frame.ok ? null : frame.error.code,
+      snapshot: m29Snapshot(),
+    };
+  }
+
+  function m29RepairAndRetry(): Record<string, unknown> {
+    if (m29FaultUnsubscribe === undefined || m29Fault === undefined) {
+      return { ok: false, reason: 'fault-not-installed', snapshot: m29Snapshot() };
+    }
+    m29FaultUnsubscribe();
+    m29FaultUnsubscribe = undefined;
+    m29RepairRuns = 0;
+    m29RepairUnsubscribe = addOnEnter(LevelId, 'tutorial', (w) => {
+      m29RepairRuns += 1;
+      const repairScope = w.spawn().unwrap();
+      m29RepairScope = repairScope;
+      despawnOnExit(w, repairScope, LevelId, 'tutorial');
+    });
+
+    // The stale non-forced request is a no-op for the already-committed first
+    // token, while the later token consumes its still-pending request.
+    const staleFrame = app.stepFrame(1 / 60);
+    const forcedRequest = setNextStateForce(world, LevelId, 'tutorial');
+    const retryFrame = app.stepFrame(1 / 60);
+    const removeRepair = m29RepairUnsubscribe;
+    if (removeRepair !== undefined) removeRepair();
+    m29RepairUnsubscribe = undefined;
+    const resumed = app.resume();
+    return {
+      ok: staleFrame.ok && forcedRequest.ok && retryFrame.ok && resumed.ok,
+      staleFrameCode: staleFrame.ok ? null : staleFrame.error.code,
+      retryFrameCode: retryFrame.ok ? null : retryFrame.error.code,
+      resumeCode: resumed.ok ? null : resumed.error.code,
+      snapshot: m29Snapshot(),
+    };
+  }
+
+  Object.assign(globalThis as Record<string, unknown>, {
+    __forgeax_level_switch__: {
+      m29: {
+        runFault: m29RunFault,
+        repairAndRetry: m29RepairAndRetry,
+        snapshot: m29Snapshot,
+      },
+      m41: {
+        runInvalid: m41RunInvalid,
+        repair: m41Repair,
+        cleanup: m41Cleanup,
+        snapshot: m41Snapshot,
+      },
+    },
+  });
 
   // Start the app.
   const startResult = app.start();

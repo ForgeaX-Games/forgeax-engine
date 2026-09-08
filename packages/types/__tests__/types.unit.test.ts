@@ -149,7 +149,7 @@ describe('AssetErrorCode closed union - 5 members', () => {
     void _bogus;
   });
 
-  it('type-level: exhaustive switch with no default compiles for all 25 members', () => {
+  it('type-level: exhaustive switch with no default compiles for all 28 members', () => {
     function describe(code: AssetErrorCode): string {
       switch (code) {
         case 'asset-not-found':
@@ -160,6 +160,8 @@ describe('AssetErrorCode closed union - 5 members', () => {
           return 'format-unsupported';
         case 'asset-fetch-failed':
           return 'fetch-failed';
+        case 'catalog-source-unconfigured':
+          return 'catalog-source-unconfigured';
         case 'asset-invalid-value':
           return 'invalid-value';
         case 'cubemap-handle-missing':
@@ -188,11 +190,15 @@ describe('AssetErrorCode closed union - 5 members', () => {
         // === 1 new code (feat-20260604-hdr-equirect-cube-importer-loader M2 / w4) ===
         case 'texture-source-not-imported':
           return 'texture-source-not-imported';
-        // === 3 new codes (feat-20260608-mesh-multi-section-primitive-multi-material-slot M1 / w2) ===
-        case 'mesh-renderer-material-count-mismatch':
-          return 'mesh-renderer-material-count-mismatch';
+        // === Mesh slot and renderer override diagnostics ===
+        case 'mesh-renderer-material-override-invalid':
+          return 'mesh-renderer-material-override-invalid';
+        case 'mesh-renderer-material-override-overflow':
+          return 'mesh-renderer-material-override-overflow';
         case 'mesh-asset-submeshes-empty':
           return 'mesh-asset-submeshes-empty';
+        case 'mesh-asset-material-slot-index-out-of-range':
+          return 'mesh-asset-material-slot-index-out-of-range';
         case 'mesh-submesh-index-range-out-of-bounds':
           return 'mesh-submesh-index-range-out-of-bounds';
         // === 1 new code (feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild) ===
@@ -812,6 +818,8 @@ describe('AssetErrorCode - 1 new member (M1-T02)', () => {
           return 'format';
         case 'asset-fetch-failed':
           return 'fetch';
+        case 'catalog-source-unconfigured':
+          return 'catalog-source-unconfigured';
         case 'asset-invalid-value':
           return 'invalid';
         case 'cubemap-handle-missing':
@@ -839,11 +847,15 @@ describe('AssetErrorCode - 1 new member (M1-T02)', () => {
         // === 1 new code (feat-20260604-hdr-equirect-cube-importer-loader M2 / w4) ===
         case 'texture-source-not-imported':
           return 'texture-source-not-imported';
-        // === 3 new codes (feat-20260608-mesh-multi-section-primitive-multi-material-slot M1 / w2) ===
-        case 'mesh-renderer-material-count-mismatch':
-          return 'mesh-renderer-material-count-mismatch';
+        // === Mesh slot and renderer override diagnostics ===
+        case 'mesh-renderer-material-override-invalid':
+          return 'mesh-renderer-material-override-invalid';
+        case 'mesh-renderer-material-override-overflow':
+          return 'mesh-renderer-material-override-overflow';
         case 'mesh-asset-submeshes-empty':
           return 'mesh-asset-submeshes-empty';
+        case 'mesh-asset-material-slot-index-out-of-range':
+          return 'mesh-asset-material-slot-index-out-of-range';
         case 'mesh-submesh-index-range-out-of-bounds':
           return 'mesh-submesh-index-range-out-of-bounds';
         // === 1 new code (feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild) ===
@@ -1281,12 +1293,12 @@ describe('AI-user property access (P3 explicit failure)', () => {
 // F2-alpha). The module physically extracts `defaultConnect` from
 // `@forgeax/engine-remote/src/cli.ts:367-451` so the WS-JSON-RPC 2.0
 // client becomes a single SSOT shared by `@forgeax/engine-remote` (base
-// CLI) and `@forgeax/engine-ecs` (cli-ecs plugin bin, M2 w8/w9).
+// CLI) and the inspection client.
 //
 // Three assertions (locked by plan-tasks w4):
 //   (a) `defaultConnect(url)` resolves to an object with `execute(script)`
 //       + `dispose()` shape (charter P5 consistent abstraction — single
-//       method-injection surface for cli-ecs scripts).
+//       method-injection surface for inspection scripts).
 //   (b) `ConnectFn` type alias is exported and may be consumed by
 //       downstream packages.
 //   (c) On WS connect failure, returns
@@ -1295,7 +1307,7 @@ describe('AI-user property access (P3 explicit failure)', () => {
 //
 // Anchors: plan-strategy §2 D-3 F2-alpha (defaultConnect extracted to
 // types as wire-protocol client SSOT); §4 risk R7 (types package shape
-// drift coverage); requirements AC-06 / AC-08 (cli-ecs reuses the same
+// drift coverage); requirements AC-06 / AC-08 (inspection reuses the same
 // client function literal as the base CLI).
 
 
@@ -1934,25 +1946,30 @@ describe('Submesh interface', () => {
   });
 });
 
-describe('AssetErrorCode — 26 members', () => {
-  it('ASSET_ERROR_HINTS has exactly 26 keys (runtime guard, not hardcoded)', () => {
+describe('AssetErrorCode — 28 members', () => {
+  it('ASSET_ERROR_HINTS has exactly 28 keys (runtime guard, not hardcoded)', () => {
     const keys = Object.keys(ASSET_ERROR_HINTS);
-    expect(keys).toHaveLength(26);
+    expect(keys).toHaveLength(28);
   });
 
-  it('all 26 codes are distinct', () => {
+  it('all 28 codes are distinct', () => {
     const keys = Object.keys(ASSET_ERROR_HINTS);
     const set = new Set(keys);
-    expect(set.size).toBe(26);
+    expect(set.size).toBe(28);
   });
 
-  it('three new codes (feat-20260608 M1 w2) are present with hint strings', () => {
-    expect(ASSET_ERROR_HINTS['mesh-renderer-material-count-mismatch']).toBeDefined();
-    expect(ASSET_ERROR_HINTS['mesh-asset-submeshes-empty']).toBeDefined();
-    expect(ASSET_ERROR_HINTS['mesh-submesh-index-range-out-of-bounds']).toBeDefined();
-    expect(ASSET_ERROR_HINTS['mesh-renderer-material-count-mismatch'].length).toBeGreaterThan(0);
-    expect(ASSET_ERROR_HINTS['mesh-asset-submeshes-empty'].length).toBeGreaterThan(0);
-    expect(ASSET_ERROR_HINTS['mesh-submesh-index-range-out-of-bounds'].length).toBeGreaterThan(0);
+  it('mesh slot and renderer override codes are present with hint strings', () => {
+    const codes = [
+      'mesh-renderer-material-override-invalid',
+      'mesh-renderer-material-override-overflow',
+      'mesh-asset-submeshes-empty',
+      'mesh-asset-material-slot-index-out-of-range',
+      'mesh-submesh-index-range-out-of-bounds',
+    ] as const;
+    for (const code of codes) {
+      expect(ASSET_ERROR_HINTS[code]).toBeDefined();
+      expect(ASSET_ERROR_HINTS[code].length).toBeGreaterThan(0);
+    }
   });
 
   it('M0 baseline-restored code tileset-region-index-out-of-range has a hint string', () => {
@@ -1975,7 +1992,7 @@ describe('AssetErrorCode — 26 members', () => {
     expect(ASSET_ERROR_HINTS['source-not-imported'].length).toBeGreaterThan(0);
   });
 
-  it('all 26 codes have non-empty hint strings', () => {
+  it('all 28 codes have non-empty hint strings', () => {
     for (const [code, hint] of Object.entries(ASSET_ERROR_HINTS)) {
       expect(hint.length, `hint for ${code} must be non-empty`).toBeGreaterThan(0);
     }
@@ -1984,7 +2001,7 @@ describe('AssetErrorCode — 26 members', () => {
   // Type-level: verify exhaustive switch on 22-member AssetErrorCode compiles
   // without default case. TS compiler validates union completeness at compile
   // time — this function exists solely for tsc type-checking.
-  it('switch on AssetErrorCode with all 26 cases compiles without default', () => {
+  it('switch on AssetErrorCode with all 28 cases compiles without default', () => {
     function describe(code: AssetErrorCode): string {
       switch (code) {
         case 'asset-not-found':
@@ -2021,10 +2038,14 @@ describe('AssetErrorCode — 26 members', () => {
           return 'not imported';
         case 'texture-source-not-imported':
           return 'texture source not imported';
-        case 'mesh-renderer-material-count-mismatch':
-          return 'count mismatch';
+        case 'mesh-renderer-material-override-invalid':
+          return 'override invalid';
+        case 'mesh-renderer-material-override-overflow':
+          return 'override overflow';
         case 'mesh-asset-submeshes-empty':
           return 'submeshes empty';
+        case 'mesh-asset-material-slot-index-out-of-range':
+          return 'material slot index oob';
         case 'mesh-submesh-index-range-out-of-bounds':
           return 'index oob';
         case 'tileset-region-index-out-of-range':

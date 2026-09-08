@@ -7,7 +7,7 @@
 //   1. Inject globalThis.navigator.gpu via `webgpu` npm package (dawn-node).
 //   2. Mock canvas + createApp (structural boot).
 //   3. Spawn minimal proof scene: 3 cubes + camera + DirectionalLight.
-//   4. Run N>=300 frames, collect RhiError via renderer.onError.
+//   4. Run N>=300 frames, collect RhiError via Renderer error event.
 //   5. Assert: createApp boot OK + 0 RhiError + frames completed without crash.
 //      No pixel assertion (UBO is engine-internal; no visible state toggle).
 //   6. Charter P3 explicit failure: on fail, output structured diagnostic.
@@ -180,20 +180,15 @@ if (!appRes.ok) {
 const app = appRes.value;
 const renderer = app.renderer;
 const world = app.world;
-const assets = renderer.assets;
+const assets = app.assets;
 
-console.log(`[learn-render-7-advanced-glsl-ubo] backend=${renderer.backend}`);
+console.log(`[learn-render-7-advanced-glsl-ubo] backend=${renderer.inspect().capabilities.backendKind}`);
 
 // --- 4. RhiError collection ---
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => { if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint }); });
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} hint=${ready.error.hint}`);
-  process.exit(1);
-}
 
 // --- 5. Spawn minimal proof scene (AC-05) ---
 
@@ -281,14 +276,19 @@ if (!stopRes.ok) {
   console.error(`[smoke] FAIL - app.stop() returned err: ${stopRes.error.code}`);
   process.exit(1);
 }
+const disposeRes = await app.dispose();
+if (!disposeRes.ok) {
+  console.error(`[smoke] FAIL - app.dispose() returned err: ${disposeRes.error.code}`);
+  process.exit(1);
+}
 
 // --- 7. Verdict ---
 
 const failures = [];
 
 // (a) Backend must be webgpu.
-if (renderer.backend !== 'webgpu') {
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (renderer.inspect().capabilities.backendKind !== 'webgpu') {
+  failures.push(`(a) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
 }
 
 // (b) No crash.
@@ -335,7 +335,7 @@ console.log(
 
 // Synchronously walk dawn-node's destruction graph in spec order so the
 // renderer's module-level GPU resources (e.g. SSAO ShaderModule / Pipelines /
-// BGL captured in createRenderer closure -- engine-side dispose() deliberately
+// BGL captured in the Runtime-owned host -- renderer disposal deliberately
 // drops JS refs but does NOT destroy the device per w25 chromium-pool lesson)
 // are released before V8 process teardown. Without this pair, dawn native
 // dtors race process exit -> SIGSEGV (PR #397 4.7 smoke regression).

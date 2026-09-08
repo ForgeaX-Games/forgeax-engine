@@ -1,166 +1,102 @@
-// mesh-bin.test.ts -- feat-20260629-multi-uv-set-support m2-w1
-//
-// Roundtrip test for mesh-bin header v2: 0/1/2/8 UV sets encode->decode
-// byte-identical. Header v2 expands from 16B to 28B (version=2 u32 +
-// uvSetCount u32 + floatsPerVertex u32 + existing 4 fields).
-//
-// RED at this commit: packMeshBin still writes 16B header; unpackMeshBin
-// reads 16B header. No version/uvSetCount/floatsPerVertex fields survive
-// roundtrip. GREEN after m2-w3 (encode v2) + m2-w4 (decode v2).
-//
-// Coverage:
-//   (A) 0 extra UV sets: uvSetCount=1, floatsPerVertex=12 (no skin)
-//   (B) 1 extra UV set: uvSetCount=2, floatsPerVertex=14 (no skin)
-//   (C) 2 extra UV sets: uvSetCount=3, floatsPerVertex=16 (no skin)
-//   (D) 8 UV sets total: uvSetCount=8, floatsPerVertex=26 (no skin)
-//   (E) with skin: uvSetCount=2, floatsPerVertex=20 (skin adds +8)
-
-import { packMeshBin } from '@forgeax/engine-import';
+import { packMeshBinV4 } from '@forgeax/engine-import';
+import { decodeMeshBinHeader } from '@forgeax/engine-pack';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { describe, expect, it } from 'vitest';
-
-// Replicate the runtime decode signature for cross-package roundtrip test.
-// We test the actual pack output bytes against the known header layout,
-// then assert the runtime can reconstruct uvSetCount/floatsPerVertex
-// from those bytes.
-
-const HEADER_V2_BYTES = 28;
-
-function readHeaderV2(bytes: Uint8Array):
-  | {
-      version: number;
-      uvSetCount: number;
-      floatsPerVertex: number;
-      vlen: number;
-      ilen: number;
-      iwidth: number;
-      jsonlen: number;
-    }
-  | undefined {
-  if (bytes.byteLength < HEADER_V2_BYTES) return undefined;
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  return {
-    version: view.getUint32(0, true),
-    uvSetCount: view.getUint32(4, true),
-    floatsPerVertex: view.getUint32(8, true),
-    vlen: view.getUint32(12, true),
-    ilen: view.getUint32(16, true),
-    iwidth: view.getUint32(20, true),
-    jsonlen: view.getUint32(24, true),
-  };
-}
 
 function buildPayload(vertexCount: number, extraUvCount: number, hasSkin: boolean) {
   const baseFpv = hasSkin ? 18 : 12;
   const fpv = baseFpv + extraUvCount * 2;
-  const floats = new Float32Array(vertexCount * fpv);
-  for (let i = 0; i < floats.length; i++) floats[i] = i * 0.1;
-
-  const indices = new Uint16Array([0, 1, 2]);
-
-  const attrs: Record<string, unknown> = {
+  const vertices = new Float32Array(vertexCount * fpv);
+  for (let i = 0; i < vertices.length; i++) vertices[i] = i * 0.1;
+  const attributes: Record<string, unknown> = {
     position: new Float32Array(vertexCount * 3),
     normal: new Float32Array(vertexCount * 3),
     uv: new Float32Array(vertexCount * 2),
     tangent: new Float32Array(vertexCount * 4),
   };
-
-  // Add extra UV sets
-  for (let k = 1; k <= extraUvCount; k++) {
-    const uvArr = new Float32Array(vertexCount * 2);
-    for (let i = 0; i < uvArr.length; i++) uvArr[i] = (k * 100 + i) * 0.01;
-    attrs[`uv${k}`] = uvArr;
+  for (let set = 1; set <= extraUvCount; set++) {
+    attributes[`uv${set}`] = new Float32Array(vertexCount * 2);
   }
-
   if (hasSkin) {
-    attrs.skinIndex = new Uint16Array(vertexCount * 4);
-    attrs.skinWeight = new Float32Array(vertexCount * 4);
+    attributes.skinIndex = new Uint16Array(vertexCount * 4);
+    attributes.skinWeight = new Float32Array(vertexCount * 4);
   }
-
-  return { vertices: floats, indices, attributes: attrs };
+  return { vertices, indices: new Uint16Array([0, 1, 2]), attributes };
 }
 
-describe('mesh-bin header v2 roundtrip (feat-20260629 m2-w1)', () => {
-  it('(A) 0 extra UV sets (uvSetCount=1, floatsPerVertex=12, no skin)', () => {
-    const payload = buildPayload(4, 0, false);
-    const bytes = packMeshBin(payload);
-    expect(bytes.byteLength).toBeGreaterThanOrEqual(HEADER_V2_BYTES);
-
-    const hdr = readHeaderV2(bytes);
-    expect(hdr).not.toBeUndefined();
-    if (!hdr) return;
-    expect(hdr.version).toBe(2);
-    expect(hdr.uvSetCount).toBe(1);
-    expect(hdr.floatsPerVertex).toBe(12);
+describe('mesh-bin v4 roundtrip contract', () => {
+  it.each([
+    [0, false, 1],
+    [1, false, 2],
+    [2, false, 3],
+    [7, false, 8],
+    [1, true, 2],
+  ])('records canonical projection for %i extra UV sets and skin=%s', (extra, skin, uvSets) => {
+    const result = packMeshBinV4(buildPayload(4, extra, skin), `gltf://mesh/${extra}/${skin}`);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const header = decodeMeshBinHeader(result.value, `gltf://mesh/${extra}/${skin}`);
+    expect(header.ok).toBe(true);
+    if (!header.ok) return;
+    expect(header.value.version).toBe(4);
+    expect(header.value.projectionVersion).toBe(1);
+    expect(header.value.vertexCount).toBe(4);
+    expect(header.value.stride).toBe((skin ? 18 + extra * 2 : 12 + extra * 2) * 4);
+    expect(header.value.mask).toBeGreaterThan(0);
+    expect(uvSets).toBeGreaterThan(0);
   });
 
-  it('(B) 1 extra UV set (uvSetCount=2, floatsPerVertex=14, no skin)', () => {
-    const payload = buildPayload(4, 1, false);
-    const bytes = packMeshBin(payload);
-    expect(bytes.byteLength).toBeGreaterThanOrEqual(HEADER_V2_BYTES);
-
-    const hdr = readHeaderV2(bytes);
-    expect(hdr).not.toBeUndefined();
-    if (!hdr) return;
-    expect(hdr.version).toBe(2);
-    expect(hdr.uvSetCount).toBe(2);
-    expect(hdr.floatsPerVertex).toBe(14);
-  });
-
-  it('(C) 2 extra UV sets (uvSetCount=3, floatsPerVertex=16, no skin)', () => {
-    const payload = buildPayload(4, 2, false);
-    const bytes = packMeshBin(payload);
-    expect(bytes.byteLength).toBeGreaterThanOrEqual(HEADER_V2_BYTES);
-
-    const hdr = readHeaderV2(bytes);
-    expect(hdr).not.toBeUndefined();
-    if (!hdr) return;
-    expect(hdr.version).toBe(2);
-    expect(hdr.uvSetCount).toBe(3);
-    expect(hdr.floatsPerVertex).toBe(16);
-  });
-
-  it('(D) 8 UV sets total (uvSetCount=8, floatsPerVertex=26, no skin)', () => {
-    const payload = buildPayload(4, 7, false);
-    const bytes = packMeshBin(payload);
-    expect(bytes.byteLength).toBeGreaterThanOrEqual(HEADER_V2_BYTES);
-
-    const hdr = readHeaderV2(bytes);
-    expect(hdr).not.toBeUndefined();
-    if (!hdr) return;
-    expect(hdr.version).toBe(2);
-    expect(hdr.uvSetCount).toBe(8);
-    expect(hdr.floatsPerVertex).toBe(26);
-  });
-
-  it('(E) with skin: uvSetCount=2, floatsPerVertex=20', () => {
-    const payload = buildPayload(4, 1, true);
-    const bytes = packMeshBin(payload);
-    expect(bytes.byteLength).toBeGreaterThanOrEqual(HEADER_V2_BYTES);
-
-    const hdr = readHeaderV2(bytes);
-    expect(hdr).not.toBeUndefined();
-    if (!hdr) return;
-    expect(hdr.version).toBe(2);
-    expect(hdr.uvSetCount).toBe(2);
-    expect(hdr.floatsPerVertex).toBe(20);
-  });
-
-  it('roundtrip preserves interleaved vertex data byte-exact', () => {
-    const payload = buildPayload(4, 2, false);
-    const bytes = packMeshBin(payload);
-
-    // Vertices payload starts after 28B header
-    const hdr = readHeaderV2(bytes);
-    expect(hdr).not.toBeUndefined();
-    if (!hdr) return;
-
-    const vertexPayload = new Float32Array(
-      bytes.buffer,
-      bytes.byteOffset + HEADER_V2_BYTES,
-      hdr.vlen,
+  it('stores canonical interleaved bytes and material refs as indexes', () => {
+    const guid = '019d0000-0000-7000-8000-000000000005';
+    const parsed = AssetGuid.parse(guid);
+    if (!parsed.ok) throw new Error('fixture guid must parse');
+    const payload = {
+      vertices: new Float32Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+      indices: new Uint16Array([0, 1, 2]),
+      attributes: {
+        position: new Float32Array([1, 2, 3]),
+        normal: new Float32Array([4, 5, 6]),
+        uv: new Float32Array([7, 8]),
+        tangent: new Float32Array([9, 10, 11, 12]),
+      },
+      submeshes: [
+        {
+          indexOffset: 0,
+          indexCount: 3,
+          vertexCount: 1,
+          topology: 'triangle-list' as const,
+          materialSlot: 0,
+        },
+      ],
+      materialSlots: [
+        { slotName: 'Body', sourceKey: 'gltf:material:0', defaultMaterial: parsed.value },
+      ],
+    };
+    const result = packMeshBinV4(payload, 'gltf://color', [guid]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const header = decodeMeshBinHeader(result.value, 'gltf://color');
+    expect(header.ok).toBe(true);
+    if (!header.ok) return;
+    const jsonOffset = 80 + header.value.vertexBytes + header.value.indexBytes;
+    const json = new TextDecoder().decode(
+      result.value.subarray(jsonOffset, jsonOffset + header.value.jsonBytes),
     );
-    expect(Array.from(vertexPayload)).toEqual(
-      Array.from((payload.vertices as Float32Array).subarray(0, hdr.vlen)),
+    expect(JSON.parse(json).materialSlots).toEqual([
+      { slotName: 'Body', sourceKey: 'gltf:material:0', defaultMaterialRef: 0 },
+    ]);
+    expect(json).not.toContain(guid);
+    expect(Array.from(result.value.subarray(80, 80 + payload.vertices.byteLength))).toEqual(
+      Array.from(new Uint8Array(payload.vertices.buffer)),
     );
+  });
+
+  it('returns a closed error without bytes for invalid stride cardinality', () => {
+    const payload = buildPayload(2, 0, false);
+    const result = packMeshBinV4({ ...payload, vertexCount: 3 }, 'gltf://invalid');
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.sourceKey).toBe('gltf://invalid');
+    expect(result.error.recovery).toContain('re-cook');
   });
 });

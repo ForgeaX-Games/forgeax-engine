@@ -21,6 +21,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const NATIVE = join(ROOT, 'src', 'native');
 const PKG = join(ROOT, 'pkg');
+const REPRODUCIBLE_PATH = `-ffile-prefix-map=${ROOT}=/forgeax/fbx`;
 
 if (!existsSync(join(NATIVE, 'ufbx.c'))) {
   console.error('ufbx.c not found. Run `pnpm fetch-ufbx` first.');
@@ -52,6 +53,7 @@ mkdirSync(PKG, { recursive: true });
 const cmd = [
   'emcc',
   '-O3',
+  REPRODUCIBLE_PATH,
   '-s WASM=1',
   '-s "EXPORTED_FUNCTIONS=[\'_parseFbxWasm\',\'_getResultPtr\',\'_getResultLen\',\'_freeResult\',\'_malloc\',\'_free\']"',
   '-s "EXPORTED_RUNTIME_METHODS=[\'ccall\',\'cwrap\',\'HEAPU8\',\'UTF8ToString\']"',

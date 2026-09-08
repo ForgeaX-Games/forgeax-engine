@@ -11,6 +11,8 @@ import type { AnimationClip, AnimationTargetIdValue, Handle } from '@forgeax/eng
 
 export type AnimatedTransformInstanceKey = 'direct' | 'graph';
 
+export const TRANSFORM_CLIP_GUID = 'demo/animated-transform/clip';
+
 export interface AnimatedTransformInstance {
   readonly key: AnimatedTransformInstanceKey;
   readonly player: EntityHandle;
@@ -28,7 +30,7 @@ const PLANET_ID = deriveAnimationTargetId(['Planet']);
 const ORBIT_ID = deriveAnimationTargetId(['Planet', 'OrbitController']);
 const SATELLITE_ID = deriveAnimationTargetId(['Planet', 'OrbitController', 'Satellite']);
 
-function transformClip(): AnimationClip {
+export function transformClip(): AnimationClip {
   return {
     kind: 'animation-clip',
     duration: 1,
@@ -104,7 +106,7 @@ function spawnInstance(
       })
       .unwrap();
   } else {
-    const graph = defineAnimationGraph((builder) => builder.clip(clipHandle));
+    const graph = defineAnimationGraph((builder) => builder.clip(TRANSFORM_CLIP_GUID));
     if (!graph.ok) throw graph.error;
     const graphHandle = world.allocSharedRef('AnimationGraph', graph.value);
     world
@@ -134,8 +136,11 @@ function spawnInstance(
   return { key, player, planet, orbitController, satellite, targets };
 }
 
-export function buildAnimatedTransformWorld(world: World): AnimatedTransformDemo {
-  const clipHandle = world.allocSharedRef('AnimationClip', transformClip());
+export function buildAnimatedTransformWorld(
+  world: World,
+  clip: AnimationClip = transformClip(),
+): AnimatedTransformDemo {
+  const clipHandle = world.allocSharedRef('AnimationClip', clip);
   return {
     instances: [
       spawnInstance(world, 'direct', -4, clipHandle),

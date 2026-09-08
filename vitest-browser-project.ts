@@ -22,7 +22,11 @@ import { targetProfileImporter } from './templates/game-default/assets/plugins/t
 // and loading the rest makes Vite's dependency optimizer exceed the heavy
 // runner heap before a browser test can start.
 const rootDir = fileURLToPath(new URL('.', import.meta.url));
-const materialPackages = materialContractInventory.materialPackages;
+const materialPackages = [
+  ...materialContractInventory.materialPackages,
+  resolve(rootDir, 'templates/game-default/assets/animated-target-material.pack.json'),
+  resolve(rootDir, 'templates/game-default/assets/hit-flash-material.pack.json'),
+];
 const vfxModules = Object.fromEntries(
   ['hit.vfx.wgsl', 'charge.vfx.wgsl'].map((name) => [
     name,
@@ -39,14 +43,12 @@ const templatePackRoots = [
   'hit-vfx-effect.pack.json',
   'hit-vfx-materials.pack.json',
   'multi-material-target.pack.json',
+  'resonance-forge.pack.ts',
   'scene.pack.json',
   'target-profile.json.meta.json',
   'ui/hud.pack.json',
   'ui/settings.pack.json',
 ].map((relativePath) => resolve(rootDir, 'templates/game-default/assets', relativePath));
-const learnOpenGlTexturesRoot = resolve(rootDir, 'forgeax-engine-assets/learn-opengl/textures');
-const learnOpenGlMeshesRoot = resolve(rootDir, 'forgeax-engine-assets/learn-opengl/meshes');
-const learnOpenGlObjectsRoot = resolve(rootDir, 'forgeax-engine-assets/learn-opengl/objects');
 const submoduleJpegMetaPath = resolve(
   rootDir,
   'forgeax-engine-assets/demo-assets/hello-sprite/wood-container.jpg.meta.json',
@@ -100,15 +102,10 @@ const browserVendorMetaRoots = [
   'learn-opengl/objects/rock/rock.gltf.meta.json',
   'learn-opengl/objects/rock/rock.png.meta.json',
 ].map((relativePath) => resolve(rootDir, 'forgeax-engine-assets', relativePath));
-const browserVendorMetaRootSet = new Set(browserVendorMetaRoots);
-const browserVendorRoots = [learnOpenGlTexturesRoot, learnOpenGlMeshesRoot, learnOpenGlObjectsRoot];
-const browserPackIgnorePath = (candidatePath: string): boolean => {
-  if (!candidatePath.endsWith('.meta.json')) return false;
-  if (!browserVendorRoots.some((root) => candidatePath.startsWith(`${root}/`))) return false;
-  return !browserVendorMetaRootSet.has(candidatePath);
-};
 const entityVisibilityBrowserTest =
   'apps/hello/entity-visibility/src/__tests__/visibility.browser.test.ts';
+const producerReadiness =
+  process.env.FORGEAX_BROWSER_PACK_READINESS === 'before-consume' ? 'before-consume' : 'on-demand';
 
 export function createBrowserProject() {
   const runEntityVisibilityBrowserTest = process.env.FORGEAX_BROWSER_ENTITY_VISIBILITY === '1';
@@ -116,15 +113,13 @@ export function createBrowserProject() {
     forgeaxShader({ materialPackages }),
     pluginPack({
       runtimeBinding: createStandaloneRuntimeAssetBinding('browser-tests'),
-      producerReadiness: 'before-consume',
+      producerReadiness,
       roots: [
         resolve(rootDir, 'apps/learn-render/1.getting-started/4.textures/assets'),
         resolve(rootDir, 'apps/learn-render/1.getting-started/5.transformations/assets'),
         resolve(rootDir, 'apps/learn-render/1.getting-started/6.coordinate-systems/assets'),
         resolve(rootDir, 'apps/learn-render/1.getting-started/7.camera/assets'),
-        learnOpenGlTexturesRoot,
-        learnOpenGlMeshesRoot,
-        learnOpenGlObjectsRoot,
+        ...browserVendorMetaRoots,
         resolve(rootDir, 'forgeax-engine-assets/khronos-gltf-samples/Sponza/Sponza.gltf.meta.json'),
         ...templatePackRoots,
         resolve(
@@ -141,7 +136,6 @@ export function createBrowserProject() {
         submoduleDejavuLegacyPackPath,
         submoduleSpriteAtlasDir,
       ],
-      ignorePath: browserPackIgnorePath,
       importers: [
         imageImporter,
         gltfImporter,
@@ -167,6 +161,7 @@ export function createBrowserProject() {
       exclude: [
         '**/node_modules/**',
         '**/dist/**',
+        '**/artifacts/**',
         '**/.worktrees/**',
         '**/.claude/worktrees/**',
         ...(runEntityVisibilityBrowserTest ? [] : [entityVisibilityBrowserTest]),

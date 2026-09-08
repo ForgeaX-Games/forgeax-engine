@@ -5,6 +5,26 @@ import { readArtifact } from '../registry/artifact-io';
 const GUID = '22222222-2222-4222-8222-222222222222';
 
 describe('artifact integrity and outer encoding', () => {
+  it('rejects an artifact without a durable media type', async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(Uint8Array.of(1)));
+    const result = await readArtifact(
+      {
+        packageUrl: 'https://example.test/pkg.pack.json',
+        guid: GUID,
+        artifactKey: 'payload',
+        descriptor: {
+          path: 'payload.bin',
+          mediaType: '',
+        },
+      },
+      fetcher,
+    );
+
+    expect(result.ok).toBe(false);
+    expect(fetcher).not.toHaveBeenCalled();
+    if (!result.ok) expect(result.error.code).toBe('asset-artifact-media-unsupported');
+  });
+
   it('checks byte length and integrity after outer decoding', async () => {
     const descriptor: ArtifactDescriptor = {
       path: 'payload.bin',
@@ -32,6 +52,28 @@ describe('artifact integrity and outer encoding', () => {
       expect(result.error.expected).toContain('sha256');
       expect(result.error.detail.observed).toBeTruthy();
     }
+  });
+
+  it('reports a same-sized published artifact with the wrong digest as an integrity mismatch', async () => {
+    const result = await readArtifact(
+      {
+        packageUrl: 'https://example.test/pkg.pack.json',
+        guid: GUID,
+        artifactKey: 'shader',
+        descriptor: {
+          path: 'shader.wgsl',
+          mediaType: 'text/wgsl',
+          byteLength: 4,
+          integrity: { algorithm: 'sha256', digest: 'sha256:published-digest' },
+        },
+      },
+      vi.fn().mockResolvedValue(new Response(Uint8Array.of(1, 2, 3, 4))),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'asset-artifact-integrity-mismatch' },
+    });
   });
 
   it('does not pass asset codec names to the outer decoder', async () => {

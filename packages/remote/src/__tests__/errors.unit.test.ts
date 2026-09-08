@@ -1,4 +1,4 @@
-// w11: RemoteErrorCode completeness unit test (4-member closed union).
+// w11: RemoteErrorCode completeness unit test (5-member closed union).
 // Verifies that the error-code family has exactly 4 members after
 // deleting inspector-write-denied + script-timeout in w7.
 
@@ -10,12 +10,13 @@ const EXPECTED_MEMBERS: readonly RemoteErrorCode[] = [
   'script-runtime-error',
   'server-startup-failed',
   'server-not-running',
+  'eval-result-not-serializable',
 ];
 
-describe('RemoteErrorCode closed union — 4-member completeness', () => {
-  it('REMOTE_ERROR_CODE_TO_JSONRPC has exactly 4 keys matching the expected set', () => {
+describe('RemoteErrorCode closed union — 5-member completeness', () => {
+  it('REMOTE_ERROR_CODE_TO_JSONRPC has exactly 5 keys matching the expected set', () => {
     const keys = Object.keys(REMOTE_ERROR_CODE_TO_JSONRPC) as RemoteErrorCode[];
-    expect(keys).toHaveLength(4);
+    expect(keys).toHaveLength(5);
     // Sort-stable comparison — order is incidental
     expect([...keys].sort()).toStrictEqual([...EXPECTED_MEMBERS].sort());
   });

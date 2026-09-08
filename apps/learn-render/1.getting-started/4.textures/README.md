@@ -41,7 +41,7 @@ flowchart LR
 // 1. engine usage - 引擎公开符号集
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { Engine, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { Camera, MeshRenderer, MeshFilter } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
@@ -54,11 +54,11 @@ const CUBE_MESH_GUID         = '019e3968-6007-71ae-856e-1fd6c9728cfb';
 const WOOD_MATERIAL_GUID     = '019e2cc6-5e6a-757c-a001-b69bc85af3c3';
 
 // 3. bootstrap - 4-step recipe
-const renderer = await Engine.create(canvas, { /* clearColor / shaderManifestUrl */ });
+const renderer = await createRenderer(canvas, { /* clearColor / shaderManifestUrl */ });
 const assets = renderer.assets;
 
-// (1) wire pack-index URL
-assets.configurePackIndex('/pack-index.json');
+// (1) select the scoped dev catalog or the emitted production catalog
+configureRuntimeAssetCatalog(assets, runtimeBinding);
 
 // (2) loadByGuid x 3 - 单入口调用栈（AC-15 c）
 const containerHandleRes = await assets.loadByGuid<TextureAsset>(containerGuid);

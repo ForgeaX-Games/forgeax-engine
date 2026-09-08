@@ -1,0 +1,198 @@
+{
+  "schemaVersion": 1,
+  "kind": "material-acceptance-declaration",
+  "producer": "apps/hello/custom-shader",
+  "requiredCategories": [
+    "custom-shader",
+    "runtime-cooked-fixture",
+    "built-in-cold-recook",
+    "gltf-cold-recook",
+    "fbx-cold-recook",
+    "material-bearing-consumer",
+    "runtime-bool-no-compile",
+    "module-slot-replacement",
+    "compiler-context-variant"
+  ],
+  "witnesses": [
+    {
+      "id": "custom-shader-dawn",
+      "category": "custom-shader",
+      "subject": "apps/hello/custom-shader/src/pulse-material.shader.pack.json",
+      "fixture": "apps/hello/custom-shader/assets/pulse-material.pack.json",
+      "materialGuid": "01935b00-7d8c-7c4e-9f12-345678abcd02",
+      "evidence": "dawn",
+      "command": {
+        "program": "pnpm",
+        "args": ["--filter", "@forgeax/hello-custom-shader", "smoke"]
+      }
+    },
+    {
+      "id": "custom-shader-browser",
+      "category": "custom-shader",
+      "subject": "apps/hello/custom-shader/src/pulse-material.shader.pack.json",
+      "fixture": "apps/hello/custom-shader/assets/pulse-material.pack.json",
+      "materialGuid": "01935b00-7d8c-7c4e-9f12-345678abcd02",
+      "evidence": "browser",
+      "command": {
+        "program": "pnpm",
+        "args": ["--filter", "@forgeax/hello-custom-shader", "smoke:browser"]
+      }
+    },
+    {
+      "id": "runtime-cooked-fixture-dawn",
+      "category": "runtime-cooked-fixture",
+      "subject": "packages/shader/src/default-standard-pbr.wgsl",
+      "fixture": "scripts/forgeax/material-witness-fixtures/runtime.pack.json",
+      "materialGuid": "019f0000-0000-7000-8000-000000000101",
+      "evidence": "dawn",
+      "command": {
+        "program": "node",
+        "args": ["packages/vite-plugin-pack/scripts/material-witness-smoke.mjs", "runtime"]
+      }
+    },
+    {
+      "id": "builtin-cold-recook-dawn",
+      "category": "built-in-cold-recook",
+      "subject": "packages/shader/src/unlit.wgsl",
+      "fixture": "scripts/forgeax/material-witness-fixtures/builtin.pack.json",
+      "materialGuid": "019f0000-0000-7000-8000-000000000102",
+      "evidence": "dawn",
+      "command": {
+        "program": "node",
+        "args": ["packages/vite-plugin-pack/scripts/material-witness-smoke.mjs", "builtin"]
+      }
+    },
+    {
+      "id": "gltf-cold-recook-dawn",
+      "category": "gltf-cold-recook",
+      "subject": "apps/hello/gltf/assets/box.gltf",
+      "fixture": "scripts/forgeax/material-witness-fixtures/gltf.pack.json",
+      "materialGuid": "019f0000-0000-7000-8000-000000000103",
+      "evidence": "dawn",
+      "command": {
+        "program": "node",
+        "args": ["packages/vite-plugin-pack/scripts/material-witness-smoke.mjs", "gltf"]
+      }
+    },
+    {
+      "id": "fbx-cold-recook-dawn",
+      "category": "fbx-cold-recook",
+      "subject": "forgeax-engine-assets/vendor/fbx-test/cube.fbx",
+      "fixture": "scripts/forgeax/material-witness-fixtures/fbx.pack.json",
+      "materialGuid": "019f0000-0000-7000-8000-000000000104",
+      "evidence": "dawn",
+      "command": {
+        "program": "node",
+        "args": ["packages/vite-plugin-pack/scripts/material-witness-smoke.mjs", "fbx"]
+      }
+    },
+    {
+      "id": "material-bearing-consumer-dawn",
+      "category": "material-bearing-consumer",
+      "subject": "apps/hello/fbx-cube/src/main.ts",
+      "fixture": "scripts/forgeax/material-witness-fixtures/consumer.pack.json",
+      "materialGuid": "019f0000-0000-7000-8000-000000000105",
+      "evidence": "dawn",
+      "command": {
+        "program": "node",
+        "args": ["packages/vite-plugin-pack/scripts/material-witness-smoke.mjs", "consumer"]
+      }
+    },
+    {
+      "id": "runtime-bool-no-compile-dawn",
+      "category": "runtime-bool-no-compile",
+      "subject": "apps/hello/custom-shader/scripts/smoke-material-semantics.mjs",
+      "fixture": "scripts/forgeax/material-witness-fixtures/semantic-runtime-bool-no-compile.pack.json",
+      "materialGuid": "019f0000-0000-7000-8000-000000000201",
+      "evidence": "dawn",
+      "command": {
+        "program": "node",
+        "args": [
+          "apps/hello/custom-shader/scripts/smoke-material-semantics.mjs",
+          "runtime-bool-no-compile",
+          "dawn"
+        ]
+      }
+    },
+    {
+      "id": "runtime-bool-no-compile-browser",
+      "category": "runtime-bool-no-compile",
+      "subject": "apps/hello/custom-shader/scripts/smoke-material-semantics.mjs",
+      "fixture": "scripts/forgeax/material-witness-fixtures/semantic-runtime-bool-no-compile.pack.json",
+      "materialGuid": "019f0000-0000-7000-8000-000000000201",
+      "evidence": "browser",
+      "command": {
+        "program": "node",
+        "args": [
+          "apps/hello/custom-shader/scripts/smoke-material-semantics.mjs",
+          "runtime-bool-no-compile",
+          "browser"
+        ]
+      }
+    },
+    {
+      "id": "module-slot-replacement-dawn",
+      "category": "module-slot-replacement",
+      "subject": "apps/hello/custom-shader/scripts/smoke-material-semantics.mjs",
+      "fixture": "scripts/forgeax/material-witness-fixtures/semantic-module-slot-replacement.pack.json",
+      "materialGuid": "019f0000-0000-7000-8000-000000000201",
+      "evidence": "dawn",
+      "command": {
+        "program": "node",
+        "args": [
+          "apps/hello/custom-shader/scripts/smoke-material-semantics.mjs",
+          "module-slot-replacement",
+          "dawn"
+        ]
+      }
+    },
+    {
+      "id": "module-slot-replacement-browser",
+      "category": "module-slot-replacement",
+      "subject": "apps/hello/custom-shader/scripts/smoke-material-semantics.mjs",
+      "fixture": "scripts/forgeax/material-witness-fixtures/semantic-module-slot-replacement.pack.json",
+      "materialGuid": "019f0000-0000-7000-8000-000000000201",
+      "evidence": "browser",
+      "command": {
+        "program": "node",
+        "args": [
+          "apps/hello/custom-shader/scripts/smoke-material-semantics.mjs",
+          "module-slot-replacement",
+          "browser"
+        ]
+      }
+    },
+    {
+      "id": "compiler-context-variant-dawn",
+      "category": "compiler-context-variant",
+      "subject": "apps/hello/custom-shader/scripts/smoke-material-semantics.mjs",
+      "fixture": "scripts/forgeax/material-witness-fixtures/semantic-compiler-context-variant.pack.json",
+      "materialGuid": "019f0000-0000-7000-8000-000000000201",
+      "evidence": "dawn",
+      "command": {
+        "program": "node",
+        "args": [
+          "apps/hello/custom-shader/scripts/smoke-material-semantics.mjs",
+          "compiler-context-variant",
+          "dawn"
+        ]
+      }
+    },
+    {
+      "id": "compiler-context-variant-browser",
+      "category": "compiler-context-variant",
+      "subject": "apps/hello/custom-shader/scripts/smoke-material-semantics.mjs",
+      "fixture": "scripts/forgeax/material-witness-fixtures/semantic-compiler-context-variant.pack.json",
+      "materialGuid": "019f0000-0000-7000-8000-000000000201",
+      "evidence": "browser",
+      "command": {
+        "program": "node",
+        "args": [
+          "apps/hello/custom-shader/scripts/smoke-material-semantics.mjs",
+          "compiler-context-variant",
+          "browser"
+        ]
+      }
+    }
+  ]
+}

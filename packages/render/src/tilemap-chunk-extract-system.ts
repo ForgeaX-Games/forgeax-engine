@@ -49,7 +49,11 @@
 // §D-2 (multi-cell + flip x pivot) + §D-5 (M0 baseline file-by-file
 // ECS API adaptation) + §D-7 step 3 (half-texel UV inset).
 
-import { HANDLE_QUAD, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
+import {
+  HANDLE_QUAD,
+  resolveTilesetRuntime,
+  type TilesetAtlasLookup,
+} from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { decodeTileBits } from '@forgeax/engine-graphics-extras';
 import { type box3, frustum, mat4 } from '@forgeax/engine-math';
@@ -60,6 +64,7 @@ import {
   type TilesetAsset,
   type TilesetRegion,
   type TilesetTileEntry,
+  toShared,
   unwrapHandle,
 } from '@forgeax/engine-types';
 import {
@@ -93,8 +98,8 @@ import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from './materials';
 //      The shader's PER_INSTANCE_REGION=true variant reads per-instance
 //      UV from the instance buffer, not from the material UBO, so the
 //      placeholder is ignored at draw time.
-let atlasMaterialCache = new WeakMap<World, Map<string, number>>();
-let atlasOnlyMaterialCache = new WeakMap<World, Map<string, number>>();
+let atlasMaterialCache = new WeakMap<World, Map<string, Handle<'MaterialAsset', 'shared'>>>();
+let atlasOnlyMaterialCache = new WeakMap<World, Map<string, Handle<'MaterialAsset', 'shared'>>>();
 // tweak-20260714 M3 (plan-strategy §2 D-3): the terrain (sortScope='layer')
 // derived-entity tracker Map + first-frame-heuristic Set that used to live
 // alongside these material caches were retired once every derived entity
@@ -148,7 +153,7 @@ interface StreamLayerCache {
 }
 interface PerWorldStreamingCache {
   readonly layers: Map<string, StreamLayerCache>;
-  readonly chunkEntities: Map<string, number[]>;
+  readonly chunkEntities: Map<string, EntityHandle[]>;
   readonly activeChunks: Map<string, Set<number>>;
 }
 
@@ -172,8 +177,8 @@ function streamingCache(world: World): PerWorldStreamingCache {
  * TilesetAsset reload.
  */
 export function resetTilemapChunkExtractCache(): void {
-  atlasMaterialCache = new WeakMap<World, Map<string, number>>();
-  atlasOnlyMaterialCache = new WeakMap<World, Map<string, number>>();
+  atlasMaterialCache = new WeakMap<World, Map<string, Handle<'MaterialAsset', 'shared'>>>();
+  atlasOnlyMaterialCache = new WeakMap<World, Map<string, Handle<'MaterialAsset', 'shared'>>>();
 }
 
 /**
@@ -272,19 +277,28 @@ export function encodeTilemapLayerValue(
  * texture handle + a UV region rectangle covering the supplied
  * TilesetRegion (half-texel inset added in m2-t4).
  */
-function resolveTilesetMaterial(world: World, tileset: TilesetAsset, regionIndex: number): number {
+function resolveTilesetMaterial(
+  world: World,
+  tileset: TilesetAsset,
+  regionIndex: number,
+  lookup: (guid: string) => TilesetAtlasLookup,
+): Handle<'MaterialAsset', 'shared'> {
   const region = tileset.regions[regionIndex];
-  if (region === undefined) return 0;
+  if (region === undefined) return toShared<'MaterialAsset'>(0);
   // 3-hop walk: regions[i].atlasIndex (default 0) -> atlases[atlasIndex].
   // atlasIndex out-of-range is register-time fail-fast via
   // `validateTilesetPayload` (m1-t6); the runtime resolver still bails
   // when the slot is unexpectedly empty (charter P3 fail-safe).
   const atlasIndex = region.atlasIndex ?? 0;
-  const atlasHandle = tileset.atlases[atlasIndex];
-  if (atlasHandle === undefined) return 0;
-  const atlasId = unwrapHandle(atlasHandle as unknown as Handle<'TextureAsset', 'shared'>);
+  const atlasGuid = tileset.atlases[atlasIndex];
+  if (atlasGuid === undefined) return toShared<'MaterialAsset'>(0);
+  const atlas = resolveTilesetRuntime(world, atlasGuid, lookup);
+  if (!atlas.ok) return toShared<'MaterialAsset'>(0);
+  const atlasHandle = atlas.value.handle;
+  const atlasId = unwrapHandle(atlasHandle);
   const cacheKey = `${atlasId}|${regionIndex}`;
-  const cache = atlasMaterialCache.get(world) ?? new Map<string, number>();
+  const cache =
+    atlasMaterialCache.get(world) ?? new Map<string, Handle<'MaterialAsset', 'shared'>>();
   atlasMaterialCache.set(world, cache);
   const cached = cache.get(cacheKey);
   if (cached !== undefined) return cached;
@@ -336,9 +350,8 @@ function resolveTilesetMaterial(world: World, tileset: TilesetAsset, regionIndex
     'MaterialAsset',
     matPayload,
   );
-  const id = unwrapHandle(matHandle);
-  cache.set(cacheKey, id);
-  return id;
+  cache.set(cacheKey, matHandle);
+  return matHandle;
 }
 
 /**
@@ -357,12 +370,21 @@ function resolveTilesetMaterial(world: World, tileset: TilesetAsset, regionIndex
  * 0 if the atlas slot is empty (charter P3 fail-safe; mirrors
  * `resolveTilesetMaterial`).
  */
-function resolveAtlasOnlyMaterial(world: World, tileset: TilesetAsset, atlasIndex: number): number {
-  const atlasHandle = tileset.atlases[atlasIndex];
-  if (atlasHandle === undefined) return 0;
-  const atlasId = unwrapHandle(atlasHandle as unknown as Handle<'TextureAsset', 'shared'>);
+function resolveAtlasOnlyMaterial(
+  world: World,
+  tileset: TilesetAsset,
+  atlasIndex: number,
+  lookup: (guid: string) => TilesetAtlasLookup,
+): Handle<'MaterialAsset', 'shared'> {
+  const atlasGuid = tileset.atlases[atlasIndex];
+  if (atlasGuid === undefined) return toShared<'MaterialAsset'>(0);
+  const atlas = resolveTilesetRuntime(world, atlasGuid, lookup);
+  if (!atlas.ok) return toShared<'MaterialAsset'>(0);
+  const atlasHandle = atlas.value.handle;
+  const atlasId = unwrapHandle(atlasHandle);
   const cacheKey = String(atlasId);
-  const cache = atlasOnlyMaterialCache.get(world) ?? new Map<string, number>();
+  const cache =
+    atlasOnlyMaterialCache.get(world) ?? new Map<string, Handle<'MaterialAsset', 'shared'>>();
   atlasOnlyMaterialCache.set(world, cache);
   const cached = cache.get(cacheKey);
   if (cached !== undefined) return cached;
@@ -392,9 +414,8 @@ function resolveAtlasOnlyMaterial(world: World, tileset: TilesetAsset, atlasInde
     'MaterialAsset',
     matPayload,
   );
-  const id = unwrapHandle(matHandle);
-  cache.set(cacheKey, id);
-  return id;
+  cache.set(cacheKey, matHandle);
+  return matHandle;
 }
 
 /**
@@ -433,7 +454,7 @@ interface DerivedSpawnSpec {
   readonly cellY: number;
   readonly tileId: number;
   readonly packedTile: number;
-  readonly materialHandle: number;
+  readonly materialHandle: Handle<'MaterialAsset', 'shared'>;
   readonly chunkIndex: number;
   // M2: multi-cell footprint + custom pivot land per-tile via TilesetTileEntry.
   readonly widthCells: number;
@@ -485,7 +506,7 @@ function specFor(
   chunkSize: number,
   cellIndex: number,
   packedTile: number,
-  materialHandle: number,
+  materialHandle: Handle<'MaterialAsset', 'shared'>,
   entry: TilesetTileEntry,
   atlasIndex: number,
 ): DerivedSpawnSpec {
@@ -604,7 +625,7 @@ function spawnDerivedRenderEntities(
       {
         component: MeshRenderer,
         data: {
-          materials: [spec.materialHandle as unknown as Handle<'MaterialAsset', 'shared'>],
+          materials: [spec.materialHandle],
         },
       },
       { component: Layer, data: { value: layerValue } },
@@ -651,15 +672,14 @@ function spawnSpriteInstancesGroup(
   layerOrder: number,
   chunkIndex: number,
   atlasIndex: number,
-  materialHandle: number,
+  materialHandle: Handle<'MaterialAsset', 'shared'>,
   cellSpecs: readonly DerivedSpawnSpec[],
 ): EntityHandle | undefined {
   if (cellSpecs.length === 0) return undefined;
   const N = cellSpecs.length;
   const transforms = new Float32Array(N * 16);
   const regions = new Float32Array(N * 4);
-  const tmpMat = new Float32Array(16) as unknown as Parameters<typeof mat4.compose>[0];
-  const tmpF = tmpMat as unknown as Float32Array;
+  const tmpMat = mat4.create();
   const tmpT: [number, number, number] = [0, 0, 0];
   const tmpR: [number, number, number, number] = [0, 0, 0, 1];
   const tmpS: [number, number, number] = [1, 1, 1];
@@ -717,10 +737,10 @@ function spawnSpriteInstancesGroup(
     const dst = i * 16;
     for (let c = 0; c < 4; c++) {
       const base = c * 4;
-      const w3 = tmpF[base + 3] as number;
-      transforms[dst + base + 0] = ((tmpF[base + 0] as number) - chunkCenterX * w3) * invSX;
-      transforms[dst + base + 1] = ((tmpF[base + 1] as number) - chunkCenterY * w3) * invSY;
-      transforms[dst + base + 2] = tmpF[base + 2] as number;
+      const w3 = tmpMat[base + 3] ?? 0;
+      transforms[dst + base + 0] = ((tmpMat[base + 0] ?? 0) - chunkCenterX * w3) * invSX;
+      transforms[dst + base + 1] = ((tmpMat[base + 1] ?? 0) - chunkCenterY * w3) * invSY;
+      transforms[dst + base + 2] = tmpMat[base + 2] ?? 0;
       transforms[dst + base + 3] = w3;
     }
 
@@ -756,7 +776,7 @@ function spawnSpriteInstancesGroup(
       {
         component: MeshRenderer,
         data: {
-          materials: [materialHandle as unknown as Handle<'MaterialAsset', 'shared'>],
+          materials: [materialHandle],
         },
       },
       { component: SpriteInstances, data: { transforms, regions } },
@@ -774,6 +794,7 @@ function bucketTileLayer(
   world: World,
   layerEntity: EntityHandle,
   parentEntity: EntityHandle,
+  lookup: (guid: string) => TilesetAtlasLookup,
 ):
   | {
       readonly tilemap: {
@@ -791,12 +812,10 @@ function bucketTileLayer(
   const tilemapRes = world.get(parentEntity, Tilemap);
   if (!tilemapRes.ok) return undefined;
   const tilemap = tilemapRes.value;
-  const tilesetRes = resolveAssetHandle<TilesetAsset>(
-    world,
-    tilemap.tileset as unknown as Handle<string, 'shared'>,
-  );
-  if (!tilesetRes.ok) return undefined;
-  const tileset = tilesetRes.value;
+  const tilesetPayload = lookup(tilemap.tileset);
+  if (tilesetPayload === undefined || 'code' in tilesetPayload) return undefined;
+  if (tilesetPayload.kind !== 'tileset') return undefined;
+  const tileset = tilesetPayload;
 
   const layerRes = world.get(layerEntity, TileLayer);
   if (!layerRes.ok) return undefined;
@@ -824,8 +843,8 @@ function bucketTileLayer(
     if (region === undefined) continue;
     const atlasIndex = region.atlasIndex ?? 0;
     const materialHandle = useSpriteInstances
-      ? resolveAtlasOnlyMaterial(world, tileset, atlasIndex)
-      : resolveTilesetMaterial(world, tileset, entry.regionIndex);
+      ? resolveAtlasOnlyMaterial(world, tileset, atlasIndex, lookup)
+      : resolveTilesetMaterial(world, tileset, entry.regionIndex, lookup);
     const spec = specFor(
       tilemap.cols,
       tilemap.chunkSize,
@@ -864,18 +883,8 @@ function buildCameraFrustumPlanes(world: World): frustum.Frustum | null {
     const trRes = world.get(camEntity, Transform);
     if (!camRes.ok || !trRes.ok) continue;
 
-    const cam = camRes.value as unknown as {
-      near: number;
-      far: number;
-      projection: number;
-      left: number;
-      right: number;
-      bottom: number;
-      top: number;
-      fov: number;
-      aspect: number;
-    };
-    const tr = trRes.value as unknown as { world: Float32Array };
+    const cam = camRes.value;
+    const tr = trRes.value;
 
     const { near, far } = cam;
     if (near >= far) continue;
@@ -934,7 +943,7 @@ function buildCameraFrustumPlanes(world: World): frustum.Frustum | null {
  * §2 D-4). `bucketTileLayer` filters empty cells before the byChunk map
  * is built, so this branch should never trigger in production; the
  * sentinel is an explicit "no visible pixels" value that
- * `frustum.intersectsBox` rejects immediately, avoiding any silent NaN
+ * `frustum.intersectsBox` rejects immediately, avoiding a silent NaN
  * propagation path (charter P3 explicit failure).
  *
  * Note: `frustum.intersectsBox` picks a p-vertex per plane and computes
@@ -971,7 +980,7 @@ export function computeChunkStreamBounds(
     if (x1 > maxX) maxX = x1;
     if (y1 > maxY) maxY = y1;
   }
-  return [minX, minY, -1, maxX, maxY, 1] as unknown as box3.Box3Like;
+  return [minX, minY, -1, maxX, maxY, 1];
 }
 
 /**
@@ -1048,7 +1057,7 @@ function evictDeadPerCellStreamingCaches(work: readonly LayerWork[], world: Worl
   const cache = streamingCache(world);
   const aliveLayerKeys = new Set<string>();
   for (const w of work) {
-    aliveLayerKeys.add(String(unwrapHandle(w.layerEntity as unknown as Handle<string, 'shared'>)));
+    aliveLayerKeys.add(String(w.layerEntity));
   }
   const deadLayerKeys = new Set<string>();
   for (const layerKey of cache.activeChunks.keys()) {
@@ -1090,7 +1099,10 @@ function evictDeadPerCellStreamingCaches(work: readonly LayerWork[], world: Worl
  *     have ECS entities alive, keeping `extractFrame` iteration proportional
  *     to visible tile count rather than total map tile count.
  */
-export function tilemapChunkExtractSystem(world: World): void {
+export function tilemapChunkExtractSystem(
+  world: World,
+  lookup: (guid: string) => TilesetAtlasLookup = () => undefined,
+): void {
   const streaming = streamingCache(world);
   const work: LayerWork[] = [];
   const tileLayerQuery = world.query({ read: [TileLayer, ChildOf] }).unwrap();
@@ -1115,7 +1127,7 @@ export function tilemapChunkExtractSystem(world: World): void {
   for (const w of work) {
     // The outer WeakMap owns World identity; this generation-bearing packed
     // entity handle prevents aliasing when an ECS slot is reused.
-    const layerKey = String(unwrapHandle(w.layerEntity as unknown as Handle<string, 'shared'>));
+    const layerKey = String(w.layerEntity);
     // AC-04: decode via the canonical SortScope union; avoid relying on the
     // raw encoding (0='layer', 1='per-cell') leaking through this call site.
     // `decodeSortScope` is the SSOT used throughout `bucketTileLayer` (see
@@ -1140,7 +1152,7 @@ export function tilemapChunkExtractSystem(world: World): void {
 
       purgeDerivedEntities(world, w.layerEntity);
 
-      const bucket = bucketTileLayer(world, w.layerEntity, w.parentEntity);
+      const bucket = bucketTileLayer(world, w.layerEntity, w.parentEntity, lookup);
       if (bucket === undefined) continue;
 
       const byChunkAtlas = new Map<number, DerivedSpawnSpec[]>();
@@ -1192,7 +1204,7 @@ export function tilemapChunkExtractSystem(world: World): void {
       }
       streaming.layers.delete(layerKey);
 
-      const bucket = bucketTileLayer(world, w.layerEntity, w.parentEntity);
+      const bucket = bucketTileLayer(world, w.layerEntity, w.parentEntity, lookup);
       if (bucket !== undefined) {
         const byChunkSpecs = new Map<number, DerivedSpawnSpec[]>();
         for (const spec of bucket.specs) {
@@ -1248,7 +1260,7 @@ export function tilemapChunkExtractSystem(world: World): void {
 
       if (visible && !wasActive) {
         // Spawn per-cell entities for this newly-visible chunk.
-        const spawned: number[] = [];
+        const spawned: EntityHandle[] = [];
         for (const spec of specs) {
           const e = spawnDerivedRenderEntities(
             world,
@@ -1259,7 +1271,7 @@ export function tilemapChunkExtractSystem(world: World): void {
             spec.packedTile,
             cache.sortScope,
           );
-          spawned.push(unwrapHandle(e as unknown as Handle<string, 'shared'>));
+          spawned.push(e);
         }
         streaming.chunkEntities.set(`${layerKey}:${chunkIdx}`, spawned);
         activeSet.add(chunkIdx);
@@ -1268,7 +1280,7 @@ export function tilemapChunkExtractSystem(world: World): void {
         const key = `${layerKey}:${chunkIdx}`;
         const entities = streaming.chunkEntities.get(key);
         if (entities !== undefined) {
-          for (const e of entities) world.despawn(e as EntityHandle);
+          for (const e of entities) world.despawn(e);
           streaming.chunkEntities.delete(key);
         }
         activeSet.delete(chunkIdx);

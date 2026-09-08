@@ -1,4 +1,6 @@
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { Update } from '@forgeax/engine-ecs';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 // apps/learn-render/5.advanced-lighting/7.bloom/src/index.ts
 // LearnOpenGL section 5.7 - Bloom.
 //
@@ -37,17 +39,19 @@ import { PointLight } from '@forgeax/engine-render';
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
-import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
+import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
-import { createDevImportTransport } from '@forgeax/engine-runtime';
+
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
+import { captureCanvasPixels } from '@forgeax/apps-shared/canvas-capture';
+import {
+  exposeLearnRenderTestApp,
+  trackLearnRenderTestBootstrap,
+} from '../../../../shared/src/learn-render-test-lifecycle';
 
 // 2. example-specific glue
 
-const PACK_INDEX_URL = '/pack-index.json';
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-5-7-bloom',
-);
+
 
 // Texture GUIDs from forgeax-engine-assets/learn-opengl/textures/
 //   wood.png       GUID 019e3969-1d48-7c3b-ac24-6d68f457065f
@@ -136,20 +140,21 @@ if (canvas === null) {
   throw new Error("[learn-render 5.7 bloom] missing <canvas id='app'> in index.html");
 }
 
-void bootstrap(canvas);
+const bootstrapPromise = bootstrap(canvas);
+trackLearnRenderTestBootstrap(bootstrapPromise, canvas);
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 5.7 bloom] createApp failed:', appRes.error);
     return;
   }
   const app = appRes.value;
-  const renderer = app.renderer;
+  exposeLearnRenderTestApp(app, target);
   const world = app.world;
   app.onError((error) => {
     console.error('[learn-render 5.7 bloom] app.onError:', error.code, error.hint);
@@ -162,9 +167,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     if (bus !== undefined) bus.push({ code: error.code, hint: error.hint });
   });
 
-  const assets = renderer.assets;
-  assets.configureRuntimeBinding(runtimeBinding);
-  assets.configurePackIndex(PACK_INDEX_URL);
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[learn-render 5.7 bloom] asset owner is unavailable');
+    return;
+  }
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   // Load textures by GUID.
   const woodGuidRes = AssetGuid.parse(WOOD_GUID_STR);
@@ -308,7 +316,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .unwrap();
 
   // First-person controls so the AI user can explore the bloom scene.
-  addFirstPersonSystem(app.world, app.renderer, {
+  addFirstPersonSystem(app.world, {
     name: 'learn-render-5.7-bloom-first-person',
     overrideBackend: undefined,
   });
@@ -328,7 +336,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     after: ['input-frame-start-scan'],
     queries: [],
     fn: () => {
-      const snap = app.renderer.input.snapshot(world);
+      const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (snap === undefined) return;
       const cur = snap.keyboard.down(' ');
       if (cur && !prevSpace) {
@@ -361,26 +369,22 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   updateHud(currentBloom);
 
-  console.warn(`[learn-render 5.7 bloom] backend=${renderer.backend}. Press Space to toggle bloom.`);
+  console.warn('[learn-render 5.7 bloom] Standard pipeline active. Press Space to toggle bloom.');
 
-  installCaptureHook(app, world);
+  installCaptureHook(target, world);
 }
 
-// RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives
-// one update + draw + readPixels so the live canvas read is anchored to the same
-// frame the capture records. Only meaningful when the page is served with
-// FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
-function installCaptureHook(app: App, world: App['world']): void {
+// Canvas capture hook for the capture smoke harness (pixel mode). Advances the
+// World before reading the Host-owned presentation surface.
+function installCaptureHook(target: HTMLCanvasElement, world: App['world']): void {
   type CaptureHook = () => Promise<Uint8Array>;
   const win = window as unknown as { __captureBloom?: CaptureHook };
-  const renderer = app.renderer;
   win.__captureBloom = async (): Promise<Uint8Array> => {
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    const r = await renderer.readPixels();
+    const r = await captureCanvasPixels(target);
     if (!r.ok) {
       throw new Error(
-        `[learn-render 5.7 bloom] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
+        `[learn-render 5.7 bloom] canvas capture failed: ${r.error.code} -- ${r.error.hint}`,
       );
     }
     return r.value;

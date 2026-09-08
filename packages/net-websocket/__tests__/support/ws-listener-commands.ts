@@ -10,8 +10,11 @@ const listeners = new Map<string, NetEndpoint>();
 let nextListenerId = 1;
 
 export const websocketListenerCommands = {
-  async startWebSocketListener(_context: unknown): Promise<{ id: string; url: string }> {
-    const port = await reservePort();
+  async startWebSocketListener(
+    _context: unknown,
+    requestedPort?: number,
+  ): Promise<{ id: string; url: string }> {
+    const port = requestedPort ?? (await reservePort());
     const result = await listenWebSocketEndpoint({ port });
     if (!result.ok) throw result.error;
     const id = String(nextListenerId++);

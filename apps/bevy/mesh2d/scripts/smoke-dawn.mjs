@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -64,7 +65,7 @@ const manifestUrl = `data:application/json,${encodeURIComponent(readFileSync(man
 
 let renderer;
 try {
-  renderer = await createRenderer(canvas, {}, { shaderManifestUrl: manifestUrl });
+  renderer = await createSmokeRenderer(createRenderer, canvas, {}, { shaderManifestUrl: manifestUrl });
 } catch (error) {
   console.error(`[smoke] FAIL - renderer: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
@@ -72,15 +73,10 @@ try {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
 const errors = [];
-renderer.onError((error) => errors.push(error));
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code}`);
-  process.exit(1);
-}
+subscribeSmokeErrors(renderer, (error) => errors.push(error));
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 buildMesh2dWorld(world);
 propagateTransforms(world);
@@ -103,7 +99,7 @@ async function capture() {
 let pixels;
 for (let i = 0; i < frames; i++) {
   world.update().unwrap();
-  const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const drawn = drawSmokeFrame(renderer, world);
   if (!drawn.ok) console.error(`[smoke] draw ${i}: ${drawn.error.code}`);
   if (i === frames - 1) pixels = await capture();
 }
@@ -125,7 +121,7 @@ mkdirSync(outDir, { recursive: true });
 writeFileSync(resolve(outDir, 'mesh2d.png'), writeReferencePng(pixels, width, height));
 console.log(`[smoke] frames=${frames} bright=${(bright / 255).toFixed(4)} coloredPixels=${colored} errors=${errors.length}`);
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`backend=${renderer.backend}`);
+if (rendererBackend(renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(renderer)}`);
 if (frames < 100) failures.push(`frames=${frames}`);
 if (bright / 255 <= 0.15) failures.push(`bright=${(bright / 255).toFixed(4)}`);
 if (colored < 500) failures.push(`coloredPixels=${colored}`);

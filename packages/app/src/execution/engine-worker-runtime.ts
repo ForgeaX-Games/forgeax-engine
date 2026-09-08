@@ -1,28 +1,19 @@
-import { animationPlugin } from '@forgeax/engine-animation';
-import {
-  ASSET_REGISTRY_RESOURCE_KEY,
-  AUDIO_ENGINE_RESOURCE_KEY,
-  type AudioIntent,
-  createAudioIntentBackend,
-} from '@forgeax/engine-audio';
-import type { SharedKernelExecutor } from '@forgeax/engine-ecs';
-import { World } from '@forgeax/engine-ecs';
-import {
-  INPUT_BACKEND_KEY,
-  type InputBackend,
-  type InputBackendSample,
-} from '@forgeax/engine-input';
-import { runPlugins } from '@forgeax/engine-plugin';
+import { type AudioIntent, createAudioIntentBackend } from '@forgeax/engine-audio';
+import { createWorldContext, World } from '@forgeax/engine-ecs';
+import type { SharedKernelExecutor } from '@forgeax/engine-ecs/shared';
+import type { InputBackend, InputBackendSample } from '@forgeax/engine-input';
+import type { Context, Plugin } from '@forgeax/engine-plugin';
 import type { Renderer } from '@forgeax/engine-render';
-import { createRenderer } from '@forgeax/engine-runtime';
-import { scenePlugin } from '@forgeax/engine-scene';
-import { statePlugin } from '@forgeax/engine-state';
-import { inputPlugin } from '../plugin-factories';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
+import { createAnimationPayloadLookup } from '../animation-asset-lookup';
+import { syncCameraAspect } from '../canvas-policy';
+import { workerEngineProfile } from '../internal/worker-engine-profile';
+import { createRenderFeatureHost } from '../renderer-plugin';
 import { commitAttachedWorld, SerializedRebuildQueue } from './attached-world-swap';
 import {
+  executionBootstrapHostPlugin,
   type PreparedExecutionBootstrap,
   prepareBootstrapEntry,
-  runPreparedBootstrap,
 } from './bootstrap-entry';
 import { createKernelPool, type KernelPool } from './kernel-pool';
 import type {
@@ -40,6 +31,7 @@ const scope = globalThis as unknown as {
 };
 
 let renderer: Renderer | undefined;
+let assets: import('@forgeax/engine-assets-runtime').AssetRegistry | undefined;
 let currentSample: InputBackendSample = {
   downKeys: new Set(),
   upKeys: new Set(),
@@ -55,9 +47,9 @@ let engineCanvas: OffscreenCanvas | undefined;
 interface WorkerRealm {
   readonly world: World;
   readonly init: ExecutionInitMessage;
-  readonly cleanups: Array<() => void>;
   pendingAudioIntents: AudioIntent[];
   kernelPool: KernelPool | undefined;
+  pluginContext: Context | undefined;
 }
 
 let realm: WorkerRealm | undefined;
@@ -67,6 +59,33 @@ const inputBackend: InputBackend = {
   sample: () => currentSample,
   detach: () => {},
 };
+
+function sharedKernelPlugin(target: WorkerRealm): Plugin {
+  return {
+    name: 'shared-kernel-executor',
+    inject: ['world'],
+    apply(ctx) {
+      const executor: SharedKernelExecutor = {
+        warmup(kernel) {
+          target.kernelPool ??= createKernelPool();
+          target.kernelPool.warmup?.(kernel);
+        },
+        execute(kernel, spans) {
+          target.kernelPool ??= createKernelPool();
+          return target.kernelPool.execute(kernel, spans);
+        },
+      };
+      ctx.effect(() => {
+        ctx.world.insertResource('SharedKernelExecutor', executor);
+        return () => {
+          ctx.world.removeResource('SharedKernelExecutor');
+          target.kernelPool?.dispose();
+          target.kernelPool = undefined;
+        };
+      }, 'execution/shared-kernel');
+    },
+  };
+}
 
 function serializableCause(cause: unknown): { readonly name: string; readonly message: string } {
   return cause instanceof Error
@@ -106,35 +125,9 @@ function postFault(
   });
 }
 
-function flushRealmCleanups(target: WorkerRealm): void {
-  const pending = target.cleanups.splice(0);
-  for (const cleanup of pending.reverse()) {
-    try {
-      cleanup();
-    } catch (cause) {
-      postFault(
-        'runtime',
-        'app-system-update-failed',
-        'execution bootstrap cleanup completes',
-        'inspect the realm-local cleanup callback',
-        cause,
-      );
-    }
-  }
-}
-
-function registerRealmCleanup(target: WorkerRealm, cleanup: () => void): () => void {
-  target.cleanups.push(cleanup);
-  return () => {
-    const index = target.cleanups.indexOf(cleanup);
-    if (index >= 0) target.cleanups.splice(index, 1);
-  };
-}
-
-function disposeRealm(target: WorkerRealm): void {
-  flushRealmCleanups(target);
-  target.kernelPool?.dispose();
-  target.kernelPool = undefined;
+async function disposeRealm(target: WorkerRealm): Promise<void> {
+  await target.pluginContext?.fiber.dispose();
+  target.pluginContext = undefined;
   target.pendingAudioIntents = [];
 }
 
@@ -161,29 +154,15 @@ async function createRealm(init: ExecutionInitMessage): Promise<boolean> {
   const candidate: WorkerRealm = {
     world: nextWorld,
     init,
-    cleanups: [],
     pendingAudioIntents: [],
     kernelPool: undefined,
+    pluginContext: undefined,
   };
-  nextWorld.insertResource(INPUT_BACKEND_KEY, inputBackend);
   const audioBackend = createAudioIntentBackend({
     emit: (intent) => candidate.pendingAudioIntents.push(intent),
   });
-  nextWorld.insertResource(AUDIO_ENGINE_RESOURCE_KEY, audioBackend);
-  if (init.tier === 'shared') {
-    const kernelExecutor: SharedKernelExecutor = {
-      warmup(kernel) {
-        candidate.kernelPool ??= createKernelPool();
-        candidate.kernelPool.warmup?.(kernel);
-      },
-      execute(kernel, spans) {
-        candidate.kernelPool ??= createKernelPool();
-        return candidate.kernelPool.execute(kernel, spans);
-      },
-    };
-    nextWorld.insertResource('SharedKernelExecutor', kernelExecutor);
-  }
   let candidateRenderer: Renderer | undefined;
+  let rendererLifecycleTransferred = false;
   const previousRenderer = renderer;
   let previousSurfaceReleased = false;
   try {
@@ -192,69 +171,62 @@ async function createRealm(init: ExecutionInitMessage): Promise<boolean> {
       if (!released.ok) throw released.error;
       previousSurfaceReleased = true;
     }
-    candidateRenderer = await createRenderer(
+    const constructed = await constructRuntimeRendererHost(
       init.canvas,
       prepared.features === undefined ? {} : { features: prepared.features },
       init.shaderManifestUrl === undefined
         ? undefined
         : { shaderManifestUrl: init.shaderManifestUrl },
     );
-    const ready = await candidateRenderer.ready;
-    if (!ready.ok) throw ready.error;
-    if (candidateRenderer.assets !== undefined) {
-      nextWorld.insertResource(ASSET_REGISTRY_RESOURCE_KEY, candidateRenderer.assets);
-    }
-    const plugins = await runPlugins(
+    if (!constructed.ok) throw constructed.error;
+    candidateRenderer = constructed.value.renderer;
+    assets = constructed.value.assets;
+    rendererLifecycleTransferred = true;
+    const pluginContext = await createWorldContext(
       nextWorld,
-      [scenePlugin(), animationPlugin(), statePlugin(), inputPlugin()],
-      prepared.plugins ?? [],
+      workerEngineProfile({
+        renderer: candidateRenderer,
+        rendererFeatureHost: createRenderFeatureHost(constructed.value.featureHost),
+        assets,
+        input: inputBackend,
+        audio: audioBackend,
+        animationPayloads: createAnimationPayloadLookup(assets),
+        extensions: [
+          ...(init.tier === 'shared' ? [sharedKernelPlugin(candidate)] : []),
+          executionBootstrapHostPlugin({
+            ...(init.bootstrapPort === undefined ? {} : { port: init.bootstrapPort }),
+            setPointerLockAllowed(allowed): void {
+              scope.postMessage({
+                kind: 'host-control',
+                command: 'set-pointer-lock-allowed',
+                allowed,
+              });
+            },
+          }),
+          ...(prepared.plugins ?? []),
+        ],
+      }),
     );
-    if (!plugins.ok) throw plugins.error;
+    candidate.pluginContext = pluginContext;
     const activeRenderer = candidateRenderer;
     const previousRealm = realm;
-    const committed = await commitAttachedWorld(
-      candidateRenderer,
-      previousRealm?.world,
-      nextWorld,
-      async () => {
-        const bootstrapped = await runPreparedBootstrap(init.bootstrapUrl, prepared, {
-          world: nextWorld,
-          renderer: activeRenderer,
-          assets: activeRenderer.assets,
-          data: init.bootstrapData,
-          ...(init.bootstrapPort === undefined ? {} : { port: init.bootstrapPort }),
-          registerCleanup: (cleanup) => registerRealmCleanup(candidate, cleanup),
-          setPointerLockAllowed(allowed): void {
-            scope.postMessage({
-              kind: 'host-control',
-              command: 'set-pointer-lock-allowed',
-              allowed,
-            });
-          },
-        });
-        if (!bootstrapped.ok) {
-          postBootstrapFault(bootstrapped.error);
-          return false;
-        }
-        await candidate.kernelPool?.ready();
-        return true;
-      },
-    );
+    const committed = await commitAttachedWorld(candidateRenderer, nextWorld, async () => {
+      await candidate.kernelPool?.ready();
+      return true;
+    });
     if (!committed) {
-      disposeRealm(candidate);
-      activeRenderer.dispose();
+      await disposeRealm(candidate);
       if (previousSurfaceReleased) previousRenderer?.restoreSurface();
       return false;
     }
     realm = candidate;
     renderer = activeRenderer;
     lastFrameId = 0;
-    if (previousRealm !== undefined) disposeRealm(previousRealm);
-    if (previousRenderer !== undefined) previousRenderer.dispose();
+    if (previousRealm !== undefined) await disposeRealm(previousRealm);
     return true;
   } catch (cause) {
-    disposeRealm(candidate);
-    candidateRenderer?.dispose();
+    await disposeRealm(candidate);
+    if (!rendererLifecycleTransferred) candidateRenderer?.dispose();
     if (previousSurfaceReleased) previousRenderer?.restoreSurface();
     throw cause;
   }
@@ -287,6 +259,21 @@ function runFrame(message: ExecutionFrameMessage): void {
   const { world } = activeRealm;
   if (message.worldIdentity !== world.identity || message.frameId <= lastFrameId) return;
   currentSample = message.inputSample;
+  const canvasWidth =
+    Number.isFinite(message.canvasWidth) && message.canvasWidth > 0
+      ? Math.max(1, Math.floor(message.canvasWidth))
+      : undefined;
+  const canvasHeight =
+    Number.isFinite(message.canvasHeight) && message.canvasHeight > 0
+      ? Math.max(1, Math.floor(message.canvasHeight))
+      : undefined;
+  if (canvasWidth !== undefined && canvasHeight !== undefined) {
+    if (engineCanvas !== undefined) {
+      if (engineCanvas.width !== canvasWidth) engineCanvas.width = canvasWidth;
+      if (engineCanvas.height !== canvasHeight) engineCanvas.height = canvasHeight;
+    }
+    syncCameraAspect(world, canvasWidth, canvasHeight);
+  }
   const started = performance.now();
   try {
     const update = world.update(message.deltaSeconds);
@@ -304,8 +291,14 @@ function runFrame(message: ExecutionFrameMessage): void {
       return;
     }
     const updateFinished = performance.now();
-    const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    if (draw !== undefined && !draw.ok) throw draw.error;
+    const attached = renderer.attach(world);
+    if (!attached.ok) throw attached.error;
+    const draw = renderer.draw({
+      leases: [attached.value],
+      camera: { lease: attached.value },
+      environment: { lease: attached.value },
+    });
+    if (!draw.ok) throw draw.error;
     lastFrameId = message.frameId;
     const kernelDispatch = activeRealm.kernelPool?.takeLastDispatch() ?? null;
     const audioIntents = activeRealm.pendingAudioIntents;
@@ -379,12 +372,12 @@ scope.onmessage = (event): void => {
   else if (message.kind === 'rebuild') {
     void rebuildQueue.enqueue(() => rebuild(message));
   } else if (message.kind === 'dispose') {
-    if (realm !== undefined) {
-      realm.init.bootstrapPort?.close();
-      disposeRealm(realm);
-      realm = undefined;
-    }
-    renderer?.dispose();
-    scope.close();
+    void (async () => {
+      if (realm !== undefined) {
+        await disposeRealm(realm);
+        realm = undefined;
+      }
+      scope.close();
+    })();
   }
 };

@@ -6,11 +6,9 @@ import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
 
-// hello-hdrp-lighting vite config (feat-20260608-cluster-lighting M7 / w25).
-// Mirrors apps/hello/bloom/vite.config.ts shape — the forgeaxShader plugin
-// emits the engine shader manifest containing pbr/unlit/skybox + the M4 HDRP
-// cluster-forward shader (forgeax::hdrp-cluster-forward) so installPipeline
-// resolves a real RenderPipelineAsset on first ready().
+// Standard clustered-lighting Vite config (feat-20260608-cluster-lighting M7 / w25).
+// The forgeaxShader plugin emits the manifest consumed by Standard host
+// assembly; the demo does not register or install a pipeline asset.
 export default defineConfig({
   plugins: [forgeaxShader() as never],
   server: {

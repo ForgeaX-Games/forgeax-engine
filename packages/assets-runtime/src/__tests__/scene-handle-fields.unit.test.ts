@@ -4,7 +4,7 @@
 // raw GUID string(s). Uses test-unique component names to avoid colliding with
 // the engine's real component registry in the shared coverage run.
 
-import { defineComponent } from '@forgeax/engine-ecs';
+import { type Component, defineComponent } from '@forgeax/engine-ecs';
 import type { MountOverride } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import {
@@ -12,14 +12,20 @@ import {
   extractSceneEntityHandleGuids,
 } from '../scene-handle-fields';
 
-// Register once at module load (nameToToken is last-write-wins, no throw).
-defineComponent('T709MeshFilter', { assetHandle: 'shared<MeshAsset>' });
-defineComponent('T709MeshRenderer', { materials: 'array<shared<MaterialAsset>>' });
-defineComponent('T709Transform', { x: 'f32' });
+const T709MeshFilter = defineComponent('T709MeshFilter', { assetHandle: 'shared<MeshAsset>' });
+const T709MeshRenderer = defineComponent('T709MeshRenderer', {
+  materials: 'array<shared<MaterialAsset>>',
+});
+const T709Transform = defineComponent('T709Transform', { x: 'f32' });
+const components = new Map<string, Component>([
+  [T709MeshFilter.name, T709MeshFilter],
+  [T709MeshRenderer.name, T709MeshRenderer],
+  [T709Transform.name, T709Transform],
+]);
 
 describe('extractSceneEntityHandleGuids', () => {
   it('extracts scalar shared<T> GUID strings', () => {
-    const entries = extractSceneEntityHandleGuids([
+    const entries = extractSceneEntityHandleGuids(components, [
       { localId: 5, components: { T709MeshFilter: { assetHandle: 'mesh-guid' } } },
     ]);
     expect(entries).toEqual([
@@ -33,7 +39,7 @@ describe('extractSceneEntityHandleGuids', () => {
   });
 
   it('extracts array<shared<T>> element GUIDs with their arrayIndex', () => {
-    const entries = extractSceneEntityHandleGuids([
+    const entries = extractSceneEntityHandleGuids(components, [
       { localId: 1, components: { T709MeshRenderer: { materials: ['m0', 'm1'] } } },
     ]);
     expect(entries).toEqual([
@@ -55,7 +61,7 @@ describe('extractSceneEntityHandleGuids', () => {
   });
 
   it('skips unknown components, non-shared fields, and already-resolved numbers', () => {
-    const entries = extractSceneEntityHandleGuids([
+    const entries = extractSceneEntityHandleGuids(components, [
       { localId: 0, components: { NotRegistered709: { assetHandle: 'x' } } },
       { localId: 1, components: { T709Transform: { x: 3 } } },
       { localId: 2, components: { T709MeshFilter: { assetHandle: 42 } } },
@@ -79,7 +85,7 @@ describe('extractMountOverrideHandleGuids', () => {
     const overrides: MountOverride[] = [
       { localId: 1 as never, comp: 'T709MeshFilter', field: 'assetHandle', value: 'mesh-guid' },
     ];
-    const entries = extractMountOverrideHandleGuids(overrides);
+    const entries = extractMountOverrideHandleGuids(components, overrides);
     expect(entries).toEqual([
       {
         overrideIndex: 0,
@@ -94,7 +100,7 @@ describe('extractMountOverrideHandleGuids', () => {
     const overrides: MountOverride[] = [
       { localId: 1 as never, comp: 'T709MeshRenderer', value: { materials: ['a', 'b'] } },
     ];
-    const entries = extractMountOverrideHandleGuids(overrides);
+    const entries = extractMountOverrideHandleGuids(components, overrides);
     expect(entries).toEqual([
       {
         overrideIndex: 0,
@@ -118,6 +124,6 @@ describe('extractMountOverrideHandleGuids', () => {
       { localId: 1 as never, comp: 'NotRegistered709', value: { assetHandle: 'x' } },
       { localId: 2 as never, comp: 'T709MeshFilter', value: 5 },
     ];
-    expect(extractMountOverrideHandleGuids(overrides)).toEqual([]);
+    expect(extractMountOverrideHandleGuids(components, overrides)).toEqual([]);
   });
 });

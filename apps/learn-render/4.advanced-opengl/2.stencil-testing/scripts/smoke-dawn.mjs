@@ -39,7 +39,7 @@
 
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
@@ -225,12 +225,10 @@ if (!existsSync(METAL_SRC_PATH) || !existsSync(MARBLE_SRC_PATH)) {
 
 // --- 4. Decode textures + create renderer ---
 
-const { ok: okResult, World } = await import('@forgeax/engine-ecs');
+const { World } = await import('@forgeax/engine-ecs');
+const { ok: okResult } = await import('@forgeax/engine-types');
 const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
-const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  createRenderer,
-} = enginePkg;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const {
@@ -259,53 +257,45 @@ console.log(
   `[learn-render-2-stencil-testing] decoded marble=${marbleDecoded.width}x${marbleDecoded.height} ${marbleDecoded.mime}`,
 );
 
-const { buildEngineShaderManifest } = await import(
-  '@forgeax/engine-vite-plugin-shader'
-);
-const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const DEMO_MANIFEST_PATH = resolve(APP_ROOT, 'dist', 'shaders', 'manifest.json');
+if (!existsSync(DEMO_MANIFEST_PATH)) {
+  console.error(`[smoke] FAIL - dist/shaders/manifest.json missing at ${DEMO_MANIFEST_PATH}`);
+  process.exit(1);
+}
+const demoManifest = JSON.parse(readFileSync(DEMO_MANIFEST_PATH, 'utf8'));
+const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(demoManifest))}`;
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  var hostAssets = constructed.value.assets;
 } catch (err) {
   console.error(
-    `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
+    `[smoke] FAIL - constructRuntimeRendererHost failed: ${err instanceof Error ? err.message : String(err)}`,
   );
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[learn-render-2-stencil-testing] backend=${renderer.backend}`);
+console.log(`[learn-render-2-stencil-testing] backend=${renderer.inspect().capabilities.backendKind}`);
 
-const assets = renderer.assets;
+const assets = hostAssets;
 if (!assets) {
   console.error('[smoke] FAIL - AssetRegistry is null');
   process.exit(1);
 }
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => { if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint }); });
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
-// Register the custom outline-solid shader with pre-composed WGSL.
-const shader = renderer.shader;
-if (shader === null) {
-  console.error('[smoke] FAIL - renderer.shader is null');
+// Runtime consumes the cooked outline-solid module from the demo manifest.
+if (!(demoManifest.materialShaders ?? []).some((m) => m?.identifier === 'learn_render::outline_solid')) {
+  console.error('[smoke] FAIL - manifest.materialShaders[] missing learn_render::outline_solid');
   process.exit(1);
-}
-if (!shader.findMaterialArtifact('learn_render::outline_solid').ok) {
-  shader.installMaterialArtifact('learn_render::outline_solid', {
-    source: COMPOSED_OUTLINE_WGSL,
-    paramSchema: [{ name: 'baseColor', type: 'color' }],
-    bindingLayout: [],
-  });
 }
 
 // Register textures under their GUIDs.
@@ -318,8 +308,9 @@ if (!metalGuidRes.ok || !marbleGuidRes.ok) {
 
 // World must exist before allocSharedRef mints any column handle.
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const lease = worldAttachment1.value;
 
 const metalTexAsset = {
   kind: 'texture',
@@ -517,8 +508,13 @@ let framesObserved = 0;
 const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-  if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  const r = renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } });
+  if (!r.ok) {
+    console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  } else {
+    const completed = await r.value.completed;
+    if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+  }
   framesObserved++;
 }
 const device = sharedDevice;
@@ -659,8 +655,8 @@ const wallTotalMs = Date.now() - frameStart;
 console.log(`[smoke] wallTotalMs=${wallTotalMs}`);
 
 const failures = [];
-if (renderer.backend !== 'webgpu')
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (renderer.inspect().capabilities.backendKind !== 'webgpu')
+  failures.push(`(a) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES)
   failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (meshedCount < 1) {

@@ -5,6 +5,7 @@
     {
       "guid": "240de8ec-681e-57e5-8205-facbb46dbc3d",
       "kind": "material",
+      "execution": "cooked",
       "sourceKey": "animate-shader.wgsl",
       "payload": {
         "kind": "material",

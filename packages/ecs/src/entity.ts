@@ -15,20 +15,20 @@
 // favour of a single uniform column read.
 //
 // id=0 structural guarantee: `Entity` MUST be the first `defineComponent`
-// evaluated in the process so the auto-increment id counter assigns it 0. The
-// package barrel (packages/ecs/src/index.ts) force-evaluates this module before
-// any other component-defining module and asserts `Entity.id === 0` fail-fast.
+// evaluated in the process so the owner identity assigns it 0. The package
+// barrel (packages/ecs/src/index.ts) force-evaluates this module before any
+// other component-defining module and asserts the invariant fail-fast.
 // See plan-strategy D-1 / D-6b (LP-1): the hard-coded 0 + barrel forced
 // registration + startup throw is the locked design; no UECS-style runtime
 // token lookup is introduced (the hot-path archetype column key stays a numeric
-// component.id).
+// owner-assigned component identity).
 //
 // charter mapping: P4 (consistent abstraction -- reading the entity handle is
 // reading any other column) + P3 (id=0 drift surfaces as a structured startup
 // throw, never a silent runtime mis-id) + P1 (single top-level import surface).
 
 import type { ComponentId } from './component';
-import { defineComponent } from './component';
+import { componentId, defineComponent } from './component';
 
 /**
  * The id=0 essential `Entity` component. Its single `self` field carries the
@@ -89,15 +89,17 @@ export const Disabled = defineComponent('Disabled', {});
  * `import { ESSENTIAL_COMPONENT_IDS } from '@forgeax/engine-ecs'` works.
  *
  * Physical location is `packages/ecs/src/entity.ts` -- the module that owns
- * the `defineComponent('Entity', ...)` call, so reading `Entity.id`
+ * the `defineComponent('Entity', ...)` call, so reading the owner identity
  * immediately after registration is well-defined. tweak-20260612-ecs-concept-
  * compression lifted this file back from the historical `components/entity.ts`
  * after `entity-handle.ts` freed up the `entity.ts` slot.
  */
-export const ESSENTIAL_COMPONENT_IDS: ReadonlyArray<ComponentId> = Object.freeze([Entity.id]);
+export const ESSENTIAL_COMPONENT_IDS: ReadonlyArray<ComponentId> = Object.freeze([
+  componentId(Entity),
+]);
 
 /**
- * Fold the essential component ids (currently `[Entity.id]`) into a caller-
+ * Fold the essential component ids (currently `[componentId(Entity)]`) into a caller-
  * supplied id list. Returns a NEW array; never mutates the input.
  *
  *   - If `ids` already contains every essential id, returns a deduped copy
@@ -105,7 +107,7 @@ export const ESSENTIAL_COMPONENT_IDS: ReadonlyArray<ComponentId> = Object.freeze
  *   - Otherwise, returns `[...essential, ...ids]` with duplicates of the
  *     essential ids removed.
  *
- * The empty input maps to `[Entity.id]` -- the bare-archetype shape that a
+ * The empty input maps to `[componentId(Entity)]` -- the bare-archetype shape that a
  * `world.spawn()` (no components) materialises.
  *
  * Single SSOT consumed by both `archetypeKey` (string-key fold) and
@@ -114,10 +116,10 @@ export const ESSENTIAL_COMPONENT_IDS: ReadonlyArray<ComponentId> = Object.freeze
  * side: misalignment between key and columns silently drops fields.
  *
  * @example
- *   foldEssentials([2, 5, 7])              // [Entity.id, 2, 5, 7]
- *   foldEssentials([Entity.id, 2, 5])      // [Entity.id, 2, 5]
- *   foldEssentials([Entity.id, Entity.id]) // [Entity.id]
- *   foldEssentials([])                     // [Entity.id]
+ *   foldEssentials([2, 5, 7])              // [componentId(Entity), 2, 5, 7]
+ *   foldEssentials([componentId(Entity), 2, 5]) // [componentId(Entity), 2, 5]
+ *   foldEssentials([componentId(Entity), componentId(Entity)]) // [componentId(Entity)]
+ *   foldEssentials([])                     // [componentId(Entity)]
  */
 export function foldEssentials(ids: ReadonlyArray<ComponentId>): ComponentId[] {
   const seen = new Set<ComponentId>();

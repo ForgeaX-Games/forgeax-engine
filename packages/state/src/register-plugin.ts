@@ -1,4 +1,4 @@
-import { defineRecoverableResource, Update } from '@forgeax/engine-ecs';
+import { Update } from '@forgeax/engine-ecs';
 // @forgeax/engine-state -- registerStatesPlugin (M2 / m2w2, M3 / m3w4)
 //
 // Idempotent plugin that inserts per-token Resources (State / NextState /
@@ -14,9 +14,9 @@ import { defineRecoverableResource, Update } from '@forgeax/engine-ecs';
 // - plan-strategy D-4: insertResource initial values from token.defaultValue
 
 import { defineSystem, defineSystemSet, type SystemHandle, type World } from '@forgeax/engine-ecs';
-import { getRegisteredTokens } from './define-state';
+import { getRegisteredTokens, onStateDefined, type StateToken } from './define-state';
 import { nextStateResourceKey, previousStateResourceKey, stateResourceKey } from './resources';
-import { registerScopedComponents } from './scoped-component';
+import { getScopedComponent, registerScopedComponents } from './scoped-component';
 import { transitionStatesSystem } from './transition-system';
 
 /** Schedule anchor: system name for the input frame-start scan (registered by {@link @forgeax/engine-input}). */
@@ -27,6 +27,7 @@ const PROPAGATE_TRANSFORMS_SYSTEM = 'propagateTransforms' as const;
 
 const TRANSITION_STATES_SYSTEM_NAME = 'transitionStates';
 export const StateSet = defineSystemSet({ name: 'state' });
+const ACTIVE_STATE_RUNTIMES = new WeakSet<World>();
 
 /**
  * The `transitionStates` system token (M2 — full resource-ification, D-4).
@@ -42,9 +43,7 @@ export const TransitionStates: SystemHandle<readonly []> = defineSystem({
   queries: [],
   after: [FRAME_START_SCAN_SYSTEM_NAME],
   before: [PROPAGATE_TRANSFORMS_SYSTEM],
-  fn: (world) => {
-    transitionStatesSystem(world);
-  },
+  fn: transitionStatesSystem,
 });
 
 /**
@@ -57,51 +56,59 @@ export const TransitionStates: SystemHandle<readonly []> = defineSystem({
  *    {@link PreviousState} = defaultValue index).
  * 3. Registers the {@link TransitionStates} system in the schedule.
  *
- * Re-registering the {@link TransitionStates} token overwrites the same name
- * slot (M2: defineSystem token is fixed, so no findSystem dedup guard is
- * needed). Resource inserts are idempotent overwrites to each token's default.
- *
- * Called automatically by {@link createApp} in both canvas and assemble
- * forms; manual callers must invoke it before {@link setNextState}.
+ * Tokens defined after registration are projected immediately. Repeated calls
+ * on the same World are no-ops; the first owner receives the sole disposer.
  */
-export function registerStatesPlugin(world: World): void {
-  // Pre-register ScopedTo components for all known tokens.
-  registerScopedComponents();
+export function registerStatesPlugin(world: World): () => void {
+  if (ACTIVE_STATE_RUNTIMES.has(world)) return () => {};
 
-  // Insert per-token Resources.
-  for (const token of getRegisteredTokens().values()) {
-    const defaultValueIdx = token.nameToIdx.get(token.defaultValue);
-    if (defaultValueIdx === undefined) {
-      continue;
+  const resourceKeys = new Set<string>();
+  const componentLeases = new Map<string, { dispose(): unknown }>();
+  const registerToken = (token: StateToken): void => {
+    registerScopedComponents();
+    const scopedComponent = getScopedComponent(token);
+    if (!componentLeases.has(token.name)) {
+      const lease = world.components.register(scopedComponent);
+      if (!lease.ok) throw lease.error;
+      componentLeases.set(token.name, lease.value);
     }
+    const defaultValueIdx = token.nameToIdx.get(token.defaultValue);
+    if (defaultValueIdx === undefined) return;
 
-    world.insertResource(stateResourceKey(token), defaultValueIdx);
-    world.insertResource(
-      nextStateResourceKey(token),
-      undefined as { value: number; force: boolean } | undefined,
-    );
-    world.insertResource(previousStateResourceKey(token), defaultValueIdx);
-    world.registerRecoverableResource(
-      defineRecoverableResource(stateResourceKey(token), {
-        schemaFingerprint: `forgeax.state.v1:${token.name}`,
-        clone: (value: unknown) => value,
-      }),
-    );
-    world.registerRecoverableResource(
-      defineRecoverableResource(nextStateResourceKey(token), {
-        schemaFingerprint: `forgeax.next-state.v1:${token.name}`,
-        clone: (value: unknown) =>
-          value === undefined ? undefined : { ...(value as { value: number; force: boolean }) },
-      }),
-    );
-    world.registerRecoverableResource(
-      defineRecoverableResource(previousStateResourceKey(token), {
-        schemaFingerprint: `forgeax.previous-state.v1:${token.name}`,
-        clone: (value: unknown) => value,
-      }),
-    );
+    const stateKey = stateResourceKey(token);
+    const nextKey = nextStateResourceKey(token);
+    const previousKey = previousStateResourceKey(token);
+    if (world.hasResource(stateKey)) return;
+    resourceKeys.add(stateKey);
+    resourceKeys.add(nextKey);
+    resourceKeys.add(previousKey);
+    world.insertResource(stateKey, defaultValueIdx);
+    world.insertResource(nextKey, undefined as { value: number; force: boolean } | undefined);
+    world.insertResource(previousKey, defaultValueIdx);
+  };
+
+  for (const token of getRegisteredTokens().values()) registerToken(token);
+  const installed = world.addSystems(Update, StateSet, [TransitionStates]);
+  if (!installed.ok) {
+    for (const key of resourceKeys) {
+      world.removeResource(key);
+    }
+    throw installed.error;
   }
-
-  // Register the transition system.
-  world.addSystems(Update, StateSet, [TransitionStates]);
+  const unsubscribe = onStateDefined(registerToken);
+  ACTIVE_STATE_RUNTIMES.add(world);
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    unsubscribe();
+    ACTIVE_STATE_RUNTIMES.delete(world);
+    world.removeSystem(Update, TRANSITION_STATES_SYSTEM_NAME);
+    for (const key of resourceKeys) {
+      world.removeResource(key);
+    }
+    for (const lease of componentLeases.values()) {
+      lease.dispose();
+    }
+  };
 }

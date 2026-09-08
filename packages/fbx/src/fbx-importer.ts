@@ -137,6 +137,7 @@ export const fbxImporter: Importer = {
           skin,
           animationClips,
           subAssets: ctx.subAssets,
+          ...(ctx.sourceOverrides === undefined ? {} : { sourceOverrides: ctx.sourceOverrides }),
         }),
         sourceDependencies: [],
       },

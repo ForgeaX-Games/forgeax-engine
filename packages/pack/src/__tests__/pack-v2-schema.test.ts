@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { validatePack, validatePackV2 } from '../schema-compiled.js';
+import { SCRIPTABLE_PACK_ASSET_KINDS } from '../scriptable-pack.js';
 
 const GUID_A = '11111111-1111-4111-8111-111111111111';
 const GUID_B = '22222222-2222-4222-8222-222222222222';
@@ -126,5 +127,16 @@ describe('Pack v2 schema', () => {
     delete asset.execution;
 
     expect(validatePackV2(pack)).toBe(false);
+  });
+
+  it('accepts every published durable kind without closing producer extensions', () => {
+    for (const kind of SCRIPTABLE_PACK_ASSET_KINDS) {
+      const pack = validPack();
+      const asset = pack.assets[0];
+      if (!asset) throw new Error('fixture asset is missing');
+      asset.kind = kind;
+      asset.payload = { kind };
+      expect(validatePackV2(pack), kind).toBe(true);
+    }
   });
 });

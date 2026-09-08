@@ -1,6 +1,4 @@
 #define_import_path hello-multi-uv::multi-uv-demo
-#pragma variant_axis M3_MULTI_UV_VARIANT
-
 #import forgeax_view::common::{view, meshes, instances}
 #import forgeax_material::parameters::{material, baseColorTexture, baseColorTexture_sampler, detailTexture, detailTexture_sampler}
 
@@ -70,11 +68,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   // surface colour; the demo plane's (0,0)/(1,1) checkerboard renders as
   // alternating dark / bright cells modulated by the base tint.
   let pattern = vec3<f32>(in.uv1, 0.5);
-#if M3_MULTI_UV_VARIANT == true
   let variantTint = vec3<f32>(1.0, 1.0, 1.0);
-#else
-  let variantTint = vec3<f32>(0.85, 1.0, 0.85);
-#endif
   let parameterUv = transformUv(in.uv, material.baseColorUvTransform);
   // Keep the default [0, 0, 1, 1] transform pixel-identical to the original
   // multi-UV proof while making an authored transform visibly causal when it

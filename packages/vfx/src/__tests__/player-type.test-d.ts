@@ -1,3 +1,4 @@
+import type { SchemaOf, ShapeOf } from '@forgeax/engine-ecs';
 import type { Handle } from '@forgeax/engine-types';
 import { describe, expectTypeOf, it } from 'vitest';
 import {
@@ -32,19 +33,19 @@ describe('ParticleEffectPlayer public type shape', () => {
   });
 
   it('contains only the author-intent schema fields', () => {
-    expectTypeOf<keyof typeof ParticleEffectPlayer.schema>().toEqualTypeOf<
+    expectTypeOf<keyof SchemaOf<typeof ParticleEffectPlayer>>().toEqualTypeOf<
       'effect' | 'playing' | 'seed' | 'timeScale'
     >();
     expectTypeOf<
-      typeof ParticleEffectPlayer.schema.effect
+      SchemaOf<typeof ParticleEffectPlayer>['effect']
     >().toEqualTypeOf<'shared<ParticleEffectAsset>'>();
-    expectTypeOf<typeof ParticleEffectPlayer.schema.playing>().toEqualTypeOf<'bool'>();
-    expectTypeOf<typeof ParticleEffectPlayer.schema.seed>().toEqualTypeOf<'u32'>();
-    expectTypeOf<typeof ParticleEffectPlayer.schema.timeScale>().toEqualTypeOf<'f32'>();
+    expectTypeOf<SchemaOf<typeof ParticleEffectPlayer>['playing']>().toEqualTypeOf<'bool'>();
+    expectTypeOf<SchemaOf<typeof ParticleEffectPlayer>['seed']>().toEqualTypeOf<'u32'>();
+    expectTypeOf<SchemaOf<typeof ParticleEffectPlayer>['timeScale']>().toEqualTypeOf<'f32'>();
   });
 
   it('derives the shared effect handle from the ECS schema', () => {
-    type Data = import('@forgeax/engine-ecs').ShapeOf<typeof ParticleEffectPlayer.schema>;
+    type Data = ShapeOf<SchemaOf<typeof ParticleEffectPlayer>>;
     expectTypeOf<Data['effect']>().toEqualTypeOf<Handle<'ParticleEffectAsset', 'shared'>>();
     expectTypeOf<Data['playing']>().toEqualTypeOf<boolean>();
     expectTypeOf<Data['seed']>().toEqualTypeOf<number>();

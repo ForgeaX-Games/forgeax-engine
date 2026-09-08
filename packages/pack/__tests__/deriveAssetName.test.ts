@@ -1,16 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { deriveAssetName } from '../src/deriveAssetName.js';
 
-// AC-15: deriveAssetName pure function -- four branches, no errors thrown.
-//   1. single-asset package (assetCount === 1) -> basename(path)
-//   2. multi-asset package + storedName -> storedName
-//   3. multi-asset package + no storedName (AC-15.1 fallback) -> basename(path)
-//   4. null packagePath + no storedName (AC-15.2 fallback) -> ''
+// AC-15: deriveAssetName pure function -- explicit authored names always win;
+// package basename and empty string are deterministic fallbacks.
 
 describe('deriveAssetName (AC-15)', () => {
-  it('single asset package: returns basename(packagePath)', () => {
+  it('single asset package without storedName: returns basename(packagePath)', () => {
     expect(deriveAssetName('/assets/models/robot.pack.json', 1)).toBe('robot.pack.json');
     expect(deriveAssetName('/hero', 1)).toBe('hero');
+  });
+
+  it('single asset package with storedName: preserves the authored entry name', () => {
+    expect(deriveAssetName('/assets/Materials.pack.json', 1, 'NewMaterial')).toBe('NewMaterial');
   });
 
   it('multi asset package with storedName: returns storedName', () => {

@@ -1,7 +1,23 @@
 import { describe, expect, it } from 'vitest';
+import { defineComponent, World } from '@forgeax/engine-ecs';
 import { createMemoryEndpointPair } from '../src/endpoint/memory';
 import type { PeerId } from '../src/endpoint/endpoint';
+import { encodeReplicationPacket } from '../src/replication/codec';
+import { createReplicaCoordinator } from '../src/replication/replica';
+import { defineReplication } from '../src/replication/profile';
 import { NetSession } from '../src/session/net-session';
+
+const NetworkedSessionRaw = defineComponent('NetworkedSessionRaw', { enabled: 'bool' });
+
+function sessionRawProfile() {
+  const result = defineReplication({
+    name: 'session-raw-message',
+    entities: { with: [NetworkedSessionRaw] },
+    components: [NetworkedSessionRaw],
+  });
+  if (!result.ok) throw result.error;
+  return result.value;
+}
 
 // ---------------------------------------------------------------------------
 // TDD phase: raw message boundary tests.
@@ -63,6 +79,51 @@ describe('Session raw message bounds', () => {
     expect(raw).toHaveLength(1);
     // B's peerId from A's perspective is 2
     expect(raw[0]!.peerId).toBe(2 as PeerId);
+    expect(raw[0]!.sessionId).toBe(2);
+  });
+
+  it('routes a replica write through its logical SessionId', () => {
+    const [authorityEndpoint, replicaEndpoint] = createMemoryEndpointPair();
+    const authority = new NetSession({ endpoint: authorityEndpoint, maxRawMessages: 256 });
+    const replica = new NetSession({ endpoint: replicaEndpoint, sessionId: 7, maxRawMessages: 256 });
+    const replication = sessionRawProfile();
+    replica.attachReplica(createReplicaCoordinator(new World(), replication), replication.limits);
+    authority.receiveEvents();
+    replica.receiveEvents();
+
+    const sent = replica.sendToAuthority(
+      replica.getRecoverySnapshot().sessionId,
+      new Uint8Array([7]),
+    );
+    expect(sent.ok).toBe(true);
+    expect(authority.receiveEvents()).toEqual([]);
+    const raw = authority.drainRawMessages();
+    expect(raw).toEqual([
+      expect.objectContaining({ peerId: 2 as PeerId, sessionId: 7, data: new Uint8Array([7]) }),
+    ]);
+  });
+
+  it('routes an authority write through the mapped logical SessionId', () => {
+    const [authorityEndpoint, replicaEndpoint] = createMemoryEndpointPair();
+    const authority = new NetSession({ endpoint: authorityEndpoint, maxRawMessages: 256 });
+    const replica = new NetSession({ endpoint: replicaEndpoint, sessionId: 8, maxRawMessages: 256 });
+    const replication = sessionRawProfile();
+    replica.attachReplica(createReplicaCoordinator(new World(), replication), replication.limits);
+    authority.receiveEvents();
+    replica.receiveEvents();
+
+    const sessionId = authority.getSessionSnapshot().sessionIds[0];
+    expect(sessionId).toBe(2);
+    if (sessionId === undefined) return;
+    const sessionOpen = encodeReplicationPacket(
+      { version: 2, kind: 'session-open', sessionId: 8 as never, epoch: 0, sequence: 0 },
+      replication.limits,
+    );
+    expect(sessionOpen.ok).toBe(true);
+    if (!sessionOpen.ok) return;
+    expect(authority.sendToSession(sessionId, sessionOpen.value).ok).toBe(true);
+    expect(replica.receiveEvents()).toEqual([]);
+    expect(replica.getSessionSnapshot().sessionIds).toEqual([8]);
   });
 
   it('sendRaw to wrong peer returns error', () => {

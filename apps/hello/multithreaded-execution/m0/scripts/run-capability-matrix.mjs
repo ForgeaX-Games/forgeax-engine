@@ -280,6 +280,13 @@ async function probeBrowser(name, browserType, parentOrigin, childOrigin) {
   return results;
 }
 
+function requestedBrowser() {
+  const option = process.argv.find((argument) => argument.startsWith('--browser='));
+  const browser = option?.slice('--browser='.length) ?? 'all';
+  if (browser === 'all' || browser === 'chrome' || browser === 'webkit') return browser;
+  throw new Error(`unsupported browser selection: ${browser}`);
+}
+
 async function main() {
   if (process.argv.includes('--self-test')) {
     const worker = {
@@ -303,16 +310,23 @@ async function main() {
     else console.log('[m0-capability] real-header policy fixture accepted; missing-header fixture rejected');
     return;
   }
+  const browserSelection = requestedBrowser();
   const { childServer, childOrigin, parentServer, parentOrigin } = await startServers();
   try {
-    const runs = [
-      ...(await probeBrowser('chrome', chromium, parentOrigin, childOrigin)),
-      ...(await probeBrowser('webkit', webkit, parentOrigin, childOrigin)),
-    ];
+    const runs = [];
+    if (browserSelection === 'all' || browserSelection === 'chrome') {
+      runs.push(...(await probeBrowser('chrome', chromium, parentOrigin, childOrigin)));
+    }
+    if (browserSelection === 'all' || browserSelection === 'webkit') {
+      runs.push(...(await probeBrowser('webkit', webkit, parentOrigin, childOrigin)));
+    }
     await mkdir(dirname(evidencePath), { recursive: true });
     await writeFile(evidencePath, `${JSON.stringify(runs, null, 2)}\n`);
     console.log(JSON.stringify(runs, null, 2));
-    if (runs.length !== 8 || runs.some((run) => !run.verdict.passed)) process.exitCode = 1;
+    const expectedRuns = browserSelection === 'all' ? 8 : 4;
+    if (runs.length !== expectedRuns || runs.some((run) => !run.verdict.passed)) {
+      process.exitCode = 1;
+    }
   } finally {
     await Promise.all([
       new Promise((resolvePromise) => childServer.close(resolvePromise)),

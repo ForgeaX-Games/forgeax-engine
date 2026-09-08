@@ -42,6 +42,7 @@
     "@forgeax/engine-app": "workspace:*",
     "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-input": "workspace:*",
     "@forgeax/engine-geometry": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
@@ -60,6 +61,7 @@
     "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/apps-shared": "workspace:*",
     "@forgeax/engine-fbx": "workspace:*",
     "@forgeax/engine-gltf": "workspace:*",
     "@forgeax/engine-image": "workspace:*",

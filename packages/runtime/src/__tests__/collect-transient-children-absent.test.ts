@@ -1,3 +1,5 @@
+import * as SceneOwner from '@forgeax/engine-scene';
+
 // feat-20260707-engine-world-clone-transient-for-editor-ssot M1 / m1t3:
 // Children-absent collect test (AC-04).
 //
@@ -10,14 +12,14 @@
 // the bug exists. After m1t6 fixes collect to skip transient components,
 // the test must PASS.
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import '@forgeax/engine-render/internal';
-import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { rootsToSceneAsset } from '../collect-scene-asset';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+import { registerSceneComponents } from './helpers/register-scene-components';
 
 function makeRegistry(): AssetRegistry {
   return new AssetRegistry(makeMockShaderRegistry());
@@ -42,12 +44,13 @@ describe('m1t3 — Children absent from collect (AC-04)', () => {
     };
 
     const world = new World();
+    registerSceneComponents(world);
     const reg = makeRegistry();
     const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
     if (sg.ok) reg.catalog(sg.value, asset);
     // biome-ignore lint/suspicious/noExplicitAny: branded type mismatch
     const handle = world.allocSharedRef('SceneAsset', asset) as any;
-    const res = world.instantiateScene(handle);
+    const res = SceneOwner.worldInstantiateScene(world, handle);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 
@@ -88,6 +91,7 @@ describe('m1t3 — Children absent from collect (AC-04)', () => {
     };
 
     const world = new World();
+    registerSceneComponents(world);
     const reg = makeRegistry();
     const sg0 = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
     const sg1 = AssetGuid.parse('11111111-1111-1111-1111-111111111111');
@@ -104,19 +108,19 @@ describe('m1t3 — Children absent from collect (AC-04)', () => {
     const outerH = world.allocSharedRef('SceneAsset', outerAsset) as any;
 
     // Instantiate outer scene first.
-    const outerInst = world.instantiateScene(outerH);
+    const outerInst = SceneOwner.worldInstantiateScene(world, outerH);
     expect(outerInst.ok).toBe(true);
     if (!outerInst.ok) return;
 
     // Find entity at localId 0 under outer root — this is the anchor for mid.
     // We use iterDescendants to find it or directly spawn ChildOf under root.
     // Simpler: instantiate mid under outer root directly.
-    const midInst = world.instantiateScene(midH, outerInst.value.root);
+    const midInst = SceneOwner.worldInstantiateScene(world, midH, outerInst.value.root);
     expect(midInst.ok).toBe(true);
     if (!midInst.ok) return;
 
     // Instantiate leaf under mid root.
-    const leafInst = world.instantiateScene(leafH, midInst.value.root);
+    const leafInst = SceneOwner.worldInstantiateScene(world, leafH, midInst.value.root);
     expect(leafInst.ok).toBe(true);
     if (!leafInst.ok) return;
 
@@ -143,12 +147,13 @@ describe('m1t3 — Children absent from collect (AC-04)', () => {
     };
 
     const world = new World();
+    registerSceneComponents(world);
     const reg = makeRegistry();
     const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
     if (sg.ok) reg.catalog(sg.value, asset);
     // biome-ignore lint/suspicious/noExplicitAny: branded type mismatch
     const handle = world.allocSharedRef('SceneAsset', asset) as any;
-    const res = world.instantiateScene(handle);
+    const res = SceneOwner.worldInstantiateScene(world, handle);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 

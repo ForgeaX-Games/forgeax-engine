@@ -7,19 +7,16 @@
 //           asset's derived basename is frozen as its stored name so it keeps
 //           the same resolveName (now via the multi-asset branch), with no error
 //           and no caller awareness. Promotion is idempotent: re-registering the
-//           same path does not overwrite an already-frozen name.
+//           same path does not overwrite an already-frozen name. An explicitly
+//           authored name is already stable and is preserved through promotion.
 //
-// The promotion is observable through `package.xor-invariant-violated`: when the
-// original asset already carries a stored name at promotion time (the abnormal
-// single-asset-with-name state, D-4), the freeze must not overwrite it and the
-// soft-violation counter increments. Without w11 there is no promotion branch,
-// so the counter never fires (the falsifying assertion).
+// The promotion must not emit a violation for an explicitly named first asset.
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { createEngineMetrics } from '@forgeax/engine-render/internal';
 import type { SamplerAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { createEngineMetrics } from '../../../render/src/engine-metrics';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const G1 = 'c0000000-0000-4000-c000-000000000001';
@@ -70,19 +67,18 @@ describe('1->N package promotion (AC-05)', () => {
     expect(reg.resolveName(G2)).toBe('SecondAsset');
   });
 
-  it('abnormal single-asset-with-name state bumps the xor counter and is not overwritten', () => {
+  it('preserves an explicitly authored first-asset name without a false violation', () => {
     const reg = makeRegistry();
     const metrics = createEngineMetrics();
     reg.setMetrics(metrics);
-    // Abnormal: a single-asset package whose lone asset already carries a name.
     reg.catalog(parseGuid(G1), sampler);
     reg._registerPackage(PATH, [G1], new Map([[G1, 'PreNamed']]));
     reg.catalog(parseGuid(G2), sampler);
-    // Promotion fires: the pre-existing name is preserved (not overwritten by
-    // basename) and the soft-violation counter records the abnormal state.
+    // Promotion preserves the authored name rather than replacing it with the
+    // package basename.
     reg._registerPackage(PATH, [G2], new Map([[G2, 'SecondAsset']]));
 
     expect(reg.resolveName(G1)).toBe('PreNamed');
-    expect(metrics.snapshot()['package.xor-invariant-violated']).toBe(1);
+    expect(metrics.snapshot()['package.xor-invariant-violated'] ?? 0).toBe(0);
   });
 });

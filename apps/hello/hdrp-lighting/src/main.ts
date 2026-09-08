@@ -1,13 +1,9 @@
 import { Update } from '@forgeax/engine-ecs';
-// apps/hello/hdrp-lighting -- HDRP cluster-forward 256-light demo
+// Standard clustered-lighting 256-light demo
 // (feat-20260608-cluster-lighting / M7 / w25).
 //
-// This demo REQUIRES the HDRP pipeline. AI users opt-in via:
-//   1. assets.register<RenderPipelineAsset>({ kind, pipelineId: HDRP_PIPELINE_ID, config: { clusterGrid } })
-//   2. renderer.installPipeline(handle)
-// URP is the engine default (zero config) -- HDRP is an explicit upgrade
-// for ≤256 punctual lights via cluster-forward shading (charter P1
-// progressive disclosure: one-line opt-in, AC-06 + AC-21).
+// This demo selects the Standard clustered-lighting lane at host assembly.
+// The same closed Standard profile can be falsified with the direct lane.
 //
 // Scene (charter F1 progressive disclosure):
 //   - 1 ground cube (large, dark gray) acting as the "lit floor".
@@ -19,18 +15,15 @@ import { Update } from '@forgeax/engine-ecs';
 //     once per frame, not just once at install).
 //
 // FALSIFY mode (AC-21 falsifiability discipline):
-//   FALSIFY=force-urp -- skip installPipeline(hdrpAsset), so the engine
-//   stays on URP. Smoke verdict (d) below detects that the HDRP buffers
-//   are NOT bound and FAILS the smoke. Local-only manual run; not in CI.
+//   ?falsify=force-direct -- assemble the same scene on the direct lane.
+//   The smoke verdict detects the lane change while retaining the real GPU
+//   256-light path. Local-only manual run; not in CI.
 //
 // Charter mapping:
-//   - P1 progressive disclosure: 6-step recipe below (createApp ->
-//     register HDRP RenderPipelineAsset -> installPipeline -> spawn 256
-//     lights -> per-frame animation -> app.start).
-//   - P3 explicit failure: HdrpInstallError on bad clusterGrid is
-//     surfaced via reportAppError; not silent.
-//   - P5 consistent abstraction: the HDRP install path mirrors hello-bloom's
-//     bloom opt-in pattern (a single asset.register + opt-in surface).
+//   - P1 progressive disclosure: createApp -> Standard profile -> spawn 256
+//     lights -> per-frame animation -> app.start.
+//   - P5 consistent abstraction: direct and clustered are closed Standard
+//     profile lanes with one renderer owner.
 
 import { createApp } from '@forgeax/engine-app';
 import type { CanvasAppError } from '@forgeax/engine-app';
@@ -38,10 +31,15 @@ import type { CanvasAppError } from '@forgeax/engine-app';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
-import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { perspective, TONEMAP_ACES_FILMIC } from '@forgeax/engine-render';
+import {
+  Camera,
+  DEFAULT_STANDARD_PROFILE,
+  MeshFilter,
+  MeshRenderer,
+  perspective,
+  TONEMAP_ACES_FILMIC,
+} from '@forgeax/engine-render';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
-import { HDRP_PIPELINE_ID } from '@forgeax/engine-render/internal';
 import { PointLight, SpotLight } from '@forgeax/engine-render';
 
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -56,68 +54,46 @@ const FALSIFY = (() => {
 
 const POINT_LIGHT_COUNT = 200;
 const SPOT_LIGHT_COUNT = 56;
-const CLUSTER_GRID = { x: 16, y: 9, z: 24 } as const;
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) {
-  throw new Error('[hdrp-lighting] missing <canvas id="app"> in index.html');
+  throw new Error('[standard-lighting] missing <canvas id="app"> in index.html');
 }
 
 bootstrap(canvas).catch((err: unknown) => {
   if (err instanceof EngineEnvironmentError) {
     const inner = err.detail.webgpuError;
     const code = inner !== undefined && 'code' in inner ? inner.code : '<none>';
-    console.error(`[hdrp-lighting] EngineEnvironmentError: webgpu inner=${code}`);
+    console.error(`[standard-lighting] EngineEnvironmentError: webgpu inner=${code}`);
   } else {
-    console.error('[hdrp-lighting] bootstrap error:', err);
+    console.error('[standard-lighting] bootstrap error:', err);
   }
 });
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Step 1: createApp -- one-screen takeoff.
-  const appRes = await createApp(target, {}, forgeaxBundlerAdapter());
+  const appRes = await createApp(
+    target,
+    {
+      standardProfile: {
+        ...DEFAULT_STANDARD_PROFILE,
+        lighting: FALSIFY === 'force-direct' ? 'direct' : 'clustered',
+        lightCount: 256,
+      },
+    },
+    forgeaxBundlerAdapter(),
+  );
   if (!appRes.ok) {
     reportAppError(appRes.error);
     return;
   }
   const app = appRes.value;
-  console.warn(`[hdrp-lighting] backend=${app.renderer.backend}`);
+  console.warn(`[standard-lighting] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
-  const ready = await app.renderer.ready;
-  if (!ready.ok) {
-    console.error('[hdrp-lighting] renderer.ready failed:', ready.error.code, ready.error.hint);
-    return;
-  }
 
   const world = app.world;
 
-  // Step 2: install the HDRP RenderPipelineAsset (the M2/M4 install seam).
-  // pipelineId narrows on the literal 'forgeax::hdrp' so config.clusterGrid
-  // becomes valid. URP would ignore config.clusterGrid; HDRP reads it at
-  // buildGraph time to size the cluster_uniform UBO. D-19: installPipeline
-  // takes the POD directly (no AssetRegistry round-trip).
-  // FALSIFY=force-urp skips this call, so the engine stays on URP and
-  // the smoke (d) per-frame graph assertion fails -- proves that the
-  // 256-light demo actually depends on HDRP install (AC-21 falsifiability).
-  if (FALSIFY === 'force-urp') {
-    console.warn('[hdrp-lighting] FALSIFY=force-urp -- skipping installPipeline(hdrpAsset)');
-  } else {
-    const installRes = app.renderer.installPipeline({
-      kind: 'render-pipeline',
-      pipelineId: HDRP_PIPELINE_ID,
-      config: { clusterGrid: CLUSTER_GRID },
-    });
-    if (!installRes.ok) {
-      console.error(
-        '[hdrp-lighting] installPipeline failed:',
-        installRes.error.code,
-        installRes.error.hint,
-      );
-      return;
-    }
-  }
-
-  // Step 3: alloc a standard PBR material for the lit floor + lit cube as a
+  // Step 2: alloc a standard PBR material for the lit floor + lit cube as a
   // user-tier shared ref on the World (D-19).
   const materialHandle = world.allocSharedRef('MaterialAsset', {
     kind: 'material',
@@ -212,9 +188,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     );
   }
   console.warn(
-    `[hdrp-lighting] spawned ${POINT_LIGHT_COUNT} point + ${SPOT_LIGHT_COUNT} spot = ${
+    `[standard-lighting] spawned ${POINT_LIGHT_COUNT} point + ${SPOT_LIGHT_COUNT} spot = ${
       POINT_LIGHT_COUNT + SPOT_LIGHT_COUNT
-    } punctual lights on grid {x:${CLUSTER_GRID.x}, y:${CLUSTER_GRID.y}, z:${CLUSTER_GRID.z}}`,
+    } punctual lights on the Standard clustered-lighting lane`,
   );
 
   // Step 7: spawn camera. identity quat looks down -Z (no lookAt helper yet,
@@ -253,7 +229,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // stays close to the smoke baseline (deterministic readback target).
   let elapsed = 0;
   world.addSystem(Update, {
-    name: 'hdrp-light-orbit',
+    name: 'standard-light-orbit',
     queries: [],
     fn: () => {
       elapsed += 1 / 60;
@@ -284,7 +260,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   console.warn(
-    `[hdrp-lighting] running. installPipeline(${FALSIFY === 'force-urp' ? 'SKIPPED -- URP active' : 'forgeax::hdrp'}). 256 punctual lights orbiting.`,
+    `[standard-lighting] running. Standard ${FALSIFY === 'force-direct' ? 'direct' : 'clustered'} lane. 256 punctual lights orbiting.`,
   );
 }
 
@@ -292,10 +268,10 @@ function reportAppError(err: CanvasAppError | EngineEnvironmentError): void {
   if (err instanceof EngineEnvironmentError) {
     const inner = err.detail.webgpuError;
     const code = inner !== undefined && 'code' in inner ? inner.code : '<none>';
-    console.error(`[hdrp-lighting] EngineEnvironmentError: webgpu inner=${code}`);
+    console.error(`[standard-lighting] EngineEnvironmentError: webgpu inner=${code}`);
     return;
   }
-  console.error(`[hdrp-lighting] ${err.code}: ${err.hint}`);
+  console.error(`[standard-lighting] ${err.code}: ${err.hint}`);
 }
 
 // mulberry32 PRNG -- deterministic 32-bit, used for repeatable seeds.

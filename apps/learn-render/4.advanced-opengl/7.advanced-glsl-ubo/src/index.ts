@@ -30,6 +30,7 @@ import { Materials } from '@forgeax/engine-render';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
+import { captureCanvasPixels } from '@forgeax/apps-shared/canvas-capture';
 
 // 2. example glue
 
@@ -133,7 +134,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
   );
 
-  addFirstPersonSystem(world, renderer, {
+  addFirstPersonSystem(world, {
     name: 'learn-render-4.7-advanced-glsl-ubo-first-person',
     overrideBackend: undefined,
   });
@@ -143,23 +144,35 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[learn-render 4.7 advanced-glsl-ubo] app.start failed:', startRes.error);
     return;
   }
-  console.warn(`[learn-render 4.7 advanced-glsl-ubo] backend=${renderer.backend}`);
+  console.warn(
+    `[learn-render 4.7 advanced-glsl-ubo] backend=${renderer.inspect().capabilities.backendKind}`,
+  );
 
-  installCaptureHook(app, world);
+  installCaptureHook(app, world, target);
 }
 
 // RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives
 // one update + draw + readPixels so the live canvas read is anchored to the same
 // frame the capture records. Only meaningful when the page is served with
 // FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
-function installCaptureHook(app: App, world: App['world']): void {
+function installCaptureHook(app: App, world: App['world'], canvas: HTMLCanvasElement): void {
   type CaptureHook = () => Promise<Uint8Array>;
   const win = window as unknown as { __captureAdvancedGlslUbo?: CaptureHook };
   const renderer = app.renderer;
+  const attached = renderer.attach(world);
+  if (!attached.ok) throw attached.error;
+  const lease = attached.value;
   win.__captureAdvancedGlslUbo = async (): Promise<Uint8Array> => {
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    const r = await renderer.readPixels();
+    const frame = renderer.draw({
+      leases: [lease],
+      camera: { lease },
+      environment: { lease },
+    });
+    if (!frame.ok) throw frame.error;
+    const observed = await renderer.observe(frame.value, { include: ['draws'] });
+    if (!observed.ok) throw observed.error;
+    const r = await captureCanvasPixels(canvas);
     if (!r.ok) {
       throw new Error(
         `[learn-render 4.7 advanced-glsl-ubo] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,

@@ -1,7 +1,6 @@
 import { createApp } from '@forgeax/engine-app';
-import { FixedUpdate, Update, defineComponent, ok } from '@forgeax/engine-ecs';
+import { FixedUpdate, Update, defineComponent } from '@forgeax/engine-ecs';
 import { INPUT_MAP_KEY, INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
-import { runPlugins } from '@forgeax/engine-plugin';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { ChildOf, Transform } from '@forgeax/engine-scene';
@@ -22,9 +21,10 @@ const appResult = await createApp(
     plugins: [
       {
         name: 'm1-live-composition',
-        build(world) {
-          world.insertResource('m1LivePluginBuilt', { value: true });
-          return ok(undefined);
+        inject: ['world'],
+        apply(ctx) {
+          ctx.world.insertResource('m1LivePluginBuilt', { value: true });
+          return () => ctx.world.removeResource('m1LivePluginBuilt');
         },
       },
     ],
@@ -177,8 +177,6 @@ app.onError((error) => {
   liveErrors.codes.push(error.code);
 });
 
-const pluginProbe = await runPlugins(world, [], []);
-if (!pluginProbe.ok) throw new Error(`plugin probe failed: ${pluginProbe.error.code}`);
 const transition = setNextState(world, Mode, 'play');
 if (!transition.ok) throw new Error(`initial state transition failed: ${transition.error.code}`);
 app.start().unwrap();

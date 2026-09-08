@@ -29,6 +29,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // The harness floating clone is never a submodule and must never be deleted by
 // clean; it holds unpushed closed-loop state. Also whitelisted from orphan scan.
 const HARNESS_DIR = '.forgeax-harness';
+const PUBLIC_DISTRIBUTION_MARKER = '.forgeax-public-distribution';
+const isPublicDistribution = existsSync(resolve(ROOT, PUBLIC_DISTRIBUTION_MARKER));
 
 // ── types ────────────────────────────────────────────────────────────────────
 
@@ -424,8 +426,9 @@ function restoreStashResult(ref: string, dryRun: boolean): StepResult {
 
 // Fast-forward .forgeax-harness through its SSOT script (scripts/sync-harness.mjs)
 // rather than reimplementing the clone/ff/divergence logic. Direct node call
-// matches how postinstall runs it and preserves its exit codes (0 offline/skip,
-// 1 only on real divergence) so the report row is accurate.
+// matches how postinstall runs it and preserves its exit codes (0 offline/skip
+// and default divergence fallback; 1 only with FORGEAX_HARNESS_STRICT=1) so
+// the report row is accurate.
 function harnessSyncStep(dryRun: boolean): StepResult {
   const cmd = 'node scripts/sync-harness.mjs';
   if (dryRun) {
@@ -476,16 +479,26 @@ function finish(results: StepResult[], hintScopes = false): never {
 function setup(args: string[]): never {
   const dryRun = args.includes('--dry-run') || args.includes('-n');
   const results: StepResult[] = [];
-  console.log('[fx] setup: initialising submodules + installing dependencies + building');
+  const buildCommand = isPublicDistribution ? 'build:engine' : 'build';
+  console.log(
+    `[fx] setup: ${isPublicDistribution ? 'public source distribution - no submodules' : 'initialising submodules'} + installing dependencies + ${buildCommand}`,
+  );
 
   results.push(
-    runGitStep(
-      'submodule',
-      '(all)',
-      submoduleUpdateAllArgs(),
-      dryRun,
-      'submodules initialised with depth=1',
-    ),
+    isPublicDistribution
+      ? {
+          scope: 'submodule',
+          name: '(all)',
+          result: 'skipped',
+          detail: 'public SDK source has no private submodule dependency',
+        }
+      : runGitStep(
+          'submodule',
+          '(all)',
+          submoduleUpdateAllArgs(),
+          dryRun,
+          'submodules initialised with depth=1',
+        ),
   );
 
   // pnpm install runs postinstall (scripts/sync-harness.mjs) which materialises
@@ -516,17 +529,42 @@ function setup(args: string[]): never {
   const installSucceeded = results.at(-1)?.result === 'ok' || results.at(-1)?.result === 'planned';
   if (installSucceeded) {
     if (dryRun) {
-      console.log('[dry-run] pnpm build');
-      results.push({ scope: 'root', name: '.', result: 'planned', detail: 'pnpm build' });
+      console.log('[dry-run] node scripts/forgeax/link-template-agents.mjs');
+      results.push({
+        scope: 'root',
+        name: 'templates/AGENTS.md',
+        result: 'planned',
+        detail: 'link shared game instructions',
+      });
     } else {
-      console.log('[fx] pnpm build');
-      const r = spawnSync('pnpm', ['build'], { cwd: ROOT, stdio: 'inherit' });
+      console.log('[fx] linking shared template AGENTS.md');
+      const linked = spawnSync('node', ['scripts/forgeax/link-template-agents.mjs'], {
+        cwd: ROOT,
+        stdio: 'inherit',
+      });
+      results.push({
+        scope: 'root',
+        name: 'templates/AGENTS.md',
+        result: linked.status === 0 ? 'ok' : 'failed',
+        detail:
+          linked.status === 0 ? 'game template links ready' : `linker exited ${linked.status ?? 1}`,
+      });
+    }
+  }
+  const linksSucceeded = results.at(-1)?.result === 'ok' || results.at(-1)?.result === 'planned';
+  if (installSucceeded && linksSucceeded) {
+    if (dryRun) {
+      console.log(`[dry-run] pnpm ${buildCommand}`);
+      results.push({ scope: 'root', name: '.', result: 'planned', detail: `pnpm ${buildCommand}` });
+    } else {
+      console.log(`[fx] pnpm ${buildCommand}`);
+      const r = spawnSync('pnpm', [buildCommand], { cwd: ROOT, stdio: 'inherit' });
       if (r.error) {
         results.push({
           scope: 'root',
           name: '.',
           result: 'failed',
-          detail: `cannot run pnpm build: ${r.error.message}`,
+          detail: `cannot run pnpm ${buildCommand}: ${r.error.message}`,
         });
       } else {
         const status = r.status ?? 1;
@@ -534,7 +572,7 @@ function setup(args: string[]): never {
           scope: 'root',
           name: '.',
           result: status === 0 ? 'ok' : 'failed',
-          detail: status === 0 ? 'build completed' : `pnpm build exited ${status}`,
+          detail: status === 0 ? 'build completed' : `pnpm ${buildCommand} exited ${status}`,
         });
       }
     }
@@ -602,18 +640,27 @@ function update(args: string[]): never {
   const rootOk = !results.some((r) => r.scope === 'root' && r.result === 'failed');
 
   if (rootOk) {
-    console.log('[fx] update: submodules (depth=1, jobs=1)');
-    const paths = submodulePaths();
-    if (paths.length === 0) {
+    if (isPublicDistribution) {
       results.push({
         scope: 'submodule',
-        name: '(none)',
+        name: '(all)',
         result: 'skipped',
-        detail: 'no submodules configured',
+        detail: 'public SDK source has no private submodule dependency',
       });
     } else {
-      for (const p of paths) {
-        results.push(updateSubmoduleDepthOne(p, dryRun));
+      console.log('[fx] update: submodules (depth=1, jobs=1)');
+      const paths = submodulePaths();
+      if (paths.length === 0) {
+        results.push({
+          scope: 'submodule',
+          name: '(none)',
+          result: 'skipped',
+          detail: 'no submodules configured',
+        });
+      } else {
+        for (const p of paths) {
+          results.push(updateSubmoduleDepthOne(p, dryRun));
+        }
       }
     }
     console.log(`[fx] update: ${HARNESS_DIR}`);
@@ -658,19 +705,28 @@ function clean(args: string[]): never {
   // 1. discard tracked edits + reset submodule pointers to recorded pins.
   step('root', '.', ['reset', '--hard'], 'reset tracked changes');
   // 2. sync submodule checkouts to pins (init any missing / nested).
-  step(
-    'submodule',
-    '(all)',
-    [...submoduleUpdateAllArgs(), '--force'],
-    'checkouts synced to pins with depth=1',
-  );
-  // 3. scrub every submodule tree to bare pin state so none reports "modified" upward.
-  step(
-    'submodule',
-    '(all)',
-    ['submodule', 'foreach', '--recursive', subForeachCmd],
-    'submodule trees scrubbed',
-  );
+  if (isPublicDistribution) {
+    results.push({
+      scope: 'submodule',
+      name: '(all)',
+      result: 'skipped',
+      detail: 'public SDK source has no private submodule dependency',
+    });
+  } else {
+    step(
+      'submodule',
+      '(all)',
+      [...submoduleUpdateAllArgs(), '--force'],
+      'checkouts synced to pins with depth=1',
+    );
+    // 3. scrub every submodule tree to bare pin state so none reports "modified" upward.
+    step(
+      'submodule',
+      '(all)',
+      ['submodule', 'foreach', '--recursive', subForeachCmd],
+      'submodule trees scrubbed',
+    );
+  }
 
   // 4. remove orphan submodule dirs (registered in git but dropped from
   //    .gitmodules). Whitelisted names (harness / live submodules) never match.
@@ -751,8 +807,9 @@ Usage:
   bun fx <command> [args...]
 
 Commands:
-  setup                 First-time bootstrap: git submodule update --init
-                        --recursive, then pnpm install and pnpm build
+  setup                 First-time bootstrap: contributor checkouts initialise
+                        git submodules; public SDK source skips them. Both run
+                        pnpm install (public source also runs pnpm build:engine).
                         (postinstall materialises ${HARNESS_DIR}). Idempotent —
                         safe to re-run.
   update [flags]        Pull root (ff-only), keep clean submodules at Git depth=1,

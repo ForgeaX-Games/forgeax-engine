@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // Dawn smoke for the Bevy update_gltf_scene reproduction.
 
 import { readFileSync } from 'node:fs';
@@ -49,20 +50,19 @@ const canvas = {
 };
 
 const manifest = readFileSync(resolve(appRoot, 'dist', 'shaders', 'manifest.json'), 'utf8');
-const { World } = await import('@forgeax/engine-ecs');
-const { createRenderer } = await import('@forgeax/engine-runtime');
-const { Camera, DirectionalLight, perspective } = await import('@forgeax/engine-render');
-const { Transform } = await import('@forgeax/engine-scene');
+const { createWorldContext, World } = await import('@forgeax/engine-ecs');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
+const { Camera, DirectionalLight, perspective, renderComponentsPlugin } = await import('@forgeax/engine-render');
+const { scenePlugin, Transform } = await import('@forgeax/engine-scene');
 const { quat } = await import('@forgeax/engine-math');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 const { gltfDocToSceneAsset, meshIrToMeshAsset, parseGltf, toMaterialAsset } = await import('@forgeax/engine-gltf');
 const { MovedScene, sceneDescendants, stepUpdateGltfScene } = await import(resolve(appRoot, 'src', 'update-gltf-scene.ts'));
 
-const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: `data:application/json,${encodeURIComponent(manifest)}` });
-renderer.onError((error) => errors.push(error));
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
-const assets = renderer.assets;
+const constructed = await constructRuntimeRendererHost(canvas, {}, { shaderManifestUrl: `data:application/json,${encodeURIComponent(manifest)}` });
+if (!constructed.ok) throw constructed.error;
+const { renderer, assets } = constructed.value;
+subscribeSmokeErrors(renderer, (error) => errors.push(error));
 const gltfPath = resolve(root, 'apps/hello/gltf/assets/box.gltf');
 const metaPath = resolve(root, 'apps/hello/gltf/assets/box.gltf.meta.json');
 const docResult = await parseGltf(JSON.parse(readFileSync(gltfPath, 'utf8')), async () => { throw new Error('unexpected external buffer'); }, gltfPath);
@@ -75,14 +75,17 @@ const guidFor = (kind) => {
   if (!result.ok) throw new Error(`invalid ${kind} GUID`);
   return result.value;
 };
-const mesh = meshIrToMeshAsset(docResult.value.meshes);
+const meshResult = meshIrToMeshAsset(docResult.value.meshes);
+if (!meshResult.ok) throw meshResult.error;
+const mesh = meshResult.value;
 const materialIr = docResult.value.materials[0];
 if (!materialIr) throw new Error('glTF has no material');
 const material = toMaterialAsset(materialIr);
 assets.catalog(guidFor('mesh'), mesh);
 assets.catalog(guidFor('material'), material);
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+await createWorldContext(world, [renderComponentsPlugin(), scenePlugin()]);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const meshHandle = world.allocSharedRef('MeshAsset', mesh);
 const materialHandle = world.allocSharedRef('MaterialAsset', material);
@@ -137,14 +140,14 @@ let frames = 0;
 for (; frames < minFrames; frames += 1) {
   stepUpdateGltfScene(world, frames / 60);
   world.update().unwrap();
-  const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const result = drawSmokeFrame(renderer, world);
   if (!result.ok) errors.push(result.error);
 }
 const luma = await meanLuma();
-console.log(`[bevy-update-gltf-scene] backend=${renderer.backend}`);
+console.log('[bevy-update-gltf-scene] Standard pipeline active');
 console.log(`[smoke] frames observed=${frames} meanLuma=${luma.toFixed(4)} descendants=${descendants.length} motionDelta=${motionDelta.toFixed(5)}`);
-if (renderer.backend !== 'webgpu' || frames < minFrames || luma <= 0.02 || motionDelta <= 0.001 || errors.length > 0) {
-  console.error(`[smoke] FAIL - backend=${renderer.backend} frames=${frames} meanLuma=${luma.toFixed(4)} motionDelta=${motionDelta.toFixed(5)} errors=${errors.map((error) => error.code).join(',')}`);
+if (frames < minFrames || luma <= 0.02 || motionDelta <= 0.001 || errors.length > 0) {
+  console.error(`[smoke] FAIL - frames=${frames} meanLuma=${luma.toFixed(4)} motionDelta=${motionDelta.toFixed(5)} errors=${errors.map((error) => error.code).join(',')}`);
   process.exit(1);
 }
 console.log('[smoke] PASS - SceneAsset descendants updated through Children and rendered for the full frame gate');

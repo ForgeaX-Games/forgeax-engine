@@ -10,25 +10,24 @@
 // M1-T4-TEST: getOrBuildPipeline cache miss/hit + fail-fast unit (5 cases)
 // M1-T5-TEST: 12 SPEC_CONST unit (mutual uniqueness + sampleCount + axis round-trip)
 
+import { describe, expect, it } from 'vitest';
 // M1-T1 (after impl exists) re-exports (only import what the tests actually use):
 import {
   buildBeginRenderPassDescriptor,
   buildLinearLdrMaterialSpecTable,
   buildPipelineDescriptor,
   cacheKeyOf,
-  deriveBglShapeFromShader,
   getOrBuildPipeline,
   // M1-T0: type-level imports
   KNOWN_PASS_KINDS,
+  type PipelineDeviceProvider,
   type PipelineSpec,
   PipelineSpecError,
   type PipelineSpecErrorCode,
   passKindPolicyTable,
   SPEC_CONST_TABLE,
-  specsEqual,
   validateSpec,
-} from '@forgeax/engine-render/internal';
-import { describe, expect, it } from 'vitest';
+} from '../../../render/src/pipeline-spec';
 
 // =============================================================================
 // M1-T0: PipelineSpec type + error codes narrowing
@@ -220,34 +219,6 @@ describe('cacheKeyOf', () => {
   });
 });
 
-describe('specsEqual', () => {
-  it('returns true for identical specs', () => {
-    const a = makeSpec();
-    const b = makeSpec();
-    expect(specsEqual(a, b)).toBe(true);
-  });
-
-  it('returns false when shader differs', () => {
-    const a = makeSpec();
-    const b = makeSpec({
-      shader: { id: 'forgeax::default-standard-pbr', passKind: 'forward', variantSet: undefined },
-    });
-    expect(specsEqual(a, b)).toBe(false);
-  });
-
-  it('returns false when attachments differ', () => {
-    const a = makeSpec();
-    const b = makeSpec({
-      attachments: {
-        colorFormats: ['bgra8unorm-srgb' as unknown as GPUTextureFormat],
-        depthFormat: 'depth24plus-stencil8' as unknown as GPUTextureFormat,
-        sampleCount: 4,
-      },
-    });
-    expect(specsEqual(a, b)).toBe(false);
-  });
-});
-
 describe('validateSpec', () => {
   it('passes for a valid spec', () => {
     const s = makeSpec();
@@ -285,134 +256,19 @@ describe('validateSpec', () => {
       expect(r.code).toBe('attachment-format-incompatible');
     }
   });
-});
 
-// =============================================================================
-// M1-T3-TEST: deriveBglShapeFromShader helper unit (12 cases)
-// =============================================================================
-
-describe('deriveBglShapeFromShader', () => {
-  // Helper: create a minimal ShaderEntry fixture.
-  function shaderEntry(
-    params: readonly { name: string; type: string }[] = [],
-  ): import('@forgeax/engine-shader').MaterialShaderEntry {
-    return {
-      source: 'fn vs() {} fn fs() {}',
-      paramSchema: params.map((p) => ({
-        name: p.name,
-        type: p.type as import('@forgeax/engine-types').MaterialParamType,
-      })),
-    };
-  }
-
-  it('reflects empty schema to empty BGL shape', () => {
-    const entry = shaderEntry([]);
-    const shape = deriveBglShapeFromShader(entry);
-    expect(shape.entries).toHaveLength(0);
-  });
-
-  it('reflects 1 f32 param to 1 entry UBO shape', () => {
-    const entry = shaderEntry([{ name: 'u_color', type: 'color' }]);
-    const shape = deriveBglShapeFromShader(entry);
-    expect(shape.entries.length).toBeGreaterThanOrEqual(1);
-    // The first entry should be a uniform buffer binding.
-    const e0 = shape.entries[0];
-    expect(e0?.buffer).toBeDefined();
-  });
-
-  it('reflects texture param with auto-paired sampler', () => {
-    const entry = shaderEntry([{ name: 't_albedo', type: 'texture2d' }]);
-    const shape = deriveBglShapeFromShader(entry);
-    // Should have at least 2 entries: the texture + auto-paired sampler.
-    expect(shape.entries.length).toBe(2);
-  });
-
-  it('reflects storage_buffer param', () => {
-    const entry = shaderEntry([{ name: 's_mesh', type: 'storage_buffer' }]);
-    const shape = deriveBglShapeFromShader(entry);
-    expect(shape.entries.length).toBe(1);
-    expect(shape.entries[0]?.buffer).toBeDefined();
-  });
-
-  it('reflects multiple numeric params into single UBO entry', () => {
-    const entry = shaderEntry([
-      { name: 'u_baseColor', type: 'color' },
-      { name: 'u_metallic', type: 'f32' },
-      { name: 'u_roughness', type: 'f32' },
-    ]);
-    const shape = deriveBglShapeFromShader(entry);
-    // Multiple numeric types should merge into a single UBO binding entry.
-    const uboEntries = shape.entries.filter((e) => e.buffer !== undefined);
-    expect(uboEntries.length).toBe(1);
-  });
-
-  it('reflects sprite-1-slot shape (sprite base UBO only)', () => {
-    const entry = shaderEntry([{ name: 'u_baseColor', type: 'color' }]);
-    const shape = deriveBglShapeFromShader(entry);
-    expect(shape.entries.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('reflects unlit-1-slot shape (unlit base params)', () => {
-    const entry = shaderEntry([
-      { name: 'u_color', type: 'color' },
-      { name: 't_baseColor', type: 'texture2d' },
-    ]);
-    const shape = deriveBglShapeFromShader(entry);
-    // unlit: 1 UBO + 1 texture + 1 sampler = 3 entries
-    expect(shape.entries.length).toBe(3);
-  });
-
-  it('reflects pbr-1-slot shape (standard PBR params)', () => {
-    const entry = shaderEntry([
-      { name: 'u_baseColor', type: 'color' },
-      { name: 'u_metallicRoughness', type: 'vec2' },
-      { name: 'u_emissive', type: 'vec3' },
-      { name: 't_baseColor', type: 'texture2d' },
-      { name: 't_metallicRoughness', type: 'texture2d' },
-      { name: 't_normal', type: 'texture2d' },
-      { name: 't_emissive', type: 'texture2d' },
-      { name: 't_occlusion', type: 'texture2d' },
-    ]);
-    const shape = deriveBglShapeFromShader(entry);
-    // pbr: 1 UBO + 5 textures + 5 samplers = 11 entries
-    expect(shape.entries.length).toBe(11);
-  });
-
-  it('reflects pbr-skin-2-slot shape (standard PBR + skin palette)', () => {
-    // skin variant: same param schema as pbr but the variantSet triggers
-    // 2-slot mesh-array entry (meshes + palette).
-    const entry = shaderEntry([
-      { name: 'u_baseColor', type: 'color' },
-      { name: 't_baseColor', type: 'texture2d' },
-    ]);
-    const shape = deriveBglShapeFromShader(entry, 'SKIN_AVAILABLE=1');
-    expect(shape.entries.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('accepts hdrp variantSet without error (M1 skeleton, full reflection in M3)', () => {
-    const entry = shaderEntry([
-      { name: 'u_baseColor', type: 'color' },
-      { name: 'u_metallicRoughness', type: 'vec2' },
-    ]);
-    // M1: variantSet is accepted but detailed classification deferred to M3.
-    const shape = deriveBglShapeFromShader(entry, 'CLUSTER_FORWARD_AVAILABLE=true');
-    expect(shape.entries.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('reflects fullscreen-tonemap shape (post-process BGL)', () => {
-    const entry = shaderEntry([{ name: 't_color', type: 'texture2d' }]);
-    const shape = deriveBglShapeFromShader(entry);
-    // Fullscreen: 1 texture + 1 sampler = 2 entries.
-    expect(shape.entries.length).toBe(2);
-  });
-
-  it('reflects fullscreen-fxaa shape (storage input)', () => {
-    const entry = shaderEntry([
-      { name: 't_input', type: 'texture2d' },
-      { name: 'u_params', type: 'vec2' },
-    ]);
-    const shape = deriveBglShapeFromShader(entry);
-    expect(shape.entries.length).toBe(3); // 1 UBO + 1 tex + 1 sampler
+  it('returns attachment-format-incompatible for a depth-only pass without depthFormat', () => {
+    const s = makeSpec({
+      shader: {
+        id: 'forgeax::default-unlit',
+        passKind: 'point-shadow-caster',
+        variantSet: undefined,
+      },
+      attachments: { colorFormats: [], depthFormat: undefined, sampleCount: 1 },
+    });
+    const r = validateSpec(s);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe('attachment-format-incompatible');
   });
 });
 
@@ -434,7 +290,7 @@ describe('getOrBuildPipeline', () => {
       createRenderPipeline: () => {
         throw new Error('should not be called on cache hit');
       },
-    } as unknown as import('@forgeax/engine-render/internal').PipelineDeviceProvider;
+    } as unknown as PipelineDeviceProvider;
 
     // M1: verify cache hit returns the pre-populated handle.
     const result = getOrBuildPipeline(spec, _deviceProvider, cache);

@@ -1,19 +1,19 @@
-// IblPipelineCache.ts -- Per-device WeakMap pipeline cache for IBL precompute.
+// IblPipelineCache.ts -- DeviceScope-generation cache for IBL precompute.
 //
 // Plan-strategy D-1/D-7: cache for 4 GPU passes (equirect->cube /
 // irradiance / prefilter / BRDF LUT). M2 provides the cache skeleton;
 // M3 (t18/t20) wires real shader math from ibl.wgsl.
 //
-// Structure mirrors mipmap-generator.ts per-device WeakMap pattern:
-//   WeakMap<device, IblPipelineCachePerDevice>
+// The cache is keyed by the renderer-owned DeviceScope generation. Raw device
+// handles are inputs to pipeline creation, never cache or lifecycle owners.
 //
 // Public surface (M3):
-//   - getOrCreateIblCache(device): get or initialize per-device cache
+//   - getOrCreateIblCache(scope): get or initialize the generation cache
 //   - iblCacheSize(): introspection hook
-//   - hasIblCache(device): introspection hook
+//   - hasIblCache(scope): introspection hook
 //   - setIblWgslSource(source): set the ibl.wgsl WGSL source string
 //   - createIblShaderModules(device, factory): create shader modules from ibl.wgsl
-//   - createIblPipelines(device, factory, modules): create 4 render pipelines
+//   - createIblPipelines(scope, device, factory, modules): create 4 render pipelines
 //   - runIblPrecompute(opts): execute 4 GPU precompute passes (M3 t20)
 //
 // M3 t20: pipeline slots are filled with real render pipelines loaded from
@@ -21,86 +21,111 @@
 // executed in the standard order (equirect->cube -> irradiance -> prefilter
 // -> BRDF LUT), with counters set post-execution per AC-04/05/06.
 
-// ─── Device shim shapes ──────────────────────────────────────────────────────
+// ─── RHI-owned handles ───────────────────────────────────────────────────────
 
+import {
+  type BindGroup,
+  type BindGroupLayout,
+  type Buffer,
+  type CommandBuffer,
+  err,
+  ok,
+  type RenderPipeline,
+  type Result,
+  type RhiCommandEncoder,
+  type RhiDevice,
+  type RhiError,
+  type RhiRenderPassEncoder,
+  type Sampler,
+  type ShaderModule,
+  type Texture,
+  type TextureFormat,
+  type TextureView,
+} from '@forgeax/engine-rhi';
+import type { DeviceScope } from '../device/device-scope';
 import { GPU_SHADER_STAGE_FRAGMENT, GPU_SHADER_STAGE_VERTEX } from '../gpu-stage';
 import {
   GPU_TEXTURE_USAGE_COPY_DST,
   GPU_TEXTURE_USAGE_COPY_SRC,
   GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
 } from '../gpu-texture-usage';
-import { cubemapCaptureProjection } from './cubemap-projection';
 
 /**
  * Shader module factory (async, injected via configureGpuDevice).
  * Mirrors `MipmapShaderModuleFactory` from mipmap-generator.
  */
+/**
+ * IBL is assembled by the renderer's device owner, so it consumes the full
+ * opaque RHI device rather than a structurally-compatible raw/shim split.
+ * Keeping the owner as RhiDevice makes the backend boundary explicit: raw
+ * GPU handles can only exist inside an RHI implementation or a test readback.
+ */
+export type IblRhiOwner = RhiDevice;
+
 export type IblShaderModuleFactory = (
-  device: object,
+  device: IblRhiOwner,
   desc: { code: string; label?: string },
-) => Promise<{ ok: boolean; value?: unknown; error?: { code: string; message: string } }>;
+) => Promise<Result<ShaderModule, RhiError>>;
+
+export interface IblPipelineSet {
+  readonly equirectToCubePipeline: RenderPipeline;
+  readonly irradiancePipeline: RenderPipeline;
+  readonly prefilterPipeline: RenderPipeline;
+  readonly brdfLutPipeline: RenderPipeline;
+}
+
+export interface IblPipelineError {
+  readonly code: 'ibl-pipeline-create-failed' | 'ibl-shader-module-missing';
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: { readonly stage: string; readonly rhiCode?: RhiError['code'] };
+}
 
 /**
- * Per-device IBL pipeline cache instance.
+ * Per-DeviceScope-generation IBL pipeline cache instance.
  *
  * M3.5 (round-2 t52): the 4 pipeline slots are mutable so createIblPipelines
  * can fill them after construction. The 4 textures + their views are also
  * cached here so runIblPrecompute targets are stable across calls
  * (idempotent).
  */
-export interface IblPipelineCachePerDevice {
+export interface IblPipelineCache {
   /** Color format shared by all precompute outputs for this device. */
-  outputFormat?: string;
+  outputFormat?: TextureFormat;
   /** Equirectangular-to-cubemap pipeline. */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU pipeline handle
-  equirectToCubePipeline?: any;
+  equirectToCubePipeline?: RenderPipeline;
   /** Diffuse irradiance convolution pipeline. */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU pipeline handle
-  irradiancePipeline?: any;
+  irradiancePipeline?: RenderPipeline;
   /** Specular prefilter pipeline. */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU pipeline handle
-  prefilterPipeline?: any;
+  prefilterPipeline?: RenderPipeline;
   /** BRDF integration LUT pipeline. */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU pipeline handle
-  brdfLutPipeline?: any;
+  brdfLutPipeline?: RenderPipeline;
 
   /** Face uniforms BGL (shared across equirect/irradiance/prefilter, D-9). */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque BGL
-  faceUniformsBgl?: any;
+  faceUniformsBgl?: BindGroupLayout;
   /** group(1) BGL for the equirect-to-cube pass (texture_2d + sampler). */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque BGL
-  equirectGroup1Bgl?: any;
+  equirectGroup1Bgl?: BindGroupLayout;
   /** group(1) BGL for irradiance + prefilter (texture_cube + sampler). */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque BGL
-  cubeGroup1Bgl?: any;
+  cubeGroup1Bgl?: BindGroupLayout;
   /** group(0) BGL for prefilter (face + prefilter uniforms). */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque BGL
-  prefilterGroup0Bgl?: any;
+  prefilterGroup0Bgl?: BindGroupLayout;
 
   /** Irradiance cubemap texture (32x32; outputFormat, cube). */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture
-  irradianceTexture?: any;
+  irradianceTexture?: Texture;
   /** Irradiance cubemap view (dimension:cube). */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture view
-  irradianceView?: any;
+  irradianceView?: TextureView;
   /** Per-face 2D views for irradiance (render-attachment use). */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture views
-  irradianceFaceViews?: ReadonlyArray<any>;
+  irradianceFaceViews?: ReadonlyArray<TextureView>;
   /** Specular prefilter cubemap (128x128, 5 mip levels). */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture
-  prefilterTexture?: any;
+  prefilterTexture?: Texture;
   /** Prefilter cubemap view (dimension:cube, all mips). */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture view
-  prefilterView?: any;
+  prefilterView?: TextureView;
   /** Per-face 2D views per mip for prefilter (5 mips x 6 faces). */
-  // biome-ignore lint/suspicious/noExplicitAny: nested mip x face views
-  prefilterFaceViewsByMip?: ReadonlyArray<ReadonlyArray<any>>;
+  prefilterFaceViewsByMip?: ReadonlyArray<ReadonlyArray<TextureView>>;
   /** BRDF LUT (256x256; outputFormat). */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture
-  brdfLutTexture?: any;
+  brdfLutTexture?: Texture;
   /** BRDF LUT view. */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture view
-  brdfLutView?: any;
+  brdfLutView?: TextureView;
 
   /** Counter: times irradiance pass has executed. AC-04: == 1 after first cook. */
   irradianceBakeCount: number;
@@ -111,101 +136,41 @@ export interface IblPipelineCachePerDevice {
 }
 
 /**
- * Per-device cache map. The WeakMap key is the opaque device object;
- * destroying the device naturally clears its cache entry.
+ * Cache ownership follows the renderer's DeviceScope generation. A cache is
+ * never recovered by looking up an opaque device handle, so every pipeline and
+ * side texture is born under the same lifecycle owner as the rest of the
+ * renderer resources.
  */
-const deviceCache: WeakMap<object, IblPipelineCachePerDevice> = new WeakMap();
+const scopeCaches: WeakMap<DeviceScope, IblPipelineCache> = new WeakMap();
 
 /**
- * Get or create the per-device IBL pipeline cache.
+ * Get or create the current-generation IBL pipeline cache.
  */
-export function getOrCreateIblCache(device: object): IblPipelineCachePerDevice {
-  const existing = deviceCache.get(device);
+export function getOrCreateIblCache(scope: DeviceScope): IblPipelineCache {
+  const existing = scopeCaches.get(scope);
   if (existing !== undefined) return existing;
 
-  const cache: IblPipelineCachePerDevice = {
+  const cache: IblPipelineCache = {
     irradianceBakeCount: 0,
     prefilterBakeCount: 0,
     brdfLutBakeCount: 0,
   };
-  deviceCache.set(device, cache);
+  scopeCaches.set(scope, cache);
   return cache;
 }
 
 /**
- * Number of cached per-device instances (introspection hook for tests).
+ * Check whether a DeviceScope generation has an active cache entry.
  */
-export function iblCacheSize(): number {
-  // WeakMap doesn't expose size; approximate by iteration.
-  let count = 0;
-  try {
-    // biome-ignore lint/suspicious/noExplicitAny: WeakMap iteration hack
-    for (const _ of deviceCache as any) {
-      count++;
-    }
-  } catch {
-    // WeakMap is not iterable; this is expected.
-  }
-  return count;
-}
-
-/**
- * Check whether a device has an active cache entry (introspection for tests).
- */
-export function hasIblCache(device: object): boolean {
-  return deviceCache.has(device);
-}
-
-/**
- * Clear the per-device cache entry for the given device, if any.
- *
- * feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle / M5: called from
- * `Renderer.dispose()` step 4 (plan-strategy D-2 6-step walk) so the IBL
- * pipelines / textures attached to a torn-down device do not survive in the
- * runtime cache. The underlying GPU pipeline / texture handles are not
- * separately destroyed here -- they were created on the same RhiDevice the
- * dispose chain is about to release at step 5 (`context.unconfigure`); the
- * spec contract is that releasing the device tears down its child pipelines
- * implicitly. Clearing the WeakMap entry simply lets GC reclaim the JS-side
- * cache record.
- *
- * Idempotent (architecture-principles §6): a second call after the entry
- * was deleted is a no-op.
- */
-export function clearIblCacheForDevice(device: object): void {
-  deviceCache.delete(device);
-}
-
-// ─── IBL WGSL source management ──────────────────────────────────────────────
-
-let iblWgslSourceCache: string | undefined;
-
-/**
- * Set the ibl.wgsl source string. Called once by the consumer
- * (e.g., AssetRegistry) when the shader module source is loaded.
- */
-export function setIblWgslSource(source: string): void {
-  iblWgslSourceCache = source;
-}
-
-/**
- * Get the cached ibl.wgsl source string.
- * Throws if not yet loaded.
- */
-export function getIblWgslSource(): string {
-  if (iblWgslSourceCache === undefined) {
-    throw new Error(
-      'ibl.wgsl source not loaded -- call setIblWgslSource before using IBL pipelines',
-    );
-  }
-  return iblWgslSourceCache;
+export function hasIblCache(scope: DeviceScope): boolean {
+  return scopeCaches.has(scope);
 }
 
 // ─── M3.5 composed ibl-* shader source registry ─────────────────────────────
 //
 // 4 composed WGSL strings -- one per render pipeline. Each string is the
 // output of @forgeax/engine-naga composeShader after merging ibl_shared +
-// the per-pass module. Built by ShaderRegistry / vite-plugin-shader at
+// the per-pass module. Built by ShaderCatalog / vite-plugin-shader at
 // build-time so the runtime cache never reaches into engine-naga
 // (AGENTS.md grep gate forbids).
 
@@ -225,20 +190,10 @@ let iblComposedShadersCache: IblComposedShaders | undefined;
 /**
  * Inject the composed ibl-* shader sources used by createIblPipelines.
  * Called once by the engine bootstrap (createRenderer step "shader-load")
- * with the 4 composed entries from ShaderRegistry.
+ * with the 4 composed entries from ShaderCatalog.
  */
 export function setIblComposedShaders(sources: IblComposedShaders): void {
   iblComposedShadersCache = sources;
-}
-
-/**
- * Retrieve the cached composed shader bundle.
- * Returns undefined when the runtime is operating without a real shader
- * source (mock device unit tests that exercise pipeline dispatch surface
- * only).
- */
-export function getIblComposedShaders(): IblComposedShaders | undefined {
-  return iblComposedShadersCache;
 }
 
 // ─── Standard cube vertices for cubemap face rendering ───────────────────────
@@ -294,6 +249,18 @@ function buildCaptureViewProjs(): Float32Array[] {
     const view = lookAtMatrix([0, 0, 0], t, u);
     return mulMat4(proj, view);
   });
+}
+
+function cubemapCaptureProjection(fovy: number, near: number, far: number): Float32Array {
+  const f = 1.0 / Math.tan(fovy / 2);
+  const nf = 1.0 / (near - far);
+  // biome-ignore format: manual column-major mat4
+  return new Float32Array([
+    f, 0, 0, 0,
+    0, -f, 0, 0,
+    0, 0, (far + near) * nf, -1,
+    0, 0, 2 * far * near * nf, 0,
+  ]);
 }
 
 function lookAtMatrix(
@@ -380,43 +347,6 @@ export const PREFILTER_MIP_LEVELS = 5;
 export const BRDF_LUT_SIZE = 256;
 
 /**
- * Minimal device shape used by createIblPipelines + runIblPrecompute. The
- * surface is intentionally narrow so unit-level mock devices can exercise
- * the dispatch path without standing up the full RHI shim.
- */
-export interface IblPipelineDevice {
-  // biome-ignore lint/suspicious/noExplicitAny: shim shapes
-  createBindGroupLayout(desc: any): { ok: true; value: any } | { ok: false; error: unknown };
-  // biome-ignore lint/suspicious/noExplicitAny: shim shapes
-  createPipelineLayout(desc: any): { ok: true; value: any } | { ok: false; error: unknown };
-  // biome-ignore lint/suspicious/noExplicitAny: shim shapes
-  createRenderPipeline(desc: any): { ok: true; value: any } | { ok: false; error: unknown };
-  // biome-ignore lint/suspicious/noExplicitAny: shim shapes
-  createBuffer(desc: any): { ok: true; value: any } | { ok: false; error: unknown };
-  // biome-ignore lint/suspicious/noExplicitAny: shim shapes
-  createTexture(desc: any): { ok: true; value: any } | { ok: false; error: unknown };
-  createTextureView(
-    // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture
-    texture: any,
-    // biome-ignore lint/suspicious/noExplicitAny: shim shapes
-    desc: any,
-    // biome-ignore lint/suspicious/noExplicitAny: shim shapes
-  ): { ok: true; value: any } | { ok: false; error: unknown };
-  // biome-ignore lint/suspicious/noExplicitAny: shim shapes
-  createSampler(desc?: any): { ok: true; value: any } | { ok: false; error: unknown };
-  // biome-ignore lint/suspicious/noExplicitAny: shim shapes
-  createBindGroup(desc: any): { ok: true; value: any } | { ok: false; error: unknown };
-  // biome-ignore lint/suspicious/noExplicitAny: shim shapes
-  createCommandEncoder(desc?: any): { ok: true; value: any } | { ok: false; error: unknown };
-  readonly queue: {
-    // biome-ignore lint/suspicious/noExplicitAny: shim shapes
-    submit(buffers: ReadonlyArray<any>): unknown;
-    // biome-ignore lint/suspicious/noExplicitAny: shim shapes
-    writeBuffer?: (...args: any[]) => unknown;
-  };
-}
-
-/**
  * Create 4 independent GPURenderPipelines + their shared / per-pass bind
  * group layouts. Pipeline slots are stored on the per-device cache and
  * survive across calls (D-1 startup-once cook).
@@ -427,37 +357,24 @@ export interface IblPipelineDevice {
  * irradiance + prefilter, none for brdf-lut.
  */
 export async function createIblPipelines(
-  device: IblPipelineDevice,
+  scope: DeviceScope,
+  device: IblRhiOwner,
   factory: IblShaderModuleFactory,
-  // biome-ignore lint/suspicious/noExplicitAny: cubemap output format opaque
-  cubeOutputFormat: any = 'rgba16float',
-): Promise<
-  | {
-      ok: true;
-      value: {
-        // biome-ignore lint/suspicious/noExplicitAny: opaque GPU pipelines
-        equirectToCubePipeline: any;
-        // biome-ignore lint/suspicious/noExplicitAny: opaque GPU pipelines
-        irradiancePipeline: any;
-        // biome-ignore lint/suspicious/noExplicitAny: opaque GPU pipelines
-        prefilterPipeline: any;
-        // biome-ignore lint/suspicious/noExplicitAny: opaque GPU pipelines
-        brdfLutPipeline: any;
-      };
-    }
-  | { ok: false; error: unknown }
-> {
-  const cache = getOrCreateIblCache(device);
-  if (cache.equirectToCubePipeline !== undefined) {
-    return {
-      ok: true,
-      value: {
-        equirectToCubePipeline: cache.equirectToCubePipeline,
-        irradiancePipeline: cache.irradiancePipeline,
-        prefilterPipeline: cache.prefilterPipeline,
-        brdfLutPipeline: cache.brdfLutPipeline,
-      },
-    };
+  cubeOutputFormat: TextureFormat = 'rgba16float',
+): Promise<Result<IblPipelineSet, RhiError | IblPipelineError>> {
+  const cache = getOrCreateIblCache(scope);
+  if (
+    cache.equirectToCubePipeline !== undefined &&
+    cache.irradiancePipeline !== undefined &&
+    cache.prefilterPipeline !== undefined &&
+    cache.brdfLutPipeline !== undefined
+  ) {
+    return ok({
+      equirectToCubePipeline: cache.equirectToCubePipeline,
+      irradiancePipeline: cache.irradiancePipeline,
+      prefilterPipeline: cache.prefilterPipeline,
+      brdfLutPipeline: cache.brdfLutPipeline,
+    });
   }
   // Keep the output format on the per-device cache so the four pipelines and
   // their lazily-created side textures cannot drift. WebGL2 may need the
@@ -476,16 +393,6 @@ export async function createIblPipelines(
     brdfLut: fallbackCode,
   };
 
-  // M5-amend Bug 1: normalise shim/raw return shapes. See runIblPrecompute
-  // for full rationale -- same helper applied across both functions so
-  // dawn-node (raw GPUDevice) + browser (rhi-shim) both succeed.
-  // biome-ignore lint/suspicious/noExplicitAny: union of shim/raw return shapes
-  const unwrap = (r: any): any => {
-    if (r === null || r === undefined) return undefined;
-    if (typeof r === 'object' && 'ok' in r) return r.ok ? r.value : undefined;
-    return r;
-  };
-
   const modules = await Promise.all([
     factory(device, { code: src.equirectToCube, label: 'ibl-equirect-to-cube' }),
     factory(device, { code: src.irradiance, label: 'ibl-irradiance' }),
@@ -493,183 +400,175 @@ export async function createIblPipelines(
     factory(device, { code: src.brdfLut, label: 'ibl-brdf-lut' }),
   ]);
   for (const m of modules) {
-    if (!m.ok) return { ok: false, error: m.error };
+    if (!m.ok) return err(m.error);
   }
-  // biome-ignore lint/style/noNonNullAssertion: checked above
-  const [mEq, mIr, mPr, mBr] = modules.map((m) => m.value!) as [unknown, unknown, unknown, unknown];
+  const shaderModules = modules.flatMap((module) => (module.ok ? [module.value] : []));
+  if (shaderModules.length !== 4) {
+    return err(iblPipelineError('shader-modules', 'ibl-shader-module-missing'));
+  }
+  const [mEq, mIr, mPr, mBr] = shaderModules;
+  if (mEq === undefined || mIr === undefined || mPr === undefined || mBr === undefined) {
+    return err(iblPipelineError('shader-modules', 'ibl-shader-module-missing'));
+  }
 
   // D-9: faceUniforms BGL shared across 3 pipelines (equirect / irradiance /
   // prefilter). The prefilter additionally needs binding(1) for prefUniforms;
   // we keep a separate BGL for the prefilter group(0) to honour the WGSL
   // declaration in ibl-prefilter.wgsl.
-  const faceBgl = unwrap(
-    device.createBindGroupLayout({
-      label: 'ibl-face-uniforms-bgl',
-      entries: [{ binding: 0, visibility: GPU_SHADER_STAGE_VERTEX, buffer: { type: 'uniform' } }],
-    }),
-  );
-  if (faceBgl === undefined) return { ok: false, error: 'ibl-face-uniforms-bgl' };
-  cache.faceUniformsBgl = faceBgl;
+  const faceBgl = device.createBindGroupLayout({
+    label: 'ibl-face-uniforms-bgl',
+    entries: [{ binding: 0, visibility: GPU_SHADER_STAGE_VERTEX, buffer: { type: 'uniform' } }],
+  });
+  if (!faceBgl.ok) return err(faceBgl.error);
+  cache.faceUniformsBgl = faceBgl.value;
 
-  const prefilterGroup0 = unwrap(
-    device.createBindGroupLayout({
-      label: 'ibl-prefilter-group0-bgl',
-      entries: [
-        { binding: 0, visibility: GPU_SHADER_STAGE_VERTEX, buffer: { type: 'uniform' } },
-        { binding: 1, visibility: GPU_SHADER_STAGE_FRAGMENT, buffer: { type: 'uniform' } },
-      ],
-    }),
-  );
-  if (prefilterGroup0 === undefined) return { ok: false, error: 'ibl-prefilter-group0-bgl' };
-  cache.prefilterGroup0Bgl = prefilterGroup0;
+  const prefilterGroup0 = device.createBindGroupLayout({
+    label: 'ibl-prefilter-group0-bgl',
+    entries: [
+      { binding: 0, visibility: GPU_SHADER_STAGE_VERTEX, buffer: { type: 'uniform' } },
+      { binding: 1, visibility: GPU_SHADER_STAGE_FRAGMENT, buffer: { type: 'uniform' } },
+    ],
+  });
+  if (!prefilterGroup0.ok) return err(prefilterGroup0.error);
+  cache.prefilterGroup0Bgl = prefilterGroup0.value;
 
-  const equirectGroup1 = unwrap(
-    device.createBindGroupLayout({
-      label: 'ibl-equirect-group1-bgl',
-      entries: [
-        {
-          binding: 0,
-          visibility: GPU_SHADER_STAGE_FRAGMENT,
-          texture: { sampleType: 'float', viewDimension: '2d' },
-        },
-        {
-          binding: 1,
-          visibility: GPU_SHADER_STAGE_FRAGMENT,
-          sampler: { type: 'filtering' },
-        },
-      ],
-    }),
-  );
-  if (equirectGroup1 === undefined) return { ok: false, error: 'ibl-equirect-group1-bgl' };
-  cache.equirectGroup1Bgl = equirectGroup1;
+  const equirectGroup1 = device.createBindGroupLayout({
+    label: 'ibl-equirect-group1-bgl',
+    entries: [
+      {
+        binding: 0,
+        visibility: GPU_SHADER_STAGE_FRAGMENT,
+        texture: { sampleType: 'float', viewDimension: '2d' },
+      },
+      {
+        binding: 1,
+        visibility: GPU_SHADER_STAGE_FRAGMENT,
+        sampler: { type: 'filtering' },
+      },
+    ],
+  });
+  if (!equirectGroup1.ok) return err(equirectGroup1.error);
+  cache.equirectGroup1Bgl = equirectGroup1.value;
 
-  const cubeGroup1 = unwrap(
-    device.createBindGroupLayout({
-      label: 'ibl-cube-group1-bgl',
-      entries: [
-        {
-          binding: 0,
-          visibility: GPU_SHADER_STAGE_FRAGMENT,
-          texture: { sampleType: 'float', viewDimension: 'cube' },
-        },
-        {
-          binding: 1,
-          visibility: GPU_SHADER_STAGE_FRAGMENT,
-          sampler: { type: 'filtering' },
-        },
-      ],
-    }),
-  );
-  if (cubeGroup1 === undefined) return { ok: false, error: 'ibl-cube-group1-bgl' };
-  cache.cubeGroup1Bgl = cubeGroup1;
+  const cubeGroup1 = device.createBindGroupLayout({
+    label: 'ibl-cube-group1-bgl',
+    entries: [
+      {
+        binding: 0,
+        visibility: GPU_SHADER_STAGE_FRAGMENT,
+        texture: { sampleType: 'float', viewDimension: 'cube' },
+      },
+      {
+        binding: 1,
+        visibility: GPU_SHADER_STAGE_FRAGMENT,
+        sampler: { type: 'filtering' },
+      },
+    ],
+  });
+  if (!cubeGroup1.ok) return err(cubeGroup1.error);
+  cache.cubeGroup1Bgl = cubeGroup1.value;
 
   // Pipeline layouts.
-  const equirectLayout = unwrap(
-    device.createPipelineLayout({
-      label: 'ibl-equirect-pipeline-layout',
-      bindGroupLayouts: [cache.faceUniformsBgl, cache.equirectGroup1Bgl],
-    }),
-  );
-  if (equirectLayout === undefined) return { ok: false, error: 'ibl-equirect-pipeline-layout' };
-  const irradianceLayout = unwrap(
-    device.createPipelineLayout({
-      label: 'ibl-irradiance-pipeline-layout',
-      bindGroupLayouts: [cache.faceUniformsBgl, cache.cubeGroup1Bgl],
-    }),
-  );
-  if (irradianceLayout === undefined) return { ok: false, error: 'ibl-irradiance-pipeline-layout' };
-  const prefilterLayout = unwrap(
-    device.createPipelineLayout({
-      label: 'ibl-prefilter-pipeline-layout',
-      bindGroupLayouts: [prefilterGroup0, cache.cubeGroup1Bgl],
-    }),
-  );
-  if (prefilterLayout === undefined) return { ok: false, error: 'ibl-prefilter-pipeline-layout' };
-  const brdfLutLayout = unwrap(
-    device.createPipelineLayout({
-      label: 'ibl-brdf-lut-pipeline-layout',
-      bindGroupLayouts: [],
-    }),
-  );
-  if (brdfLutLayout === undefined) return { ok: false, error: 'ibl-brdf-lut-pipeline-layout' };
+  const equirectLayout = device.createPipelineLayout({
+    label: 'ibl-equirect-pipeline-layout',
+    bindGroupLayouts: [faceBgl.value, equirectGroup1.value],
+  });
+  if (!equirectLayout.ok) return err(equirectLayout.error);
+  const irradianceLayout = device.createPipelineLayout({
+    label: 'ibl-irradiance-pipeline-layout',
+    bindGroupLayouts: [faceBgl.value, cubeGroup1.value],
+  });
+  if (!irradianceLayout.ok) return err(irradianceLayout.error);
+  const prefilterLayout = device.createPipelineLayout({
+    label: 'ibl-prefilter-pipeline-layout',
+    bindGroupLayouts: [prefilterGroup0.value, cubeGroup1.value],
+  });
+  if (!prefilterLayout.ok) return err(prefilterLayout.error);
+  const brdfLutLayout = device.createPipelineLayout({
+    label: 'ibl-brdf-lut-pipeline-layout',
+    bindGroupLayouts: [],
+  });
+  if (!brdfLutLayout.ok) return err(brdfLutLayout.error);
 
   const vertexLayout3F = {
     arrayStride: 12,
     attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' as const }],
   };
 
-  const pipeEquirect = unwrap(
-    device.createRenderPipeline({
-      label: 'ibl-equirect-to-cube-pipeline',
-      layout: equirectLayout,
-      vertex: { module: mEq, entryPoint: 'cubemap_vs', buffers: [vertexLayout3F] },
-      fragment: {
-        module: mEq,
-        entryPoint: 'equirectToCube_fs',
-        targets: [{ format: cubeOutputFormat }],
-      },
-      primitive: { topology: 'triangle-list', cullMode: 'none' },
-    }),
-  );
-  if (pipeEquirect === undefined) return { ok: false, error: 'ibl-equirect-to-cube-pipeline' };
-  cache.equirectToCubePipeline = pipeEquirect;
-
-  const pipeIrradiance = unwrap(
-    device.createRenderPipeline({
-      label: 'ibl-irradiance-pipeline',
-      layout: irradianceLayout,
-      vertex: { module: mIr, entryPoint: 'cubemap_vs', buffers: [vertexLayout3F] },
-      fragment: {
-        module: mIr,
-        entryPoint: 'irradianceConvolve_fs',
-        targets: [{ format: cubeOutputFormat }],
-      },
-      primitive: { topology: 'triangle-list', cullMode: 'none' },
-    }),
-  );
-  if (pipeIrradiance === undefined) return { ok: false, error: 'ibl-irradiance-pipeline' };
-  cache.irradiancePipeline = pipeIrradiance;
-
-  const pipePrefilter = unwrap(
-    device.createRenderPipeline({
-      label: 'ibl-prefilter-pipeline',
-      layout: prefilterLayout,
-      vertex: { module: mPr, entryPoint: 'cubemap_vs', buffers: [vertexLayout3F] },
-      fragment: {
-        module: mPr,
-        entryPoint: 'prefilterEnv_fs',
-        targets: [{ format: cubeOutputFormat }],
-      },
-      primitive: { topology: 'triangle-list', cullMode: 'none' },
-    }),
-  );
-  if (pipePrefilter === undefined) return { ok: false, error: 'ibl-prefilter-pipeline' };
-  cache.prefilterPipeline = pipePrefilter;
-
-  const pipeBrdfLut = unwrap(
-    device.createRenderPipeline({
-      label: 'ibl-brdf-lut-pipeline',
-      layout: brdfLutLayout,
-      vertex: { module: mBr, entryPoint: 'fullscreen_vs', buffers: [] },
-      fragment: {
-        module: mBr,
-        entryPoint: 'brdfLutBake_fs',
-        targets: [{ format: cubeOutputFormat }],
-      },
-      primitive: { topology: 'triangle-list', cullMode: 'none' },
-    }),
-  );
-  if (pipeBrdfLut === undefined) return { ok: false, error: 'ibl-brdf-lut-pipeline' };
-  cache.brdfLutPipeline = pipeBrdfLut;
-
-  return {
-    ok: true,
-    value: {
-      equirectToCubePipeline: cache.equirectToCubePipeline,
-      irradiancePipeline: cache.irradiancePipeline,
-      prefilterPipeline: cache.prefilterPipeline,
-      brdfLutPipeline: cache.brdfLutPipeline,
+  const pipeEquirect = device.createRenderPipeline({
+    label: 'ibl-equirect-to-cube-pipeline',
+    layout: equirectLayout.value,
+    vertex: { module: mEq, entryPoint: 'cubemap_vs', buffers: [vertexLayout3F] },
+    fragment: {
+      module: mEq,
+      entryPoint: 'equirectToCube_fs',
+      targets: [{ format: cubeOutputFormat }],
     },
+    primitive: { topology: 'triangle-list', cullMode: 'none' },
+  });
+  if (!pipeEquirect.ok) return err(pipeEquirect.error);
+  cache.equirectToCubePipeline = pipeEquirect.value;
+
+  const pipeIrradiance = device.createRenderPipeline({
+    label: 'ibl-irradiance-pipeline',
+    layout: irradianceLayout.value,
+    vertex: { module: mIr, entryPoint: 'cubemap_vs', buffers: [vertexLayout3F] },
+    fragment: {
+      module: mIr,
+      entryPoint: 'irradianceConvolve_fs',
+      targets: [{ format: cubeOutputFormat }],
+    },
+    primitive: { topology: 'triangle-list', cullMode: 'none' },
+  });
+  if (!pipeIrradiance.ok) return err(pipeIrradiance.error);
+  cache.irradiancePipeline = pipeIrradiance.value;
+
+  const pipePrefilter = device.createRenderPipeline({
+    label: 'ibl-prefilter-pipeline',
+    layout: prefilterLayout.value,
+    vertex: { module: mPr, entryPoint: 'cubemap_vs', buffers: [vertexLayout3F] },
+    fragment: {
+      module: mPr,
+      entryPoint: 'prefilterEnv_fs',
+      targets: [{ format: cubeOutputFormat }],
+    },
+    primitive: { topology: 'triangle-list', cullMode: 'none' },
+  });
+  if (!pipePrefilter.ok) return err(pipePrefilter.error);
+  cache.prefilterPipeline = pipePrefilter.value;
+
+  const pipeBrdfLut = device.createRenderPipeline({
+    label: 'ibl-brdf-lut-pipeline',
+    layout: brdfLutLayout.value,
+    vertex: { module: mBr, entryPoint: 'fullscreen_vs', buffers: [] },
+    fragment: {
+      module: mBr,
+      entryPoint: 'brdfLutBake_fs',
+      targets: [{ format: cubeOutputFormat }],
+    },
+    primitive: { topology: 'triangle-list', cullMode: 'none' },
+  });
+  if (!pipeBrdfLut.ok) return err(pipeBrdfLut.error);
+  cache.brdfLutPipeline = pipeBrdfLut.value;
+
+  return ok({
+    equirectToCubePipeline: pipeEquirect.value,
+    irradiancePipeline: pipeIrradiance.value,
+    prefilterPipeline: pipePrefilter.value,
+    brdfLutPipeline: pipeBrdfLut.value,
+  });
+}
+
+function iblPipelineError(
+  stage: string,
+  code: IblPipelineError['code'],
+  cause?: RhiError,
+): IblPipelineError {
+  return {
+    code,
+    expected: `${stage} completed through the RHI Result contract`,
+    hint: `inspect the ${stage} RHI error before retrying IBL pipeline creation`,
+    detail: { stage, ...(cause === undefined ? {} : { rhiCode: cause.code }) },
   };
 }
 
@@ -677,28 +576,28 @@ export async function createIblPipelines(
 
 /**
  * Options consumed by runIblPrecompute. The caller (the internal
- * GpuResourceStore equirect-to-cubemap projection) provides the equirect input
+ * GpuResidencyCache equirect-to-cubemap projection) provides the equirect input
  * + cubemap target GPU resources; the face-uniform / prefilter-uniform buffers
  * come from the t55 helpers.
  */
 export interface RunIblPrecomputeOptions {
-  readonly device: IblPipelineDevice;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture (input equirect)
-  readonly equirectGpuTex: any;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture view (input equirect 2D view)
-  readonly equirectView: any;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture (output cube)
-  readonly cubeGpuTex: any;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque cube view (for sampling)
-  readonly cubeView: any;
-  // biome-ignore lint/suspicious/noExplicitAny: per-face 2D views (6) for render attachments
-  readonly cubeFaceViews: ReadonlyArray<any>;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU buffer (6 x 256-byte face uniforms)
-  readonly faceUniformsBuffer: any;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU buffer (30 x 256-byte prefilter uniforms)
-  readonly prefilterUniformsBuffer: any;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque vertex buffer (36 cube verts)
-  readonly cubeVertexBuffer: any;
+  readonly scope: DeviceScope;
+  readonly device: IblRhiOwner;
+  readonly equirectGpuTex: Texture;
+  readonly equirectView: TextureView;
+  readonly cubeGpuTex: Texture;
+  readonly cubeView: TextureView;
+  readonly cubeFaceViews: ReadonlyArray<TextureView>;
+  readonly faceUniformsBuffer: Buffer;
+  readonly prefilterUniformsBuffer: Buffer;
+  readonly cubeVertexBuffer: Buffer;
+}
+
+export interface IblPrecomputeError {
+  readonly code: 'ibl-precompute-not-dispatched';
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail?: { readonly stage: string; readonly rhiCode?: RhiError['code'] };
 }
 
 /**
@@ -712,82 +611,15 @@ export interface RunIblPrecomputeOptions {
  * round-1 "counter += 1 as dispatch proxy" anti-pattern.
  *
  * Returns Result.err with code='ibl-precompute-not-dispatched' when the
- * underlying device lacks queue.submit or any of the 4 pipelines was not
+ * underlying device lacks queue.submit or one of the 4 pipelines was not
  * created (createIblPipelines must run first).
  */
 export function runIblPrecompute(
   opts: RunIblPrecomputeOptions,
-):
-  | { ok: true; value: { submitted: boolean } }
-  | { ok: false; error: { code: string; expected: string; hint: string } } {
-  const { device } = opts;
-  const cache = getOrCreateIblCache(device);
+): Result<{ submitted: boolean }, IblPrecomputeError> {
+  const { device, scope } = opts;
+  const cache = getOrCreateIblCache(scope);
   const outputFormat = cache.outputFormat ?? 'rgba16float';
-
-  // M5-amend Bug 1: support both rhi-shim path (Result<T, RhiError>) and raw
-  // GPUDevice path (returns value directly). The shim returns
-  // `{ok, value}`; raw devices return the GPU resource handle directly.
-  // Same root cause + remedy as the mesh-upload raw-device fix at
-  // uploadMeshById. Without this normalisation, every `device.createXxx(...)`
-  // call inside this function bails on `!res.ok` (== !undefined == true)
-  // when invoked from dawn-node / native bindings, silently skipping the
-  // entire dispatch chain.
-  // biome-ignore lint/suspicious/noExplicitAny: union of shim/raw return shapes
-  const unwrap = (r: any): any => {
-    if (r === null || r === undefined) return undefined;
-    if (typeof r === 'object' && 'ok' in r) return r.ok ? r.value : undefined;
-    return r;
-  };
-
-  // M5-amend Bug 1: detect raw GPUDevice vs rhi-shim. The shim's
-  // `createBindGroup` accepts the forgeax tagged-union resource shape
-  // (`{kind: 'buffer', value: {buffer, offset, size}}` etc.); raw
-  // GPUDevice strictly requires WebGPU spec shape (`{buffer, offset,
-  // size}` directly as `resource` for buffer bindings, raw view/sampler
-  // handles directly for the other kinds). Probe by creating a no-op
-  // empty BGL: shim wraps in `{ok, value}`; raw returns the BGL handle
-  // directly. We discard the probe result; the cache already has BGLs.
-  // biome-ignore lint/suspicious/noExplicitAny: probe call
-  const probe: any = device.createBindGroupLayout({
-    label: 'ibl-shape-probe',
-    entries: [],
-  });
-  const isRawDevice =
-    probe === null || probe === undefined || typeof probe !== 'object' || !('ok' in probe);
-
-  // biome-ignore lint/suspicious/noExplicitAny: spec buffer-binding shape
-  type SpecBgEntry = { binding: number; resource: any };
-  // biome-ignore lint/suspicious/noExplicitAny: forgeax tagged-union resource
-  const toSpecResource = (r: any): any => {
-    if (r === null || r === undefined) return r;
-    if (typeof r !== 'object' || !('kind' in r)) return r;
-    if (r.kind === 'sampler') return r.value;
-    if (r.kind === 'textureView') return r.value;
-    if (r.kind === 'externalTexture') return r.value;
-    if (r.kind === 'buffer') {
-      const v = r.value;
-      if (v !== null && typeof v === 'object' && 'buffer' in v) return v;
-      // legacy shape -- shouldn't occur after Bug 1 fix but tolerate
-      return { buffer: v };
-    }
-    return r;
-  };
-  // biome-ignore lint/suspicious/noExplicitAny: descriptor builder
-  const buildBgDesc = (desc: any): any => {
-    if (!isRawDevice) return desc;
-    const entries: SpecBgEntry[] = (
-      desc.entries as ReadonlyArray<{ binding: number; resource: unknown }>
-    ).map((e) => ({
-      binding: e.binding,
-      resource: toSpecResource(e.resource),
-    }));
-    const out: { label?: string; layout: unknown; entries: SpecBgEntry[] } = {
-      layout: desc.layout,
-      entries,
-    };
-    if ('label' in desc && desc.label !== undefined) out.label = desc.label;
-    return out;
-  };
 
   if (
     cache.equirectToCubePipeline === undefined ||
@@ -795,24 +627,12 @@ export function runIblPrecompute(
     cache.prefilterPipeline === undefined ||
     cache.brdfLutPipeline === undefined
   ) {
-    return {
-      ok: false,
-      error: {
-        code: 'ibl-precompute-not-dispatched',
-        expected: '4 IBL pipelines created via createIblPipelines',
-        hint: 'check IblPipelineCache.createIblPipelines was called before runIblPrecompute; counters must not increment before queue.submit',
-      },
-    };
-  }
-  if (typeof device.queue?.submit !== 'function') {
-    return {
-      ok: false,
-      error: {
-        code: 'ibl-precompute-not-dispatched',
-        expected: 'device.queue.submit callable',
-        hint: 'check IblPipelineCache.runIblPrecompute is called inside the GpuResourceStore equirect-to-cubemap projection; counters must not increment before queue.submit',
-      },
-    };
+    return err({
+      code: 'ibl-precompute-not-dispatched',
+      expected: '4 IBL pipelines created via createIblPipelines',
+      hint: 'check IblPipelineCache.createIblPipelines was called before runIblPrecompute; counters must not increment before queue.submit',
+      detail: { stage: 'pipeline-cache' },
+    });
   }
 
   // Allocate side textures (irradiance / prefilter / brdf-lut) lazily.
@@ -821,31 +641,8 @@ export function runIblPrecompute(
   // requires the TextureUsage::CopySrc bit on the source. Without it
   // Dawn fails-fast "usage doesn't include CopySrc".
 
-  // M5-amend Bug 1: helper that normalises shim/raw texture-view creation.
-  // Raw GPUDevice exposes `gpuTexture.createView(desc)` on the texture
-  // object itself; the rhi-shim exposes `device.createTextureView(tex, desc)`
-  // and returns Result<T>.
-  // biome-ignore lint/suspicious/noExplicitAny: shim/raw device split
-  const makeView = (texture: any, desc: any): any => {
-    // biome-ignore lint/suspicious/noExplicitAny: device shim shape
-    const dev = device as any;
-    if (typeof dev.createTextureView === 'function') {
-      const r = dev.createTextureView(texture, desc);
-      const u = unwrap(r);
-      if (u !== undefined) return u;
-    }
-    if (texture !== null && texture !== undefined && typeof texture.createView === 'function') {
-      try {
-        return texture.createView(desc);
-      } catch {
-        return undefined;
-      }
-    }
-    return undefined;
-  };
-
   if (cache.irradianceTexture === undefined) {
-    const tRaw = device.createTexture({
+    const textureResult = device.createTexture({
       label: 'ibl-irradiance-cube',
       size: { width: IRRADIANCE_SIZE, height: IRRADIANCE_SIZE, depthOrArrayLayers: 6 },
       mipLevelCount: 1,
@@ -857,34 +654,33 @@ export function runIblPrecompute(
         GPU_TEXTURE_USAGE_COPY_DST |
         GPU_TEXTURE_USAGE_COPY_SRC,
       viewFormats: [],
+      textureBindingViewDimension: undefined,
     });
-    const tVal = unwrap(tRaw);
-    if (tVal === undefined) return { ok: false, error: badAlloc('irradiance-texture') };
-    cache.irradianceTexture = tVal;
-    const cubeView = makeView(tVal, {
+    if (!textureResult.ok) return err(badAlloc('irradiance-texture', textureResult.error));
+    cache.irradianceTexture = textureResult.value;
+    const cubeViewResult = device.createTextureView(textureResult.value, {
       label: 'ibl-irradiance-cube-view',
       dimension: 'cube',
       arrayLayerCount: 6,
     });
-    if (cubeView === undefined) return { ok: false, error: badAlloc('irradiance-view') };
-    cache.irradianceView = cubeView;
-    // biome-ignore lint/suspicious/noExplicitAny: opaque GPU views
-    const faceViews: any[] = [];
+    if (!cubeViewResult.ok) return err(badAlloc('irradiance-view', cubeViewResult.error));
+    cache.irradianceView = cubeViewResult.value;
+    const faceViews: TextureView[] = [];
     for (let f = 0; f < 6; f++) {
-      const v = makeView(tVal, {
+      const viewResult = device.createTextureView(textureResult.value, {
         label: `ibl-irradiance-face-${f}`,
         dimension: '2d',
         baseArrayLayer: f,
         arrayLayerCount: 1,
       });
-      if (v === undefined) return { ok: false, error: badAlloc('irradiance-face-view') };
-      faceViews.push(v);
+      if (!viewResult.ok) return err(badAlloc('irradiance-face-view', viewResult.error));
+      faceViews.push(viewResult.value);
     }
     cache.irradianceFaceViews = faceViews;
   }
 
   if (cache.prefilterTexture === undefined) {
-    const tRaw = device.createTexture({
+    const textureResult = device.createTexture({
       label: 'ibl-prefilter-cube',
       size: { width: PREFILTER_SIZE, height: PREFILTER_SIZE, depthOrArrayLayers: 6 },
       mipLevelCount: PREFILTER_MIP_LEVELS,
@@ -896,26 +692,24 @@ export function runIblPrecompute(
         GPU_TEXTURE_USAGE_COPY_DST |
         GPU_TEXTURE_USAGE_COPY_SRC,
       viewFormats: [],
+      textureBindingViewDimension: undefined,
     });
-    const tVal = unwrap(tRaw);
-    if (tVal === undefined) return { ok: false, error: badAlloc('prefilter-texture') };
-    cache.prefilterTexture = tVal;
-    const cubeView = makeView(tVal, {
+    if (!textureResult.ok) return err(badAlloc('prefilter-texture', textureResult.error));
+    cache.prefilterTexture = textureResult.value;
+    const cubeViewResult = device.createTextureView(textureResult.value, {
       label: 'ibl-prefilter-cube-view',
       dimension: 'cube',
       arrayLayerCount: 6,
       baseMipLevel: 0,
       mipLevelCount: PREFILTER_MIP_LEVELS,
     });
-    if (cubeView === undefined) return { ok: false, error: badAlloc('prefilter-view') };
-    cache.prefilterView = cubeView;
-    // biome-ignore lint/suspicious/noExplicitAny: opaque GPU views
-    const mipViews: any[][] = [];
+    if (!cubeViewResult.ok) return err(badAlloc('prefilter-view', cubeViewResult.error));
+    cache.prefilterView = cubeViewResult.value;
+    const mipViews: TextureView[][] = [];
     for (let m = 0; m < PREFILTER_MIP_LEVELS; m++) {
-      // biome-ignore lint/suspicious/noExplicitAny: opaque GPU views
-      const faces: any[] = [];
+      const faces: TextureView[] = [];
       for (let f = 0; f < 6; f++) {
-        const v = makeView(tVal, {
+        const viewResult = device.createTextureView(textureResult.value, {
           label: `ibl-prefilter-mip${m}-face${f}`,
           dimension: '2d',
           baseMipLevel: m,
@@ -923,8 +717,8 @@ export function runIblPrecompute(
           baseArrayLayer: f,
           arrayLayerCount: 1,
         });
-        if (v === undefined) return { ok: false, error: badAlloc('prefilter-face-view') };
-        faces.push(v);
+        if (!viewResult.ok) return err(badAlloc('prefilter-face-view', viewResult.error));
+        faces.push(viewResult.value);
       }
       mipViews.push(faces);
     }
@@ -932,7 +726,7 @@ export function runIblPrecompute(
   }
 
   if (cache.brdfLutTexture === undefined) {
-    const tRaw = device.createTexture({
+    const textureResult = device.createTexture({
       label: 'ibl-brdf-lut',
       size: { width: BRDF_LUT_SIZE, height: BRDF_LUT_SIZE, depthOrArrayLayers: 1 },
       mipLevelCount: 1,
@@ -944,22 +738,22 @@ export function runIblPrecompute(
         GPU_TEXTURE_USAGE_COPY_DST |
         GPU_TEXTURE_USAGE_COPY_SRC,
       viewFormats: [],
+      textureBindingViewDimension: undefined,
     });
-    const tVal = unwrap(tRaw);
-    if (tVal === undefined) return { ok: false, error: badAlloc('brdf-lut-texture') };
-    cache.brdfLutTexture = tVal;
-    const v = makeView(tVal, {
+    if (!textureResult.ok) return err(badAlloc('brdf-lut-texture', textureResult.error));
+    cache.brdfLutTexture = textureResult.value;
+    const viewResult = device.createTextureView(textureResult.value, {
       label: 'ibl-brdf-lut-view',
       dimension: '2d',
     });
-    if (v === undefined) return { ok: false, error: badAlloc('brdf-lut-view') };
-    cache.brdfLutView = v;
+    if (!viewResult.ok) return err(badAlloc('brdf-lut-view', viewResult.error));
+    cache.brdfLutView = viewResult.value;
   }
 
   // Shared sampler (filtering, linear-linear).
   // U=repeat because equirect wraps horizontally (atan2 seam at ±π);
   // V=clamp because equirect poles are clamped vertically.
-  const samplerRaw = device.createSampler({
+  const samplerResult = device.createSampler({
     label: 'ibl-precompute-sampler',
     magFilter: 'linear',
     minFilter: 'linear',
@@ -968,51 +762,74 @@ export function runIblPrecompute(
     addressModeV: 'clamp-to-edge',
     addressModeW: 'clamp-to-edge',
   });
-  const sampler = unwrap(samplerRaw);
-  if (sampler === undefined) return { ok: false, error: badAlloc('sampler') };
+  if (!samplerResult.ok) return err(badAlloc('sampler', samplerResult.error));
+  const sampler: Sampler = samplerResult.value;
 
-  const encoderRaw = device.createCommandEncoder({ label: 'ibl-precompute-encoder' });
-  const encoder = unwrap(encoderRaw);
-  if (encoder === undefined) return { ok: false, error: badAlloc('encoder') };
+  const encoderResult = device.createCommandEncoder({ label: 'ibl-precompute-encoder' });
+  if (!encoderResult.ok) return err(badAlloc('encoder', encoderResult.error));
+  const encoder: RhiCommandEncoder = encoderResult.value;
+
+  const faceUniformsBgl = cache.faceUniformsBgl;
+  const equirectGroup1Bgl = cache.equirectGroup1Bgl;
+  const cubeGroup1Bgl = cache.cubeGroup1Bgl;
+  const prefilterGroup0Bgl = cache.prefilterGroup0Bgl;
+  const equirectPipeline = cache.equirectToCubePipeline;
+  const irradiancePipeline = cache.irradiancePipeline;
+  const prefilterPipeline = cache.prefilterPipeline;
+  const brdfLutPipeline = cache.brdfLutPipeline;
+  const irrFaceViews = cache.irradianceFaceViews;
+  const prefMipViews = cache.prefilterFaceViewsByMip;
+  const brdfLutView = cache.brdfLutView;
+  if (
+    faceUniformsBgl === undefined ||
+    equirectGroup1Bgl === undefined ||
+    cubeGroup1Bgl === undefined ||
+    prefilterGroup0Bgl === undefined ||
+    equirectPipeline === undefined ||
+    irradiancePipeline === undefined ||
+    prefilterPipeline === undefined ||
+    brdfLutPipeline === undefined ||
+    irrFaceViews === undefined ||
+    prefMipViews === undefined ||
+    brdfLutView === undefined
+  ) {
+    return err(badAlloc('ibl-cache-resources'));
+  }
 
   // Bind group: equirect group(1).
-  const equirectBg = unwrap(
-    device.createBindGroup(
-      buildBgDesc({
-        label: 'ibl-equirect-bg',
-        layout: cache.equirectGroup1Bgl,
-        entries: [
-          { binding: 0, resource: { kind: 'textureView', value: opts.equirectView } },
-          { binding: 1, resource: { kind: 'sampler', value: sampler } },
-        ],
-      }),
-    ),
-  );
-  if (equirectBg === undefined) return { ok: false, error: badAlloc('equirect-bg') };
+  const equirectBgResult = device.createBindGroup({
+    label: 'ibl-equirect-bg',
+    layout: equirectGroup1Bgl,
+    entries: [
+      { binding: 0, resource: { kind: 'textureView', value: opts.equirectView } },
+      { binding: 1, resource: { kind: 'sampler', value: sampler } },
+    ],
+  });
+  if (!equirectBgResult.ok) return err(badAlloc('equirect-bg', equirectBgResult.error));
+  const equirectBg: BindGroup = equirectBgResult.value;
 
   // Bind group: cube group(1) for irradiance + prefilter.
-  const cubeBg = unwrap(
-    device.createBindGroup(
-      buildBgDesc({
-        label: 'ibl-cube-bg',
-        layout: cache.cubeGroup1Bgl,
-        entries: [
-          { binding: 0, resource: { kind: 'textureView', value: opts.cubeView } },
-          { binding: 1, resource: { kind: 'sampler', value: sampler } },
-        ],
-      }),
-    ),
-  );
-  if (cubeBg === undefined) return { ok: false, error: badAlloc('cube-bg') };
+  const cubeBgResult = device.createBindGroup({
+    label: 'ibl-cube-bg',
+    layout: cubeGroup1Bgl,
+    entries: [
+      { binding: 0, resource: { kind: 'textureView', value: opts.cubeView } },
+      { binding: 1, resource: { kind: 'sampler', value: sampler } },
+    ],
+  });
+  if (!cubeBgResult.ok) return err(badAlloc('cube-bg', cubeBgResult.error));
+  const cubeBg: BindGroup = cubeBgResult.value;
 
   // (a) equirect-to-cube: 6 face draws.
   const cubeFaceViews = opts.cubeFaceViews;
   for (let face = 0; face < 6; face++) {
-    const pass = encoder.beginRenderPass({
+    const cubeFaceView = cubeFaceViews[face];
+    if (cubeFaceView === undefined) return err(badAlloc('cube-face-view'));
+    const pass: RhiRenderPassEncoder = encoder.beginRenderPass({
       label: 'ibl-equirect-to-cube',
       colorAttachments: [
         {
-          view: cubeFaceViews[face],
+          view: cubeFaceView,
           clearValue: { r: 0, g: 0, b: 0, a: 1 },
           loadOp: 'clear',
           storeOp: 'store',
@@ -1020,30 +837,26 @@ export function runIblPrecompute(
       ],
     });
     // Face uniform: dynamic offset = face * 256.
-    const faceBg = unwrap(
-      device.createBindGroup(
-        buildBgDesc({
-          label: `ibl-face-bg-${face}`,
-          layout: cache.faceUniformsBgl,
-          entries: [
-            {
-              binding: 0,
-              resource: {
-                kind: 'buffer',
-                value: {
-                  buffer: opts.faceUniformsBuffer,
-                  offset: face * 256,
-                  size: 64,
-                },
-              },
+    const faceBgResult = device.createBindGroup({
+      label: `ibl-face-bg-${face}`,
+      layout: faceUniformsBgl,
+      entries: [
+        {
+          binding: 0,
+          resource: {
+            kind: 'buffer',
+            value: {
+              buffer: opts.faceUniformsBuffer,
+              offset: face * 256,
+              size: 64,
             },
-          ],
-        }),
-      ),
-    );
-    if (faceBg === undefined) return { ok: false, error: badAlloc('face-bg') };
-    pass.setPipeline(cache.equirectToCubePipeline);
-    pass.setBindGroup(0, faceBg);
+          },
+        },
+      ],
+    });
+    if (!faceBgResult.ok) return err(badAlloc('face-bg', faceBgResult.error));
+    pass.setPipeline(equirectPipeline);
+    pass.setBindGroup(0, faceBgResult.value);
     pass.setBindGroup(1, equirectBg);
     pass.setVertexBuffer(0, opts.cubeVertexBuffer);
     pass.draw(6, 1, face * 6, 0);
@@ -1051,43 +864,40 @@ export function runIblPrecompute(
   }
 
   // (b) irradiance convolve: 6 face draws.
-  const irrFaceViews = cache.irradianceFaceViews ?? [];
   for (let face = 0; face < 6; face++) {
-    const pass = encoder.beginRenderPass({
+    const irrFaceView = irrFaceViews[face];
+    if (irrFaceView === undefined) return err(badAlloc('irradiance-face-view'));
+    const pass: RhiRenderPassEncoder = encoder.beginRenderPass({
       label: 'ibl-irradiance',
       colorAttachments: [
         {
-          view: irrFaceViews[face],
+          view: irrFaceView,
           clearValue: { r: 0, g: 0, b: 0, a: 1 },
           loadOp: 'clear',
           storeOp: 'store',
         },
       ],
     });
-    const faceBg = unwrap(
-      device.createBindGroup(
-        buildBgDesc({
-          label: `ibl-irr-face-bg-${face}`,
-          layout: cache.faceUniformsBgl,
-          entries: [
-            {
-              binding: 0,
-              resource: {
-                kind: 'buffer',
-                value: {
-                  buffer: opts.faceUniformsBuffer,
-                  offset: face * 256,
-                  size: 64,
-                },
-              },
+    const faceBgResult = device.createBindGroup({
+      label: `ibl-irr-face-bg-${face}`,
+      layout: faceUniformsBgl,
+      entries: [
+        {
+          binding: 0,
+          resource: {
+            kind: 'buffer',
+            value: {
+              buffer: opts.faceUniformsBuffer,
+              offset: face * 256,
+              size: 64,
             },
-          ],
-        }),
-      ),
-    );
-    if (faceBg === undefined) return { ok: false, error: badAlloc('irr-face-bg') };
-    pass.setPipeline(cache.irradiancePipeline);
-    pass.setBindGroup(0, faceBg);
+          },
+        },
+      ],
+    });
+    if (!faceBgResult.ok) return err(badAlloc('irr-face-bg', faceBgResult.error));
+    pass.setPipeline(irradiancePipeline);
+    pass.setBindGroup(0, faceBgResult.value);
     pass.setBindGroup(1, cubeBg);
     pass.setVertexBuffer(0, opts.cubeVertexBuffer);
     pass.draw(6, 1, face * 6, 0);
@@ -1095,57 +905,55 @@ export function runIblPrecompute(
   }
 
   // (c) prefilter env: 5 mips x 6 faces = 30 sub-passes.
-  const prefMipViews = cache.prefilterFaceViewsByMip ?? [];
   for (let mip = 0; mip < PREFILTER_MIP_LEVELS; mip++) {
-    const mipFaceViews = prefMipViews[mip] ?? [];
+    const mipFaceViews = prefMipViews[mip];
+    if (mipFaceViews === undefined) return err(badAlloc('prefilter-mip-views'));
     for (let face = 0; face < 6; face++) {
       const subIdx = mip * 6 + face;
-      const pass = encoder.beginRenderPass({
+      const mipFaceView = mipFaceViews[face];
+      if (mipFaceView === undefined) return err(badAlloc('prefilter-face-view'));
+      const pass: RhiRenderPassEncoder = encoder.beginRenderPass({
         label: 'ibl-prefilter',
         colorAttachments: [
           {
-            view: mipFaceViews[face],
+            view: mipFaceView,
             clearValue: { r: 0, g: 0, b: 0, a: 1 },
             loadOp: 'clear',
             storeOp: 'store',
           },
         ],
       });
-      const bg = unwrap(
-        device.createBindGroup(
-          buildBgDesc({
-            label: `ibl-pref-bg-${subIdx}`,
-            layout: prefilterGroup0LayoutOf(cache),
-            entries: [
-              {
-                binding: 0,
-                resource: {
-                  kind: 'buffer',
-                  value: {
-                    buffer: opts.faceUniformsBuffer,
-                    offset: face * 256,
-                    size: 64,
-                  },
-                },
+      const bgResult = device.createBindGroup({
+        label: `ibl-pref-bg-${subIdx}`,
+        layout: prefilterGroup0Bgl,
+        entries: [
+          {
+            binding: 0,
+            resource: {
+              kind: 'buffer',
+              value: {
+                buffer: opts.faceUniformsBuffer,
+                offset: face * 256,
+                size: 64,
               },
-              {
-                binding: 1,
-                resource: {
-                  kind: 'buffer',
-                  value: {
-                    buffer: opts.prefilterUniformsBuffer,
-                    offset: subIdx * 256,
-                    size: 16,
-                  },
-                },
+            },
+          },
+          {
+            binding: 1,
+            resource: {
+              kind: 'buffer',
+              value: {
+                buffer: opts.prefilterUniformsBuffer,
+                offset: subIdx * 256,
+                size: 16,
               },
-            ],
-          }),
-        ),
-      );
-      if (bg === undefined) return { ok: false, error: badAlloc('pref-bg') };
-      pass.setPipeline(cache.prefilterPipeline);
-      pass.setBindGroup(0, bg);
+            },
+          },
+        ],
+      });
+      if (!bgResult.ok) return err(badAlloc('pref-bg', bgResult.error));
+      pass.setPipeline(prefilterPipeline);
+      pass.setBindGroup(0, bgResult.value);
       pass.setBindGroup(1, cubeBg);
       pass.setVertexBuffer(0, opts.cubeVertexBuffer);
       pass.draw(6, 1, face * 6, 0);
@@ -1155,18 +963,18 @@ export function runIblPrecompute(
 
   // (d) brdf-lut: fullscreen triangle.
   {
-    const pass = encoder.beginRenderPass({
+    const pass: RhiRenderPassEncoder = encoder.beginRenderPass({
       label: 'ibl-brdf-lut',
       colorAttachments: [
         {
-          view: cache.brdfLutView,
+          view: brdfLutView,
           clearValue: { r: 0, g: 0, b: 0, a: 1 },
           loadOp: 'clear',
           storeOp: 'store',
         },
       ],
     });
-    pass.setPipeline(cache.brdfLutPipeline);
+    pass.setPipeline(brdfLutPipeline);
     pass.draw(3, 1, 0, 0);
     pass.end();
   }
@@ -1174,73 +982,25 @@ export function runIblPrecompute(
   // Finish + submit. Counter increments are STRICTLY after submit; if
   // submit throws or fails, counters stay at 0 (AC-20 critical invariant).
   const finishRes = encoder.finish();
-  // biome-ignore lint/suspicious/noExplicitAny: command buffer opaque
-  let cmdBuffer: any;
-  if (
-    finishRes !== null &&
-    finishRes !== undefined &&
-    typeof finishRes === 'object' &&
-    'ok' in finishRes
-  ) {
-    if (!finishRes.ok) return { ok: false, error: badAlloc('finish') };
-    cmdBuffer = finishRes.value;
-  } else {
-    cmdBuffer = finishRes;
-  }
-
-  // Submit -- may throw on mock devices in failure-injection tests, or
-  // return a structured Result.err on the rhi shim path. AC-20 critical:
-  // counters are incremented ONLY if submit returns cleanly (no throw +
-  // no .ok === false).
-  let submitOk = true;
-  let submitError: unknown;
-  try {
-    // biome-ignore lint/suspicious/noExplicitAny: submit returns Result|undefined
-    const submitRes = device.queue.submit([cmdBuffer]) as any;
-    if (
-      submitRes !== null &&
-      submitRes !== undefined &&
-      typeof submitRes === 'object' &&
-      'ok' in submitRes &&
-      submitRes.ok === false
-    ) {
-      submitOk = false;
-      submitError = submitRes.error;
-    }
-  } catch (e) {
-    submitOk = false;
-    submitError = e;
-  }
-
-  if (!submitOk) {
-    return {
-      ok: false,
-      error: {
-        code: 'ibl-precompute-not-dispatched',
-        expected: 'device.queue.submit returned successfully',
-        hint: `queue.submit failed: ${String(submitError)}; counters must not increment before queue.submit`,
-      },
-    };
-  }
+  if (!finishRes.ok) return err(badAlloc('finish', finishRes.error));
+  const cmdBuffer: CommandBuffer = finishRes.value;
+  const submitRes = device.queue.submit([cmdBuffer]);
+  if (!submitRes.ok) return err(badAlloc('queue.submit', submitRes.error));
 
   // POST-SUBMIT counter increments (AC-20).
   cache.irradianceBakeCount += 1;
   cache.prefilterBakeCount += 1;
   cache.brdfLutBakeCount += 1;
 
-  return { ok: true, value: { submitted: true } };
+  return ok({ submitted: true });
 }
 
 // Local helper -- structured error payload shared across allocation paths.
-function badAlloc(stage: string): { code: string; expected: string; hint: string } {
+function badAlloc(stage: string, cause?: RhiError): IblPrecomputeError {
   return {
     code: 'ibl-precompute-not-dispatched',
     expected: `${stage} allocated successfully`,
-    hint: `check queue.submit path is reachable and ${stage} GPU resource creation did not fail; counters must not increment before queue.submit`,
+    hint: `check the RHI Result for ${stage}; counters must not increment before queue.submit`,
+    ...(cause === undefined ? {} : { detail: { stage, rhiCode: cause.code } }),
   };
-}
-
-// biome-ignore lint/suspicious/noExplicitAny: opaque BGL return
-function prefilterGroup0LayoutOf(cache: IblPipelineCachePerDevice): any {
-  return cache.prefilterGroup0Bgl;
 }

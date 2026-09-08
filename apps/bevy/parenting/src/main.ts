@@ -39,7 +39,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = appResult.value;
-  console.warn(`[bevy-parenting] backend=${app.renderer.backend}`);
+  console.warn(`[bevy-parenting] state=${app.renderer.inspect().state}`);
 
   buildParentingWorld(app.world);
 

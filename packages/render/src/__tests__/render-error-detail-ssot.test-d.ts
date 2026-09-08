@@ -1,14 +1,5 @@
 import { describe, expectTypeOf, it } from 'vitest';
 import type {
-  PipelineErrorCode,
-  PipelineErrorDetail,
-  PipelineErrorDetailFor,
-  PipelineError as PipelineErrorType,
-  PipelineNotFoundDetail,
-  PipelinePreviouslyRegisteredDetail,
-} from '../pipeline-errors';
-import { PipelineError } from '../pipeline-errors';
-import type {
   FullscreenInputNotFoundDetail,
   PostProcessErrorCode,
   PostProcessErrorDetail,
@@ -39,38 +30,7 @@ type DetailFor<C extends PostProcessErrorCode> = Extract<
   { readonly code: C }
 >['detail'];
 
-type ExpectedPipelineDetails = {
-  readonly 'pipeline-already-registered': PipelinePreviouslyRegisteredDetail;
-  readonly 'pipeline-not-found': PipelineNotFoundDetail;
-};
-
-type ExpectedPipelineCodes = keyof ExpectedPipelineDetails;
-type PipelineDetailFor<C extends PipelineErrorCode> = Extract<
-  PipelineErrorType,
-  { readonly code: C }
->['detail'];
-
 describe('render error detail aliases derive from their code resolvers', () => {
-  it('preserves the complete pipeline detail union', () => {
-    expectTypeOf<PipelineErrorDetail>().toEqualTypeOf<PipelineErrorDetailFor<PipelineErrorCode>>();
-  });
-
-  it('keeps the exact two-code vocabulary and derives the public code view', () => {
-    expectTypeOf<PipelineErrorCode>().toEqualTypeOf<ExpectedPipelineCodes>();
-    expectTypeOf<ExpectedPipelineCodes>().toEqualTypeOf<PipelineErrorCode>();
-    expectTypeOf<PipelineErrorType['code']>().toEqualTypeOf<PipelineErrorCode>();
-    expectTypeOf<PipelineErrorCode>().toEqualTypeOf<PipelineErrorType['code']>();
-  });
-
-  it('preserves every pipeline code/detail correlation in the mapped error view', () => {
-    expectTypeOf<PipelineDetailFor<'pipeline-already-registered'>>().toMatchTypeOf<
-      ExpectedPipelineDetails['pipeline-already-registered']
-    >();
-    expectTypeOf<PipelineDetailFor<'pipeline-not-found'>>().toMatchTypeOf<
-      ExpectedPipelineDetails['pipeline-not-found']
-    >();
-  });
-
   it('preserves the complete post-process detail union', () => {
     expectTypeOf<PostProcessErrorDetail>().toEqualTypeOf<
       PostProcessErrorDetailFor<PostProcessErrorCode>
@@ -110,16 +70,6 @@ describe('render error detail aliases derive from their code resolvers', () => {
 
   it('rejects unknown codes and mismatched code/detail pairs', () => {
     // @ts-expect-error unknown literals are outside the closed code view.
-    const invalidPipelineCode: PipelineErrorCode = 'pipeline-not-real';
-    void invalidPipelineCode;
-
-    new PipelineError({
-      code: 'pipeline-not-found',
-      // @ts-expect-error the detail must match the selected code.
-      detail: { id: 'already-registered' },
-    });
-
-    // @ts-expect-error unknown literals are outside the closed code view.
     const invalidCode: PostProcessErrorCode = 'post-process-not-real';
     void invalidCode;
 
@@ -128,43 +78,6 @@ describe('render error detail aliases derive from their code resolvers', () => {
       // @ts-expect-error the detail must match the selected code.
       detail: { readsKey: 'hdrColor', passName: 'tonemap' },
     });
-  });
-
-  it('preserves generic PipelineError constructor inference for each selected variant', () => {
-    const previouslyRegistered = new PipelineError({
-      code: 'pipeline-already-registered',
-      detail: { id: 'forward' },
-    });
-    expectTypeOf(previouslyRegistered).toEqualTypeOf<
-      Extract<PipelineErrorType, { readonly code: 'pipeline-already-registered' }>
-    >();
-    expectTypeOf(previouslyRegistered.detail.id).toEqualTypeOf<string>();
-
-    const notFound = new PipelineError({
-      code: 'pipeline-not-found',
-      detail: { handle: 42 },
-    });
-    expectTypeOf(notFound).toEqualTypeOf<
-      Extract<PipelineErrorType, { readonly code: 'pipeline-not-found' }>
-    >();
-    expectTypeOf(notFound.detail.handle).toEqualTypeOf<number>();
-  });
-
-  it('supports exhaustive PipelineError narrowing across every mapped variant', () => {
-    const describePipeline = (error: PipelineErrorType): string => {
-      switch (error.code) {
-        case 'pipeline-already-registered':
-          expectTypeOf(error.detail.id).toEqualTypeOf<string>();
-          return error.detail.id;
-        case 'pipeline-not-found':
-          expectTypeOf(error.detail.handle).toEqualTypeOf<number>();
-          return `${error.detail.handle}`;
-      }
-      const exhaustive: never = error;
-      return exhaustive;
-    };
-
-    expectTypeOf(describePipeline).returns.toEqualTypeOf<string>();
   });
 
   it('preserves generic constructor inference for each selected variant', () => {

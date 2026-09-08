@@ -25,16 +25,21 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
-import { DEFAULT_STANDARD_PBR_PARAM_SCHEMA } from '@forgeax/engine-shader';
+import {
+  DEFAULT_STANDARD_PBR_PARAM_SCHEMA,
+  DEFAULT_UNLIT_PARAM_SCHEMA,
+} from '@forgeax/engine-shader';
 import {
   buildMaterialSourceCatalog,
   checkBindGroupOverflow,
   cookMaterialAsset,
+  type MaterialCookError,
 } from '@forgeax/engine-shader-compiler';
 import {
   assertMaterialAsset,
   type BindGroupLayoutDescriptor,
   type MaterialAsset,
+  type MaterialError,
   type ParamSchemaEntry,
 } from '@forgeax/engine-types';
 import { loadEngineImportsMap } from './engine-imports-map.js';
@@ -81,6 +86,8 @@ function engineMaterialParamSchema(identifier: string): readonly ParamSchemaEntr
       return DEFAULT_STANDARD_PBR_PARAM_SCHEMA;
     case 'forgeax::msdf-text':
       return MSDF_TEXT_PARAM_SCHEMA;
+    case 'forgeax::points-lines':
+      return DEFAULT_UNLIT_PARAM_SCHEMA;
     default:
       return [];
   }
@@ -138,6 +145,7 @@ export async function buildEngineShaderManifest(): Promise<{
     eng.defaultStandardPbr,
     eng.defaultStandardPbrSkin,
     eng.unlit,
+    eng.pointsLines,
     eng.tonemap,
     eng.shadowCaster,
     eng.sprite,
@@ -679,13 +687,32 @@ async function compileUserMaterialVariants(
   };
 }
 
+function throwAuthoredMaterialError(error: MaterialCookError | MaterialError): never {
+  if (error instanceof Error) {
+    const log = toRollupLog(error);
+    throw Object.assign(new Error(error.message), log);
+  }
+  throw Object.assign(new Error(error.message), {
+    code: error.code,
+    expected: error.expected,
+    hint: error.hint,
+    detail: error.detail,
+    meta: {
+      expected: error.expected,
+      hint: error.hint,
+      detail: error.detail,
+    },
+  });
+}
+
 async function prepareAuthoredMaterial(
   packagePath: string,
   materialPackage: MaterialPackageFile,
   engineImports: Readonly<Record<string, string>>,
+  sourceOverride?: string,
 ): Promise<PreparedAuthoredMaterial> {
   const sourcePath = resolve(dirname(packagePath), materialPackage.source);
-  const source = await materialSourceProvider.read(sourcePath);
+  const source = sourceOverride ?? (await materialSourceProvider.read(sourcePath));
   const moduleId = materialPackage.material.passes?.[0]?.program.module;
   if (moduleId === undefined) throw new Error(`material pack has no pass module: ${packagePath}`);
   if (
@@ -706,19 +733,24 @@ async function prepareAuthoredMaterial(
       engine: Object.entries(engineImports).map(([path, value]) => ({ path, source: value })),
       project: [{ path: sourcePath, source: variantSource }],
     });
-    if (!catalog.ok) throw new Error(catalog.error.message);
+    if (!catalog.ok) throwAuthoredMaterialError(catalog.error);
     const cooked = await cookMaterialAsset({
       material: 'root',
       table: { root: materialPackage.material },
       sources: catalog.value,
-      defines: {
-        STORAGE_BUFFER_AVAILABLE: true,
-        PER_INSTANCE_REGION: false,
-        ...(defines ?? {}),
-        ...(defines?.POINT_SHADOW_AVAILABLE === true ? { POINT_SHADOW_AVAILABLE: true } : {}),
+      context: {
+        backend: defines?.WEBGL2_COMPAT === true ? 'webgl2' : 'webgpu',
+        capability:
+          defines?.STORAGE_BUFFER_AVAILABLE === false ? 'uniform-fallback' : 'storage-buffer',
+        pipeline: 'forward',
+        geometry: 'mesh',
+        pass: 'forward',
+        profile: 'forgeax-material-wgsl-v1',
+        toolchain: 'naga-oil',
+        instrumentation: 'none',
       },
     });
-    if (!cooked.ok) throw new Error(cooked.error.message);
+    if (!cooked.ok) throwAuthoredMaterialError(cooked.error);
     const pass = cooked.value.passes[0];
     if (pass === undefined) throw new Error(`material pack has no pass: ${packagePath}`);
     paramSchema = pass.paramSchema;
@@ -754,6 +786,7 @@ async function findAuthoredMaterialForSource(
   packagePaths: readonly string[],
   sourcePath: string,
   engineImports: Readonly<Record<string, string>>,
+  sourceOverride?: string,
 ): Promise<PreparedAuthoredMaterial | undefined> {
   for (const packagePath of packagePaths) {
     const resolvedPackagePath = resolve(process.cwd(), packagePath);
@@ -765,7 +798,12 @@ async function findAuthoredMaterialForSource(
       resolve(dirname(resolvedPackagePath), materialPackage.source),
     );
     if (candidateSourcePath !== sourcePath) continue;
-    return prepareAuthoredMaterial(resolvedPackagePath, materialPackage, engineImports);
+    return prepareAuthoredMaterial(
+      resolvedPackagePath,
+      materialPackage,
+      engineImports,
+      sourceOverride,
+    );
   }
   return undefined;
 }
@@ -785,7 +823,7 @@ function authoredShaderSourcePath(id: string): string {
   const end = [queryIndex, hashIndex]
     .filter((index) => index >= 0)
     .reduce((smallest, index) => Math.min(smallest, index), id.length);
-  return id.slice(0, end);
+  return id.slice(0, end).replace(/\\/g, '/');
 }
 
 // === reverseDeps: cross-file HMR propagation (plan-strategy §2 D-10, T-16) =========
@@ -991,7 +1029,7 @@ async function collectSiblingImports(
  * no mutex is required (plan-strategy §3 RISK-3).
  */
 function updateReverseDeps(importerFile: string, depFiles: readonly string[]): void {
-  reverseDeps.record(importerFile, depFiles);
+  reverseDeps.replace(importerFile, depFiles);
 }
 
 /**
@@ -1228,6 +1266,7 @@ interface EngineShaderEntries {
    */
   readonly defaultStandardPbrSkin: EngineShaderFile;
   readonly unlit: EngineShaderFile;
+  readonly pointsLines: EngineShaderFile;
   readonly tonemap: EngineShaderFile;
   readonly shadowCaster: EngineShaderFile;
   // feat-20260520-2d-sprite-layer-mvp / M-3 / w20: 5th engine entry for
@@ -1400,6 +1439,7 @@ async function loadEngineShaderEntries(): Promise<EngineShaderEntries> {
   const defaultStandardPbrPath = resolve(srcDir, 'default-standard-pbr.wgsl');
   const defaultStandardPbrSkinPath = resolve(srcDir, 'default-standard-pbr-skin.wgsl');
   const unlitPath = resolve(srcDir, 'unlit.wgsl');
+  const pointsLinesPath = resolve(srcDir, 'points-lines.wgsl');
   const tonemapPath = resolve(srcDir, 'tonemap.wgsl');
   const shadowCasterPath = resolve(srcDir, 'shadow_caster.wgsl');
   const spritePath = resolve(srcDir, 'sprite.wgsl');
@@ -1407,6 +1447,8 @@ async function loadEngineShaderEntries(): Promise<EngineShaderEntries> {
   const msdfTextPath = resolve(srcDir, 'msdf-text.wgsl');
   const commonPath = resolve(srcDir, 'common.wgsl');
   const brdfPath = resolve(srcDir, 'brdf.wgsl');
+  const temporalPath = resolve(srcDir, 'pbr-temporal.wgsl');
+  const fogPath = resolve(srcDir, 'fog.wgsl');
   // M3 round-2 (feat-20260520-skylight-ibl-cubemap / t49): round-1 single
   // forgeax_pbr::ibl entry replaced by 6 physically isolated modules so each
   // module's @group/@binding namespace is its own (WGSL spec rule: (group,
@@ -1442,6 +1484,7 @@ async function loadEngineShaderEntries(): Promise<EngineShaderEntries> {
     defaultStandardPbrSrc,
     defaultStandardPbrSkinSrc,
     unlitSrc,
+    pointsLinesSrc,
     tonemapSrc,
     shadowCasterSrc,
     spriteSrc,
@@ -1449,6 +1492,8 @@ async function loadEngineShaderEntries(): Promise<EngineShaderEntries> {
     msdfTextSrc,
     commonSrc,
     brdfSrc,
+    temporalSrc,
+    fogSrc,
     iblSharedSrc,
     iblEquirectToCubeSrc,
     iblIrradianceSrc,
@@ -1470,6 +1515,7 @@ async function loadEngineShaderEntries(): Promise<EngineShaderEntries> {
     readFile(defaultStandardPbrPath, 'utf8'),
     readFile(defaultStandardPbrSkinPath, 'utf8'),
     readFile(unlitPath, 'utf8'),
+    readFile(pointsLinesPath, 'utf8'),
     readFile(tonemapPath, 'utf8'),
     readFile(shadowCasterPath, 'utf8'),
     readFile(spritePath, 'utf8'),
@@ -1477,6 +1523,8 @@ async function loadEngineShaderEntries(): Promise<EngineShaderEntries> {
     readFile(msdfTextPath, 'utf8'),
     readFile(commonPath, 'utf8'),
     readFile(brdfPath, 'utf8'),
+    readFile(temporalPath, 'utf8'),
+    readFile(fogPath, 'utf8'),
     readFile(iblSharedPath, 'utf8'),
     readFile(iblEquirectToCubePath, 'utf8'),
     readFile(iblIrradiancePath, 'utf8'),
@@ -1507,6 +1555,11 @@ async function loadEngineShaderEntries(): Promise<EngineShaderEntries> {
       reservedIdentifier: 'forgeax::pbr-skin',
     },
     unlit: { id: unlitPath, source: unlitSrc, reservedIdentifier: 'forgeax::default-unlit' },
+    pointsLines: {
+      id: pointsLinesPath,
+      source: pointsLinesSrc,
+      reservedIdentifier: 'forgeax::points-lines',
+    },
     tonemap: { id: tonemapPath, source: tonemapSrc },
     shadowCaster: {
       id: shadowCasterPath,
@@ -1533,6 +1586,8 @@ async function loadEngineShaderEntries(): Promise<EngineShaderEntries> {
     imports: {
       'forgeax_view::common': commonSrc,
       'forgeax_pbr::brdf': brdfSrc,
+      'forgeax_pbr::temporal': temporalSrc,
+      'forgeax_view::fog': fogSrc,
       'forgeax_pbr::ibl_shared': iblSharedSrc,
       'forgeax_pbr::ibl_equirect_to_cube': iblEquirectToCubeSrc,
       'forgeax_pbr::ibl_irradiance': iblIrradianceSrc,
@@ -1933,27 +1988,31 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
   const authoredMaterialIdentifiers = new Set<string>();
   const authoredMaterialSources = new Set<string>();
 
-  const clearAuthoredMaterialState = (): void => {
-    for (const identifier of authoredMaterialIdentifiers) {
+  const removeAuthoredMaterial = (sourcePath: string, moduleId?: string): void => {
+    const previous = state.authoredMaterials.get(sourcePath);
+    const identifier = previous?.moduleId ?? moduleId;
+    if (identifier !== undefined) {
       state.entries.delete(identifier);
       for (const key of state.variantWgsl.keys()) {
         if (key.startsWith(`${identifier}#`)) state.variantWgsl.delete(key);
       }
+      authoredMaterialIdentifiers.delete(identifier);
     }
-    for (const sourcePath of authoredMaterialSources) {
-      state.authoredMaterials.delete(sourcePath);
-    }
+    state.authoredMaterials.delete(sourcePath);
+    authoredMaterialSources.delete(sourcePath);
     state.materialShaders.splice(
       0,
       state.materialShaders.length,
       ...state.materialShaders.filter(
         (entry) =>
-          !authoredMaterialIdentifiers.has(entry.identifier) &&
-          !authoredMaterialSources.has(entry.sourcePath),
+          entry.sourcePath !== sourcePath &&
+          (identifier === undefined || entry.identifier !== identifier),
       ),
     );
-    authoredMaterialIdentifiers.clear();
-    authoredMaterialSources.clear();
+  };
+
+  const clearAuthoredMaterialState = (): void => {
+    for (const sourcePath of [...authoredMaterialSources]) removeAuthoredMaterial(sourcePath);
   };
 
   const installAuthoredMaterial = (prepared: PreparedAuthoredMaterial): void => {
@@ -1985,6 +2044,11 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
     });
     authoredMaterialIdentifiers.add(prepared.moduleId);
     authoredMaterialSources.add(prepared.sourcePath);
+  };
+
+  const replaceAuthoredMaterial = (prepared: PreparedAuthoredMaterial): void => {
+    removeAuthoredMaterial(prepared.sourcePath, prepared.moduleId);
+    installAuthoredMaterial(prepared);
   };
 
   const ensureAuthoredMaterialPackages = async (
@@ -2107,6 +2171,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
         wantPointShadows,
       );
       await compileEngineEntry(this, state, eng.unlit, eng.imports, isServeMode);
+      await compileEngineEntry(this, state, eng.pointsLines, eng.imports, isServeMode);
       await compileEngineEntry(this, state, eng.tonemap, eng.imports, isServeMode);
       // feat-20260520-directional-light-shadow-mapping: shadow_caster.wgsl
       // engine entry compiled at buildStart so the runtime
@@ -2192,14 +2257,16 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       const sourcePath = authoredShaderSourcePath(id);
       let authored = state.authoredMaterials.get(sourcePath);
       const materialPackages = currentMaterialPackages();
-      if (authored === undefined && materialPackages.length > 0) {
-        authored = await findAuthoredMaterialForSource(
+      if (materialPackages.length > 0) {
+        const compiled = await findAuthoredMaterialForSource(
           materialPackages,
           sourcePath,
           getEngineImports(),
+          code,
         );
-        if (authored !== undefined) {
-          installAuthoredMaterial(authored);
+        if (compiled !== undefined) {
+          replaceAuthoredMaterial(compiled);
+          authored = compiled;
         }
       }
       if (authored !== undefined) {
@@ -2279,6 +2346,9 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       // `compileEngineEntry` line 621; user-shader transform now matches
       // (charter P4 consistent abstraction across the two compile paths).
       state.entries.set(id, { hash, wgsl: manifestEntry.wgsl, bindings: bindingsJson, uvSetCount });
+      for (const key of state.variantWgsl.keys()) {
+        if (key.startsWith(`${id}#`)) state.variantWgsl.delete(key);
+      }
       for (const variant of compiledVariants) {
         state.variantWgsl.set(`${id}#${variant.definesKey}`, variant.manifestEntry.wgsl);
         if (!isServeMode && variant.definesKey !== '') {
@@ -2319,6 +2389,13 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
         // in MaterialAsset values and are not reconstructed from WGSL.
         // composedWgsl is a path-only index -- the actual composed wgsl is
         // emitted as a sidecar file in generateBundle.
+        state.materialShaders.splice(
+          0,
+          state.materialShaders.length,
+          ...state.materialShaders.filter(
+            (entry) => entry.sourcePath !== id && entry.identifier !== materialShaderIdentifier,
+          ),
+        );
         const composedWgslPath = `./${hash}.composed.wgsl`;
         state.materialShaders.push({
           identifier: materialShaderIdentifier ?? extractDefineImportPath(code) ?? hash,
@@ -2499,7 +2576,9 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
         .filter((f): f is string => typeof f === 'string');
       console.warn('[forgeax-shader] HMR invalidate downstream:', downstreamFiles);
 
-      return [...direct, ...downstream];
+      const unique = new Set<HmrModuleNodeLike>();
+      for (const node of [...direct, ...downstream]) unique.add(node);
+      return [...unique];
     },
 
     // hook 5: configureServer — dev-only manifest middleware (D-P2 / II-A)

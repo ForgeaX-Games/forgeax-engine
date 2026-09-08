@@ -1,15 +1,15 @@
-// asset-union-no-name.test-d.ts - M1 grep gate for Asset union cardinality
+// asset-union-no-name.test-d.ts - M2 grep gate for Asset union cardinality
 // + POD no-name constraint (OOS-2).
 //
 // Three assertions guard the SSOT boundary:
-// (a) Asset union exhaustive switch covers all 15 kind discriminants
+// (a) Asset union exhaustive switch covers all 16 kind discriminants
 //     without default fallback -- TS compile-error on drift.
 // (b) Type-level: exhaustiveSwitch returns string (proves all cases present).
-// (c) grep: none of the 15 Asset union member interfaces (MeshAsset /
+// (c) grep: none of the 16 Asset union member interfaces (MeshAsset /
 //     TextureAsset / EquirectAsset / SamplerAsset / MaterialAsset /
 //     SceneAsset / SkeletonAsset / SkinAsset / AnimationClip /
 //     AudioClipAsset / FontAsset / RenderPipelineAsset / TilesetAsset /
-//     VideoAsset) has gained a `name`
+//     VideoAsset / ParticleEffectAsset) has gained a `name`
 //     field. The check scans
 //     each Asset member interface block between `export interface <N>Asset`
 //     and the next `}` for `readonly name` and asserts exactly 1 hit
@@ -23,7 +23,7 @@
 import { execSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import type { Asset } from '../index';
+import type { Asset, ParticleEffectAsset, TilesetAsset } from '../index';
 
 const REPO_ROOT = resolve(import.meta.dirname ?? '.', '..', '..', '..', '..');
 const TYPES_INDEX = resolve(REPO_ROOT, 'packages', 'types', 'src', 'index.ts');
@@ -144,7 +144,16 @@ function countNameFieldsPerAssetInterface(): Map<string, number> {
   return result;
 }
 
-describe('M1 Asset union cardinality grep gate (17 members, OOS-2 POD no-name)', () => {
+describe('M2 Asset union cardinality grep gate (16 members, OOS-2 POD no-name)', () => {
+  it('keeps the durable union discoverable through the public kind field', () => {
+    expectTypeOf<Asset>().toHaveProperty('kind');
+  });
+
+  it('does not expose removed durable identity fields on public PODs', () => {
+    expectTypeOf<ParticleEffectAsset>().not.toMatchTypeOf<{ readonly guid: string }>();
+    expectTypeOf<TilesetAsset>().not.toMatchTypeOf<{ readonly guid: string }>();
+  });
+
   it('(a) exhaustive switch over Asset.kind covers all 17 discriminants', () => {
     const result = exhaustiveAssetKindSwitch({ kind: 'mesh' } as Asset);
     expect(typeof result).toBe('string');
@@ -156,7 +165,7 @@ describe('M1 Asset union cardinality grep gate (17 members, OOS-2 POD no-name)',
 
   it('(c) no Asset union member interface has a name field', () => {
     const counts = countNameFieldsPerAssetInterface();
-    expect(counts.size).toBeGreaterThanOrEqual(13);
+    expect(counts.size).toBe(16);
 
     for (const count of counts.values()) {
       expect(count).toBe(0);

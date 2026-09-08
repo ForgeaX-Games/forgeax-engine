@@ -8,22 +8,23 @@
 // component field shape and type assignability.
 
 import { World } from '@forgeax/engine-ecs';
-import { PostProcessParams } from '@forgeax/engine-render/internal';
+import { componentId, componentSchema } from '@forgeax/engine-ecs/internal';
+import { PostProcessParams } from '@forgeax/engine-render';
 import { describe, expect, it } from 'vitest';
 
 describe('PostProcessParams component definition', () => {
   it('should be registered as a named component', () => {
     expect(PostProcessParams).toBeDefined();
     expect(PostProcessParams.name).toBe('PostProcessParams');
-    expect(typeof PostProcessParams.id).toBe('number');
+    expect(typeof componentId(PostProcessParams)).toBe('number');
   });
 
   it('should have shader field of type string', () => {
-    expect(PostProcessParams.schema.shader).toBe('string');
+    expect(componentSchema(PostProcessParams).shader).toBe('string');
   });
 
   it('should have data field of type buffer (variable-byte ECS managed slot)', () => {
-    expect(PostProcessParams.schema.data).toBe('buffer');
+    expect(componentSchema(PostProcessParams).data).toBe('buffer');
   });
 
   it('should accept Uint8Array for the data field (FieldInputType match)', () => {
@@ -49,8 +50,8 @@ describe('PostProcessParams component definition', () => {
   });
 
   it('should enforce shader as string (compile-time guard)', () => {
-    expect(PostProcessParams.schema.shader).toBe('string');
-    expect(PostProcessParams.schema.data).toBe('buffer');
+    expect(componentSchema(PostProcessParams).shader).toBe('string');
+    expect(componentSchema(PostProcessParams).data).toBe('buffer');
   });
 
   it('should be spawnable with an empty buffer', () => {

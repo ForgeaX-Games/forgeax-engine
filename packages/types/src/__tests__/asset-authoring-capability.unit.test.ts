@@ -6,6 +6,31 @@ import {
 } from '../index';
 
 describe('producer-owned asset authoring capability', () => {
+  it('keeps the ordinary Asset discovery set separate from UI capability kinds', () => {
+    const ordinaryKinds = [
+      'mesh',
+      'material',
+      'scene',
+      'texture',
+      'equirect',
+      'sampler',
+      'font',
+      'render-pipeline',
+      'tileset',
+      'video',
+      'skeleton',
+      'skin',
+      'animation-clip',
+      'animation-graph',
+      'audio',
+      'particle-effect',
+    ] as const;
+    for (const kind of ordinaryKinds) {
+      expect(authoringCapabilityForAssetKind(kind)).toHaveProperty('placement');
+      expect(authoringCapabilityForAssetKind(kind)).toHaveProperty('binding');
+    }
+  });
+
   it('publishes placement and binding shape for built-in kinds', () => {
     expect(authoringCapabilityForAssetKind('mesh')).toEqual({
       placement: { operation: 'spawnEntity' },

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -74,13 +75,11 @@ const appResult = await createApp(mockCanvas, {}, { shaderManifestUrl: manifestU
 globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 if (!appResult.ok) { console.error(`[smoke] createApp failed: ${appResult.error.code}`); process.exit(1); }
 const app = appResult.value;
-app.renderer.onError((error) => errors.push(error)); app.onError((error) => errors.push(error));
-const ready = await app.renderer.ready;
-if (!ready.ok) { console.error(`[smoke] renderer.ready failed: ${ready.error.code}`); process.exit(1); }
+subscribeSmokeErrors(app.renderer, (error) => errors.push(error)); app.onError((error) => errors.push(error));
 const hdrParsed = AssetGuid.parse(hdrGuid); const tintParsed = AssetGuid.parse(tintGuid);
 if (!hdrParsed.ok || !tintParsed.ok) { console.error('[smoke] GUID parse failed'); process.exit(1); }
-app.renderer.assets.configurePackIndex('/pack-index.json');
-const hdr = await app.renderer.assets.loadByGuid(hdrParsed.value); const tint = await app.renderer.assets.loadByGuid(tintParsed.value);
+app.assets.configurePackIndex('/pack-index.json');
+const hdr = await app.assets.loadByGuid(hdrParsed.value); const tint = await app.assets.loadByGuid(tintParsed.value);
 if (!hdr.ok || !tint.ok) { console.error(`[smoke] asset load failed: ${hdr.ok ? tint.error.code : hdr.error.code}`); process.exit(1); }
 const equirect = app.world.allocSharedRef('EquirectAsset', hdr.value);
 const texture = app.world.allocSharedRef('TextureAsset', tint.value);
@@ -104,13 +103,13 @@ const patchMean = (x0, x1, y0, y1) => { const sum = [0, 0, 0]; let count = 0; fo
 const neutral = patchMean(25, 95, 45, 145); const solid = patchMean(125, 195, 45, 145); const mappedPatch = patchMean(225, 295, 45, 145);
 let maxLuma = 0; for (let i = 0; i < tight.length; i += 4) maxLuma = Math.max(maxLuma, ((tight[i] ?? 0) * 0.299 + (tight[i + 1] ?? 0) * 0.587 + (tight[i + 2] ?? 0) * 0.114) / 255);
 const failures = [];
-if (app.renderer.backend !== 'webgpu') failures.push(`backend=${app.renderer.backend}`);
+if (rendererBackend(app.renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(app.renderer)}`);
 if (frames < targetFrames) failures.push(`frames=${frames} < ${targetFrames}`);
 if (errors.length > 0) failures.push(`engine errors=${errors.map((error) => error.code).join(',')}`);
 if (maxLuma <= 0.02) failures.push(`specular tint scene is dark: maxLuma=${maxLuma.toFixed(4)}`);
 if (Math.abs(solid[0] - neutral[0]) + Math.abs(solid[1] - neutral[1]) + Math.abs(solid[2] - neutral[2]) <= 0.01) failures.push(`solid tint missing: neutral=${neutral.map((value) => value.toFixed(4)).join(',')} solid=${solid.map((value) => value.toFixed(4)).join(',')}`);
 if (Math.abs(mappedPatch[0] - neutral[0]) + Math.abs(mappedPatch[1] - neutral[1]) + Math.abs(mappedPatch[2] - neutral[2]) <= 0.01) failures.push(`texture-map witness missing: neutral=${neutral.map((value) => value.toFixed(4)).join(',')} mapped=${mappedPatch.map((value) => value.toFixed(4)).join(',')}`);
-console.log(`[smoke] backend=${app.renderer.backend} frames=${frames} neutral=${neutral.map((value) => value.toFixed(4)).join(',')} solid=${solid.map((value) => value.toFixed(4)).join(',')} mapped=${mappedPatch.map((value) => value.toFixed(4)).join(',')} png=${pngOut}`);
+console.log(`[smoke] backend=${rendererBackend(app.renderer)} frames=${frames} neutral=${neutral.map((value) => value.toFixed(4)).join(',')} solid=${solid.map((value) => value.toFixed(4)).join(',')} mapped=${mappedPatch.map((value) => value.toFixed(4)).join(',')} png=${pngOut}`);
 if (failures.length > 0) { console.error(`[smoke] FAIL - ${failures.join('; ')}`); sharedDevice.destroy?.(); delete globalThis.navigator.gpu; process.exit(1); }
 console.log('[smoke] PASS - neutral, solid-tinted, and texture-mapped dielectric specular witnesses rendered with zero engine errors');
 sharedDevice.destroy?.(); delete globalThis.navigator.gpu; process.exit(0);

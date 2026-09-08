@@ -14,8 +14,9 @@
 
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { gltfDocToSceneAsset, meshIrToMeshAsset, toMaterialAsset } from '../bridge.js';
+import { gltfDocToSceneAsset, toMaterialAsset } from '../bridge.js';
 import type { GltfDoc, GltfMaterialIr, GltfMeshIr } from '../parse-gltf.js';
+import { unwrapMeshAsset as meshIrToMeshAsset } from './bridge-test-helpers.js';
 
 function fakeMeshHandle(id: number): Handle<'MeshAsset', 'shared'> {
   return id as unknown as Handle<'MeshAsset', 'shared'>;
@@ -630,8 +631,7 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
         if (renderer !== undefined) {
           const materials = renderer.materials as unknown[];
           expect(Array.isArray(materials)).toBe(true);
-          expect(materials.length).toBeGreaterThanOrEqual(1);
-          expect(materials[0]).toBe(7);
+          expect(materials).toEqual([]);
         }
         expect(meshNode?.components.Transform).toBeDefined();
       });
@@ -876,8 +876,8 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
         expect(scene.entities.length).toBe(2);
         const nodeA = scene.entities.find((n) => n.components.Name?.value === 'NodeA');
         const nodeB = scene.entities.find((n) => n.components.Name?.value === 'NodeB');
-        expect(nodeA?.components.MeshRenderer?.materials).toHaveLength(2);
-        expect(nodeB?.components.MeshRenderer?.materials).toHaveLength(1);
+        expect(nodeA?.components.MeshRenderer?.materials).toEqual([]);
+        expect(nodeB?.components.MeshRenderer?.materials).toEqual([]);
       });
     });
   });
@@ -1188,3 +1188,40 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
     });
   });
 }
+
+describe('meshIrToMeshAsset material slots', () => {
+  it('deduplicates source materials into stable A/default/A slots', () => {
+    const primitive = (materialIndex: number | null): GltfMeshIr => ({
+      positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+      indices: new Uint16Array([0, 1, 2]),
+      materialIndex,
+      meshIndex: 0,
+    });
+    const guid = '019d0000-0000-7000-8000-000000000004';
+    const asset = meshIrToMeshAsset([primitive(0), primitive(null), primitive(0)], {
+      guidByIndex: new Map([[0, guid]]),
+      nameByIndex: new Map([[0, 'Paint']]),
+    });
+
+    expect(asset.submeshes.map((submesh) => submesh.materialSlot)).toEqual([0, 1, 0]);
+    expect(asset.materialSlots.map((slot) => slot.slotName)).toEqual(['Paint', 'Default']);
+    expect(asset.materialSlots.map((slot) => slot.sourceKey)).toEqual([
+      'gltf:material:0',
+      'gltf:default',
+    ]);
+    expect(asset.materialSlots[0]?.defaultMaterial).toBeInstanceOf(Uint8Array);
+    expect(asset.materialSlots[1]?.defaultMaterial).toBeUndefined();
+  });
+
+  it('projects importer COLOR_0 into the canonical color attribute', () => {
+    const primitive = {
+      positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+      indices: new Uint16Array([0, 1, 2]),
+      colors0: new Float32Array([1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1]),
+      materialIndex: 0,
+      meshIndex: 0,
+    } as GltfMeshIr & { readonly colors0: Float32Array };
+    const asset = meshIrToMeshAsset([primitive]);
+    expect(asset.attributes.color).toEqual(primitive.colors0);
+  });
+});

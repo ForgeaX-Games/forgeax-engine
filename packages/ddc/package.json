@@ -5,7 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Node-only immutable derived data cache for build-time asset production.",
+  "description": "Node-only v2 immutable derived data cache with project-local lifecycle evidence.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -20,6 +20,21 @@
     "./entry-store": {
       "types": "./dist/entry-store.d.ts",
       "node": { "import": "./dist/entry-store.mjs" },
+      "default": null
+    },
+    "./layout": {
+      "types": "./dist/layout.d.ts",
+      "node": { "import": "./dist/layout.mjs" },
+      "default": null
+    },
+    "./status": {
+      "types": "./dist/status.d.ts",
+      "node": { "import": "./dist/status.mjs" },
+      "default": null
+    },
+    "./errors": {
+      "types": "./dist/errors.d.ts",
+      "node": { "import": "./dist/errors.mjs" },
       "default": null
     },
     "./package.json": "./package.json"
@@ -57,10 +72,13 @@
       }
     }
   },
+  "dependencies": {
+    "@forgeax/engine-types": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "^20.14.0",
     "tsup": "^8.3.5",
     "typescript": "^5.8.3",
-    "vitest": "4.1.5"
+    "vitest": "4.1.11"
   }
 }

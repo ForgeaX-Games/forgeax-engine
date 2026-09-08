@@ -1,6 +1,9 @@
 import { PostProcessParams, type Renderer } from '@forgeax/engine-render';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import type { GameHost } from '@forgeax/engine-app';
+import type { Context } from '@forgeax/engine-plugin';
 import chromaticShader from '../shaders/chromatic-aberration.wgsl';
+import { installGameFullscreenFeature } from './fullscreen-feature';
 
 export const CHROMATIC_ABERRATION_ID = 'game-default::chromatic-aberration';
 export const CHROMATIC_ABERRATION_PARAM_BYTES = 16;
@@ -28,11 +31,12 @@ function packParams(intensity: number): Uint8Array {
   return new Uint8Array(bytes);
 }
 
-export function installChromaticAberration(
+export async function installChromaticAberration(
+  context: Context,
   world: World,
+  host: GameHost | undefined,
   renderer: Renderer | undefined,
-  postEffects: readonly string[],
-): ChromaticAberrationHandle {
+): Promise<ChromaticAberrationHandle> {
   let intensity = 0;
   const paramsEntity = world.spawn({
     component: PostProcessParams,
@@ -49,24 +53,19 @@ export function installChromaticAberration(
       snapshot: () => ({ active: false, intensity: 0, effect: CHROMATIC_ABERRATION_ID }),
     };
   }
-  const unregister = renderer.postProcess.register(CHROMATIC_ABERRATION_ID, {
+  const feature = await installGameFullscreenFeature(context, host, renderer, {
+    identity: CHROMATIC_ABERRATION_ID,
     source: chromaticShader.wgsl,
     reads: ['sceneColor'],
     params: { byteSize: CHROMATIC_ABERRATION_PARAM_BYTES, defaultValue: packParams(0) },
   });
-  const installed = renderer.installPipeline({
-    kind: 'render-pipeline',
-    pipelineId: 'forgeax::urp',
-    config: { postEffects },
-  });
-  if (!installed.ok) unregister();
   const write = (): void => {
     world.set(paramsEntity, PostProcessParams, { data: packParams(intensity) });
   };
   return {
     paramsEntity,
-    installed: installed.ok,
-    ...(installed.ok ? {} : { error: `${installed.error.code}: ${installed.error.hint}` }),
+    installed: feature.installed,
+    ...(feature.error === undefined ? {} : { error: feature.error }),
     setIntensity(next: number): void {
       intensity = Math.max(0, Math.min(MAX_INTENSITY, next));
       write();
@@ -76,12 +75,10 @@ export function installChromaticAberration(
       write();
     },
     dispose(): void {
-      if (!installed.ok) return;
-      installed.value();
-      unregister();
+      feature.dispose();
     },
     snapshot(): ChromaticAberrationSnapshot {
-      return { active: installed.ok && intensity > 0, intensity, effect: CHROMATIC_ABERRATION_ID };
+      return { active: feature.installed && intensity > 0, intensity, effect: CHROMATIC_ABERRATION_ID };
     },
   };
 }

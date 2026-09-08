@@ -5,7 +5,7 @@
 // while portable entity fields are accepted. No network metadata in schemas.
 
 import { describe, expect, it } from 'vitest';
-import { type Component, defineComponent } from '../component';
+import { type Component, componentSchema, defineComponent } from '../component';
 import {
   isComponentFullyTransient,
   isComponentPortable,
@@ -265,7 +265,7 @@ describe('m3 — profile rejection supplemental: multi-component and multi-error
     expect(result.valid).toBe(true);
     expect(result.errors.length).toBe(0);
     // Verify schema has no network metadata
-    const schema = Portable.schema as Record<string, string>;
+    const schema = componentSchema(Portable) as Record<string, string>;
     for (const key of Object.keys(schema)) {
       expect(key).not.toContain('network');
       expect(key).not.toContain('replicate');

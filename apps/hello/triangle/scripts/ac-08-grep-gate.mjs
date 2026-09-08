@@ -515,7 +515,7 @@ const G_GET_RAW_DEVICE_WHITELIST = new Set([
     // so the file must be in the allow-list; renamed-imports are not
     // applicable here because the call goes through a `RhiBackendPack`
     // record property, not a top-level import.
-    'packages/render/src/renderer/renderer-factory.ts',
+    'packages/render/src/assembly/factory.ts',
     // feat-20260511-asset-system-v1 verify F-1 fix-up (w17): dual-impl
     // texture upload spike invokes `_internal_getRawDevice(device)` to drop
     // to the raw GPUDevice for readback (copyTextureToBuffer destination
@@ -532,6 +532,14 @@ const G_GET_RAW_DEVICE_WHITELIST = new Set([
     // texture upload readback verification.
     'apps/hello/debug-draw/src/main.ts',
     'apps/hello/debug-draw/scripts/smoke-dawn.mjs',
+    // IBL Dawn evidence reads the native texture for a producer-owned
+    // readback assertion; this remains a test-only D-S1 boundary.
+    'packages/runtime/src/__tests__/dawn/ibl-precompute-readback.dawn.test.ts',
+    // GPU-driven lifecycle Dawn/browser evidence uses a validation scope to
+    // prove retired buffers are not submitted while a previous graph is
+    // still in flight. This is a test-only D-S1 boundary, not a runtime
+    // recording path.
+    'packages/render/src/__tests__/gpu-driven-view-gpu-evidence.ts',
   ]);
   // feat-20260510-rhi-resource-creation M4 (w28 / w29): the previous
   // `apps/hello/triangle/src/main.ts` allow-list entry was removed - the

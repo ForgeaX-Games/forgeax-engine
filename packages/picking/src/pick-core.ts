@@ -1,8 +1,7 @@
 // pick-core.ts — shared picking skeleton for pick() / pickVertex*() (feat-20260705 M2 M0).
 //
 // `pick.ts` (screen-to-entity ray-AABB) and `pick-vertex.ts` (vertex-level) share a
-// verbatim skeleton (F11): the internal `Transform.world` view type, the archetype
-// shape exposed by `_getGraph()`, the `readWorldMatrix` reader, and the
+// verbatim skeleton (F11): the `Transform.world` row type, the row reader, and the
 // camera-validation → view=invert(worldMatrix) → projection-branch → screenToRay
 // sequence. This module is the single source of truth for that skeleton
 // (architecture-principles §2 Derive, Don't Duplicate; AC-201). pick.ts and
@@ -15,37 +14,11 @@
 // a `undefined` return, which callers translate to their own miss shape
 // (`undefined` for pick, `[]`/`undefined` for the vertex queries).
 
-import type { Component, EntityHandle, FieldView, World } from '@forgeax/engine-ecs';
+import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { mat4, ray } from '@forgeax/engine-math';
 import { Camera, type CameraProjection, cameraProjectionFromF32 } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { PickError } from './pick-errors';
-
-/**
- * Internal world surface used by picking for the resolved `Transform.world` view.
- *
- * @internal Column-level zero-copy view of an `array<T, N>` / `buffer<N>` field.
- * Returns a `FieldView` (a TypedArray) aliasing the inline stride-N column bytes;
- * picking reads the resolved `Transform.world` mat4 through it (a `Float32Array` in
- * practice, feat-20260602 inline columns). The return type is the generic
- * `FieldView` because the underlying column may store any element type;
- * `new Float32Array(view)` below reinterprets the world mat4 from whichever
- * TypedArray backs it. `undefined` when the entity is dead or the column absent.
- */
-export type WorldInternalView = World & {
-  _getArrayView(
-    entity: EntityHandle,
-    component: Component,
-    fieldName: string,
-  ): FieldView | undefined;
-};
-
-/** Minimal shape of an archetype as exposed by the engine-internal `_getGraph()`. */
-export interface TableLike {
-  size: number;
-  components: ReadonlyArray<{ readonly id: number }>;
-  storage: Map<number, { fields: Map<string, { view: ArrayLike<number> }> }>;
-}
 
 /**
  * Read an entity's resolved world mat4 (16 column-major floats) from the
@@ -53,13 +26,9 @@ export interface TableLike {
  * copy (the view aliases live slot bytes); `undefined` when the entity has no
  * Transform / world column.
  */
-export function readWorldMatrix(
-  world: WorldInternalView,
-  entity: EntityHandle,
-): Float32Array | undefined {
-  const view = world._getArrayView(entity, Transform, 'world');
-  if (view === undefined) return undefined;
-  return new Float32Array(view);
+export function readWorldMatrix(world: World, entity: EntityHandle): Float32Array | undefined {
+  const result = world.get(entity, Transform);
+  return result.ok ? new Float32Array(result.value.world) : undefined;
 }
 
 /**
@@ -98,6 +67,17 @@ export function computeScreenRay(
   viewportWidth: number,
   viewportHeight: number,
 ): ScreenRay | undefined {
+  // An invalid viewport cannot define a screen ray; refuse it before the lower
+  // math layer's safe fallback can become a fabricated origin hit.
+  if (
+    !Number.isFinite(viewportWidth) ||
+    !Number.isFinite(viewportHeight) ||
+    viewportWidth <= 0 ||
+    viewportHeight <= 0
+  ) {
+    return undefined;
+  }
+
   // --- precondition: camera component present (structured error, charter P3) ---
   const camRes = world.get(cameraEntity, Camera);
   if (!camRes.ok) {
@@ -106,7 +86,7 @@ export function computeScreenRay(
   const cam = camRes.value;
 
   // --- camera world transform (feat-20260601 D-3: read Transform.world mat4) ---
-  const camWorld = readWorldMatrix(world as WorldInternalView, cameraEntity);
+  const camWorld = readWorldMatrix(world, cameraEntity);
   if (camWorld === undefined) {
     // A camera entity without a Transform cannot define a view matrix; treat the
     // degenerate case as a miss rather than fabricating an identity view (no spurious hit).

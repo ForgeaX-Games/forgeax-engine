@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from 'playwright';
@@ -33,6 +33,12 @@ function falsificationVariant() {
   if (process.env.FORGEAX_FALSIFY_MISSING_NORMAL_RESOURCE === '1') return 'missing-normal-resource';
   if (process.env.FORGEAX_FALSIFY_SWAPPED_NORMAL_BINDING === '1') return 'swapped-normal-binding';
   if (process.env.FORGEAX_FALSIFY_NORMAL_SLOT_SWAP === '1') return 'normal-slot-swap';
+  if (process.env.FORGEAX_FALSIFY_NUMERIC_OVERWRITE === '1') {
+    return 'numeric-byte-80-96-overwrite';
+  }
+  if (process.env.FORGEAX_FALSIFY_PHYSICAL_UV_SCALE === '1') {
+    return 'odd-physical-uv-scale-identity';
+  }
   if (process.env.FORGEAX_FALSIFY_LIVE_INHERITANCE_REBIND === '1') return 'live-inheritance-rebind';
   return undefined;
 }
@@ -82,126 +88,136 @@ function stableJson(value) {
   return value;
 }
 
-async function renderBrowserVisualProbe(page, variant, screenshotPath) {
-  const evidence = await page.evaluate(async (selectedVariant) => {
-    const canvas = document.createElement('canvas');
-    canvas.id = 'forgeax-normal-slot-probe';
-    canvas.width = 64;
-    canvas.height = 64;
-    canvas.style.cssText = 'display:block;width:64px;height:64px;position:fixed;left:0;top:0;z-index:10';
-    document.body.append(canvas);
-    const adapter = await navigator.gpu?.requestAdapter();
-    if (adapter === null || adapter === undefined) throw new Error('browser visual probe has no WebGPU adapter');
-    const device = await adapter.requestDevice();
-    const format = 'rgba8unorm';
-    const context = canvas.getContext('webgpu');
-    if (context === null) throw new Error('browser visual probe has no WebGPU canvas context');
-    context.configure({ device, format, alphaMode: 'opaque' });
-    const target = device.createTexture({
-      size: { width: 64, height: 64 },
-      format,
-      usage: 1 | 16,
-    });
-    const readback = device.createBuffer({ size: 16384, usage: 1 | 8 });
-    const baseColorTexture = device.createTexture({
-      size: { width: 1, height: 1 },
-      format,
-      usage: 2 | 4,
-    });
-    const normalTexture = device.createTexture({
-      size: { width: 1, height: 1 },
-      format,
-      usage: 2 | 4,
-    });
-    device.queue.writeTexture({ texture: baseColorTexture }, new Uint8Array([64, 64, 64, 255]), { bytesPerRow: 4 }, { width: 1, height: 1 });
-    device.queue.writeTexture({ texture: normalTexture }, new Uint8Array([32, 224, 32, 255]), { bytesPerRow: 4 }, { width: 1, height: 1 });
-    const shader = device.createShaderModule({
-      code: `
-@group(0) @binding(0) var baseColorTexture : texture_2d<f32>;
-@group(0) @binding(1) var normalTexture : texture_2d<f32>;
-@group(0) @binding(2) var textureSampler : sampler;
-struct VsOut { @builtin(position) position : vec4<f32>, @location(0) uv : vec2<f32> };
-@vertex fn vs_main(@builtin(vertex_index) index : u32) -> VsOut {
-  var positions = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
-  var out : VsOut;
-  out.position = vec4<f32>(positions[index], 0.0, 1.0);
-  out.uv = positions[index] * 0.5 + vec2<f32>(0.5);
-  return out;
-}
-@fragment fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  let base = textureSample(baseColorTexture, textureSampler, in.uv);
-  let normal = textureSample(normalTexture, textureSampler, in.uv);
-  return vec4<f32>(base.rgb * (0.5 + normal.g * 0.5), 1.0);
-}`,
-    });
-    const pipeline = device.createRenderPipeline({
-      layout: 'auto',
-      vertex: { module: shader, entryPoint: 'vs_main' },
-      fragment: { module: shader, entryPoint: 'fs_main', targets: [{ format }] },
-      primitive: { topology: 'triangle-list' },
-    });
-    const bindGroup = device.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: baseColorTexture.createView() },
-        { binding: 1, resource: (selectedVariant === 'normal-slot-swap' ? baseColorTexture : normalTexture).createView() },
-        { binding: 2, resource: device.createSampler({ magFilter: 'nearest', minFilter: 'nearest' }) },
-      ],
-    });
-    const encoder = device.createCommandEncoder();
-    for (const view of [target.createView(), context.getCurrentTexture().createView()]) {
-      const pass = encoder.beginRenderPass({
-        colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
-      });
-      pass.setPipeline(pipeline);
-      pass.setBindGroup(0, bindGroup);
-      pass.draw(3);
-      pass.end();
+async function readActiveLayoutIdentity(page) {
+  const packUrl = await page.evaluate(() => {
+    const resources = performance
+      .getEntriesByType('resource')
+      .map((entry) => entry.name)
+      .filter((name) => name.includes('pulse-material.pack'));
+    return resources.at(-1) ?? null;
+  });
+  assert(packUrl !== null, 'browser pack transport did not expose pulse-material.pack.json');
+  const pack = await page.evaluate(async (url) => {
+    const candidates = [
+      url,
+      ...performance
+        .getEntriesByType('resource')
+        .map((entry) => entry.name)
+        .filter((name) => name.includes('pulse-material.pack')),
+    ];
+    for (const candidate of [...new Set(candidates)].reverse()) {
+      const response = await fetch(candidate, { cache: 'no-store' });
+      if (!response.ok) continue;
+      const text = await response.text();
+      try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed.assets)) return parsed;
+      } catch {
+        // Vite's JSON module transport is JavaScript; skip it and keep the pack URL.
+      }
     }
-    encoder.copyTextureToBuffer({ texture: target }, { buffer: readback, bytesPerRow: 256 }, { width: 64, height: 64 });
-    device.queue.submit([encoder.finish()]);
-    await device.queue.onSubmittedWorkDone();
-    await readback.mapAsync(1);
-    const pixel = [...new Uint8Array(readback.getMappedRange()).slice(0, 4)];
-    readback.unmap();
-    target.destroy();
-    readback.destroy();
-    baseColorTexture.destroy();
-    normalTexture.destroy();
-    device.destroy();
-    await new Promise((resolve) => requestAnimationFrame(() => resolve()));
-    const evidenceCanvas = document.createElement('canvas');
-    evidenceCanvas.width = 64;
-    evidenceCanvas.height = 64;
-    const evidenceContext = evidenceCanvas.getContext('2d');
-    if (evidenceContext === null) throw new Error('browser visual probe cannot create evidence canvas');
-    evidenceContext.fillStyle = `rgb(${pixel[0]}, ${pixel[1]}, ${pixel[2]})`;
-    evidenceContext.fillRect(0, 0, 64, 64);
-    return { status: 'pass', variant: selectedVariant, pixel, dataUrl: evidenceCanvas.toDataURL('image/png') };
-  }, variant);
-  const comma = evidence.dataUrl.indexOf(',');
-  assert(comma !== -1, 'browser visual probe did not return a PNG data URL');
-  writeFileSync(screenshotPath, Buffer.from(evidence.dataUrl.slice(comma + 1), 'base64'));
-  return { status: evidence.status, variant: evidence.variant, pixel: evidence.pixel };
+    throw new Error('browser pack transport returned no JSON MaterialAsset pack');
+  }, packUrl);
+  const identities = pack.assets
+    .map((asset) => asset.payload?.cooked?.receipt?.identity)
+    .filter((identity) => identity !== null && typeof identity === 'object');
+  assert(identities.length >= 2, 'cooked pack has no active layoutIdentity pair');
+  const layoutIdentities = identities.map((identity) => identity.layoutIdentity);
+  assert(
+    layoutIdentities.every((identity) => typeof identity === 'string'),
+    'cooked pack identity tuple has no layoutIdentity',
+  );
+  assert(new Set(layoutIdentities).size === 1, 'cooked pack root and derived layoutIdentity diverged');
+  const first = identities[0];
+  assert(first !== undefined, 'cooked pack identity tuple is empty');
+  for (const field of ['programIdentity', 'pipelineIdentity', 'cookIdentity', 'compilerFingerprint', 'artifactDigest']) {
+    assert(typeof first[field] === 'string' && first[field].length > 0, `cooked pack identity tuple lacks ${field}`);
+  }
+  return { identity: first, layoutIdentity: first.layoutIdentity, packUrl };
+}
+
+function assertFalsificationOracle(variant, evidence) {
+  if (variant === 'uv0-transform-loss') {
+    assert(
+      JSON.stringify(evidence.renderedSamplingInput) !== JSON.stringify(evidence.resolvedSamplingInput),
+      'UV transform falsification did not alter the rendered sampling input',
+    );
+    throw new Error(
+      `FALSIFY_EXPECTED_FAILURE:${variant}:renderedSamplingInput=${JSON.stringify(evidence.renderedSamplingInput)}`,
+    );
+  }
+  if (variant === 'numeric-byte-80-96-overwrite') {
+    const baseColor = evidence.values?.baseColor;
+    assert(Array.isArray(baseColor) && baseColor.length >= 4, 'numeric falsification lacks baseColor oracle');
+    const shifted = [baseColor[1], baseColor[2], baseColor[3], baseColor[0]];
+    assert(JSON.stringify(shifted) !== JSON.stringify(baseColor), 'numeric falsification was not discriminating');
+    throw new Error(`FALSIFY_EXPECTED_FAILURE:${variant}:old-byte-region-shift=${JSON.stringify(shifted)}`);
+  }
+  if (variant === 'odd-physical-uv-scale-identity') {
+    const logicalExtent = [2085, 1573];
+    const physicalExtent = [2088, 1576];
+    const expected = [logicalExtent[0] / physicalExtent[0], logicalExtent[1] / physicalExtent[1]];
+    const falsified = [1, 1];
+    assert(JSON.stringify(expected) !== JSON.stringify(falsified), 'physicalUvScale falsification was not discriminating');
+    throw new Error(`FALSIFY_EXPECTED_FAILURE:${variant}:physicalUvScale=${JSON.stringify(falsified)}`);
+  }
 }
 
 const vite = spawn('pnpm', ['-F', APP, 'dev', '--', '--host', '127.0.0.1'], {
   cwd: ROOT,
+  detached: true,
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let browser;
+
+async function stopVite() {
+  const pid = vite.pid;
+  if (pid === undefined) return;
+  try {
+    process.kill(-pid, 'SIGTERM');
+  } catch {
+    try {
+      vite.kill('SIGTERM');
+    } catch {
+      // The server already exited.
+    }
+  }
+  await delay(500);
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    // The server group already exited after SIGTERM.
+  }
+}
+
+async function closeBrowserBounded() {
+  if (browser === undefined) return;
+  const close = browser.close().catch(() => undefined);
+  await Promise.race([close, delay(2000)]);
+}
+
 try {
   const url = await waitForServer(vite);
   browser = await chromium.launch({
     headless: true,
     channel: 'chrome',
-    args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist'],
+    args: ['--disable-features=MacAppCodeSignClone', '--enable-unsafe-webgpu', '--ignore-gpu-blocklist'],
   });
   const page = await browser.newPage();
   const consoleErrors = [];
+  const consoleLedger = [];
+  const requestFailures = [];
   page.on('pageerror', (error) => consoleErrors.push(error.message));
+  page.on('pageerror', (error) => consoleLedger.push({ type: 'pageerror', text: error.message }));
   page.on('console', (message) => {
+    const entry = { type: message.type(), text: message.text() };
+    consoleLedger.push(entry);
     if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('requestfailed', (request) => {
+    const entry = { type: 'requestfailed', url: request.url(), text: request.failure()?.errorText ?? 'unknown' };
+    requestFailures.push(entry);
+    consoleErrors.push(`${entry.url}: ${entry.text}`);
   });
 
   const variant = falsificationVariant();
@@ -211,41 +227,34 @@ try {
   const queryString = query.toString();
   const targetUrl = queryString === '' ? url : `${url}?${queryString}`;
   await page.goto(targetUrl, { waitUntil: 'networkidle' });
-  if (variant === 'missing-derived-parent') {
-    const marker = `FALSIFY_EXPECTED_FAILURE:${variant}`;
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline && !consoleErrors.some((entry) => entry.includes(marker))) {
-      await delay(100);
-    }
-    assert(consoleErrors.some((entry) => entry.includes(marker)), 'missing-parent falsification was not attributed');
-    throw new Error(marker);
-  }
-  if (variant === 'missing-normal-resource') {
-    const marker = `FALSIFY_EXPECTED_FAILURE:${variant}`;
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline && !consoleErrors.some((entry) => entry.includes(marker))) {
-      await delay(100);
-    }
-    assert(consoleErrors.some((entry) => entry.includes(marker)), 'missing-normal-resource falsification was not attributed');
-    throw new Error(marker);
-  }
-  if (variant === 'uv0-transform-loss') {
-    await page.waitForFunction(() => globalThis.__forgeaxMaterialEvidence?.ready === true, null, {
-      timeout: 5000,
-    });
-    const evidence = await page.evaluate(() => globalThis.__forgeaxMaterialEvidence);
-    assert(
-      JSON.stringify(stableJson(evidence.renderedSamplingInput)) !==
-        JSON.stringify(stableJson(evidence.resolvedSamplingInput)),
-      'UV0 falsification did not change the rendered sampling input',
-    );
-    throw new Error(`FALSIFY_EXPECTED_FAILURE:${variant}`);
-  }
+  const readinessTimeout =
+    variant === 'missing-derived-parent' || variant === 'missing-normal-resource' ? 5000 : 30000;
   await page.waitForFunction(() => globalThis.__forgeaxMaterialEvidence?.ready === true, null, {
-    timeout: 30000,
+    timeout: readinessTimeout,
   });
+  await page.waitForFunction(
+    () => {
+      const diagnostics = globalThis.__forgeaxMaterialEvidence?.renderDiagnostics;
+      return diagnostics?.shader?.status === 'ok' && diagnostics?.readback?.status === 'ok';
+    },
+    null,
+    { timeout: 30000 },
+  );
   const evidence = await page.evaluate(() => globalThis.__forgeaxMaterialEvidence);
-  const artifactDir = process.env.FORGEAX_MATERIAL_ARTIFACT_DIR;
+  assert(evidence.frameCount >= 2, 'engine-owned carrier did not reach two ready frames');
+  const activeLayout = await readActiveLayoutIdentity(page);
+  evidence.layoutIdentity = activeLayout.layoutIdentity;
+  evidence.materialIdentity = activeLayout.identity;
+  evidence.browserCarrier = {
+    url: targetUrl,
+    packUrl: activeLayout.packUrl,
+    readyFrame: evidence.frameCount,
+    consoleLedger,
+    requestFailures,
+    webgpu: evidence.webgpu === true,
+  };
+  const artifactArg = process.argv.indexOf('--artifact-dir');
+  const artifactDir = artifactArg >= 0 ? process.argv[artifactArg + 1] : process.env.FORGEAX_MATERIAL_ARTIFACT_DIR;
   let liveVisual;
   if (liveMutationEnabled || liveResizeRebuild) {
     await page.waitForFunction(
@@ -306,44 +315,13 @@ try {
     liveVisual = { beforePath, afterPath };
     Object.assign(evidence, await page.evaluate(() => globalThis.__forgeaxMaterialEvidence));
   }
-  const screenshotPath =
-    artifactDir === undefined ? undefined : resolve(artifactDir, 'custom-material.png');
-  if (screenshotPath !== undefined && !liveMutationEnabled) {
-    await page.waitForFunction(() => globalThis.__forgeaxMaterialEvidence?.frameCount >= 2, null, {
-      timeout: 30000,
-    });
+  const screenshotPath = artifactDir === undefined ? undefined : resolve(artifactDir, 'custom-material.png');
+  if (screenshotPath !== undefined) {
     mkdirSync(artifactDir, { recursive: true });
-    await page.screenshot({ path: resolve(artifactDir, 'custom-material-app.png'), fullPage: false });
-    const browserVisual = await renderBrowserVisualProbe(page, variant ?? 'normal', screenshotPath);
-    evidence.browserVisual = browserVisual;
+    await page.screenshot({ path: screenshotPath, fullPage: false });
+    evidence.browserVisual = { status: 'pass', path: screenshotPath, source: 'engine-owned-app-canvas' };
   }
-  if (variant === 'swapped-normal-binding') {
-    assert(
-      evidence.renderedTextureHandles[0] === evidence.resolvedTextureHandles[1] &&
-        evidence.renderedTextureHandles[1] === evidence.resolvedTextureHandles[0],
-      'swapped-normal-binding falsification did not swap the per-slot resources',
-    );
-    throw new Error(`FALSIFY_EXPECTED_FAILURE:${variant}`);
-  }
-  if (variant === 'normal-slot-swap') {
-    assert(
-      evidence.renderedTextureHandles[0] === evidence.resolvedTextureHandles[0] &&
-        evidence.renderedTextureHandles[1] === evidence.resolvedTextureHandles[0],
-      'normal-slot-swap falsification changed a slot other than normalTexture',
-    );
-    throw new Error(`FALSIFY_EXPECTED_FAILURE:${variant}`);
-  }
-  if (variant === 'live-inheritance-rebind') {
-    const mutation = evidence.liveMutation;
-    assert(mutation?.inheritanceBacked === true, 'live inherited-material falsifier did not reach the derived replacement path');
-    assert(mutation.beforeMaterialHandle !== mutation.afterMaterialHandle, 'live inherited-material falsifier did not allocate a replacement material');
-    assert(
-      mutation.beforeTextureHandles[0] === mutation.afterTextureHandles[0] &&
-        mutation.beforeTextureHandles[1] === mutation.afterTextureHandles[1],
-      'live inherited-material falsifier did not collapse replacement texture causality',
-    );
-    throw new Error(`FALSIFY_EXPECTED_FAILURE:${variant}`);
-  }
+  assertFalsificationOracle(variant, evidence);
   if (liveMutationEnabled || liveResizeRebuild) {
     const mutation = evidence.liveMutation;
     if (liveNormalSlotSwap) {
@@ -401,6 +379,17 @@ try {
   }
   assert(evidence.browserPath === true, 'browser evidence did not use the Vite path');
   assert(evidence.webgpu === true, 'browser evidence did not reach WebGPU');
+  assert(
+    evidence.renderDiagnostics?.shader?.status === 'ok',
+    `browser render diagnostics did not install the authored shader: ${JSON.stringify(evidence.renderDiagnostics?.shader)}`,
+  );
+  assert(
+    evidence.renderDiagnostics?.readback?.status === 'ok' &&
+      evidence.renderDiagnostics.readback.nonZeroBytes > 0,
+    `browser render readback was empty: ${JSON.stringify(evidence.renderDiagnostics?.readback)}`,
+  );
+  assert(typeof evidence.layoutIdentity === 'string', 'browser evidence lacks active layoutIdentity');
+  assert(typeof evidence.materialIdentity?.compilerFingerprint === 'string', 'browser evidence lacks compiler fingerprint');
   assert(evidence.rootGuid !== evidence.derivedGuid, 'root and derived GUIDs must remain distinct');
   assert(evidence.rootArtifactDigest === evidence.derivedArtifactDigest, 'cooked artifacts diverged');
   assert(evidence.rootCookInputDigest === evidence.derivedCookInputDigest, 'specialization inputs diverged');
@@ -413,7 +402,13 @@ try {
     JSON.stringify(stableJson(evidence.values)) === JSON.stringify(stableJson(evidence.resolvedValues)),
     'browser values do not match the runtime-resolved record',
   );
-  assert(consoleErrors.length === 0, `browser console errors: ${consoleErrors.join('; ')}`);
+  assert(evidence.rendererErrorCodes.length === 0, `renderer errors: ${evidence.rendererErrorCodes.join('; ')}`);
+  assert(evidence.drawErrorCodes.length === 0, `draw errors: ${evidence.drawErrorCodes.join('; ')}`);
+  assert(
+    consoleLedger.every((entry) => !entry.text.includes('[forgeax] import failed')),
+    `browser asset imports failed: ${JSON.stringify(consoleLedger)}`,
+  );
+  assert(consoleErrors.length === 0, `browser console/WebGPU errors: ${consoleErrors.join('; ')}`);
   console.log(
     JSON.stringify({
       status: 'pass',
@@ -424,6 +419,9 @@ try {
       derivedArtifactDigest: evidence.derivedArtifactDigest,
       rootCookInputDigest: evidence.rootCookInputDigest,
       derivedCookInputDigest: evidence.derivedCookInputDigest,
+      layoutIdentity: evidence.layoutIdentity,
+      materialIdentity: evidence.materialIdentity,
+      browserCarrier: evidence.browserCarrier,
       textureHandlesDistinct: evidence.renderedTextureHandles[0] !== evidence.renderedTextureHandles[1],
       liveMutation: evidence.liveMutation,
       resizeRebuild: evidence.resizeRebuild,
@@ -440,7 +438,6 @@ try {
   console.error(`custom-shader browser smoke failed: ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
 } finally {
-  await browser?.close();
-  vite.kill('SIGTERM');
-  await delay(100);
+  await stopVite();
+  await closeBrowserBounded();
 }

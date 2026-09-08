@@ -1,31 +1,54 @@
-// viewer-model.ts — thin re-export of the shared FrameModel SSOT.
-//
-// The whole-frame analysis (buildViewModel) used to live here; it now lives in
-// @forgeax/engine-rhi-debug/frame-model so the viewer UI and the AI CLI (`summary`
-// subcommand + inspect-offline pipelineState) consume one source of truth — the AI
-// inspects with the same operations the UI exposes (charter F1).
-//
-// The app keeps the `ViewModel` / `buildViewModel` names (window.__forgeaxViewer,
-// AC-14) as aliases over the package's FrameModel / buildFrameModel.
+import {
+  buildFrameModel,
+  type FrameModel,
+  type ReplayReadbackResult,
+  type RhiDebugError,
+  type V7RhiCallEvent,
+  type V7Tape,
+} from '@forgeax/engine-rhi-debug';
+import type { Result } from '@forgeax/engine-types';
 
 export type {
   CommandEntry,
-  CreateDescriptor,
-  DrawDepthStencil,
-  DrawEntry,
-  DrawPipelineState,
   FrameModel,
-  FrameModelMeta,
-  PassDrawItem,
-  PassNode,
-} from '@forgeax/engine-rhi-debug/frame-model';
+  FramePass,
+  JsonValue,
+  ResourceConsumer,
+  ResourceEntry,
+  WorkBinding,
+  WorkEntry,
+  WorkPipeline,
+} from '@forgeax/engine-rhi-debug';
 
-import type { FrameModel, FrameModelMeta } from '@forgeax/engine-rhi-debug/frame-model';
+/** The viewer consumes the producer-owned model and adds only tape events. */
+export type ViewerModel = FrameModel & {
+  readonly events: readonly V7RhiCallEvent[];
+};
 
-export { buildFrameModel as buildViewModel } from '@forgeax/engine-rhi-debug/frame-model';
-export { buildResourceLifecycle } from '@forgeax/engine-rhi-debug/resource-lifecycle';
+export type ViewerResource = FrameModel['resources'][number];
+export type ViewerWork = FrameModel['works'][number];
 
-/** The viewer's name for the shared {@link FrameModel}. */
-export type ViewModel = FrameModel;
-/** The viewer's name for {@link FrameModelMeta}. */
-export type ViewModelMeta = FrameModelMeta;
+/** The viewer's machine handoff identity for the one imported tape. */
+export interface ViewerArtifactRef {
+  readonly kind: 'rhi-tape';
+  readonly digest: string;
+  readonly source: string;
+  readonly path?: string;
+}
+
+export interface ViewerInspection {
+  readonly workIndex: number;
+  readonly eventIndex: number;
+  readonly passIndex: number;
+  readonly attachment: ReplayReadbackResult | undefined;
+}
+
+export type InspectWork = (
+  workIndex: number,
+  fields?: readonly ('bindings' | 'pipeline' | 'pixels')[],
+  signal?: AbortSignal,
+) => Promise<Result<ViewerInspection, RhiDebugError>>;
+
+export function buildViewerModel(tape: V7Tape): ViewerModel {
+  return { ...buildFrameModel(tape), events: tape.events };
+}

@@ -199,11 +199,10 @@ const mockCanvas = {
 
 // --- 3. Drive engine ECS path --------------------------------------------
 
-const { ok: okResult, World } = await import('@forgeax/engine-ecs');
-const enginePkg = await import('@forgeax/engine-runtime');
-const { createRenderer } = enginePkg;
-const { setTransparentSortConfig, TRANSPARENT_SORT_MODE_LAYER_Y, TRANSPARENT_SORT_MODE_LAYER_Z } = await import('@forgeax/engine-render/internal');
-const { SPRITE_PREMULTIPLIED_ALPHA_BLEND } = await import('@forgeax/engine-render/authoring');
+const { World } = await import('@forgeax/engine-ecs');
+const { ok: okResult } = await import('@forgeax/engine-types');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
+const { TransparentSort, SPRITE_PREMULTIPLIED_ALPHA_BLEND } = await import('@forgeax/engine-render/authoring');
 const { Camera, Layer, MeshFilter, MeshRenderer, TONEMAP_NONE, TONEMAP_REINHARD_EXTENDED } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const {
@@ -262,7 +261,7 @@ const SPRITE_COLOR_TINTS = [
 const SCENE_LAYOUTS = {
   A: {
     pivot: [0.5, 0.5],
-    sortMode: TRANSPARENT_SORT_MODE_LAYER_Z,
+    sortMode: TransparentSort.layerZ,
     sprites: [
       { layer: -100, pos: [-0.4, -0.1, -0.5] },
       { layer: 0, pos: [0.0, 0.0, 0.0] },
@@ -271,7 +270,7 @@ const SCENE_LAYOUTS = {
   },
   B: {
     pivot: [0.5, 1.0],
-    sortMode: TRANSPARENT_SORT_MODE_LAYER_Y,
+    sortMode: TransparentSort.layerY,
     sprites: [
       { layer: 0, pos: [-0.4, 0.3, 0.0] },
       { layer: 0, pos: [0.0, 0.0, 0.0] },
@@ -287,7 +286,10 @@ const TONEMAP_VALUES = {
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  var hostAssets = constructed.value.assets;
 } catch (err) {
   console.error(
     `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
@@ -297,9 +299,9 @@ try {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
 
-console.log(`[hello-sprite] backend=${renderer.backend}`);
+console.log(`[hello-sprite] backend=${renderer.inspect().capabilities.backendKind}`);
 
-const assets = renderer.assets;
+const assets = hostAssets;
 if (!assets) {
   console.error('[smoke] FAIL - AssetRegistry is null');
   process.exit(1);
@@ -308,9 +310,7 @@ if (!assets) {
 // Synthetic texture POD shared as data across matrix runs; the texture /
 // sampler / material handles are minted INSIDE each draw World below, because
 // D-15 makes SharedRefStore per-World -- a handle minted in one World is not
-// resolvable from another (the engine rejects the cross-World retain). The GPU
-// upload is renderer.store-keyed by handle id; each fresh World's first user
-// alloc is deterministic, so re-uploading per case overwrites the same slot.
+// resolvable from another (the engine rejects the cross-World retain).
 const synth = buildSyntheticRgba();
 const synthPod = {
   kind: 'texture',
@@ -322,29 +322,11 @@ const synthPod = {
   mipmap: false,
 };
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
-// Mints the texture (with GPU upload), default repeat sampler, and the 3
+// Mints the texture, default repeat sampler, and the 3
 // per-scene sprite materials into `world`. Returns the material handle array.
 async function mintSpriteAssets(world, layout) {
   const textureHandle = world.allocSharedRef('TextureAsset', synthPod);
-  // feat-20260601-gpu-resource-store-extraction M1: texture GPU upload via
-  // renderer.store (pass POD + decoded; D-2).
-  const uploadRes = await renderer.store.uploadTexture(textureHandle, synthPod, {
-    bytes: synth.data,
-    width: synth.width,
-    height: synth.height,
-    mime: 'image/png',
-    colorSpace: 'srgb',
-    mipmap: false,
-  });
-  if (!uploadRes.ok) {
-    return { ok: false, error: uploadRes.error };
-  }
   const samplerHandle = world.allocSharedRef('SamplerAsset', {
     kind: 'sampler',
     magFilter: 'linear',
@@ -394,7 +376,7 @@ for (const matrixCase of MATRIX) {
   const { scene, tonemap, refFile } = matrixCase;
   const layout = SCENE_LAYOUTS[scene];
   const world = new World();
-  const worldAttachment1 = renderer.attachWorld(world);
+  const worldAttachment1 = renderer.attach(world);
   if (!worldAttachment1.ok) throw worldAttachment1.error;
   const mint = await mintSpriteAssets(world, layout);
   if (!mint.ok) {
@@ -404,7 +386,7 @@ for (const matrixCase of MATRIX) {
   const materialHandles = mint.materialHandles;
 
   // Configure transparent sort mode (mode=0 for A / mode=1 for B).
-  const sortCfgRes = setTransparentSortConfig(world, {
+  const sortCfgRes = TransparentSort.configure(world, {
     mode: layout.sortMode,
     yzAlpha: 1.0,
   });
@@ -465,7 +447,11 @@ for (const matrixCase of MATRIX) {
   let framesObserved = 0;
   for (let i = 0; i < TARGET_FRAMES; i++) {
     world.update().unwrap();
-    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const r = renderer.draw({
+      leases: [worldAttachment1.value],
+      camera: { lease: worldAttachment1.value },
+      environment: { lease: worldAttachment1.value },
+    });
     if (!r.ok) console.error(`[smoke] case ${scene}/${tonemap} draw frame ${i}: ${r.error.code}`);
     framesObserved++;
   }
@@ -591,7 +577,8 @@ for (const matrixCase of MATRIX) {
 //      `sliceMode` literals on the pass-based MaterialAsset surface (D-1).
 //   3. With sliceMode=1 + sampler.addressMode='clamp-to-edge' the D-9 soft
 //      -warn path increments `nineslice.tile-needs-repeat-sampler` >= 1
-//      (plan-strategy D-9 register-time fail-fast escape via metrics).
+//      (plan-strategy D-9 register-time fail-fast escape via the AssetRegistry
+//      owner counter; Renderer no longer exposes a metrics facade).
 //   4. The 9-slice section can render >= 30 frames without engine errors
 //      (smoke draw-loop check; structural, no pixel parity).
 //
@@ -599,7 +586,8 @@ for (const matrixCase of MATRIX) {
 //   When set, replaces `slices` with [0,0,0,0] (degenerate equivalent of
 //   legacy quad). Assertion #3 should still hold (the soft-warn fires for
 //   sliceMode=1 regardless of slices content) but structural assertion #5
-//   below (`metrics.snapshot()['nineslice.tile-needs-repeat-sampler'] >= 1`
+//   below (the AssetRegistry owner counter for
+//   `nineslice.tile-needs-repeat-sampler` must increase by >= 1
 //   after register) becomes the falsifiable predicate -- if the sentinel
 //   path silently early-exits to the legacy sprite branch without firing
 //   the soft-warn, the falsifier reveals it. The falsifier is opt-in; CI
@@ -640,19 +628,14 @@ let softWarnDelta = 0;
 const ninesliceFrames = Math.max(30, Math.floor(SMOKE_MIN_FRAMES / 10));
 {
   const world = new World();
+  const ninesliceAttachment = renderer.attach(world);
+  if (!ninesliceAttachment.ok) throw ninesliceAttachment.error;
   const ninesliceTextureHandle = world.allocSharedRef('TextureAsset', synthPod);
-  const ninesliceUpload = await renderer.store.uploadTexture(ninesliceTextureHandle, synthPod, {
-    bytes: synth.data,
-    width: synth.width,
-    height: synth.height,
-    mime: 'image/png',
-    colorSpace: 'srgb',
-    mipmap: false,
-  });
-  if (!ninesliceUpload.ok) {
-    failures.push(`nineslice: synthetic texture upload: ${ninesliceUpload.error.code}`);
+  const ninesliceMetrics = assets._getMetrics?.();
+  if (ninesliceMetrics === undefined || ninesliceMetrics === null) {
+    failures.push('nineslice: AssetRegistry owner metrics are unavailable');
   }
-  const ninesliceMetricsBefore = renderer.metrics.snapshot();
+  const ninesliceMetricsBefore = ninesliceMetrics?.snapshot() ?? {};
   const beforeCount = ninesliceMetricsBefore['nineslice.tile-needs-repeat-sampler'] ?? 0;
   // D-9 soft-warn fires at AssetRegistry.catalog time: it reads values.sampler
   // as an embedded GUID string (D-19) and resolves it against the catalogue. So
@@ -721,7 +704,7 @@ const ninesliceFrames = Math.max(30, Math.floor(SMOKE_MIN_FRAMES / 10));
       slicesAndMode: [ninesliceSlices[0], ninesliceSlices[1], ninesliceSlices[2], ninesliceMode],
     },
   });
-  const ninesliceMetricsAfter = renderer.metrics.snapshot();
+  const ninesliceMetricsAfter = ninesliceMetrics?.snapshot() ?? {};
   const afterCount = ninesliceMetricsAfter['nineslice.tile-needs-repeat-sampler'] ?? 0;
   softWarnDelta = afterCount - beforeCount;
   console.log(
@@ -738,8 +721,8 @@ const ninesliceFrames = Math.max(30, Math.floor(SMOKE_MIN_FRAMES / 10));
   // machinery already wired above -- a new World rebuilds the camera + entity
   // graph without touching the renderer's per-Scene state.
   okResult(
-    setTransparentSortConfig(world, {
-      mode: TRANSPARENT_SORT_MODE_LAYER_Z,
+    TransparentSort.configure(world, {
+      mode: TransparentSort.layerZ,
       yzAlpha: 1.0,
     }),
   );
@@ -785,7 +768,11 @@ const ninesliceFrames = Math.max(30, Math.floor(SMOKE_MIN_FRAMES / 10));
     );
     for (let i = 0; i < ninesliceFrames; i++) {
       world.update().unwrap();
-      const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      const r = renderer.draw({
+        leases: [ninesliceAttachment.value],
+        camera: { lease: ninesliceAttachment.value },
+        environment: { lease: ninesliceAttachment.value },
+      });
       if (!r.ok) ninesliceDrawErrors++;
     }
     await sharedDevice?.queue.onSubmittedWorkDone();

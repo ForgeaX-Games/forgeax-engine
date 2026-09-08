@@ -3,7 +3,7 @@ import {
   buildMaterialSlotPlan,
   findRenderablePrefixForSlotCapacity,
   materialSlotCountForPrefix,
-} from '../material-slot-plan';
+} from '../frame';
 
 describe('material slot plan', () => {
   it('interns repeated snapshot identities across renderables', () => {

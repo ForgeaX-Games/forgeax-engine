@@ -30,11 +30,6 @@ const CUBE_INDICES = new Uint16Array([
 
 export const CUSTOM_TEXTURE_SIZE = 64;
 
-export interface MeshGpuStore {
-  updateMesh(handle: Handle<'MeshAsset', 'shared'>, vertices: Float32Array, indices: Uint16Array): void;
-  getMeshGpuHandles?(handle: Handle<'MeshAsset', 'shared'>): unknown;
-}
-
 export interface CustomMeshState {
   readonly meshEntity: EntityHandle;
   readonly meshHandle: Handle<'MeshAsset', 'shared'>;
@@ -115,8 +110,9 @@ function customCubeMesh(vertices: Float32Array): MeshAsset {
     vertices,
     attributes: { position: positions, normal: normals, uv, tangent },
     indices: CUBE_INDICES,
-    submeshes: [{ indexOffset: 0, indexCount: CUBE_INDICES.length, vertexCount: CUBE_POSITIONS.length, topology: 'triangle-list' }],
+    submeshes: [{ indexOffset: 0, indexCount: CUBE_INDICES.length, vertexCount: CUBE_POSITIONS.length, topology: 'triangle-list', materialSlot: 0 }],
     aabb: new Float32Array([-0.5, -0.5, -0.5, 0.5, 0.5, 0.5]),
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 
@@ -143,19 +139,17 @@ export function buildCustomMeshWorld(world: World, textureHandle?: number): Cust
   return { meshEntity, meshHandle, baseVertices, alternateVertices, indices: CUBE_INDICES, uvMode: 'upper', toggles: 0 };
 }
 
-export function toggleCustomMesh(state: CustomMeshState, store: MeshGpuStore): void {
-  if (store.getMeshGpuHandles !== undefined && store.getMeshGpuHandles(state.meshHandle) === undefined) return;
+export function toggleCustomMesh(world: World, state: CustomMeshState): void {
+  const mesh = world.sharedRefs.resolve<'MeshAsset', MeshAsset>(state.meshHandle);
+  if (!mesh.ok) return;
   state.uvMode = state.uvMode === 'upper' ? 'lower' : 'upper';
   state.toggles += 1;
-  store.updateMesh(
-    state.meshHandle,
-    state.uvMode === 'upper' ? state.baseVertices : state.alternateVertices,
-    state.indices,
-  );
+  mesh.value.vertices.set(state.uvMode === 'upper' ? state.baseVertices : state.alternateVertices);
+  world.sharedRefs.markChanged(state.meshHandle);
 }
 
-export function stepCustomMesh(world: World, state: CustomMeshState, store: MeshGpuStore, input: InputSnapshot): void {
-  if (input.keyboard.justPressedCode('Space')) toggleCustomMesh(state, store);
+export function stepCustomMesh(world: World, state: CustomMeshState, input: InputSnapshot): void {
+  if (input.keyboard.justPressedCode('Space')) toggleCustomMesh(world, state);
   const current = world.get(state.meshEntity, Transform);
   if (!current.ok) return;
   let rotation = current.value.quat;

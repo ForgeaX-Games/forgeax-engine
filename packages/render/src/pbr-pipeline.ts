@@ -25,17 +25,17 @@ import type {
   BindGroup,
   BindGroupEntry,
   BindGroupLayout,
+  BindGroupLayoutDescriptor,
   Buffer,
   PipelineLayout,
-  Result,
-  RhiError,
+  RhiDevice,
   Sampler,
   TextureView,
 } from '@forgeax/engine-rhi';
-import { DEFAULT_STANDARD_PBR_PARAM_SCHEMA } from '@forgeax/engine-shader';
+import { DEFAULT_STANDARD_PBR_PARAM_SCHEMA, type ShaderCatalog } from '@forgeax/engine-shader';
 import { derive, type ParamSchemaEntry } from '@forgeax/engine-types';
 import { GPU_SHADER_STAGE_FRAGMENT, GPU_SHADER_STAGE_VERTEX } from './gpu-stage';
-import { buildBindGroupLayoutDescriptor, type PipelineSpec } from './pipeline-spec';
+import type { PipelineSpec } from './pipeline-spec-types';
 
 // Stub PipelineSpec used by the BGL-only call sites. The dispatcher only reads
 // `spec.shader` when a registry is supplied for reflection; for caps-driven
@@ -51,24 +51,10 @@ const BGL_ONLY_SPEC_STUB: PipelineSpec = Object.freeze({
   renderState: undefined,
 }) as PipelineSpec;
 
-// ─── Device shim ────────────────────────────────────────────────────────────
-//
-// We accept the narrow structural subset of RhiDevice that the factory
-// touches. Production callers pass the real RhiDevice; tests pass a
-// vi.fn-based capture. The unwrap pattern matches createRenderer's
-// `runShimSyncStep` -- the factory throws on Result.ok === false so the
-// caller does not need to handle Result at every line.
+// ─── Device owner ───────────────────────────────────────────────────────────
 
-export interface PbrPipelineDevice {
-  createBindGroupLayout(desc: {
-    label: string | undefined;
-    entries: readonly GPUBindGroupLayoutEntry[];
-  }): Result<BindGroupLayout, RhiError>;
-  createPipelineLayout(desc: {
-    label?: string;
-    bindGroupLayouts: readonly BindGroupLayout[];
-  }): Result<PipelineLayout, RhiError>;
-}
+/** The PBR layout builder consumes only the two creation methods it owns. */
+export type PbrPipelineDevice = Pick<RhiDevice, 'createBindGroupLayout' | 'createPipelineLayout'>;
 
 // ─── Result shape ───────────────────────────────────────────────────────────
 
@@ -137,12 +123,19 @@ export function buildPbrMaterialUserRegionEntries(
   paramSchema: readonly ParamSchemaEntry[] = DEFAULT_STANDARD_PBR_PARAM_SCHEMA,
 ): GPUBindGroupLayoutEntry[] {
   const derived = derive(paramSchema);
-  // derive() returns the engine BindGroupLayoutEntry (exactOptionalPropertyTypes
-  // makes its optional fields `T | undefined`, structurally distinct from the
-  // DOM GPUBindGroupLayoutEntry surface). The two-step `as unknown as` is the
-  // sanctioned known-unsafe opt-in (AC-08 gate (j) allows it; single-step
-  // `as GPU...` is the forbidden shim-leak pattern).
-  const entries = derived.bglEntries.map((e) => ({ ...e })) as unknown as GPUBindGroupLayoutEntry[];
+  // Project the engine-owned entry shape into the DOM WebGPU descriptor. Omit
+  // absent optional members so exactOptionalPropertyTypes remains true at the
+  // boundary instead of leaking an `undefined` property into the descriptor.
+  const entries = derived.bglEntries.map(
+    (entry): GPUBindGroupLayoutEntry => ({
+      binding: entry.binding,
+      visibility: entry.visibility,
+      ...(entry.buffer === undefined ? {} : { buffer: entry.buffer }),
+      ...(entry.sampler === undefined ? {} : { sampler: entry.sampler }),
+      ...(entry.texture === undefined ? {} : { texture: entry.texture }),
+      ...(entry.storageTexture === undefined ? {} : { storageTexture: entry.storageTexture }),
+    }),
+  );
   // Patch binding 0 (the material UBO) to the dynamic-offset, vertex-visible
   // material-UBO contract. derive() emits binding 0 as the first numeric run's
   // merged UBO; an empty schema has no binding-0 UBO and needs no patch.
@@ -174,7 +167,7 @@ export function buildPbrMaterialUserRegionEntries(
 //                (sampler_comparison + texture_depth_2d, 2 entries).
 //                The active shadow bindings live in the view BGL today
 //                (group(0) bindings 3..7); this kind is the seam for
-//                any per-material shadow override surface a future feat
+//                each per-material shadow override surface a future feat
 //                wires onto group(1).
 //   - 'ibl'      the 7 IBL / Skylight entries (irradiance / prefilter
 //                cube + brdfLut 2d + 3 samplers + intensity uniform).
@@ -185,7 +178,7 @@ export function buildPbrMaterialUserRegionEntries(
 //                keep that meaning under the generic 'lightmap' label
 //                (per-surface secondary-lighting injection) so future
 //                lightmap support lands without renaming the kind.
-export type InjectionKind = 'shadow' | 'ibl' | 'lightmap';
+export type InjectionKind = keyof typeof INJECTION_KIND_LENGTHS;
 
 const IBL_INJECTION_LENGTH = 7;
 const LIGHTMAP_INJECTION_LENGTH = 4;
@@ -195,7 +188,7 @@ const SHADOW_INJECTION_LENGTH = 2;
  * Append the engine-injection BGL entries for the given `kind` after the
  * user-region BGL entries, with binding numbers starting at `bgl.length`.
  *
- * The function reads `bgl.length` (NOT a hardcoded constant) so any
+ * The function reads `bgl.length` (NOT a hardcoded constant) so each
  * user-region size — derived from `derive(schema).userRegionBindingEnd` or
  * computed manually — flows through to the injection start binding without
  * a coupled edit.
@@ -299,8 +292,8 @@ export function appendInjection(
   }
 }
 
-// Closed-set length sentinels — exported for test inspection.
-export const INJECTION_KIND_LENGTHS: Readonly<Record<InjectionKind, number>> = {
+// Closed-set length sentinels — the map is the membership owner.
+export const INJECTION_KIND_LENGTHS = {
   shadow: SHADOW_INJECTION_LENGTH,
   ibl: IBL_INJECTION_LENGTH,
   lightmap: LIGHTMAP_INJECTION_LENGTH,
@@ -354,6 +347,8 @@ export interface PbrCaps {
  * (always-on bindings 5/6 paired with the unconditional `POINT_SHADOW_AVAILABLE`
  * define registered in vite-plugin-shader) +
  * feat-20260613-csm-cascaded-shadow-maps M5 / w28 (binding 7 cascade UBO).
+ *   binding 10 (Points/Lines viewport UBO; always bound for the shared view
+ *   layout and consumed only by the dedicated points-lines shader).
  * Isolated here so M4 round-4 tests can recreate the layout.
  *
  * feat-20260526-pbr-uniform-fallback-no-storage-buffer M3 / w9:
@@ -455,6 +450,11 @@ export function buildPbrViewBglEntries(caps: PbrCaps): GPUBindGroupLayoutEntry[]
       visibility: GPU_SHADER_STAGE_FRAGMENT,
       texture: { sampleType: 'depth', viewDimension: '2d' },
     },
+    {
+      binding: 10,
+      visibility: GPU_SHADER_STAGE_VERTEX,
+      buffer: { type: 'uniform', hasDynamicOffset: true },
+    },
   ];
 }
 
@@ -468,7 +468,7 @@ export function buildPbrViewBglEntries(caps: PbrCaps): GPUBindGroupLayoutEntry[]
  * `caps.storageBuffer===false` switches every storage-buffer BGL entry
  * (view bindings 1+2, mesh-array, instances) to `uniform`.
  *
- * Throws on any `createBindGroupLayout` / `createPipelineLayout` Result
+ * Throws on each `createBindGroupLayout` / `createPipelineLayout` Result
  * failure -- the engine bootstrap path (createRenderer) wraps the call in
  * `runShimSyncStep` to fold the throw into the structured error pipe.
  */
@@ -578,7 +578,7 @@ export function isStandardPbrMaterialShader(shaderId: string | undefined): boole
  * shared with the standard-PBR layout (passed in via `pbr` bundle); the only
  * new BGL is the 2-entry mesh-array slot for `meshes` + `palette`.
  *
- * Throws on any `createBindGroupLayout` / `createPipelineLayout` Result
+ * Throws on each `createBindGroupLayout` / `createPipelineLayout` Result
  * failure -- the engine bootstrap path wraps the call in `runShimSyncStep`
  * to fold the throw into the structured error pipe.
  */
@@ -732,17 +732,406 @@ export type { BindGroup };
  */
 export const SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET = '';
 
+// BglKind dispatch (M3 / D-13) — closed union of BGL shapes the runtime ships
+// ══════════════════════════════════════════════════════════════════════════════
+
 /**
- * Pick the sprite-pass variant set for the current sprite entry. Returns
- * `''` (canonical all-true variant key, per bug-20260708 M2 (c)) when
- * `hasSpriteInstances` is true (the extract stage has populated
- * `RenderableSnapshot.spriteInstances`), otherwise `undefined` so the
- * existing sprite path stays byte-identical for non-SpriteInstances callers
- * (plan-strategy D-4 reverse-falsifier).
+ * Closed union of bind-group-layout shapes the runtime constructs.
  *
- * @param hasSpriteInstances — true when the renderable carries a
- *   `SpriteInstancesSnapshot` (extracted by render-system-extract M3 w10).
+ * Each kind names one physically distinct BGL the runtime has historically
+ * built by hand. {@link buildBindGroupLayoutDescriptor} dispatches on this
+ * union so every `device.createBindGroupLayout(...)` call site shares one
+ * SSOT for entries / labels (plan-strategy §3.2; D-13 round-2 decision).
+ *
+ * Three groups by derivation source:
+ * 1. Shader-derived (paramSchema reflection + injection chain):
+ *    - `'pbr-material-merged'` — derived user region + Skylight 7 + lightmap 4
+ *    - `'unlit-material'` — 7 entries: base PBR material only (no inject)
+ *    - `'hdrp-7-slot'` — 7 entries (binding 0 + 3..8): HDRP cluster + SSAO group(2) BGL
+ * 2. Caps-driven literal shapes (no shader):
+ *    - `'pbr-view'` — 10 entries: view UBO + lights + 6 shadow bindings
+ *      (directional 3/4, point 5/6, cascade 7, spot atlas 8, spot
+ *      lightViewProj matrices 9 — feat-20260625)
+ *    - `'pbr-mesh-array'` — 1 entry: per-entity mesh SSBO (dynamic-offset)
+ *    - `'pbr-instances'` — 1 entry: per-instance SSBO (no dynamic-offset)
+ *    - `'pbr-skin-mesh-array'` — 2 entries: meshes + skin palette
+ * 3. Attachment-driven (fullscreen post-process):
+ *    - `'fullscreen-post'` — 2 entries: input texture + sampler. The texture
+ *      `sampleType` is derived from `spec.attachments` (plan §R3 fix):
+ *      `'depth32float'` → `'depth'`; `'r32float'` → `'unfilterable-float'`;
+ *      else → `'float'`.
+ *    - `'fullscreen-post-with-params'` — 3 entries: the same texture@0 +
+ *      sampler@1 as `'fullscreen-post'`, plus a `buffer@2` uniform for the
+ *      per-frame params UBO (feat-20260621 D-2: `entry.params !== undefined`
+ *      passes route here; the layout stays group(1), q3=B). `'fullscreen-post'`
+ *      stays byte-identical so param-less consumers degrade with no change.
+ *    - `'fullscreen-post-with-scene-depth-msaa'` — the depth-read layout with
+ *      `texture.multisampled=true`, selected for a 4-sample scene depth target.
  */
-export function selectSpritePassVariantSet(hasSpriteInstances: boolean): string | undefined {
-  return hasSpriteInstances ? SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET : undefined;
+export type BglKind =
+  | 'pbr-view'
+  | 'pbr-material-merged'
+  | 'pbr-mesh-array'
+  | 'pbr-instances'
+  | 'pbr-skin-mesh-array'
+  | 'unlit-material'
+  | 'hdrp-7-slot'
+  | 'fullscreen-post'
+  | 'fullscreen-post-with-params'
+  | 'fullscreen-post-with-scene-depth'
+  | 'fullscreen-post-with-scene-depth-msaa';
+
+/**
+ * Output shape of {@link buildBindGroupLayoutDescriptor}: matches the RHI
+ * `BindGroupLayoutDescriptor` (label + entries with `ExplicitUndefined`) so
+ * the result can be passed directly to `device.createBindGroupLayout(...)`.
+ *
+ * `entries` is a mutable `Array` to match `GPUBindGroupLayoutDescriptor`
+ * (WebGPU types declare it mutable). Callers MUST treat the array as
+ * read-only — the dispatcher freezes neither the array nor its entries
+ * for hot-path performance.
+ */
+export interface BindGroupLayoutDescriptorOutput {
+  readonly label: string | undefined;
+  readonly entries: GPUBindGroupLayoutEntry[];
 }
+
+/** Build the canonical HDRP group(2) bind-group layout. */
+export function createHdrpBindGroupLayoutDescriptor(
+  storageBuffer: boolean = true,
+): BindGroupLayoutDescriptor {
+  const meshBufType: GPUBufferBindingType = storageBuffer ? 'read-only-storage' : 'uniform';
+  const clusterBufType: GPUBufferBindingType = storageBuffer ? 'read-only-storage' : 'uniform';
+  return {
+    label: 'hdrp-unified-bgl-group2',
+    entries: [
+      {
+        binding: 0,
+        visibility: GPU_SHADER_STAGE_VERTEX,
+        buffer: { type: meshBufType, hasDynamicOffset: true },
+      },
+      // Bindings 1 and 2 stay absent for the URP physical isolation gap.
+      {
+        binding: 3,
+        visibility: GPU_SHADER_STAGE_FRAGMENT,
+        buffer: { type: clusterBufType, hasDynamicOffset: false },
+      },
+      {
+        binding: 4,
+        visibility: GPU_SHADER_STAGE_FRAGMENT,
+        buffer: { type: clusterBufType, hasDynamicOffset: false },
+      },
+      {
+        binding: 5,
+        visibility: GPU_SHADER_STAGE_FRAGMENT,
+        buffer: { type: clusterBufType, hasDynamicOffset: false },
+      },
+      {
+        binding: 6,
+        visibility: GPU_SHADER_STAGE_FRAGMENT,
+        buffer: { type: 'uniform', hasDynamicOffset: false },
+      },
+      {
+        binding: 7,
+        visibility: GPU_SHADER_STAGE_FRAGMENT,
+        texture: { sampleType: 'float', viewDimension: '2d', multisampled: false },
+      },
+      {
+        binding: 8,
+        visibility: GPU_SHADER_STAGE_FRAGMENT,
+        sampler: { type: 'filtering' },
+      },
+    ],
+  };
+}
+
+/**
+ * Build a `GPUBindGroupLayoutDescriptor` from a PipelineSpec, dispatching on
+ * `options.kind` to one of 9 closed BGL shapes (D-13 round-2).
+ *
+ * Shader-derived kinds (`'pbr-material-merged'` / `'unlit-material'` /
+ * `'hdrp-7-slot'`) require `options.registry` to look up the shader entry
+ * and reflect its `paramSchema` via {@link deriveBglShapeFromShader}; they
+ * compose the per-entry injection chain (Skylight + lightmap for material;
+ * HDRP variantSet for cluster-forward).
+ *
+ * Caps-driven kinds (`'pbr-view'` / `'pbr-mesh-array'` / `'pbr-instances'` /
+ * `'pbr-skin-mesh-array'`) require `options.caps` for the storage-buffer
+ * vs uniform-buffer fallback (RhiCaps.storageBuffer; PBR feat-20260526 M3 /
+ * w9). They are wholly determined by the caps shape.
+ *
+ * Attachment-driven kind (`'fullscreen-post'`) reads
+ * `spec.attachments.depthFormat` and `spec.attachments.colorFormats[0]` to
+ * pick the texture binding's `sampleType` (R3 fix: `'depth32float'` → `'depth'`,
+ * `'r32float'` → `'unfilterable-float'`, else → `'float'`).
+ *
+ * @param spec - the pipeline spec (axis source for reflection / caps fallback)
+ * @param options.kind - which BGL shape to build (closed {@link BglKind} union)
+ * @param options.registry - ShaderCatalog for shader-derived kinds
+ * @param options.caps - caps shape for caps-driven kinds (storageBuffer)
+ * @returns a WebGPU bind-group-layout descriptor (entries + label)
+ * @see plan-strategy §3.2 · plan-decisions D-13 · requirements AC-02
+ */
+/**
+ * Resolve the material paramSchema for a per-shader user-region BGL derivation.
+ *
+ * Priority (D-1): explicit `options.materialParamSchema` > registry lookup of
+ * `spec.shader.id` > `undefined` (the user-region builder then falls back to
+ * the built-in standard-PBR 4-texture schema, whose user region is 9 entries).
+ */
+function resolveMaterialParamSchema(
+  spec: PipelineSpec,
+  options: { registry?: ShaderCatalog; materialParamSchema?: readonly ParamSchemaEntry[] },
+): readonly ParamSchemaEntry[] | undefined {
+  if (options.materialParamSchema !== undefined) return options.materialParamSchema;
+  if (options.registry !== undefined) {
+    const lookup = options.registry.findMaterialArtifact(spec.shader.id);
+    if (lookup.ok) return lookup.value.paramSchema;
+  }
+  return undefined;
+}
+
+export function buildBindGroupLayoutDescriptor(
+  spec: PipelineSpec,
+  options: {
+    kind: BglKind;
+    registry?: ShaderCatalog;
+    caps?: PbrCaps;
+    /**
+     * Material paramSchema for the per-shader user-region derivation
+     * (`'pbr-material-merged'` / `'unlit-material'`). When supplied it is the
+     * authoritative source for the user-region BGL shape (D-1); when omitted,
+     * `buildPbrMaterialUserRegionEntries` falls back to the built-in
+     * standard-PBR 4-texture schema (user region is 9 entries), so
+     * the caps-driven `buildPbrPipelineLayouts` seam keeps working unchanged.
+     * A registry + resolvable shader id takes precedence over this field.
+     */
+    materialParamSchema?: readonly ParamSchemaEntry[];
+  },
+): BindGroupLayoutDescriptorOutput {
+  switch (options.kind) {
+    case 'pbr-view': {
+      const caps = options.caps ?? { storageBuffer: true };
+      return {
+        label: 'pbr-view-bgl',
+        entries: buildPbrViewBglEntries(caps),
+      };
+    }
+    case 'pbr-mesh-array': {
+      const caps = options.caps ?? { storageBuffer: true };
+      const meshBufType: GPUBufferBindingType = caps.storageBuffer
+        ? 'read-only-storage'
+        : 'uniform';
+      // sprite-lit's fragment stage does not read the mesh SSBO -- worldPos
+      // is carried through the VsOut interpolant. Visibility is kept widened
+      // to VERTEX|FRAGMENT because the BGL JSON is compared byte-identically
+      // across the sprite / sprite-lit / PBR pipelines that share this
+      // descriptor; narrowing here would change every sibling pipeline's
+      // BGL fingerprint. WebGPU rejects createRenderPipeline when a fragment
+      // stage accesses a binding whose BGL visibility excludes FRAGMENT --
+      // widening is permissive (validation-only, no perf cost).
+      return {
+        label: 'pbr-mesh-array-bgl',
+        entries: [
+          {
+            binding: 0,
+            visibility: GPU_SHADER_STAGE_VERTEX | GPU_SHADER_STAGE_FRAGMENT,
+            buffer: { type: meshBufType, hasDynamicOffset: true },
+          },
+        ],
+      };
+    }
+    case 'pbr-instances': {
+      const caps = options.caps ?? { storageBuffer: true };
+      const meshBufType: GPUBufferBindingType = caps.storageBuffer
+        ? 'read-only-storage'
+        : 'uniform';
+      return {
+        label: 'pbr-instances-bgl',
+        entries: [
+          {
+            binding: 0,
+            visibility: GPU_SHADER_STAGE_VERTEX,
+            buffer: { type: meshBufType, hasDynamicOffset: false },
+          },
+        ],
+      };
+    }
+    case 'pbr-skin-mesh-array': {
+      const caps = options.caps ?? { storageBuffer: true };
+      const meshBufType: GPUBufferBindingType = caps.storageBuffer
+        ? 'read-only-storage'
+        : 'uniform';
+      return {
+        label: 'pbr-skin-mesh-array-bgl',
+        entries: [
+          {
+            binding: 0,
+            visibility: GPU_SHADER_STAGE_VERTEX,
+            buffer: { type: meshBufType, hasDynamicOffset: true },
+          },
+          {
+            binding: 1,
+            visibility: GPU_SHADER_STAGE_VERTEX,
+            buffer: { type: meshBufType, hasDynamicOffset: true },
+          },
+        ],
+      };
+    }
+    case 'pbr-material-merged': {
+      // Material BGL: per-shader user-region (derive(paramSchema).bglEntries)
+      // + IBL injection (7) + lightmap injection (4). The user-region size is
+      // the only variable; injection start = userRegion.length so a 4-texture
+      // custom schema shifts IBL/lightmap by one sampler/texture pair (D-1).
+      // For the built-in 4-texture standard-PBR schema this is 9 + 7 + 4 = 20.
+      //
+      // Schema source priority (D-1): explicit materialParamSchema option >
+      // registry lookup of spec.shader.id > built-in standard-PBR fallback.
+      const resolvedSchema = resolveMaterialParamSchema(spec, options);
+      const userRegion = buildPbrMaterialUserRegionEntries(resolvedSchema);
+      const afterIbl = [...userRegion, ...appendInjection(userRegion, 'ibl')];
+      const merged = [...afterIbl, ...appendInjection(afterIbl, 'lightmap')];
+      return {
+        label: 'pbr-material-skylight-bgl',
+        entries: merged,
+      };
+    }
+    case 'unlit-material': {
+      // Unlit material BGL: per-shader user-region only. No IBL/lightmap
+      // injection (D-5 round-4: unlit demos do not pay for IBL state).
+      const resolvedSchema = resolveMaterialParamSchema(spec, options);
+      return {
+        label: 'unlit-material-bgl',
+        entries: buildPbrMaterialUserRegionEntries(resolvedSchema),
+      };
+    }
+    case 'hdrp-7-slot': {
+      // HDRP unified BGL for group(2): 9 entries (binding 0 + 3..8). The
+      // shape depends on caps.storageBuffer for the cluster-buffer fallback.
+      const caps = options.caps ?? { storageBuffer: true };
+      const desc = createHdrpBindGroupLayoutDescriptor(caps.storageBuffer);
+      return {
+        label: desc.label ?? 'hdrp-unified-bgl-group2',
+        entries: [...(desc.entries ?? [])],
+      };
+    }
+    case 'fullscreen-post': {
+      // Fullscreen post-process BGL: 2 entries (input texture + sampler).
+      // R3 fix: derive sampleType from spec.attachments. Depth attachments
+      // (depth32float) need `sampleType: 'depth'`; r32float needs
+      // `'unfilterable-float'`; everything else (rgba8unorm-srgb, rgba16float,
+      // bgra8unorm, …) is filterable `'float'`.
+      return {
+        label: 'fullscreen-post-bgl',
+        entries: buildFullscreenPostInputEntries(spec),
+      };
+    }
+    case 'fullscreen-post-with-params': {
+      // feat-20260621 D-2: the same input texture@0 + sampler@1 as
+      // 'fullscreen-post', plus binding 2 = per-frame params UBO (uniform).
+      // The first two entries reuse buildFullscreenPostInputEntries so the
+      // sampleType derivation stays a single SSOT; 'fullscreen-post' is
+      // untouched (param-less zero-regression, R-A7).
+      return {
+        label: 'fullscreen-post-with-params-bgl',
+        entries: [
+          ...buildFullscreenPostInputEntries(spec),
+          {
+            binding: 2,
+            visibility: GPU_SHADER_STAGE_FRAGMENT,
+            buffer: { type: 'uniform' },
+          },
+        ],
+      };
+    }
+    case 'fullscreen-post-with-scene-depth': {
+      // plan-strategy D-3: 5-entry BGL for post-process passes that read the
+      // camera scene depth. color@0 + sampler@1 reuse buildFullscreenPostInputEntries
+      // (float+filtering for color). depthTex@3 uses `sampleType: 'depth'` and
+      // `dimension: '2d'`; depthSampler@4 uses `type: 'non-filtering'` (nearest
+      // + clamp-to-edge, D-2 — NOT comparison). params@2 is always present
+      // (uniform) to avoid a 2x2 kind explosion per D-3.
+      return {
+        label: 'fullscreen-post-with-scene-depth-bgl',
+        entries: [
+          ...buildFullscreenPostInputEntries(spec),
+          {
+            binding: 2,
+            visibility: GPU_SHADER_STAGE_FRAGMENT,
+            buffer: { type: 'uniform' },
+          },
+          {
+            binding: 3,
+            visibility: GPU_SHADER_STAGE_FRAGMENT,
+            texture: { sampleType: 'depth', viewDimension: '2d' },
+          },
+          {
+            binding: 4,
+            visibility: GPU_SHADER_STAGE_FRAGMENT,
+            sampler: { type: 'non-filtering' },
+          },
+        ],
+      };
+    }
+    case 'fullscreen-post-with-scene-depth-msaa': {
+      return {
+        label: 'fullscreen-post-with-scene-depth-msaa-bgl',
+        entries: [
+          ...buildFullscreenPostInputEntries(spec),
+          {
+            binding: 2,
+            visibility: GPU_SHADER_STAGE_FRAGMENT,
+            buffer: { type: 'uniform' },
+          },
+          {
+            binding: 3,
+            visibility: GPU_SHADER_STAGE_FRAGMENT,
+            texture: { sampleType: 'depth', viewDimension: '2d', multisampled: true },
+          },
+          {
+            binding: 4,
+            visibility: GPU_SHADER_STAGE_FRAGMENT,
+            sampler: { type: 'non-filtering' },
+          },
+        ],
+      };
+    }
+  }
+}
+
+/**
+ * The shared texture@0 + sampler@1 entries for fullscreen post-process BGLs.
+ * sampleType is derived from `spec.attachments` (R3 fix): depth attachments →
+ * `'depth'` + `'comparison'` sampler; `'r32float'` → `'unfilterable-float'`;
+ * else → `'float'` + `'filtering'`. Both `'fullscreen-post'` and
+ * `'fullscreen-post-with-params'` reuse this so the derivation is one SSOT.
+ */
+function buildFullscreenPostInputEntries(spec: PipelineSpec): GPUBindGroupLayoutEntry[] {
+  const inputFormat: GPUTextureFormat | undefined =
+    spec.attachments.depthFormat ?? spec.attachments.colorFormats[0];
+  const sampleType: GPUTextureSampleType =
+    inputFormat === 'depth32float' ||
+    inputFormat === 'depth24plus' ||
+    inputFormat === 'depth24plus-stencil8' ||
+    inputFormat === 'depth16unorm'
+      ? 'depth'
+      : inputFormat === 'r32float'
+        ? 'unfilterable-float'
+        : 'float';
+  return [
+    {
+      binding: 0,
+      visibility: GPU_SHADER_STAGE_FRAGMENT,
+      texture: { sampleType, viewDimension: '2d' },
+    },
+    {
+      binding: 1,
+      visibility: GPU_SHADER_STAGE_FRAGMENT,
+      sampler: {
+        type: sampleType === 'depth' ? 'comparison' : 'filtering',
+      },
+    },
+  ];
+}
+
+// ══════════════════════════════════════════════════════════════════════════════

@@ -105,19 +105,26 @@ describe('createApp(canvas) thin wrapper -- (A) path success path (AC-09)', () =
     connectedCanvas.remove();
   });
 
-  it('connected canvas + WebGPU available -> Result.ok(App); app.renderer.draw + app.world.update reachable without `as` casts', async () => {
-    const result = await createApp(connectedCanvas);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    const app = result.value;
-    // Type-level discoverability: app.renderer.draw + app.world.update
-    // are invokable directly off the App handle (AC-09).
-    expect(typeof app.renderer.draw).toBe('function');
-    expect(typeof app.world.update).toBe('function');
-    // No throw on the call site -- prove the surface is reachable
-    // without unsafe casts.
-    app.stop();
-  });
+  // A real Chrome/lavapipe device can spend >15s on its first createRenderer
+  // call after another browser group closes. Keep this owner bounded without
+  // raising the timeout for the rest of the app browser suite.
+  it(
+    'connected canvas + WebGPU available -> Result.ok(App); app.renderer.draw + app.world.update reachable without `as` casts',
+    async () => {
+      const result = await createApp(connectedCanvas);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const app = result.value;
+      // Type-level discoverability: app.renderer.draw + app.world.update
+      // are invokable directly off the App handle (AC-09).
+      expect(typeof app.renderer.draw).toBe('function');
+      expect(typeof app.world.update).toBe('function');
+      // No throw on the call site -- prove the surface is reachable
+      // without unsafe casts.
+      app.stop();
+    },
+    30_000,
+  );
 
   it('error union double-layer narrow contract: callers can switch on AppError|RhiError code OR instanceof EngineEnvironmentError', async () => {
     // This test pins the consumer pattern from plan-strategy D-6: hosts

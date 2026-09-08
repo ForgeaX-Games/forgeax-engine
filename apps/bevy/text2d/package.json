@@ -11,7 +11,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "smoke": "node scripts/smoke-dawn.mjs",
-    "smoke:browser": "node scripts/smoke-browser.mjs"
+    "smoke:browser": "node scripts/smoke-browser.mjs",
+    "smoke:m34": "node scripts/smoke-dawn.mjs --m34-recovery",
+    "smoke:m34:browser": "node scripts/smoke-browser.mjs --m34-recovery"
   },
   "forgeax": {
     "bevyExample": {
@@ -55,6 +57,7 @@
     "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/apps-shared": "workspace:*",
     "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",

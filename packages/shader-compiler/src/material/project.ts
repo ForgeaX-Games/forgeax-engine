@@ -1,29 +1,22 @@
-import type {
-  MaterialAsset,
-  MaterialError,
-  MaterialTextureValue,
-  MaterialValue,
-} from '@forgeax/engine-types';
+import type { MaterialAsset, MaterialError, MaterialValue } from '@forgeax/engine-types';
 import { createMaterialError, err, ok, type Result } from '@forgeax/engine-types';
+import type { MaterialVariantContext } from './variant-context.js';
 
 export interface MaterialProjectionContext {
   readonly material: string;
   readonly mode: 'development' | 'production';
   readonly cooked?: boolean;
-  readonly defines?: Readonly<Record<string, boolean | number | undefined>>;
   readonly sourceClosure?: Readonly<Record<string, string>>;
   readonly vertexInputs?: readonly Readonly<Record<string, unknown>>[];
+  readonly variantContext?: MaterialVariantContext;
 }
 
 export interface MaterialStaticSelection {
-  readonly values: Readonly<Record<string, MaterialValue>>;
-  readonly texturePresence: Readonly<Record<string, boolean>>;
-  readonly textureInputs: Readonly<Record<string, MaterialTextureValue>>;
-  readonly defines: Readonly<Record<string, boolean | number | undefined>>;
   readonly moduleSlots: Readonly<Record<string, string>>;
   readonly pipelineState: Readonly<Record<string, unknown>>;
   readonly sourceClosure: Readonly<Record<string, string>>;
   readonly vertexInputs: readonly Readonly<Record<string, unknown>>[];
+  readonly variantContext?: MaterialVariantContext;
 }
 
 export interface MaterialProjection {
@@ -33,9 +26,6 @@ export interface MaterialProjection {
 
 function staticNames(selection: MaterialStaticSelection): readonly string[] {
   return [
-    ...Object.keys(selection.values),
-    ...Object.keys(selection.texturePresence),
-    ...Object.keys(selection.defines).map((name) => `define:${name}`),
     ...Object.keys(selection.moduleSlots).map((name) => `module-slot:${name}`),
     'pipeline-state',
     'source-closure',
@@ -48,22 +38,10 @@ export function projectMaterial(
   context: MaterialProjectionContext,
 ): Result<MaterialProjection, MaterialError> {
   const values = material.values ?? {};
-  const declarations = new Map(
-    (material.parameters ?? []).map((parameter) => [parameter.name, parameter]),
-  );
   const runtimeValues: Record<string, MaterialValue> = {};
-  const staticValues: Record<string, MaterialValue> = {};
-  const texturePresence: Record<string, boolean> = {};
-  const textureInputs: Record<string, MaterialTextureValue> = {};
   for (const [name, value] of Object.entries(values)) {
     if (value === null) continue;
-    const parameter = declarations.get(name);
-    if (parameter?.static === true) staticValues[name] = value;
-    else runtimeValues[name] = value;
-    if (parameter?.type === 'texture' && typeof value === 'object' && !Array.isArray(value)) {
-      texturePresence[name] = true;
-      if (parameter.static === true) textureInputs[name] = value as MaterialTextureValue;
-    }
+    runtimeValues[name] = value;
   }
   const moduleSlots: Record<string, string> = {};
   const pipelineState: Record<string, unknown> = {};
@@ -73,14 +51,11 @@ export function projectMaterial(
     Object.assign(pipelineState, pass.renderState ?? {});
   }
   const staticSelection: MaterialStaticSelection = {
-    values: staticValues,
-    texturePresence,
-    textureInputs,
-    defines: context.defines ?? {},
     moduleSlots,
     pipelineState,
     sourceClosure: context.sourceClosure ?? {},
     vertexInputs: context.vertexInputs ?? [],
+    ...(context.variantContext === undefined ? {} : { variantContext: context.variantContext }),
   };
   if (context.mode === 'production' && context.cooked !== true) {
     return err(

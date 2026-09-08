@@ -3,9 +3,22 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 type CookedRecord = {
-  readonly key: string;
-  readonly bytes: string;
-  readonly values: unknown;
+  readonly specializationKey: string;
+  readonly artifactDigest: string;
+  readonly artifact: { readonly digest: string; readonly bytes: readonly number[] };
+  readonly resolved?: {
+    readonly values?: unknown;
+  };
+  readonly receipt?: {
+    readonly identity?: {
+      readonly layoutIdentity?: string;
+      readonly programIdentity?: string;
+      readonly pipelineIdentity?: string;
+      readonly cookIdentity?: string;
+      readonly compilerFingerprint?: string;
+    };
+    readonly schemaVersion?: string;
+  };
 };
 
 type MaterialRow = {
@@ -34,9 +47,29 @@ describe('custom-shader cooked MaterialAsset fixture', () => {
     const derived = fixture.assets.find((asset) => asset.payload.role === 'derived');
     expect(root?.payload.cooked).toBeDefined();
     expect(derived?.payload.cooked).toBeDefined();
-    expect(derived?.payload.cooked?.key).toBe(root?.payload.cooked?.key);
-    expect(derived?.payload.cooked?.bytes).toBe(root?.payload.cooked?.bytes);
-    expect(derived?.payload.cooked?.values).toEqual(root?.payload.cooked?.values);
+    expect(derived?.payload.cooked?.specializationKey).toBe(
+      root?.payload.cooked?.specializationKey,
+    );
+    expect(derived?.payload.cooked?.artifactDigest).toBe(root?.payload.cooked?.artifactDigest);
+    expect(derived?.payload.cooked?.artifact.bytes).toEqual(root?.payload.cooked?.artifact.bytes);
+    expect(derived?.payload.cooked?.resolved?.values).toEqual(
+      root?.payload.cooked?.resolved?.values,
+    );
+  });
+
+  it('keeps cooked layout identity and authored coordinate transforms', () => {
+    const root = fixture.assets.find((asset) => asset.payload.role === 'root');
+    const cooked = root?.payload.cooked;
+    expect(cooked?.receipt?.schemaVersion).toBe('material-cook/3');
+    expect(cooked?.receipt?.identity?.layoutIdentity).toMatch(/^sha256-/);
+    expect(cooked?.receipt?.identity?.programIdentity).toMatch(/^sha256:/);
+    expect(cooked?.receipt?.identity?.pipelineIdentity).toMatch(/^sha256:/);
+    expect(cooked?.receipt?.identity?.cookIdentity).toMatch(/^sha256:/);
+    expect(cooked?.receipt?.identity?.compilerFingerprint).toMatch(/^sha256-/);
+    expect(cooked?.resolved?.values).toMatchObject({
+      baseColorUvTransform: [0, 0, 1, 1],
+      normalUvTransform: [0.125, 0.25, 2, 2],
+    });
   });
 
   it('runs the real Dawn path for exactly 300 frames without unexpected RHI errors', () => {

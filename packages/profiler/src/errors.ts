@@ -1,4 +1,4 @@
-import type { ProfileResult } from './types.js';
+import type { ProfileResult, ProfileSource } from './types.js';
 
 /** Structured profiler failure with a code-specific detail payload. */
 export type ProfilerError =
@@ -25,7 +25,7 @@ export type ProfilerError =
       readonly expected: string;
       readonly hint: string;
       readonly detail: {
-        readonly source: 'app' | 'render';
+        readonly source: ProfileSource;
         readonly expected: readonly string[];
         readonly actual: readonly string[];
       };

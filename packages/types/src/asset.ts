@@ -4,8 +4,27 @@ export type ContentEncoding = 'identity' | 'zstd';
 
 export interface AssetCodec {
   readonly name: string;
+  /** Container identity is orthogonal to runtime texture color semantics. */
+  readonly container?: 'ktx2' | 'basis';
   readonly profile?: string;
   readonly version?: string;
+}
+
+/** Runtime projection of a codec failure without losing recovery context. */
+export interface AssetCodecFailureDetail {
+  readonly sourcePath: string;
+  readonly codecCode: string;
+  readonly codecExpected: string;
+  readonly codecHint: string;
+  readonly codecDetail: Readonly<Record<string, unknown>>;
+  readonly container: NonNullable<AssetCodec['container']>;
+  readonly profile?: string;
+  readonly targetFormat?: string;
+  readonly capabilities: Readonly<{
+    readonly bc: boolean;
+    readonly etc2: boolean;
+    readonly astc: boolean;
+  }>;
 }
 
 export interface Integrity {
@@ -22,6 +41,21 @@ export interface ArtifactDescriptor {
   readonly integrity?: Integrity;
 }
 
+/** The publication identity shared by one Catalog row and one Pack envelope. */
+export interface AssetPublicationTuple {
+  readonly scopeId: string;
+  readonly generation: number;
+  readonly digest: string;
+  readonly outputSetDigest: string;
+}
+
+/** Runtime validation requires every artifact integrity fact before decode. */
+export interface AssetRuntimeArtifactDescriptor extends ArtifactDescriptor {
+  readonly contentEncoding: ContentEncoding;
+  readonly byteLength: number;
+  readonly integrity: Integrity;
+}
+
 /** Shared completed output produced by every build-time asset producer. */
 export interface CookProduct<P = unknown> {
   readonly guid: string;
@@ -32,16 +66,18 @@ export interface CookProduct<P = unknown> {
   readonly receipt: import('./asset-evidence.js').CookReceipt;
 }
 
+/** The canonical verified asset envelope consumed by runtime decoders. */
 export interface AssetEnvelopeV2<P = unknown> {
   readonly guid: string;
   readonly kind: string;
   readonly name?: string;
   readonly payload: P;
   readonly refs: readonly string[];
-  readonly artifacts: Readonly<Record<string, ArtifactDescriptor>>;
+  readonly artifacts: Readonly<Record<string, AssetRuntimeArtifactDescriptor>>;
 }
 
-export interface PackV2<P = unknown> {
+/** The canonical Pack v2 envelope; its publication tuple is atomic. */
+export interface PackV2<P = unknown> extends AssetPublicationTuple {
   readonly schemaVersion: '2.0.0';
   readonly kind: 'internal-text-package';
   readonly assets: readonly AssetEnvelopeV2<P>[];
@@ -51,6 +87,8 @@ export interface PackV2<P = unknown> {
 export interface AudioClipAsset {
   readonly kind: 'audio';
   readonly sourceKey: string;
+  /** Source artifact media type; Web Audio still selects the codec from bytes. */
+  readonly mediaType: `audio/${string}`;
   readonly bytes: Uint8Array;
 }
 

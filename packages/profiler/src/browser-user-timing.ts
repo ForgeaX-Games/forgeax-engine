@@ -1,6 +1,6 @@
 import type { Profiler } from './profiler.js';
 import type { RecorderSession } from './recorder.js';
-import type { ProfileCapture, ProfileSource } from './types.js';
+import type { ProfileCapture, ProfilePhaseStart, ProfileSource } from './types.js';
 
 /** The small browser API surface used by the opt-in User Timing adapter. */
 type UserTiming = { readonly mark: (name: string) => void };
@@ -106,8 +106,12 @@ export function createUserTimingProfiler(
       openPhases.length = 0;
       return { ok: true as const, value: undefined };
     },
-    beginPhase(input: { readonly source: ProfileSource; readonly phase: string }) {
+    beginPhase(inputOrSource: ProfilePhaseStart | ProfileSource, phaseName?: string) {
       if (frameId === undefined) return { ok: true as const, value: undefined };
+      const input =
+        typeof inputOrSource === 'string'
+          ? { source: inputOrSource, phase: phaseName as string }
+          : inputOrSource;
       openPhases.push(input);
       mark(`forgeax.${timingSource(input.source)}.phase.${frameId}.${input.phase}.begin`);
       return { ok: true as const, value: undefined };
@@ -148,8 +152,18 @@ export function createUserTimingProfiler(
 
   return {
     registerPhaseCatalog(source, phases) {
-      phaseCatalog = { ...phaseCatalog, [source]: [...phases] };
-      return { ok: true, value: undefined };
+      const definition = [...phases];
+      phaseCatalog = { ...phaseCatalog, [source]: definition };
+      let registered = true;
+      return {
+        ok: true,
+        value: () => {
+          if (!registered) return;
+          registered = false;
+          if (phaseCatalog[source] !== definition) return;
+          phaseCatalog = { ...phaseCatalog, [source]: [] };
+        },
+      };
     },
     startCapture() {
       active = true;

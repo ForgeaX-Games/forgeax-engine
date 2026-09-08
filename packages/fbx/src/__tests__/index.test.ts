@@ -52,6 +52,7 @@ describe('@forgeax/engine-fbx barrel', () => {
     expect(typeof mod.parseSkin).toBe('function');
     expect(typeof mod.parseAnimationClips).toBe('function');
     expect(typeof mod.parseTextures).toBe('function');
+    expect(typeof mod.resolveFbxTexturePath).toBe('function');
     expect(typeof mod.toAssetPack).toBe('function');
     expect(typeof mod.fbxErr).toBe('function');
   });

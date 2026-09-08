@@ -12,7 +12,7 @@
 
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const WIDTH = 512;
@@ -133,12 +133,10 @@ if (!existsSync(BRICKWALL_SRC_PATH) || !existsSync(BRICKWALL_NORMAL_SRC_PATH)) {
 
 // --- 4. Decode textures + create renderer ---
 
-const { ok: okResult, World } = await import('@forgeax/engine-ecs');
+const { World } = await import('@forgeax/engine-ecs');
+const { ok: okResult } = await import('@forgeax/engine-types');
 const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
-const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  createRenderer,
-} = enginePkg;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Camera, MeshFilter, MeshRenderer, PointLight } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const {
@@ -166,40 +164,44 @@ console.log(
   `[learn-render-4-normal-mapping] decoded brickwall_normal=${brickwallNormalDecoded.width}x${brickwallNormalDecoded.height} ${brickwallNormalDecoded.mime}`,
 );
 
-const { buildEngineShaderManifest } = await import(
-  '@forgeax/engine-vite-plugin-shader'
-);
-const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const DEMO_MANIFEST_PATH = resolve(APP_ROOT, 'dist', 'shaders', 'manifest.json');
+if (!existsSync(DEMO_MANIFEST_PATH)) {
+  console.error(`[smoke] FAIL - dist/shaders/manifest.json missing at ${DEMO_MANIFEST_PATH}`);
+  process.exit(1);
+}
+const demoManifest = JSON.parse(readFileSync(DEMO_MANIFEST_PATH, 'utf8'));
+const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(demoManifest))}`;
 
 let renderer;
+let assets;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(
+    mockCanvas,
+    {},
+    { shaderManifestUrl: MANIFEST_URL },
+  );
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  assets = constructed.value.assets;
 } catch (err) {
   console.error(
-    `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
+    `[smoke] FAIL - constructRuntimeRendererHost failed: ${err instanceof Error ? err.message : String(err)}`,
   );
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[learn-render-4-normal-mapping] backend=${renderer.backend}`);
+console.log(`[learn-render-4-normal-mapping] backend=${renderer.inspect().capabilities.backendKind}`);
 
-const assets = renderer.assets;
 if (!assets) {
   console.error('[smoke] FAIL - AssetRegistry is null');
   process.exit(1);
 }
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => { if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint }); });
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 // Register textures under their GUIDs.
 const brickwallGuidRes = AssetGuid.parse('019e3969-1d45-78a4-9f59-a41c910656f4');
@@ -228,8 +230,9 @@ const normalTexAsset = {
   mipmap: brickwallNormalDecoded.mipmap,
 };
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const lease = worldAttachment1.value;
 
 // Catalogue the textures under their GUIDs, then mint shared-ref column handles.
 assets.catalog(brickwallGuidRes.value, baseColorTexAsset);
@@ -300,8 +303,13 @@ let framesObserved = 0;
 const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-  if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  const r = renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } });
+  if (!r.ok) {
+    console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  } else {
+    const completed = await r.value.completed;
+    if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+  }
   framesObserved++;
 }
 const device = sharedDevice;
@@ -321,8 +329,8 @@ const wallTotalMs = Date.now() - frameStart;
 console.log(`[smoke] wallTotalMs=${wallTotalMs}`);
 
 const failures = [];
-if (renderer.backend !== 'webgpu')
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (renderer.inspect().capabilities.backendKind !== 'webgpu')
+  failures.push(`(a) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES)
   failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (errors.length > 0) {

@@ -101,6 +101,22 @@ describe('reflect-uv-set-count.test.ts', () => {
   interface ReflectionOutput {
     bindings: unknown;
     uvSetCount: number;
+    schemaVersion: 'shader-reflection/2';
+    boundGlobals: readonly {
+      group: number;
+      binding: number;
+      addressSpace: string;
+      resourceKind: string;
+      name?: string;
+      members?: readonly {
+        name: string;
+        type: string;
+        offset: number;
+        size: number;
+        alignment: number;
+      }[];
+      span?: number;
+    }[];
   }
 
   async function reflectWgsl(wgsl: string): Promise<ReflectionOutput> {
@@ -149,6 +165,55 @@ describe('reflect-uv-set-count.test.ts', () => {
     it('skin shader with uv0 only -> uvSetCount=1 (skinIndex/skinWeight not counted as UV)', async () => {
       const r = await reflectWgsl(WGSL_SKIN_UV0_ONLY);
       expect(r.uvSetCount).toBe(1);
+    });
+  });
+
+  describe('generic shader-reflection/2 bound globals', () => {
+    const WGSL_GENERIC_GLOBALS = `\
+struct MaterialBlock {
+  tint: vec4<f32>,
+  roughness: f32
+};
+@group(0) @binding(0) var<uniform> renamedView: vec4<f32>;
+@group(1) @binding(0) var<storage, read> unrelatedStorage: array<u32>;
+@group(2) @binding(0) var<uniform> renamedMaterial: MaterialBlock;
+@group(2) @binding(2) var materialTexture: texture_2d<f32>;
+@group(2) @binding(5) var materialSampler: sampler;
+@vertex fn vs() -> @builtin(position) vec4<f32> {
+  return renamedView + renamedMaterial.tint;
+}
+@fragment fn fs() -> @location(0) vec4<f32> {
+  return textureSample(materialTexture, materialSampler, vec2<f32>(0.0));
+}`;
+
+    it('emits every bound global with generic facts, including binding gaps', async () => {
+      const r = await reflectWgsl(WGSL_GENERIC_GLOBALS);
+      expect(r.schemaVersion).toBe('shader-reflection/2');
+      expect(r.boundGlobals).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ group: 0, binding: 0 }),
+          expect.objectContaining({ group: 1, binding: 0 }),
+          expect.objectContaining({ group: 2, binding: 0, addressSpace: 'uniform' }),
+          expect.objectContaining({ group: 2, binding: 2, resourceKind: 'texture' }),
+          expect.objectContaining({ group: 2, binding: 5, resourceKind: 'sampler' }),
+        ]),
+      );
+      expect(r.boundGlobals).toHaveLength(5);
+      const material = r.boundGlobals.find((global) => global.group === 2 && global.binding === 0);
+      expect(material?.members).toEqual([
+        expect.objectContaining({ name: 'tint', type: 'vec4<f32>' }),
+        expect.objectContaining({ name: 'roughness', type: 'f32' }),
+      ]);
+      expect(material?.span).toBeGreaterThan(0);
+    });
+
+    it('does not identify the material by global name', async () => {
+      const renamed = WGSL_GENERIC_GLOBALS.replaceAll('renamedMaterial', 'surfaceBlock');
+      const original = await reflectWgsl(WGSL_GENERIC_GLOBALS);
+      const changed = await reflectWgsl(renamed);
+      expect(changed.boundGlobals.map(({ name: _name, ...global }) => global)).toEqual(
+        original.boundGlobals.map(({ name: _name, ...global }) => global),
+      );
     });
   });
 });

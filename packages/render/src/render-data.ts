@@ -1,9 +1,9 @@
 // @forgeax/engine-runtime - RenderData projection layer
-// (feat-20260601-gpu-resource-store-extraction M2 / w5).
+// (feat-20260601-device/gpu-residency-extraction M2 / w5).
 //
 // The middle of the three GPU-asset layers: AssetRegistry catalogues CPU asset
 // POD; `deriveRenderData*` PROJECTS a POD into the GPU descriptor a resource
-// build needs; GpuResourceStore owns device-side resource life/death. These
+// build needs; GpuResidencyCache owns device-side resource life/death. These
 // projections are PURE -- they know the asset `kind` but never touch a device
 // (AC-07). The store consumes the descriptor and does the createTexture /
 // createBuffer / writeX work.
@@ -21,11 +21,14 @@ import {
   blockParamsForFormat,
   isCompressedFormat,
 } from '@forgeax/engine-codec';
+import {
+  deriveVertexLayoutProjection,
+  type VertexLayoutProjection,
+} from '@forgeax/engine-geometry';
 import { err, ok, type Result } from '@forgeax/engine-rhi';
 import {
   ASSET_ERROR_HINTS,
   type AssetError,
-  countExtraUvSets,
   type MeshAsset,
   type Submesh,
   type TextureAsset,
@@ -69,32 +72,12 @@ function projectionError(fields: {
 /** Descriptor for a mesh's GPU vertex + index buffers (projected from POD). */
 export interface MeshRenderData {
   readonly vertexByteLength: number;
+  /** Geometry-owned immutable layout facts used by all GPU consumers. */
+  readonly layoutProjection: VertexLayoutProjection;
   /** Index byte length padded up to a 4-byte multiple (writeBuffer alignment). */
   readonly indexByteLength: number;
   readonly indexCount: number;
   readonly indexFormat: 'uint16' | 'uint32';
-  /**
-   * Vertex stride discriminator. `'12F'` = position(3) + normal(3) + uv(2) +
-   * tangent(4) = 12 floats = 48 B. `'18F'` = 12F + skinIndex(4 uint16 packed
-   * into 2 floats) + skinWeight(4 floats) = 18 floats = 72 B (feat-20260611).
-   * Derived from the source `MeshAsset.attributes` -- presence of `skinIndex`
-   * (set only via the parse-gltf -> bridge path for primitives carrying
-   * JOINTS_0/WEIGHTS_0) flips the layout to 18F. Builtin / procedural
-   * geometry never sets skinIndex and stays 12F (OOS-3).
-   */
-  readonly layout: '12F' | '18F';
-  /**
-   * Number of UV sets the interleaved vertex buffer actually carries (set 0 =
-   * `uv` always present; +1 per `uv1..uv7` in `MeshAsset.attributes`).
-   * feat-20260629-multi-uv-set-support: the `layout` discriminator only encodes
-   * the 12F/18F base stride and cannot express the extra 8 B per UV set; a mesh
-   * with a real second UV set has a 56 B stride that the forward record stage
-   * must hand to `getMaterialShaderPipeline` so `deriveVertexBufferLayout`
-   * emits the matching @location(6+) attribute (otherwise the pipeline reads a
-   * 48 B stride against a 56 B buffer and every vertex after the first lands
-   * off-screen -- the hello-multi-uv plane rendered nothing before this field).
-   */
-  readonly uvSetCount: number;
   readonly vertexUsage: number;
   readonly indexUsage: number;
   /**
@@ -259,22 +242,13 @@ export function deriveRenderDataMesh(mesh: MeshAsset): Result<MeshRenderData, As
   const indices = mesh.indices;
   const indexBytesUnpadded = indices === undefined ? 0 : indices.byteLength;
   const indexByteLength = ((indexBytesUnpadded + 3) >> 2) << 2;
-  // feat-20260611: presence of `attributes.skinIndex` is the per-MeshAsset
-  // 18F discriminator. The parse-gltf -> bridge path sets this only for
-  // primitives carrying both JOINTS_0 and WEIGHTS_0 (D-2 -- per-MeshAsset
-  // unified stride; D-6 -- attr pair check fail-fast happens upstream in
-  // parse). Builtin / procedural geometry never sets skinIndex (OOS-3).
-  const layout: '12F' | '18F' = mesh.attributes.skinIndex !== undefined ? '18F' : '12F';
-  // set 0 (`uv`) is always present in the canonical interleaved layout; each
-  // `uv1..uv7` in attributes adds one more set (and 8 B to the stride).
-  const uvSetCount = 1 + countExtraUvSets(mesh.attributes);
+  const layoutProjection = deriveVertexLayoutProjection(mesh.attributes);
   return ok({
     vertexByteLength: mesh.vertices.byteLength,
+    layoutProjection,
     indexByteLength,
     indexCount: indices === undefined ? 0 : indices.length,
     indexFormat: indices instanceof Uint32Array ? 'uint32' : 'uint16',
-    layout,
-    uvSetCount,
     vertexUsage: GPU_BUFFER_USAGE_VERTEX | GPU_BUFFER_USAGE_COPY_DST,
     indexUsage: GPU_BUFFER_USAGE_INDEX | GPU_BUFFER_USAGE_COPY_DST,
     submeshes: mesh.submeshes,
@@ -328,18 +302,35 @@ export function deriveRenderDataTexture(tex: TextureAsset): Result<TextureRender
       ? numMipLevels(tex)
       : 1;
 
-  // Base-mip row pitch: block-padded for compressed, RGBA8 linear otherwise.
+  const uncompressedBytesPerTexel =
+    tex.format === 'rgba32float' ? 16 : tex.format === 'rgba16float' ? 8 : 4;
+  if (!compressed && tex.data.byteLength < tex.width * tex.height * uncompressedBytesPerTexel) {
+    return err(
+      projectionError({
+        code: 'invalid-source-format',
+        expected: 'uncompressed texture data contains at least one complete base mip',
+        hint: ASSET_ERROR_HINTS['invalid-source-format'],
+      }),
+    );
+  }
+
+  // Compressed rows derive from block format. Uncompressed row pitch derives
+  // from the format, not aggregate payload length: imported images may retain
+  // trailing decoder bytes and offline mip chains contain more than the base mip.
   const bytesPerRow = compressed
     ? (blockBytesPerRow(tex.format, tex.width) ?? tex.width * 4)
-    : tex.width * 4;
+    : tex.width * uncompressedBytesPerTexel;
 
   // Compressed formats are not renderable -- RENDER_ATTACHMENT would fail
   // createTexture validation, and the runtime mipmap blit (which needs it) never
   // runs on a compressed texture anyway (the mip gate above rules out runtime
-  // mip-gen). Uncompressed textures keep RENDER_ATTACHMENT for the blit path.
+  // mip-gen). Both paths keep COPY_SRC so a real consumer can validate the
+  // uploaded texture through the standard GPU readback contract.
   const usage = compressed
-    ? GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST
-    : GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST;
+    ? GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST | GPU_TEXTURE_USAGE_COPY_SRC
+    : GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING |
+      GPU_TEXTURE_USAGE_COPY_DST |
+      GPU_TEXTURE_USAGE_COPY_SRC;
 
   return ok({
     width: tex.width,

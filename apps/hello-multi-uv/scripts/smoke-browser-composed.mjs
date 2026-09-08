@@ -5,12 +5,15 @@
 
 import { chromium } from 'playwright';
 import { createHash } from 'node:crypto';
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { inflateSync } from 'node:zlib';
 import { resolve, dirname } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+
+import { buildFrameModel, decodeTape, openReplay } from '@forgeax/engine-rhi-debug';
+import { bootstrapDawn } from '../../shared/scripts/rhi-debug-verify.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(HERE, '..');
@@ -153,6 +156,14 @@ function hasDepthBinding(reportPath) {
   return text.includes('sceneDepth') && text.includes('depthSampler') && text.includes('"binding":3');
 }
 
+function resolveArtifact(path) {
+  if (typeof path !== 'string') throw new Error('capture path is not a string');
+  if (path.startsWith('/')) return path;
+  const inApp = resolve(APP_ROOT, path);
+  if (existsSync(inApp)) return inApp;
+  return resolve(REPO_ROOT, path);
+}
+
 async function waitForVite(proc) {
   let portUrl;
   proc.stdout.on('data', (chunk) => {
@@ -165,6 +176,73 @@ async function waitForVite(proc) {
   while (!portUrl && Date.now() < deadline) await sleep(200);
   if (!portUrl) throw new Error('vite did not become ready in 30s');
   return portUrl;
+}
+
+async function closeResource(resource) {
+  if (!resource) return;
+  await Promise.race([
+    Promise.resolve().then(() => resource.close()).catch(() => {}),
+    sleep(5_000),
+  ]);
+}
+
+async function terminateProcess(proc) {
+  if (!proc || proc.exitCode !== null || proc.signalCode !== null) return;
+  proc.kill('SIGTERM');
+  await Promise.race([
+    new Promise((resolve) => proc.once('exit', resolve)),
+    sleep(1_000),
+  ]);
+  if (proc.exitCode === null && proc.signalCode === null) {
+    proc.kill('SIGKILL');
+    await Promise.race([
+      new Promise((resolve) => proc.once('exit', resolve)),
+      sleep(1_000),
+    ]);
+  }
+}
+
+async function closeBrowserServer(server, client) {
+  if (!server) return;
+  const browserProcess = server.process();
+  try {
+    await Promise.race([
+      Promise.resolve().then(() => server.kill()).catch(() => {}),
+      sleep(1_000),
+    ]);
+  } catch {
+    // The browser process may have exited before cleanup started.
+  }
+  if (browserProcess !== undefined) {
+    await Promise.race([
+      new Promise((resolve) => browserProcess.once('exit', resolve)),
+      sleep(1_000),
+    ]);
+  }
+  await Promise.race([
+    Promise.resolve().then(() => server.close()).catch(() => {}),
+    sleep(5_000),
+  ]);
+  const disconnectServer = server._disconnectForTest;
+  if (typeof disconnectServer === 'function') {
+    await Promise.race([
+      Promise.resolve().then(() => disconnectServer()).catch(() => {}),
+      sleep(1_000),
+    ]);
+  }
+  await closeResource(client);
+}
+
+function resolveChromeExecutable() {
+  const candidates = [
+    process.env.FORGEAX_CHROME_EXECUTABLE,
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+  ];
+  return candidates.find((candidate) => candidate !== undefined && existsSync(candidate));
 }
 
 async function select(page, id, value, status) {
@@ -252,81 +330,73 @@ async function captureRhi(page, label) {
   // before arming the recorder, so the tape describes one topology rather than
   // a resize transition carrying retired and replacement MSAA targets.
   await page.waitForTimeout(RHI_CAPTURE_SETTLE_MS);
-  const result = await page.evaluate(async () => {
+  const captured = await page.evaluate(async () => {
     if (typeof globalThis.__forgeax?.captureFrame !== 'function') {
       throw new Error('window.__forgeax.captureFrame is unavailable');
     }
-    return globalThis.__forgeax.captureFrame(1);
+    const result = await globalThis.__forgeax.captureFrame();
+    if (!result?.ok) throw new Error(`captureFrame failed: ${JSON.stringify(result?.error)}`);
+    const runId = `m3-composed-${Date.now()}-${crypto.randomUUID().replaceAll('-', '')}`;
+    const response = await fetch(`${location.origin}/__forgeax-debug/tape?runId=${runId}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-forgeax-rhitape' },
+      body: result.value.bytes,
+    });
+    const artifact = await response.json();
+    if (!response.ok) throw new Error(`raw tape upload failed: ${JSON.stringify(artifact)}`);
+    return { ...artifact, runId };
   });
-  if (typeof result?.tapePath !== 'string' || typeof result?.reportPath !== 'string') {
-    throw new Error(`RHI capture did not return tape/report paths: ${JSON.stringify(result)}`);
+  if (typeof captured?.path !== 'string' || typeof captured?.digest !== 'string') {
+    throw new Error(`RHI capture did not return a raw tape artifact: ${JSON.stringify(captured)}`);
   }
-  const resolveCapturePath = (path) => {
-    if (path.startsWith('/')) return path;
-    const appPath = resolve(APP_ROOT, path);
-    return existsSync(appPath) ? appPath : resolve(REPO_ROOT, path);
-  };
-  const sourceTape = resolveCapturePath(result.tapePath);
-  const sourceReport = resolveCapturePath(result.reportPath);
+  const sourceTape = resolveArtifact(captured.path);
   const rhiDir = resolve(ARTIFACT_DIR, 'rhi');
   mkdirSync(rhiDir, { recursive: true });
   const tape = resolve(rhiDir, `${label}.tape.bin`);
   const report = resolve(rhiDir, `${label}.report.json`);
-  let reportJson;
-  const captureDeadline = Date.now() + 5_000;
-  while (Date.now() < captureDeadline) {
-    try {
-      reportJson = JSON.parse(readFileSync(sourceReport, 'utf8'));
-      if (readFileSync(sourceTape).byteLength > 0) break;
-    } catch {
-      reportJson = undefined;
-    }
-    await sleep(50);
-  }
-  if (reportJson === undefined) throw new Error(`RHI capture files were not complete: tape=${sourceTape} report=${sourceReport}`);
+  const tapeBytes = new Uint8Array(readFileSync(sourceTape));
+  const digest = `sha256:${createHash('sha256').update(tapeBytes).digest('hex')}`;
+  if (captured.digest !== digest) throw new Error(`raw tape digest mismatch: ${captured.digest} != ${digest}`);
+  const decoded = decodeTape(tapeBytes);
+  if (!decoded.ok) throw new Error(`strict v7 decode failed: ${decoded.error.code}`);
+  const parsedTape = decoded.value;
+  const model = buildFrameModel(parsedTape);
+  if (model.works.length === 0) throw new Error('decoded tape has no work entries');
+  const workCount = model.works.length;
+  const passCount = model.passes.length;
+  const inspectedWork = workCount - 1;
   copyFileSync(sourceTape, tape);
-  copyFileSync(sourceReport, report);
-  const cli = resolve(REPO_ROOT, 'packages/rhi-debug/dist/cli.mjs');
-  const summary = JSON.parse(execFileSync('node', [cli, 'summary', tape], { encoding: 'utf8' }));
-  const inspectedDraw = Math.max(0, (summary.draws?.length ?? 1) - 1);
-  const inspect = JSON.parse(execFileSync('node', [cli, 'inspect-offline', tape, String(inspectedDraw), '--fields=bindings,drawCall,rt'], { encoding: 'utf8' }));
+  const reportJson = { header: parsedTape.header, bootstrap: parsedTape.bootstrap, events: parsedTape.events };
+  writeFileSync(report, `${JSON.stringify(reportJson, null, 2)}\n`);
+  const summary = {
+    workCount,
+    passCount,
+    bindingCount: parsedTape.events.filter((event) => event.kind === 'setBindGroup').length,
+  };
   writeFileSync(resolve(rhiDir, `${label}.summary.json`), `${JSON.stringify(summary, null, 2)}\n`);
-  writeFileSync(resolve(rhiDir, `${label}.inspect.json`), `${JSON.stringify(inspect, null, 2)}\n`);
-  const { create, globals } = await import('webgpu');
-  Object.assign(globalThis, globals);
-  if (globalThis.navigator === undefined) {
-    Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true, writable: true });
-  }
-  const gpu = create([]);
-  Object.defineProperty(globalThis.navigator, 'gpu', { value: gpu, configurable: true, writable: true });
-  gpu.getPreferredCanvasFormat = () => 'rgba8unorm';
-  const rhiWebgpu = await import('@forgeax/engine-rhi-webgpu');
-  const adapter = await rhiWebgpu.rhi.requestAdapter();
-  if (!adapter.ok) throw new Error(`Dawn requestAdapter failed: ${adapter.error.code}`);
-  const recordedCaps = reportJson.header.rhiCapsRecorded ?? {};
-  const compressionFeatures = [
-    ['textureCompressionBc', 'texture-compression-bc'],
-    ['textureCompressionEtc2', 'texture-compression-etc2'],
-    ['textureCompressionAstc', 'texture-compression-astc'],
-  ];
-  const requiredFeatures = compressionFeatures
-    .filter(([cap, feature]) => recordedCaps[cap] === true && adapter.value.features.has(feature))
-    .map(([, feature]) => feature);
-  const device = await adapter.value.requestDevice({
-    requiredFeatures,
-    requiredLimits: { maxUniformBufferBindingSize: 262144 },
+  const { freshDevice, rhiWebgpu } = await bootstrapDawn(label);
+  const replayResult = await openReplay(parsedTape, {
+    device: freshDevice,
+    createShaderModule: rhiWebgpu.createShaderModule,
   });
-  if (!device.ok) throw new Error(`Dawn requestDevice failed: ${device.error.code}`);
-  const { deserializeTape, createReplay } = await import('@forgeax/engine-rhi-debug');
-  const parsed = deserializeTape(JSON.stringify({ header: reportJson.header, events: reportJson.events }), new Uint8Array(readFileSync(tape)));
-  if (!parsed.ok) throw new Error(`deserializeTape failed: ${parsed.error.code}`);
-  const replayResult = createReplay(parsed.value, device.value, rhiWebgpu.createShaderModule);
-  if (!replayResult.ok) throw new Error(`createReplay failed: ${replayResult.error.code}`);
-  const stepped = await replayResult.value.stepTo(parsed.value.events.length - 1);
-  if (!stepped.ok) throw new Error(`replay.stepTo failed: ${stepped.error.code}`);
-  const readback = await replayResult.value.readbackRt();
-  if (!readback.ok) throw new Error(`replay.readbackRt failed: ${readback.error.code}`);
-  const pixels = readback.value.pixels;
+  if (!replayResult.ok) {
+    freshDevice.destroy?.();
+    throw new Error(`openReplay failed: ${replayResult.error.code}`);
+  }
+  const replay = replayResult.value;
+  const inspectionResult = await replay.inspectWork(inspectedWork, ['bindings', 'pixels']);
+  if (!inspectionResult.ok) {
+    await replay.dispose();
+    freshDevice.destroy?.();
+    throw new Error(`inspectWork(${inspectedWork}) failed: ${inspectionResult.error.code}`);
+  }
+  const inspection = inspectionResult.value;
+  if (inspection.attachment === undefined) {
+    await replay.dispose();
+    freshDevice.destroy?.();
+    throw new Error(`inspectWork(${inspectedWork}) returned no color attachment`);
+  }
+  const pixels = inspection.attachment.bytes;
   let nonBlackPixelCount = 0;
   let rgbTotal = 0;
   for (let index = 0; index < pixels.length; index += 4) {
@@ -337,22 +407,42 @@ async function captureRhi(page, label) {
     rgbTotal += red + green + blue;
   }
   const dawnReadback = {
-    width: readback.value.width,
-    height: readback.value.height,
+    width: inspection.attachment.width,
+    height: inspection.attachment.height,
     byteLength: pixels.byteLength,
     nonBlackPixelCount,
-    meanRgb: rgbTotal / (readback.value.width * readback.value.height * 3),
+    meanRgb: rgbTotal / (inspection.attachment.width * inspection.attachment.height * 3),
     sha256: createHash('sha256').update(pixels).digest('hex'),
     source: 'fresh-dawn-replay.readbackRt',
   };
   writeFileSync(resolve(rhiDir, `${label}.dawn-readback.rgba`), pixels);
   writeFileSync(resolve(rhiDir, `${label}.dawn-readback.json`), `${JSON.stringify(dawnReadback, null, 2)}\n`);
-  device.value.destroy?.();
-  return { tape, report, draws: summary.draws?.length ?? 0, inspectedDraw, inspect, dawnReadback };
+  await replay.dispose();
+  freshDevice.destroy?.();
+  const inspect = {
+    workIndex: inspection.workIndex,
+    eventIndex: inspection.eventIndex,
+    passIndex: inspection.passIndex,
+    attachment: {
+      resourceId: inspection.attachment.resourceId,
+      kind: inspection.attachment.kind,
+      format: inspection.attachment.format,
+      width: inspection.attachment.width,
+      height: inspection.attachment.height,
+      byteLength: inspection.attachment.bytes.byteLength,
+    },
+  };
+  writeFileSync(resolve(rhiDir, `${label}.inspect.json`), `${JSON.stringify(inspect, null, 2)}\n`);
+  return { tape, report, draws: workCount, workCount, passCount, inspectedWork, inspect, dawnReadback };
 }
 
 function countLiveTextures(report, matches) {
   const live = new Set();
+  for (const resource of report.bootstrap ?? []) {
+    if (resource.kind === 'texture' && matches(resource.create?.desc)) {
+      live.add(resource.handleId);
+    }
+  }
   for (const event of report.events) {
     const handleId = event.handleId ?? event.id;
     if (handleId === undefined || handleId === null) continue;
@@ -363,6 +453,79 @@ function countLiveTextures(report, matches) {
     }
   }
   return live.size;
+}
+
+function inspectedPipelineSignature(rhi) {
+  const pipelineHandleId = rhi.inspect?.drawCall?.pipelineHandleId;
+  if (pipelineHandleId === undefined) return null;
+  const report = JSON.parse(readFileSync(rhi.report, 'utf8'));
+  const pipeline = report.events.find(
+    (event) => event.kind === 'createRenderPipeline' && event.handleId === pipelineHandleId,
+  );
+  if (pipeline === undefined) return null;
+  const shaderModules = new Map(
+    report.events
+      .filter((event) => event.kind === 'createShaderModule' && typeof event.handleId === 'string')
+      .map((event) => [event.handleId, event.wgslCode]),
+  );
+  const shaderDigest = (handleId) => {
+    const code = shaderModules.get(handleId);
+    return typeof code === 'string' ? createHash('sha256').update(code).digest('hex') : null;
+  };
+  const desc = pipeline.desc ?? {};
+  return JSON.stringify({
+    vertex:
+      desc.vertex === undefined
+        ? null
+        : { ...desc.vertex, module: shaderDigest(pipeline.vertexShaderModuleHandleId) },
+    fragment:
+      desc.fragment === undefined
+        ? null
+        : { ...desc.fragment, module: shaderDigest(pipeline.fragmentShaderModuleHandleId) },
+    primitive: desc.primitive ?? null,
+    depthStencil: desc.depthStencil ?? null,
+    multisample: desc.multisample ?? null,
+  });
+}
+
+async function closeWithTimeout(close, timeoutMs) {
+  if (typeof close !== 'function') return;
+  let timer;
+  try {
+    await Promise.race([
+      close(),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function stopVite() {
+  if (viteProc.exitCode === null && viteProc.pid !== undefined) {
+    try {
+      process.kill(-viteProc.pid, 'SIGTERM');
+    } catch {
+      viteProc.kill('SIGTERM');
+    }
+    await Promise.race([
+      new Promise((resolve) => viteProc.once('exit', resolve)),
+      sleep(2_000),
+    ]);
+    if (viteProc.exitCode === null) {
+      try {
+        process.kill(-viteProc.pid, 'SIGKILL');
+      } catch {
+        viteProc.kill('SIGKILL');
+      }
+      await sleep(300);
+    }
+  }
+  viteProc.stdout?.destroy();
+  viteProc.stderr?.destroy();
+  viteProc.unref();
 }
 
 async function runLiveMaterialScenario(baseUrl, page) {
@@ -549,14 +712,14 @@ async function runLiveMaterialScenario(baseUrl, page) {
       }
       if (
         (reversePipelineFalsifier || inheritanceFalsifierKind === 'pipeline-texture') &&
-        (falsifier.rhi.draws === normal.rhi.draws || falsifier.rhi.dawnReadback.sha256 === normal.rhi.dawnReadback.sha256)
+        (falsifier.rhi.passCount === normal.rhi.passCount || falsifier.rhi.dawnReadback.sha256 === normal.rhi.dawnReadback.sha256)
       ) {
         throw new Error(`inheritance joint pipeline texture falsifier failed: ${JSON.stringify({ normalLive, falsifiedLive, normalRhi: normal.rhi, falsifierRhi: falsifier.rhi })}`);
       }
     } else if (
       !falsifierMaterialCausality ||
       falsifiedLive.falsifierMarker !== null ||
-      falsifier.rhi.draws === normal.rhi.draws ||
+      falsifier.rhi.passCount === normal.rhi.passCount ||
       (inheritancePost !== 'passthrough' && falsifier.rhi.dawnReadback.sha256 === normal.rhi.dawnReadback.sha256)
     ) {
       throw new Error(`inheritance pipeline falsifier failed: ${JSON.stringify({ normalLive, falsifiedLive, normalRhi: normal.rhi, falsifierRhi: falsifier.rhi })}`);
@@ -582,7 +745,7 @@ async function runLiveMaterialScenario(baseUrl, page) {
     if (leg.afterEvidence?.resizeHistory.join('>') !== expectedHistory) {
       throw new Error(`${label} resize history wrong: ${leg.afterEvidence?.resizeHistory.join('>')}`);
     }
-    if (leg.rhi.draws === 0 || leg.rhi.inspect?.drawCall === undefined || leg.rhi.dawnReadback.nonBlackPixelCount === 0) {
+    if (leg.rhi.draws === 0 || leg.rhi.inspect?.workIndex === undefined || leg.rhi.dawnReadback.nonBlackPixelCount === 0) {
       throw new Error(`${label} RHI/Dawn evidence missing: ${JSON.stringify(leg.rhi)}`);
     }
   }
@@ -828,18 +991,26 @@ const viteProc = spawn(process.execPath, [
 ], {
   cwd: APP_ROOT,
   env: { ...process.env, FORGEAX_ENGINE_RHI_DEBUG: '1' },
+  detached: true,
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 
 let browser;
 let page;
+let browserServer;
 try {
   const baseUrl = await waitForVite(viteProc);
-  browser = await chromium.launch({
+  const chromeExecutable = resolveChromeExecutable();
+  browserServer = await chromium.launchServer({
     headless: true,
-    channel: 'chrome',
-    args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer', '--ignore-gpu-blocklist'],
+    ...(chromeExecutable ? { executablePath: chromeExecutable } : {}),
+    args: [
+      '--enable-unsafe-webgpu',
+      '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
+      '--ignore-gpu-blocklist',
+    ],
   });
+  browser = await chromium.connect(browserServer.wsEndpoint());
   page = await browser.newPage({ viewport: { width: 800, height: 600 } });
   const pageErrors = [];
   const consoleErrors = [];
@@ -973,11 +1144,12 @@ try {
       secondTexture: { state: falsified.state, png: falsified.pngPath },
       resizeHistory: textureResizeHistory,
     },
-    rhi: { tape: rhi.tape, report: rhi.report, draws: rhi.draws, inspectedDraw: rhi.inspectedDraw, dawnReadback: rhi.dawnReadback },
-    falsifierRhi: { tape: falsifierRhi.tape, report: falsifierRhi.report, draws: falsifierRhi.draws, inspectedDraw: falsifierRhi.inspectedDraw, dawnReadback: falsifierRhi.dawnReadback },
+    rhi: { tape: rhi.tape, report: rhi.report, draws: rhi.draws, workCount: rhi.workCount, passCount: rhi.passCount, inspectedWork: rhi.inspectedWork, dawnReadback: rhi.dawnReadback },
+    falsifierRhi: { tape: falsifierRhi.tape, report: falsifierRhi.report, draws: falsifierRhi.draws, workCount: falsifierRhi.workCount, passCount: falsifierRhi.passCount, inspectedWork: falsifierRhi.inspectedWork, dawnReadback: falsifierRhi.dawnReadback },
   }, null, 2)}\n`);
 
-  await page.close();
+  await closeResource(page);
+  page = undefined;
   if (pageErrors.length > 0) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
   if (consoleErrors.length > 0) throw new Error(`console errors: ${consoleErrors.join(' | ')}`);
   if (variantDelta === null || variantDelta.changed < 1000) throw new Error(`combined variant delta too small: ${JSON.stringify(variantDelta)}`);
@@ -994,8 +1166,8 @@ try {
   if (resizeHistory.join('>') !== expectedResizeHistory || (resizeChurn && textureResizeHistory.join('>') !== expectedResizeHistory)) {
     throw new Error(`resize churn history wrong: normal=${resizeHistory.join('>')} texture=${textureResizeHistory.join('>')}`);
   }
-  if (rhi.draws === 0 || rhi.inspect?.drawCall === undefined) throw new Error(`RHI draw evidence missing: ${JSON.stringify(rhi)}`);
-  if (falsifierRhi.draws === 0 || falsifierRhi.inspect?.drawCall === undefined) throw new Error(`RHI falsifier evidence missing: ${JSON.stringify(falsifierRhi)}`);
+  if (rhi.draws === 0 || rhi.inspect?.workIndex === undefined) throw new Error(`RHI work evidence missing: ${JSON.stringify(rhi)}`);
+  if (falsifierRhi.draws === 0 || falsifierRhi.inspect?.workIndex === undefined) throw new Error(`RHI falsifier work evidence missing: ${JSON.stringify(falsifierRhi)}`);
   if (useMsaa) {
     const reports = [rhi.report, falsifierRhi.report].map((path) => JSON.parse(readFileSync(path, 'utf8')));
     for (const [index, report] of reports.entries()) {
@@ -1007,12 +1179,20 @@ try {
   }
   console.log(`[m3-composed] PASS pipeline=custom msaa=${useMsaa} startVariant=${startVariant} falsifier=${falsifierKind} variantChanged=${variantDelta.changed} postChanged=${postDelta.changed} falsifiedVariantChanged=${falsifiedVariantDelta.changed} secondTextureChanged=${falsifierDelta.changed} resized=${liveResized.width}x${liveResized.height} resizeHistory=${resizeHistory.join('>')} draws=${rhi.draws}/${falsifierRhi.draws} dawnSha=${rhi.dawnReadback.sha256}/${falsifierRhi.dawnReadback.sha256} artifacts=${ARTIFACT_DIR}`);
   }
+  if (page !== undefined) {
+    page = undefined;
+  }
 } catch (error) {
   console.error(`[m3-composed] FAIL - ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
   process.exitCode = 1;
 } finally {
-  await page?.close().catch(() => {});
-  await browser?.close().catch(() => {});
-  viteProc.kill('SIGTERM');
-  await sleep(300);
+  await closeResource(page);
+  await closeBrowserServer(browserServer, browser);
+  browserServer = undefined;
+  page = undefined;
+  browser = undefined;
+  await terminateProcess(viteProc);
+  await sleep(100);
 }
+
+process.exit(process.exitCode ?? 0);

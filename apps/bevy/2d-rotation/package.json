@@ -15,6 +15,9 @@
   },
   "forgeax": {
     "bevyExample": { "name": "rotation", "category": "2D Rendering", "status": "implemented" },
+    "rhiDebug": {
+      "riskFamilies": ["geometry-scale"]
+    },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-2d-rotation smoke",
     "metrics": {
       "bundle-size": { "enabled": false, "reason": "demo bundle downstream of engine-runtime sizes" },

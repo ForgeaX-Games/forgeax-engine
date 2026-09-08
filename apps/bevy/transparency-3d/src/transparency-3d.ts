@@ -118,6 +118,7 @@ export function stepTransparencyAlpha(world: World, scene: TransparencyScene, el
     const values = result.value.values as Record<string, unknown> | undefined;
     if (values === undefined) continue;
     values.baseColor = [...material.color, alpha];
+    world.sharedRefs.markChanged(material.handle).unwrap();
   }
   return alpha;
 }

@@ -15,16 +15,16 @@
 // the same row share posY and consecutive same-material runs collapse into
 // one instanced draw call (D-5 extension).
 
-import type { DispatchEntry } from '@forgeax/engine-render/internal';
+import { RenderQueue } from '@forgeax/engine-types';
+import { describe, expect, it } from 'vitest';
+import { foldDispatchBuckets } from '../../../render/src/record/mesh-ssbo';
+import type { DispatchEntry } from '../../../render/src/render-system-extract';
 import {
-  foldDispatchBuckets,
   TRANSPARENT_SORT_MODE_DISTANCE,
   TRANSPARENT_SORT_MODE_LAYER_Y,
   TRANSPARENT_SORT_MODE_LAYER_YZ,
   TRANSPARENT_SORT_MODE_LAYER_Z,
-} from '@forgeax/engine-render/internal';
-import { RenderQueue } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
+} from '../../../render/src/systems/transparent-sort-config';
 
 function mockEntry(opts: {
   renderableIndex: number;
@@ -64,7 +64,7 @@ function mockRenderable(
   world[14] = tz;
   // PR #502 fix + feat-20260625 R2 fix-up: `transparent: true` preserves the
   // fold-eligible behavior these mode-gate tests exercise; see
-  // render-system-fold.ts transparent-pass-only gate (the sprite
+  // record/mesh-ssbo.ts transparent-pass-only gate (the sprite
   // discriminator was removed in M3 / w15 and replaced with `transparent`).
   return { transform: { world }, material: { transparent: true } };
 }

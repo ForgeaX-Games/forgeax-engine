@@ -29,6 +29,18 @@ app.start().unwrap();
 
 The canvas form creates a World, renderer, default plugins, browser input backend, and rAF loop. Handle the `Result` before calling `start`.
 
+## RHI capture
+
+When the development RHI-debug flag is enabled, `app.rhiCapture` exposes one
+single-frame `captureFrame()` capability. A successful call returns one
+self-contained `rhi-tape` artifact; pass that same artifact to DevKit's
+`rhi.summary` and `rhi.inspect` operations, using the summary's
+`FrameModel.works[].workIndex` for selection.
+
+App owns only the optional capture capability. Replay, readback, PNG output,
+and artifact/file handling remain in the RHI-debug core and DevKit shells, so
+the live App surface does not grow a second replay cache or inspection API.
+
 ## Execution tiers
 
 `execution` moves the complete World, Renderer, AssetRegistry, render features,
@@ -37,10 +49,9 @@ credit, Web Audio, and inspection. `shared` adds a lazy persistent Kernel Worker
 pool over shared ECS numeric columns; it does not split the live World or render
 graph across realms.
 
-The bootstrap module is a two-step realm contract. Its default function first
-constructs renderer features and plugins inside the selected realm, then its
-`run` callback receives the ready, real owners. It never receives a remote World
-or a fake host App.
+The bootstrap module constructs renderer features and native Cordis plugins
+inside the selected realm. Those plugins receive the real owners through
+`inject`; there is no parallel `run(context)` or cleanup ledger.
 
 ```ts
 // game-bootstrap.ts
@@ -49,11 +60,23 @@ import { audioPlugin } from '@forgeax/engine-audio';
 
 const bootstrap: ExecutionBootstrapEntry = (data) => ({
   features: [createGameRenderFeature(data)],
-  plugins: [audioPlugin(), createGamePhysicsPlugin(data)],
-  async run({ world, renderer, assets, port, registerCleanup }) {
-    const session = await createGameSession({ world, renderer, assets, port });
-    registerCleanup(() => session.dispose());
-  },
+  plugins: [
+    audioPlugin(),
+    createGamePhysicsPlugin(data),
+    {
+      name: 'game-session',
+      inject: ['world', 'renderer', 'assets', 'executionBootstrapHost'],
+      async apply(ctx) {
+        const session = await createGameSession({
+          world: ctx.world,
+          renderer: ctx.renderer,
+          assets: ctx.assets,
+          port: ctx.executionBootstrapHost.port,
+        });
+        ctx.effect(() => () => session.dispose(), 'game/session');
+      },
+    },
+  ],
 });
 
 export default bootstrap;
@@ -96,18 +119,25 @@ flowchart LR
 | `shared` | Engine Worker plus SAB Kernel pool | Also requires isolation headers, SharedArrayBuffer, and Atomics wait |
 | `auto` | Best available proven tier | Reports the actual tier and reason; never disguises fallback |
 
-An explicit unavailable tier returns a structured `AppError`; only `auto` falls back. Serve `shared` with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` or `credentialless`, then verify the Worker-realm facts in `app.execution.report()`. Every SharedKernel module is imported and export-checked in every lane before the Engine Worker reports ready, so an invalid module fails before the first shared write. A partial Kernel write poisons the World, stops update/draw, and requires explicit rebuild to obtain a new World identity.
+An explicit unavailable tier returns a structured `AppError`; only `auto` falls back. Serve `shared` with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` or `credentialless`, then verify the Worker-realm facts in `app.execution.report()`. Every SharedKernel module is imported, export-checked, and retained in every lane before the Engine Worker reports ready; frame jobs invoke that retained module synchronously, so an invalid module fails before the first shared write without adding a dynamic-import Promise to each dispatch. A partial Kernel write poisons the World, stops update/draw, and requires explicit rebuild to obtain a new World identity.
 
 `bootstrapData` must be structured-cloneable and is validated before a canvas is
 transferred. `bootstrapPort` is the realm side of a host-created
-`MessageChannel`; App transfers and closes it with the execution realm. Keep DOM
-UI on the Host side of that typed channel. `registerCleanup` is flushed in
-reverse order on Stop and before Worker rebuild. `setPointerLockAllowed` is the
-one built-in realm-to-Host control because browser input ownership remains on
-the Host.
+`MessageChannel`; `executionBootstrapHostPlugin` provides it and closes it with
+the execution Fiber. Keep DOM UI on the Host side of that typed channel.
+`ExecutionBootstrapHost.setPointerLockAllowed` is the one built-in
+realm-to-Host control because browser input ownership remains on the Host.
+
+> [!IMPORTANT]
+> Runtime asset delivery in an execution realm uses `execution.assetCatalog`,
+> a serializable `{ url, expectedScope? }` descriptor. Engine constructs the
+> `CatalogSource` and `AssetRegistry` inside the selected realm, so an Engine
+> Worker never captures a Host-side registry. `expectedScope` keeps a scoped
+> game catalog tied to its `scopeId` and `generation`; `CreateAppOptions.assetCatalog`
+> remains realm-bound and is rejected when `execution` is requested.
 
 When `execution` is present, realm-bound `CreateAppOptions` (`features`,
-`plugins`, simulation participants, RHI injection, draw source, membership
+`plugins`, RHI injection, draw source, membership
 timing, and bundler import transport) are rejected instead of working only in a
 `main-serial` fallback. Construct them in the bootstrap module so `auto` has one
 game assembly path in every selected tier.
@@ -169,8 +199,23 @@ const unlisten = app.onError((error) => {
 const started = app.start();
 if (!started.ok) console.error(started.error.code, started.error.hint);
 
-// Later: unlisten(); app.stop();
+// Pause scheduling without destroying the realm:
+unlisten();
+app.stop();
+
+// Final ownership release:
+await app.dispose();
 ```
+
+`App.lastError` retains the most recent dispatch failure after the listener
+callback runs, so an AI host can inspect the same object without scraping
+console output:
+
+| Fact | Recovery surface |
+|:--|:--|
+| `app-system-update-failed` | `detail.cause` preserves the original failure and `detail.systemName` identifies the owner when known. |
+| Renderer or device failure | `app.onError` and `lastError` expose the closed error code with `expected`, `hint`, and discriminated `detail`. |
+| No failure observed | `lastError` is `undefined`; do not infer readiness from App construction alone. |
 
 Hosts that discover additional Worlds during bootstrap can update the routing pull
 without creating a second frame loop:
@@ -296,10 +341,28 @@ const ReadInput = defineSystem({
 app.world.addSystem(Update, ReadInput).unwrap();
 ```
 
-Pass optional capabilities through `plugins`, such as `physicsPlugin('rapier-3d')` and `audioPlugin()`. A
-`definePluginGroup(...)` result is also accepted; the app expands it before the same ordered
-`runPlugins` seam, so group membership does not create a second lifecycle. An assemble-form host
-owns its renderer, World, input backend, and explicit plugin source list.
+Pass optional capabilities as native Cordis plugins. Providers are explicit:
+
+```ts
+import { audioPlugin } from '@forgeax/engine-audio';
+import { webAudioPlugin } from '@forgeax/engine-audio-webaudio';
+import { physicsPlugin } from '@forgeax/engine-physics';
+
+const result = await createApp(canvas, {
+  plugins: [webAudioPlugin(), audioPlugin(), physicsPlugin('rapier-3d')],
+});
+if (!result.ok) throw result.error;
+
+const feature = await result.value.pluginContext.plugin(optionalGameplayFeature);
+await feature.dispose();
+await result.value.dispose();
+```
+
+Every App owns one `pluginContext`. Cordis `inject`, `provide`, `effect`, and
+`Fiber` are the only composition lifecycle. `stop()` controls frame scheduling;
+`dispose()` drains plugin effects and releases Host/renderer ownership. An
+assemble-form host still owns the World and renderer objects it supplied, while
+the App owns the Cordis realm it assembled around them.
 
 ## API index
 
@@ -310,10 +373,13 @@ owns its renderer, World, input backend, and explicit plugin source list.
 | `CreateAppOptions.time` | `TimePolicy` | Policy used only for the newly created canvas-form World. |
 | `CreateAppOptions.features` | `readonly RenderFeature<unknown>[]` | Existing renderer feature seam, forwarded by reference and order. |
 | `CreateAppOptions.execution` | `ExecutionOptions` | Selects `auto`, `main-serial`, `engine-worker`, or `shared` and names the bootstrap module. |
+| `ExecutionOptions.assetCatalog` | `ExecutionAssetCatalog` | Supplies the serializable catalog URL and optional scope fence to the selected Engine realm. |
 | `App.execution.report()` | `ExecutionReport` | Returns the schema-valid requested/actual tier, capabilities, health, performance, audio, and fault projection. |
 | `App.execution.rebuild()` | `Promise<Result<ExecutionReport, AppError>>` | Rebuilds only a poisoned Worker World with a new identity. |
 | `App.start()` | `Result<void, AppError>` | Arms the rAF loop. |
 | `App.stop()` / `pause()` / `resume()` | `Result<void, AppError>` | Controls the rAF lifecycle. |
+| `App.dispose()` | `Promise<Result<void, AppError>>` | Drains the Cordis realm, Host resources, and renderer ownership. |
+| `App.pluginContext` | `Context` | Native Cordis realm for runtime and asset-resident game plugins. |
 | `App.stepFrame(deltaSeconds)` | `Result<void, AppDispatchError>` | While paused, advances one deterministic update/draw frame through the same App frame authority used by rAF. |
 | `App.releaseSurfacePreserveWorld()` / `restoreSurface()` | `Promise<Result<void, RhiError>>` | Temporarily pauses presentation and relinquishes the canvas surface while preserving the same World, Renderer, registry, and execution authority; restore resumes only a loop that was running before release. |
 | `App.onError(callback)` | `() => void` | Subscribes to structured World and renderer failures. |
@@ -328,7 +394,7 @@ owns its renderer, World, input backend, and explicit plugin source list.
 - Deterministic preview and tooling seeks must pause the App and use `stepFrame`; they must not call `world.update` or `renderer.draw` as a parallel frame path.
 - `Camera.clearColor` belongs to the Camera component, and bundler wiring belongs to `BundlerOptions`; neither is an App time responsibility.
 
-See `packages/app/src/types.ts` for option and Result types, `packages/app/src/internal/frame-loop.ts` for the frame-loop implementation, `packages/plugin/README.md` for the plugin runner, and `packages/ecs/README.md` for World schedule and time semantics.
+See `packages/app/src/types.ts` for option and Result types, `packages/app/src/internal/frame-loop.ts` for the frame-loop implementation, `packages/plugin/README.md` for the Cordis lifecycle, and `packages/ecs/README.md` for World schedule and time semantics.
 
 ## Remote component discovery
 
@@ -356,27 +422,3 @@ The descriptor is a transport projection, not a live token: it contains schema,
 field reflection, labels, and JSON-safe metadata, but no methods or validator
 functions. Camera, picking, lifecycle, assets, and VFX shadow policy remain
 outside the app host.
-
-## Simulation inspection
-
-App assembles already-created, ready participant owners into the World and
-exposes one read-only `simulationInspection()` projection. App does not define
-ECS components, record schemas, restore policy, or a second state owner.
-
-```ts
-const result = await createApp({ renderer, world, simulationParticipants });
-if (!result.ok) return result.error;
-const summary = result.value.simulationInspection();
-```
-
-The summary follows [`schema/simulation-inspection.schema.json`](schema/simulation-inspection.schema.json):
-format and owner fields, participant readiness, baseline fingerprint, trace
-counts, report domains/tolerance, and structured error fields. Preview and
-Remote consume this summary through existing read/eval paths only. They do not
-add restore or replay actions and do not receive World, Rapier, or Web Audio
-objects.
-
-Use this seam when diagnosing deterministic ECS state across fresh targets. Do
-not use it for network rollback, disk persistence, RHI tape replay, or pixels.
-Recover by switching on `error.code`, repairing the named owner or target, and
-retrying with a fresh target.

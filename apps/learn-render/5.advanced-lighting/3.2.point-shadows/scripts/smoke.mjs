@@ -163,16 +163,11 @@ if (!appResult.ok) {
   process.exit(1);
 }
 const app = appResult.value;
-console.log(`[learn-render-5-3-2-point-shadows] backend=${app.renderer.backend}`);
+console.log(`[learn-render-5-3-2-point-shadows] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
 const onErrorEvents = [];
 app.onError((err) => onErrorEvents.push({ code: err.code, hint: err.hint }));
 
-const ready = await app.renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 const world = app.world;
 
@@ -314,11 +309,16 @@ globalThis.performance.now = () => fakeNow;
 
 const frameStart = Date.now();
 let totalFrames = 0;
-app.renderer.attachWorld(world).unwrap();
+const lease = app.renderer.attach(world).unwrap();
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   world.update(1 / 60).unwrap();
-  const drawResult = app.renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-  if (!drawResult.ok) console.error(`[smoke] draw frame ${i} error: ${drawResult.error.code}`);
+  const drawResult = app.renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } });
+  if (!drawResult.ok) {
+    console.error(`[smoke] draw frame ${i} error: ${drawResult.error.code}`);
+  } else {
+    const completed = await drawResult.value.completed;
+    if (!completed.ok) onErrorEvents.push({ code: completed.error.code, hint: completed.error.hint });
+  }
   totalFrames++;
   // Await each frame so async shadow/material PSOs can resolve before the
   // final readback; a tight rAF drain otherwise records only skip-draw frames.
@@ -426,11 +426,16 @@ console.log(
   `[smoke] oracle=point-light-shadow siteLuminance=${pointLightSite} deltaFromClear=${Number((pointLightSite - clearLuminance).toFixed(4))} witness=${pointLightWitness} threshold=${POINT_LIGHT_MIN_DELTA} falsifier=${FALSIFY_NO_POINT_LIGHT ? 'no-point-light' : 'none'}`,
 );
 
+const appDisposeResult = await app.dispose();
+if (!appDisposeResult.ok) {
+  onErrorEvents.push({ code: appDisposeResult.error.code, hint: appDisposeResult.error.hint });
+}
+
 // --- 8. Verdict -------------------------------------------------------------
 
 const failures = [];
-if (app.renderer.backend !== 'webgpu')
-  failures.push(`(a) backend=${app.renderer.backend} (expected webgpu)`);
+if (app.renderer.inspect().capabilities.backendKind !== 'webgpu')
+  failures.push(`(a) backend=${app.renderer.inspect().capabilities.backendKind} (expected webgpu)`);
 if (totalFrames < SMOKE_MIN_FRAMES)
   failures.push(`(b) frames=${totalFrames} < ${SMOKE_MIN_FRAMES}`);
 

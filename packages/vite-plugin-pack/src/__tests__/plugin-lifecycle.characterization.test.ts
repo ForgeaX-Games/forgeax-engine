@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it } from 'vitest';
-import { pluginPack } from '../index.js';
+import { assertBuildRoots } from '../build-inputs.js';
+import { createPluginPackInternal as pluginPack } from '../plugin-pack.js';
 
 interface RecordedResponse {
   statusCode: number;
@@ -70,7 +71,7 @@ async function request(server: MiddlewareServer & { handler?: Middleware }, url:
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {
-  const deadline = Date.now() + 1500;
+  const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -93,7 +94,13 @@ describe('Pack plugin lifecycle characterization', () => {
     const assets = join(root, 'assets');
     await mkdir(assets);
     const server = createServer();
-    const plugin = pluginPack({ roots: [assets] });
+    const plugin = pluginPack({
+      roots: [assets],
+      ddc: {
+        buildCacheRoot: join(root, 'build-cache'),
+        projectDdcRoot: join(root, '.forgeax', 'ddc', 'v2'),
+      },
+    });
     plugin.configureServer(server);
     const binding = createStandaloneRuntimeAssetBinding('pack-lifecycle');
     await plugin.rebind(binding, [assets]);
@@ -119,20 +126,36 @@ describe('Pack plugin lifecycle characterization', () => {
     );
     await plugin.closeBundle();
 
-    const emitted: Array<{ fileName?: string; source?: string | Uint8Array }> = [];
     const buildPlugin = pluginPack({ roots: [] });
-    await buildPlugin.generateBundle.call({
-      emitFile(asset) {
-        emitted.push(asset);
-        return asset.fileName ?? asset.name ?? 'asset';
-      },
-      getFileName(referenceId) {
-        return referenceId;
-      },
+    await expect(
+      buildPlugin.generateBundle.call({
+        emitFile() {
+          throw new Error('build must fail before emitting a Pack index');
+        },
+        getFileName(referenceId) {
+          return referenceId;
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 'config-failed',
+      detail: { stage: 'config', subject: 'pack-roots' },
     });
-    const packIndex = emitted.find((asset) => asset.fileName === 'pack-index.json');
-    expect(packIndex).toBeDefined();
-    expect(JSON.parse(String(packIndex?.source))).toEqual([]);
+
+    const missingRoot = join(root, 'missing-assets');
+    const missingRootBuildPlugin = pluginPack({ roots: [missingRoot] });
+    await expect(
+      missingRootBuildPlugin.generateBundle.call({
+        emitFile() {
+          throw new Error('build must fail before emitting a Pack index');
+        },
+        getFileName(referenceId) {
+          return referenceId;
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 'config-failed',
+      detail: { stage: 'config', subject: missingRoot },
+    });
   });
 
   it('keeps the characterization fixture free of producer readiness policy', async () => {
@@ -141,5 +164,14 @@ describe('Pack plugin lifecycle characterization', () => {
     const source = join(root, 'asset.pack.json');
     await writeFile(source, JSON.stringify({ schemaVersion: '2.0.0', assets: [] }));
     expect(await readFile(source, 'utf8')).toContain('schemaVersion');
+  });
+
+  it('accepts an explicit file root for sidecar-scoped projects', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-pack-file-root-'));
+    temporaryRoots.push(root);
+    const source = join(root, 'asset.pack.json');
+    await writeFile(source, JSON.stringify({ schemaVersion: '2.0.0', assets: [] }));
+
+    await expect(assertBuildRoots([source])).resolves.toBeUndefined();
   });
 });

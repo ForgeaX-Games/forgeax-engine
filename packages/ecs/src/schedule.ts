@@ -9,6 +9,7 @@ import type { Component } from './component';
 import {
   CyclicDependencyError,
   ScheduleMutationError,
+  SystemFailedError,
   type SystemSetNotRegisteredError,
   systemSetNotRegistered,
 } from './errors';
@@ -19,96 +20,13 @@ import type { Query, QueryDescriptor } from './query/query';
 // runtime cycle forms (plan-strategy D-1).
 import type { ScheduleToken } from './schedule-token';
 import type { World } from './world';
+import { worldInternal } from './world-internal';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Types
 // ────────────────────────────────────────────────────────────────────────────
 
-// ────────────────────────────────────────────────────────────────────────────
-// Severity + ErrorHandler (Layer 3 — AP-8)
-// ────────────────────────────────────────────────────────────────────────────
-
-/**
- * Seven-level severity enum for error classification (AP-8 Layer 3).
- * Default is `Panic` (KD-2: fail-fast by default).
- * Ordered: Ignore < Trace < Debug < Info < Warning < Error < Panic.
- */
-export const Severity = {
-  Ignore: 0,
-  Trace: 1,
-  Debug: 2,
-  Info: 3,
-  Warning: 4,
-  Error: 5,
-  Panic: 6,
-} as const;
-
-export type SeverityLevel = (typeof Severity)[keyof typeof Severity];
-
-/**
- * Error context passed to the ErrorHandler along with the error.
- */
-export interface ErrorContext {
-  /** Severity level of the error (default: Panic). */
-  readonly severity: SeverityLevel;
-  /** Name of the system that produced the error. */
-  readonly systemName: string;
-}
-
-/**
- * ErrorHandler function signature. Called when a system returns a Result err
- * branch (`r.ok === false`) or ParamValidation returns 'invalid'.
- */
-export type ErrorHandler = (error: unknown, context: ErrorContext) => void;
-
-/**
- * Default error handler: dispatches by severity level.
- * Panic → throw, Error → console.error, Warning → console.warn,
- * Info → console.info, Debug/Trace → console.debug, Ignore → silent.
- */
-export function matchSeverity(error: unknown, context: ErrorContext): void {
-  switch (context.severity) {
-    case Severity.Panic:
-      throw error;
-    case Severity.Error:
-      console.error(`[${context.systemName}]`, error);
-      break;
-    case Severity.Warning:
-      console.warn(`[${context.systemName}]`, error);
-      break;
-    case Severity.Info:
-      // biome-ignore lint/suspicious/noConsole: matchSeverity routes errors to console by design
-      console.info(`[${context.systemName}]`, error);
-      break;
-    case Severity.Debug:
-    case Severity.Trace:
-      // biome-ignore lint/suspicious/noConsole: matchSeverity routes errors to console by design
-      console.debug(`[${context.systemName}]`, error);
-      break;
-    case Severity.Ignore:
-      // Silent — do nothing
-      break;
-  }
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// ParamValidation (Layer 2 — AP-8)
-// ────────────────────────────────────────────────────────────────────────────
-
-/**
- * ParamValidation three-state result for system parameter validation (AP-8 Layer 2).
- *
- * - `ok`: all params valid, system body executes.
- * - `skipped`: expected absence (e.g. query no match), body NOT executed, schedule continues.
- * - `invalid`: unexpected absence (e.g. Resource missing), body NOT executed, error collected.
- */
-export type ParamValidation =
-  | { readonly tag: 'ok' }
-  | { readonly tag: 'skipped'; readonly reason: string }
-  | { readonly tag: 'invalid'; readonly error: Error };
-
-/** Query results projected into a system parameter definition. */
-export type SystemParamQueryResults<
+type SystemQueryResults<
   Qs extends ReadonlyArray<QueryDescriptor> = ReadonlyArray<QueryDescriptor>,
 > = {
   [K in keyof Qs]: Qs[K] extends QueryDescriptor<
@@ -119,33 +37,6 @@ export type SystemParamQueryResults<
     ? Query<NoInfer<R>, NoInfer<W>, NoInfer<O>>
     : Query;
 };
-
-/** Reusable resource/query bundle resolved immediately before a system runs. */
-export interface SystemParamDefinition<
-  T,
-  Qs extends ReadonlyArray<QueryDescriptor> = ReadonlyArray<QueryDescriptor>,
-> {
-  /** Stable name for inspection and diagnostics. */
-  readonly name: string;
-  /** Queries owned by this parameter; they are cached independently per world. */
-  readonly queries: Qs;
-  /** Resources required by this parameter before its resolver runs. */
-  readonly resources?: ReadonlyArray<string>;
-  /** Build the value passed to the system from this parameter's access window. */
-  readonly resolve: (world: World, queryResults: SystemParamQueryResults<Qs>) => T;
-}
-
-/** Values projected from a system's parameter-definition tuple. */
-export type SystemParamValues<Ps extends ReadonlyArray<unknown>> = {
-  [K in keyof Ps]: Ps[K] extends SystemParamDefinition<infer T, infer _Qs> ? T : never;
-};
-
-/** Freeze a reusable system parameter definition at its declaration boundary. */
-export function defineSystemParam<const Qs extends ReadonlyArray<QueryDescriptor>, T>(
-  definition: SystemParamDefinition<T, Qs>,
-): SystemParamDefinition<T, Qs> {
-  return Object.freeze(definition);
-}
 
 /**
  * System descriptor passed to `world.addSystem` — `fn` receives one persistent
@@ -204,7 +95,6 @@ export function defineSystemParam<const Qs extends ReadonlyArray<QueryDescriptor
  */
 export interface SystemDescriptor<
   Qs extends ReadonlyArray<QueryDescriptor> = ReadonlyArray<QueryDescriptor>,
-  Ps extends ReadonlyArray<unknown> = readonly [],
 > {
   /** Unique system name (used for before/after references). */
   readonly name: string;
@@ -217,22 +107,16 @@ export interface SystemDescriptor<
    * resolve components by name, etc. without closure capture.
    * @param queryResults Mapped over `Qs`: each entry is a persistent Query.
    * @param commands Deferred-mutation buffer (flushed after the system).
-   * @param params Resolved values for the reusable definitions in `params`.
    */
   readonly fn: (
     world: World,
-    queryResults: SystemParamQueryResults<Qs>,
+    queryResults: SystemQueryResults<Qs>,
     commands: CommandBuffer,
-    params: SystemParamValues<Ps>,
   ) => void | unknown;
-  /** Reusable query/resource parameters resolved as the fourth fn argument. */
-  readonly params?: Ps;
   /** Run this system after named systems or the FixedUpdate anchor. */
   readonly after?: ReadonlyArray<string | ScheduleToken>;
   /** Run this system before named systems or the FixedUpdate anchor. */
   readonly before?: ReadonlyArray<string | ScheduleToken>;
-  /** Required resource keys. Missing resource triggers 'invalid' validation (Layer 2). */
-  readonly resources?: ReadonlyArray<string>;
   /**
    * Run condition. Evaluated each frame after ParamValidation passes (tag
    * 'ok') and before query iteration. Returning `false` skips the system silently —
@@ -250,8 +134,7 @@ export interface SystemDescriptor<
  */
 export type SystemHandle<
   Qs extends ReadonlyArray<QueryDescriptor> = ReadonlyArray<QueryDescriptor>,
-  Ps extends ReadonlyArray<unknown> = readonly [],
-> = SystemDescriptor<Qs, Ps>;
+> = SystemDescriptor<Qs>;
 
 /** Internal system record with registration index. */
 interface SystemRecord {
@@ -260,8 +143,6 @@ interface SystemRecord {
   registrationIndex: number;
   /** Cached executable Queries, one per descriptor. */
   queries: Query[] | null;
-  /** Cached executable Queries owned by each declared system parameter. */
-  paramQueries: Query[][] | null;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -270,15 +151,11 @@ interface SystemRecord {
 
 /**
  * Per-set record in the Schedule. Created lazily on first addSystems /
- * configureSets call for a given set name.
+ * addSystems call for a given set name.
  */
 export interface SetRecord {
   /** Member system names (insertion-ordered, Set preserves add order). */
   readonly members: Set<string>;
-  /** Names of sets that this set must run before. */
-  readonly before: Set<string>;
-  /** Names of sets that this set must run after. */
-  readonly after: Set<string>;
   /** Snapshot of runIf from the defining token. */
   readonly runIf: ((world: import('./world').World) => boolean) | undefined;
   /** Snapshot of chained from the defining token. */
@@ -325,39 +202,29 @@ export function createSchedule(token: ScheduleToken): Schedule {
  * (S-5, KD-2). `SystemRecord` itself is intentionally non-generic — the
  * heterogeneous `Qs` cannot be expressed inside the systems Map (KD-3).
  */
-export function addSystem<
-  const Qs extends ReadonlyArray<QueryDescriptor>,
-  const Ps extends ReadonlyArray<unknown>,
->(schedule: Schedule, descriptor: SystemDescriptor<Qs, Ps>): void {
+export function addSystem<const Qs extends ReadonlyArray<QueryDescriptor>>(
+  schedule: Schedule,
+  descriptor: SystemDescriptor<Qs>,
+): void {
   const record: SystemRecord = {
     descriptor: descriptor as unknown as SystemDescriptor,
     registrationIndex: schedule.nextIndex++,
     queries: null,
-    paramQueries: null,
   };
   schedule.systems.set(descriptor.name, record);
   schedule.dirty = true;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Global system registry (defineSystem — "define == register", plan-strategy D-6)
+// System token construction (token-first World ownership)
 // ────────────────────────────────────────────────────────────────────────────
 
 /**
- * Global registry of all defined systems, keyed by system name.
- *
- * `defineSystem` writes here; `getRegisteredSystems` returns a read-only view.
- * Mirrors the `STATE_REGISTRY` pattern in `@forgeax/engine-state`.
- */
-const SYSTEM_REGISTRY = new Map<string, SystemHandle>();
-
-/**
  * Define a system at module level. Returns a frozen {@link SystemHandle} token
- * (the descriptor itself) and records it in the global registry under its name.
+ * (the descriptor itself); executable registration is World-local.
  *
  * `world.addSystem(handle)` consumes the token directly — no by-name overload
- * (OOS-8). Duplicate names silently overwrite (SYSTEM_REGISTRY.set, no guard),
- * matching `defineComponent` (OOS-3).
+ * (OOS-8). Duplicate names are resolved by the owning World schedule.
  *
  * `const Qs` locks the `queries` tuple so `fn`'s query-results parameter
  * recovers per-query row access shapes without `as const` (S-5).
@@ -372,26 +239,17 @@ const SYSTEM_REGISTRY = new Map<string, SystemHandle>();
  * world.addSystem(Move);
  * ```
  */
-export function defineSystem<
-  const Qs extends ReadonlyArray<QueryDescriptor>,
-  const Ps extends ReadonlyArray<unknown>,
->(descriptor: SystemDescriptor<Qs, Ps>): SystemHandle<Qs, Ps> {
-  const handle = Object.freeze(descriptor) as unknown as SystemHandle<Qs, Ps>;
-  SYSTEM_REGISTRY.set(handle.name, handle as unknown as SystemHandle);
+export function defineSystem<const Qs extends ReadonlyArray<QueryDescriptor>>(
+  descriptor: SystemDescriptor<Qs>,
+): SystemHandle<Qs> {
+  const handle = Object.freeze(descriptor) as unknown as SystemHandle<Qs>;
   return handle;
 }
 
 /**
- * Read-only snapshot of all systems defined via {@link defineSystem}, keyed by
- * name. The aux enumeration path is type-erased (`SystemHandle<any>` values) —
- * the heterogeneous `Qs` cannot be expressed inside one Map (KD-3).
  */
-export function getRegisteredSystems(): ReadonlyMap<string, SystemHandle> {
-  return SYSTEM_REGISTRY;
-}
-
 // ────────────────────────────────────────────────────────────────────────────
-// SystemSet — nominal token + global registry (D-2c step 1, w2)
+// SystemSet — nominal token (D-2c step 1, w2)
 // ────────────────────────────────────────────────────────────────────────────
 
 /** Brand symbol for {@link SystemSet}. Declared (not runtime-initialised) so
@@ -418,21 +276,10 @@ export interface SystemSet {
 }
 
 /**
- * Global registry of all defined system sets, keyed by set name.
- *
- * `defineSystemSet` writes here; `getRegisteredSystemSets` returns a read-only
- * view. Mirrors the `SYSTEM_REGISTRY` / `STATE_REGISTRY` pattern.
- */
-const SYSTEM_SET_REGISTRY = new Map<string, SystemSet>();
-
-/**
  * Define a system set at module level. Returns a frozen branded token and
- * records it in the global registry under its name.
+ * keeps membership in the World-local Schedule.
  *
- * Duplicate names silently overwrite (SYSTEM_SET_REGISTRY.set, no guard),
- * matching `defineSystem` / `defineComponent` (AGENTS.md §Component naming
- * "silent overwrite" convention). The old token becomes stale — identity
- * checks (`SYSTEM_SET_REGISTRY.get(name) === oldToken`) will reject it.
+ * Duplicate names are independent tokens; the owning World decides membership.
  *
  * @example
  * ```ts
@@ -456,25 +303,14 @@ export function defineSystemSet(opts: {
     token.chained = opts.chained;
   }
   const frozen = Object.freeze(token) as unknown as SystemSet;
-  SYSTEM_SET_REGISTRY.set(opts.name, frozen);
   return frozen;
 }
 
 /**
- * Read-only snapshot of all system sets defined via {@link defineSystemSet},
- * keyed by name. Returns the live map — callers should not mutate the
- * returned reference.
- */
-export function getRegisteredSystemSets(): ReadonlyMap<string, SystemSet> {
-  return SYSTEM_SET_REGISTRY;
-}
-
 /**
- * Validate every token in `tokens` against the global registry via identity
- * check (`SYSTEM_SET_REGISTRY.get(token.name) === token`). Returns `ok(undefined)`
- * only when all tokens pass; the first failure produces a
- * `SystemSetNotRegisteredError` with the rejected token name and a
- * deterministic snapshot of current registry keys.
+ * Validate every token in `tokens` for local structural validity.
+ * Returns `ok(undefined)` for a structurally valid token and reports an empty
+ * token name as a structured registration error.
  *
  * Does not write any Schedule state — callers consume the `Result` and proceed
  * only on `ok`.
@@ -483,9 +319,8 @@ export function validateSystemSetTokens(
   tokens: readonly SystemSet[],
 ): Result<void, SystemSetNotRegisteredError> {
   for (const token of tokens) {
-    const current = SYSTEM_SET_REGISTRY.get(token.name);
-    if (current !== token) {
-      return err(systemSetNotRegistered(token.name, Array.from(SYSTEM_SET_REGISTRY.keys())));
+    if (token.name.length === 0) {
+      return err(systemSetNotRegistered(token.name, []));
     }
   }
   return ok(undefined);
@@ -537,13 +372,10 @@ export function removeSystem(
  * Failure: name not registered → `Result.err(ScheduleMutationError)` with
  * `.code = 'system-before-unknown'`.
  */
-export function replaceSystem<
-  const Qs extends ReadonlyArray<QueryDescriptor>,
-  const Ps extends ReadonlyArray<unknown>,
->(
+export function replaceSystem<const Qs extends ReadonlyArray<QueryDescriptor>>(
   schedule: Schedule,
   name: string,
-  descriptor: SystemDescriptor<Qs, Ps>,
+  descriptor: SystemDescriptor<Qs>,
 ): Result<void, ScheduleMutationError> {
   const record = schedule.systems.get(name);
   if (!record) {
@@ -559,7 +391,6 @@ export function replaceSystem<
   record.descriptor = descriptor as unknown as SystemDescriptor;
   // Reset cached query states — descriptor.queries may have changed shape.
   record.queries = null;
-  record.paramQueries = null;
   schedule.dirty = true;
   return ok(undefined);
 }
@@ -575,13 +406,10 @@ export function replaceSystem<
  * Returns `Result.err` with `SystemSetNotRegisteredError` if the set token
  * fails identity validation.
  */
-export function addSystems<
-  const Qs extends ReadonlyArray<QueryDescriptor>,
-  const Ps extends ReadonlyArray<unknown>,
->(
+export function addSystems<const Qs extends ReadonlyArray<QueryDescriptor>>(
   schedule: Schedule,
   set: SystemSet,
-  systems: ReadonlyArray<SystemDescriptor<Qs, Ps>>,
+  systems: ReadonlyArray<SystemDescriptor<Qs>>,
 ): Result<void, SystemSetNotRegisteredError> {
   const validated = validateSystemSetTokens([set]);
   if (!validated.ok) {
@@ -593,8 +421,6 @@ export function addSystems<
   if (!record) {
     record = {
       members: new Set(),
-      before: new Set(),
-      after: new Set(),
       runIf: set.runIf,
       chained: set.chained ?? false,
     };
@@ -609,92 +435,6 @@ export function addSystems<
     }
     // Always add membership — multi-belong is supported.
     record.members.add(name);
-  }
-
-  schedule.dirty = true;
-  return ok(undefined);
-}
-
-/**
- * Record set-level ordering constraints (M1 record layer only — no edge
- * expansion until M2's buildSchedule).
- *
- * Validates all input tokens (main set + before/after members) before
- * writing. On success, writes the before/after relationships into the
- * per-set record and marks the schedule dirty. On failure, writes nothing
- * (no partial record, no edges, no dirty).
- *
- * Returns `Result.err` with `SystemSetNotRegisteredError` if any token
- * fails identity validation.
- */
-export function configureSets(
-  schedule: Schedule,
-  set: SystemSet,
-  before?: readonly SystemSet[],
-  after?: readonly SystemSet[],
-): Result<void, SystemSetNotRegisteredError> {
-  // Collect all tokens to validate.
-  const allTokens: SystemSet[] = [set];
-  if (before) {
-    for (const b of before) allTokens.push(b);
-  }
-  if (after) {
-    for (const a of after) allTokens.push(a);
-  }
-
-  const validated = validateSystemSetTokens(allTokens);
-  if (!validated.ok) {
-    return err(validated.error);
-  }
-
-  // Ensure a record exists for the main set.
-  const setName = set.name;
-  let record = schedule.sets.get(setName);
-  if (!record) {
-    record = {
-      members: new Set(),
-      before: new Set(),
-      after: new Set(),
-      runIf: set.runIf,
-      chained: set.chained ?? false,
-    };
-    schedule.sets.set(setName, record);
-  }
-
-  // Record before/after edges (M1 only stores; M2 expands).
-  if (before) {
-    for (const b of before) {
-      record.before.add(b.name);
-      let targetRecord = schedule.sets.get(b.name);
-      if (!targetRecord) {
-        targetRecord = {
-          members: new Set(),
-          before: new Set(),
-          after: new Set(),
-          runIf: b.runIf,
-          chained: b.chained ?? false,
-        };
-        schedule.sets.set(b.name, targetRecord);
-      }
-      targetRecord.after.add(setName);
-    }
-  }
-  if (after) {
-    for (const a of after) {
-      record.after.add(a.name);
-      let targetRecord = schedule.sets.get(a.name);
-      if (!targetRecord) {
-        targetRecord = {
-          members: new Set(),
-          before: new Set(),
-          after: new Set(),
-          runIf: a.runIf,
-          chained: a.chained ?? false,
-        };
-        schedule.sets.set(a.name, targetRecord);
-      }
-      targetRecord.before.add(setName);
-    }
   }
 
   schedule.dirty = true;
@@ -754,40 +494,8 @@ export function buildSchedule(schedule: Schedule): string[] {
     }
   }
 
-  // ── Set-level edge expansion (M2) ──
-  // Expand set before/after edges and chain edges into system-level edges.
-  // This runs between the adjacency-list construction and Kahn's sort so the
-  // existing cycle detection and stable tie-breaking apply unchanged.
+  // Set membership contributes only run conditions and optional chaining.
   for (const [, setRecord] of schedule.sets) {
-    // 1. Expand setA-before-setB edges: each member of setA must run before each member of setB
-    for (const beforeName of setRecord.before) {
-      const targetRecord = schedule.sets.get(beforeName);
-      if (!targetRecord) continue; // skip unknown sets
-      for (const srcMember of setRecord.members) {
-        if (!nameSet.has(srcMember)) continue; // skip unknown systems
-        for (const tgtMember of targetRecord.members) {
-          if (!nameSet.has(tgtMember)) continue;
-          // srcMember → tgtMember (srcMember runs before tgtMember)
-          addEdge(srcMember, tgtMember);
-        }
-      }
-    }
-
-    // 2. Expand setA-after-setB edges: each member of setB must run before each member of setA
-    for (const afterName of setRecord.after) {
-      const targetRecord = schedule.sets.get(afterName);
-      if (!targetRecord) continue;
-      for (const tgtMember of targetRecord.members) {
-        if (!nameSet.has(tgtMember)) continue;
-        for (const srcMember of setRecord.members) {
-          if (!nameSet.has(srcMember)) continue;
-          // tgtMember → srcMember (tgtMember runs before srcMember)
-          addEdge(tgtMember, srcMember);
-        }
-      }
-    }
-
-    // 3. Chain expansion: each consecutive pair of members in insertion order
     if (setRecord.chained) {
       const members = [...setRecord.members];
       for (let i = 0; i < members.length - 1; i++) {
@@ -895,9 +603,23 @@ function findCyclePath(remaining: string[], adj: Map<string, string[]>): readonl
   return remaining;
 }
 
-/** Interface for resource existence check (injected from World). */
-export interface ResourceChecker {
-  hasResource(key: string): boolean;
+function poisonSystemFailure(world: World, systemName: string, cause: unknown): void {
+  const poison = world[worldInternal].poisonExecution;
+  poison({
+    code: 'shared-kernel-failed',
+    kernelName: `system:${systemName}`,
+    cause,
+    partialWrite: true,
+    retryable: false,
+  });
+}
+
+function abortOutstandingCommands(
+  commandsBySystem: Map<string, ReturnType<typeof createCommandBuffer>>,
+): void {
+  for (const commands of commandsBySystem.values()) {
+    if (commands.status === 'open') commands.abort();
+  }
 }
 
 /**
@@ -907,14 +629,13 @@ export interface ResourceChecker {
  * and resource checks.
  *
  * Layer 2 (ParamValidation): query empty → skip, resource missing → invalid.
- * Layer 3 (ErrorHandler): system fn returning a Result err branch → error handler.
+ * A returned Result error poisons the active frame and stops execution.
  */
-export function runSchedule(
+function runScheduleBody(
   schedule: Schedule,
   world: World,
-  errorHandler?: ErrorHandler,
-  selectedNames?: readonly string[],
-  commandsBySystem = new Map<string, ReturnType<typeof createCommandBuffer>>(),
+  selectedNames: readonly string[] | undefined,
+  commandsBySystem: Map<string, ReturnType<typeof createCommandBuffer>>,
   finalDrain = true,
 ): void {
   if (schedule.dirty) {
@@ -929,8 +650,6 @@ export function runSchedule(
       return (
         record !== undefined &&
         record.descriptor.queries.length === 0 &&
-        record.descriptor.params === undefined &&
-        record.descriptor.resources === undefined &&
         record.descriptor.runIf === undefined &&
         (schedule.predecessors.get(name)?.size ?? 0) === 0
       );
@@ -941,22 +660,36 @@ export function runSchedule(
       /* istanbul ignore next -- sortedOrder comes from systems Map keys */
       if (!record) continue;
 
-      const commands = createCommandBuffer(world);
+      const commands = createCommandBuffer(world, {
+        systemName: name,
+        scheduleName: schedule.token.name,
+      });
       commandsBySystem.set(name, commands);
-      const returnValue = record.descriptor.fn(world, [], commands, []);
+      let returnValue: unknown;
+      try {
+        returnValue = record.descriptor.fn(world, [], commands);
+      } catch (error) {
+        abortOutstandingCommands(commandsBySystem);
+        poisonSystemFailure(world, name, error);
+        throw new SystemFailedError(name, schedule.token.name, error);
+      }
       if (returnValue && typeof returnValue === 'object' && 'ok' in returnValue) {
         const result = returnValue as { ok: boolean; error?: unknown };
-        if (result.ok === false && result.error !== undefined && errorHandler) {
-          errorHandler(result.error, {
-            severity: Severity.Panic,
-            systemName: name,
-          });
+        if (result.ok === false && result.error !== undefined) {
+          abortOutstandingCommands(commandsBySystem);
+          poisonSystemFailure(world, name, result.error);
+          throw new SystemFailedError(name, schedule.token.name, result.error);
         }
       }
     }
     if (finalDrain) {
-      for (const commands of commandsBySystem.values()) {
-        flushCommands(commands, world);
+      try {
+        for (const commands of commandsBySystem.values()) {
+          flushCommands(commands, world);
+        }
+      } catch (error) {
+        abortOutstandingCommands(commandsBySystem);
+        throw error;
       }
     }
     return;
@@ -992,7 +725,14 @@ export function runSchedule(
     // Apply only buffers that have an explicit graph edge into this system.
     for (const predecessor of schedule.predecessors.get(name) ?? []) {
       const producerCommands = commandsBySystem.get(predecessor);
-      if (producerCommands) flushCommands(producerCommands, world);
+      if (producerCommands) {
+        try {
+          flushCommands(producerCommands, world);
+        } catch (error) {
+          abortOutstandingCommands(commandsBySystem);
+          throw error;
+        }
+      }
     }
 
     // Lazily initialize the persistent executable queries on first run.
@@ -1003,35 +743,7 @@ export function runSchedule(
         return result.value;
       });
     }
-    if (record.paramQueries === null) {
-      record.paramQueries = (record.descriptor.params ?? []).map((param) =>
-        (param as SystemParamDefinition<unknown>).queries.map((descriptor) => {
-          const result = world.query(descriptor);
-          if (!result.ok) throw result.error;
-          return result.value;
-        }),
-      );
-    }
-
-    // ── Layer 2: ParamValidation ──
-    const validation = validateSystemParams(record, world);
-    /* istanbul ignore next -- skipped path reserved for future Populated/Single query types */
-    if (validation.tag === 'skipped') {
-      // Expected absence — skip system body silently, continue to next system
-      continue;
-    }
-    if (validation.tag === 'invalid') {
-      // Unexpected absence — collect error via ErrorHandler
-      if (errorHandler) {
-        errorHandler(validation.error, {
-          severity: Severity.Panic,
-          systemName: name,
-        });
-      }
-      continue;
-    }
-
-    // ── Set-level runIf AND gate (D-5) — evaluated after ParamValidation 'ok',
+    // ── Set-level runIf AND gate (D-5) ──
     // before system-level runIf. Each set's runIf is lazily cached per frame. ──
     const setNames = systemToSets.get(name);
     let allSetConditionsPass = true;
@@ -1061,82 +773,74 @@ export function runSchedule(
       continue;
     }
 
-    const values = (record.descriptor.params ?? []).map((param, index) => {
-      const resolver = (param as unknown as SystemParamDefinition<unknown>).resolve;
-      return resolver(world, (record.paramQueries?.[index] ?? []) as never);
-    });
-
     // ── Layer 3: system execution + Result collection ──
     // trusted-cast: the descriptor tuple constructed the matching Query tuple above.
-    const commands = createCommandBuffer(world);
+    const commands = createCommandBuffer(world, {
+      systemName: name,
+      scheduleName: schedule.token.name,
+    });
     commandsBySystem.set(name, commands);
-    const returnValue = record.descriptor.fn(
-      world,
-      record.queries as Parameters<typeof record.descriptor.fn>[1],
-      commands,
-      values as unknown as Parameters<typeof record.descriptor.fn>[3],
-    );
+    let returnValue: unknown;
+    try {
+      returnValue = record.descriptor.fn(
+        world,
+        record.queries as Parameters<typeof record.descriptor.fn>[1],
+        commands,
+      );
+    } catch (error) {
+      abortOutstandingCommands(commandsBySystem);
+      poisonSystemFailure(world, name, error);
+      throw new SystemFailedError(name, schedule.token.name, error);
+    }
 
-    // If system fn returns a Result with err, invoke ErrorHandler
+    // A returned Result error is a poisoned frame failure.
     if (returnValue && typeof returnValue === 'object' && 'ok' in (returnValue as object)) {
       const result = returnValue as { ok: boolean; error?: unknown };
       if (result.ok === false && result.error !== undefined) {
-        if (errorHandler) {
-          errorHandler(result.error, {
-            severity: Severity.Panic,
-            systemName: name,
-          });
-        }
+        abortOutstandingCommands(commandsBySystem);
+        poisonSystemFailure(world, name, result.error);
+        throw new SystemFailedError(name, schedule.token.name, result.error);
       }
     }
-    // void return → treated as ok, ErrorHandler not called
+    // void return is treated as successful execution.
   }
 
   if (finalDrain) {
     // A schedule boundary drains every remaining buffer, including commands
     // enqueued by lifecycle hooks while another command is being applied.
-    for (const commands of commandsBySystem.values()) {
-      flushCommands(commands, world);
+    try {
+      for (const commands of commandsBySystem.values()) {
+        flushCommands(commands, world);
+      }
+    } catch (error) {
+      abortOutstandingCommands(commandsBySystem);
+      throw error;
     }
   }
 }
 
 /**
- * Validate system parameters before execution (Layer 2).
- * - Query empty match → ok (Bevy: Query is always Ok; skip is for Populated/Single — not yet in forgeax).
- * - All required resources must exist; otherwise → invalid.
- *
- * Note: "query empty → skipped" path is available via the ParamValidation type
- * but not auto-triggered for plain queries. Future extensions (Populated, Single)
- * will use the skipped path.
+ * Execute one schedule with a terminalization guard.  Query construction,
+ * run-if evaluation, DAG compilation, and command draining may all throw an
+ * unexpected error; every still-open buffer is nevertheless aborted before the
+ * error reaches World.update.
  */
-function validateSystemParams(record: SystemRecord, world: ResourceChecker): ParamValidation {
-  // Check required resources
-  if (record.descriptor.resources) {
-    for (const key of record.descriptor.resources) {
-      if (!world.hasResource(key)) {
-        return {
-          tag: 'invalid',
-          error: new Error(
-            `Required resource "${key}" not found for system "${record.descriptor.name}".`,
-          ),
-        };
-      }
-    }
+export function runSchedule(
+  schedule: Schedule,
+  world: World,
+  selectedNames?: readonly string[],
+  commandsBySystem = new Map<string, ReturnType<typeof createCommandBuffer>>(),
+  finalDrain = true,
+): void {
+  let completed = false;
+  try {
+    runScheduleBody(schedule, world, selectedNames, commandsBySystem, finalDrain);
+    completed = true;
+  } finally {
+    // When Update is split around the FixedUpdate anchor, the first segment
+    // deliberately leaves its command buffers open so FixedUpdate observes a
+    // stable pre-frame World and the second segment can drain them. Only the
+    // final segment (or an exceptional exit) may abort outstanding buffers.
+    if (!completed || finalDrain) abortOutstandingCommands(commandsBySystem);
   }
-
-  for (const param of record.descriptor.params ?? []) {
-    for (const key of (param as SystemParamDefinition<unknown>).resources ?? []) {
-      if (!world.hasResource(key)) {
-        return {
-          tag: 'invalid',
-          error: new Error(
-            `Required resource "${key}" not found for system parameter "${(param as SystemParamDefinition<unknown>).name}" in system "${record.descriptor.name}".`,
-          ),
-        };
-      }
-    }
-  }
-
-  return { tag: 'ok' };
 }

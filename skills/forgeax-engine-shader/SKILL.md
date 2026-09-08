@@ -1,9 +1,18 @@
 ---
 name: forgeax-engine-shader
-description: Author WGSL modules that are consumed by cooked MaterialAsset contracts.
+description: ForgeaX WGSL composition, reflection, and cooked shader contracts. Use when authoring or debugging custom shaders, parameter schemas, bindings, or shader readiness.
 ---
 
 # forgeax-engine-shader
+
+## Contract index
+
+The shader compiler is build-time only: it composes real module slots, reflects
+the closed compiler context, and records actual WASM provenance. Material
+identity is layered across `materialContractDigest`, `sourceClosureDigest`,
+`layoutIdentity`, `programIdentity`, `cookIdentity`, and
+`materialPublicationIdentity`; runtime receives the Pack projection and never
+compiles, cooks, or interprets feature macros.
 
 > [!IMPORTANT]
 > The authoring route is WGSL source plus one MaterialAsset contract. Build-time composition and reflection publish a module manifest entry; material cook publishes the artifact and receipt; runtime resolves both through the catalog. App code never installs or duplicates a shader artifact. The recovery route is source or cook repair.

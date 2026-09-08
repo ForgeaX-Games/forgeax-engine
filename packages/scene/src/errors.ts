@@ -2,6 +2,11 @@ import type { EntityHandle } from '@forgeax/engine-ecs';
 
 export type SceneErrorCode = 'hierarchy-broken' | 'hierarchy-cycle';
 
+/** Scene-instantiation failures owned by the scene package. */
+export type SceneInstanceErrorCode = 'component-not-defined' | 'scene-override-type-mismatch';
+
+export { ComponentNotDefinedError } from '@forgeax/engine-ecs/projection';
+
 export interface SceneErrorDetail {
   readonly entity: EntityHandle;
   readonly parent: EntityHandle;

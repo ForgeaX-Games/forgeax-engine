@@ -50,12 +50,12 @@ Open `http://localhost:5173/?game=game-default` in a WebGPU browser. Start with
 `assets/scene.pack.json` and `assets/multi-material-target.pack.json` for persistent world content.
 The `RedBox` mesh uses two positional material slots, so its triangle-list body and line-list accent
 are the first multi-primitive asset recipe in the template. Start with `assets/plugins/scene-runtime.ts` for scene
-loading, fallback, and physics attachment. `main.ts` is only the stable entry; `assets/plugins/bootstrap.ts`
-assembles the asset-resident plugin bundle, while `assets/plugins/systems/gameplay.ts` wires the named
+loading, fallback, and physics attachment. `main.ts` is only the stable entry; `assets/plugins/game-plugin.ts`
+is the root native Cordis plugin, while `assets/plugins/systems/gameplay.ts` wires the named
 input, camera, movement, projectile, feedback, and camera-follow systems (top-down, fixed-radius orbit,
 FPS/free-flight, and bounded orthographic Map).
-`assets/plugins/bootstrap.ts` is intentionally only an 18-line host phase coordinator. Its three
-neighbors make the assembly map explicit: `gameplay-targets.ts` owns the target roster and GUID-backed
+`assets/plugins/game-plugin.ts` owns only realm composition and reversible effects. Its three neighbors
+make the assembly map explicit: `gameplay-targets.ts` owns the target roster and GUID-backed
 asset plugins, `gameplay-session.ts` owns the one-shot runtime capabilities and reset transaction, and
 `gameplay-wiring.ts` registers projections and systems. The guided profile/JPEG/WebM/FBX-companion paths
 are part of the normal game, while the built-in mesh, FBX cube, and glTF comparisons are created only by

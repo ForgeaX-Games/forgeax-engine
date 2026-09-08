@@ -31,6 +31,7 @@ import type {
   defineComponent,
   FieldValueType,
   SchemaFieldType,
+  SchemaOf,
   ShapeOf,
   TypedArrayFor,
 } from '../component';
@@ -75,19 +76,19 @@ describe('array vocab - keyword recognition (w12, AC-01)', () => {
 describe('array vocab - three-application-point inference (w12, AC-01 / AC-02)', () => {
   it('application point (a) - inside world.addSystem fn callback', () => {
     type Foo = ReturnType<typeof defineComponent<'Foo', { entities: 'array<entity>' }>>;
-    type FooShape = ShapeOf<Foo['schema']>;
+    type FooShape = ShapeOf<SchemaOf<Foo>>;
     expectTypeOf<FooShape['entities']>().toEqualTypeOf<Uint32Array>();
   });
 
   it('application point (b) - inside a QueryRow loop', () => {
     type Foo = ReturnType<typeof defineComponent<'Foo', { entities: 'array<entity>' }>>;
-    type FooShape = ShapeOf<Foo['schema']>;
+    type FooShape = ShapeOf<SchemaOf<Foo>>;
     expectTypeOf<FooShape['entities']>().toEqualTypeOf<Uint32Array>();
   });
 
   it('application point (c) - direct world.get call site', () => {
     type Foo = ReturnType<typeof defineComponent<'Foo', { entities: 'array<entity>' }>>;
-    type FooShape = ShapeOf<Foo['schema']>;
+    type FooShape = ShapeOf<SchemaOf<Foo>>;
     // expectType: direct world.get(e, Foo).unwrap().entities matches TypedArrayFor<'u32'>.
     const arr: TypedArrayFor<'u32'> = new Uint32Array(0);
     expectTypeOf(arr).toEqualTypeOf<FooShape['entities']>();

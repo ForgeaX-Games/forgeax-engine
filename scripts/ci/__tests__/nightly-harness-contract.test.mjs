@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { test } from 'node:test';
 
 const workflow = readFileSync(resolve('.github/workflows/nightly.yml'), 'utf8');
+const harnessSync = readFileSync(resolve('scripts/sync-harness.mjs'), 'utf8');
 
 function jobSection(name) {
   const start = workflow.indexOf(`  ${name}:`);
@@ -38,4 +39,19 @@ test('nightly materializes the authenticated harness before documentation tests'
   ]) {
     assert.match(harness, new RegExp(`test -f \\.forgeax-harness/docs/${document}`));
   }
+  assert.match(
+    smokeJob,
+    /- name: Setup Node\.js for Linux Emscripten[\s\S]*?package-manager-cache: false/,
+  );
+  assert.match(
+    smokeJob,
+    /- name: Setup Node\.js \(non-Linux upstream\)[\s\S]*?package-manager-cache: false/,
+  );
+  assert.match(smokeJob, /NODE_OPTIONS: --max-old-space-size=4096/);
+});
+
+test('sparse harness sync skips the clone checkout before applying docs patterns', () => {
+  assert.match(harnessSync, /'--filter=blob:none', '--sparse', '--no-checkout'/);
+  assert.match(harnessSync, /'sparse-checkout', 'set', 'docs'/);
+  assert.match(harnessSync, /git\(\['read-tree', '-mu', 'HEAD'\]/);
 });

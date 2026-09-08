@@ -13,7 +13,7 @@ import {
 } from '@forgeax/engine-types';
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
-import type { CatalogRecord } from '../registry/catalog';
+import { type CatalogRecord, fetchPackIndex } from '../registry/catalog';
 import { registerPackagesFromIndex } from '../registry/load-by-guid';
 
 const GUID_A = '11111111-1111-4111-8111-111111111111';
@@ -39,7 +39,10 @@ function meshPayload(): MeshAsset {
     vertices: new Float32Array(36), // 3 verts * 12
     indices: Uint16Array.of(0, 1, 2),
     attributes: { position: Float32Array.of(0, 0, 0, 1, 0, 0, 0, 1, 0) },
-    submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+    submeshes: [
+      { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list', materialSlot: 0 },
+    ],
+    materialSlots: [{ slotName: 'Default' }],
   } as MeshAsset;
 }
 
@@ -80,7 +83,6 @@ describe('catalog + lookup', () => {
     const reg = makeRegistry();
     const bad = {
       kind: 'tileset',
-      guid: GUID_A,
       atlases: [],
       tileWidth: 16,
       tileHeight: 16,
@@ -100,6 +102,35 @@ describe('catalog + lookup', () => {
 });
 
 describe('loadByGuid', () => {
+  it('accepts a static pack-index after a runtime binding keeps dev scope state', async () => {
+    const reg = makeRegistry();
+    reg.configureRuntimeBinding(createStandaloneRuntimeAssetBinding('game-a'));
+    reg.configurePackIndex('/pack-index.json');
+    const originalFetch = globalThis.fetch;
+    const fetcher = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(
+          JSON.stringify([
+            {
+              guid: GUID_A,
+              packageUrl: '/assets/mesh.pack.json',
+              kind: 'mesh',
+            },
+          ]),
+        ),
+    );
+    vi.stubGlobal('fetch', fetcher);
+
+    try {
+      const result = await fetchPackIndex(reg);
+
+      expect(result.ok).toBe(true);
+      expect(fetcher).toHaveBeenCalledWith('/pack-index.json', { cache: 'no-store' });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('returns the payload for an already-catalogued GUID (fast path)', async () => {
     const reg = makeRegistry();
     reg.catalog(GUID_A, meshPayload());
@@ -187,6 +218,33 @@ describe('loadByGuid', () => {
 
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe('asset-not-imported');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('refreshCatalog bypasses the browser cache', async () => {
+    const reg = makeRegistry();
+    reg.configurePackIndex('/pack-index.json');
+    const originalFetch = globalThis.fetch;
+    const fetcher = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(
+          JSON.stringify([
+            {
+              guid: GUID_A,
+              packageUrl: '/runtime/mesh.pack.json',
+              kind: 'mesh',
+              sourcePath: 'authoring/mesh.glb',
+            },
+          ]),
+        ),
+    );
+    vi.stubGlobal('fetch', fetcher);
+
+    try {
+      await expect(reg.refreshCatalog()).resolves.toBe(true);
+      expect(fetcher).toHaveBeenCalledWith('/pack-index.json', { cache: 'no-store' });
     } finally {
       globalThis.fetch = originalFetch;
     }

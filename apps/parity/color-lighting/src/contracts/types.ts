@@ -57,6 +57,98 @@ export interface SceneCase {
   readonly budget: SceneCaseBudget;
 }
 
+export type VertexColorBackend = 'browser-webgpu' | 'dawn';
+export type VertexColorDomain = 'linearHdr' | 'displayEncoded';
+export type VertexColorReadbackMethod = 'copyTextureToBuffer' | 'readRenderTargetPixelsAsync';
+export type VertexColorCaseId =
+  | 'vertex-color-vec3'
+  | 'vertex-color-vec4'
+  | 'vertex-color-normalized'
+  | 'vertex-color-skinning'
+  | 'vertex-color-mixed-primitives'
+  | 'vertex-color-mask-taa'
+  | 'vertex-color-no-color-baseline';
+export type VertexColorRgba = readonly [number, number, number, number];
+
+export interface VertexColorSemanticFixture {
+  readonly schemaVersion: 1;
+  readonly caseId: string;
+  readonly semantic: string;
+  readonly colorDomain: VertexColorDomain;
+  readonly samplePoints: readonly {
+    readonly id: string;
+    readonly coordinate: readonly [number, number];
+  }[];
+  readonly [field: string]: unknown;
+}
+
+export interface VertexColorProducerIdentity {
+  readonly implementation: 'forgeax' | 'three';
+  readonly version: string;
+  readonly renderer: 'webgpu';
+  readonly adapterId: string;
+  readonly pinnedCommit: string;
+  readonly buildIdentity: string;
+}
+
+export interface VertexColorSampleObservation {
+  readonly id: string;
+  readonly coordinate: readonly [number, number];
+  readonly expected: VertexColorRgba;
+  readonly observed: {
+    readonly forgeax: VertexColorRgba;
+    readonly three: VertexColorRgba;
+  };
+  readonly rgbMaxDelta: number;
+  readonly alphaDelta: number;
+  readonly verdict: 'passed' | 'failed';
+  readonly confidence: 'high' | 'medium' | 'low';
+}
+
+export interface VertexColorProducerSample {
+  readonly id: string;
+  readonly coordinate: readonly [number, number];
+  readonly rgba: VertexColorRgba;
+}
+
+export interface VertexColorCaptureOutput {
+  readonly backend: VertexColorBackend;
+  readonly frameCount: 300;
+  readonly sourceSha: string;
+  readonly sourceFixtureHash: string;
+  readonly colorDomain: VertexColorDomain;
+  readonly samples: readonly VertexColorProducerSample[];
+  readonly linear: readonly number[];
+  readonly final: readonly number[];
+  readonly readback: VertexColorReadbackMethod;
+}
+
+export interface VertexColorFalsifierResult {
+  readonly kind: 'white-color' | 'no-color-baseline';
+  readonly verdict: 'passed' | 'failed';
+  readonly observed: string;
+}
+
+export interface VertexColorCaseReport {
+  readonly schemaVersion: 3;
+  readonly kind: 'vertex-color';
+  readonly caseId: string;
+  readonly required: true;
+  readonly invocationId: string;
+  readonly backend: VertexColorBackend;
+  readonly sourceSha: string;
+  readonly sourceFixtureHash: string;
+  readonly colorDomain: VertexColorDomain;
+  readonly frameCount: 300;
+  readonly epsilon: { readonly rgb: 0.05; readonly alpha: 0.05 };
+  readonly producers: { readonly forgeax: VertexColorProducerIdentity; readonly three: VertexColorProducerIdentity };
+  readonly samples: readonly VertexColorSampleObservation[];
+  readonly falsifier: VertexColorFalsifierResult;
+  readonly artifacts: readonly string[];
+  readonly verdict: 'passed' | 'failed';
+  readonly status: 'complete' | 'failed' | 'blocked';
+}
+
 export interface ParityProvenance {
   readonly implementation: string;
   readonly version: string;
@@ -103,7 +195,7 @@ export interface CaseReport {
   readonly attachmentEvidence?: AttachmentReport;
   readonly budget: SceneCaseBudget;
   readonly metrics: CaseMetrics;
-  readonly verdict: 'notRun' | 'failed' | 'passed';
+  readonly verdict: CaseVerdict;
   readonly status: 'partial' | 'failed' | 'complete';
   readonly firstDivergence?: FirstDivergence | null;
 }

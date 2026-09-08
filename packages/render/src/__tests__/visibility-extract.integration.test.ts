@@ -1,13 +1,8 @@
 import { World } from '@forgeax/engine-ecs';
-import {
-  extractFrame,
-  extractFrames,
-  prepareExtractContext,
-  Visibility,
-  VisibilityStateValue,
-} from '@forgeax/engine-render/internal';
 import { ChildOf, registerPropagateTransforms, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
+import { Visibility, VisibilityStateValue } from '../components/visibility';
+import { extractFrame, extractFrames, prepareExtractContext } from '../render-system-extract';
 
 function transform(pos: [number, number, number]) {
   return {
@@ -53,19 +48,29 @@ describe('visibility extract orchestration', () => {
     const { world, parent, child } = makeWorld();
     world.update(0).unwrap();
     const before = [...world.get(child, Transform).unwrap().world];
-    const internal = world as unknown as {
-      _getMutationEpoch(): number;
-      _getStructureEpoch(): number;
+    const beforeInspection = world.inspect();
+    const beforeShape = {
+      entityCount: beforeInspection.entityCount,
+      archetypeCount: beforeInspection.archetypeCount,
+      tableCount: beforeInspection.tableCount,
+      activeComponents: beforeInspection.activeComponents,
+      systemCount: beforeInspection.systemCount,
+      resourceKeys: beforeInspection.resourceKeys,
     };
 
     world.set(parent, Transform, { pos: [9, 0, 0] }).unwrap();
-    const mutationBeforeExtract = internal._getMutationEpoch();
-    const structureBeforeExtract = internal._getStructureEpoch();
     extractFrames([world], 0);
 
     expect([...world.get(child, Transform).unwrap().world]).toEqual(before);
-    expect(internal._getMutationEpoch()).toBe(mutationBeforeExtract);
-    expect(internal._getStructureEpoch()).toBe(structureBeforeExtract);
+    const afterInspection = world.inspect();
+    expect({
+      entityCount: afterInspection.entityCount,
+      archetypeCount: afterInspection.archetypeCount,
+      tableCount: afterInspection.tableCount,
+      activeComponents: afterInspection.activeComponents,
+      systemCount: afterInspection.systemCount,
+      resourceKeys: afterInspection.resourceKeys,
+    }).toEqual(beforeShape);
     world.update(0).unwrap();
     expect(world.get(child, Transform).unwrap().world[12]).toBeCloseTo(11);
   });

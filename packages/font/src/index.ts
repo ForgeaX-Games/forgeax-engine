@@ -1,18 +1,7 @@
-// @forgeax/engine-font - MSDF font atlas baking and runtime font asset plumbing.
+// @forgeax/engine-font - runtime-safe font asset contribution.
 //
-// The bake pipeline (cli-font.ts) reads a TTF and produces an MSDF atlas PNG +
-// glyph-metrics sidecar via @zappar/msdf-generator. The pure helpers
-// (bakeFont / encodePng / atlasToSidecar) are exported so consumers + tests
-// can drive the bake with an injected generator (real: @zappar; mock: tests).
-
-export {
-  atlasToSidecar,
-  type BakeAtlas,
-  type BakeGlyph,
-  type BakeResult,
-  type BakeSidecar,
-  bakeFont,
-  encodePng,
-  type MsdfGenerator,
-  runCliFont,
-} from './cli-font.js';
+// Build-time baking lives behind the explicit Node-only `./cli-font` and
+// `./font-importer` subpaths. Keeping the main entry free of the CLI's
+// `node:buffer`/WASM graph prevents App bundles from pulling the producer
+// toolchain into the browser runtime.
+export { fontContribution } from './runtime/font-decoder.js';

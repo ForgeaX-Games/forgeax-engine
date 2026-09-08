@@ -21,6 +21,13 @@
       },
       "default": null
     },
+    "./cli-font": {
+      "types": "./dist/cli-font.d.ts",
+      "node": {
+        "import": "./dist/cli-font.mjs"
+      },
+      "default": null
+    },
     "./package.json": "./package.json"
   },
   "main": "./dist/index.mjs",

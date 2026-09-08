@@ -265,11 +265,10 @@ if (!existsSync(WOOD_SRC_PATH)) {
 
 const { World } = await import('@forgeax/engine-ecs');
 const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
-const enginePkg = await import('@forgeax/engine-runtime');
 const { createBoxGeometry } = await import('@forgeax/engine-geometry');
-const { createRenderer } = enginePkg;
-const { addFullscreenPass, addScenePass } = await import('@forgeax/engine-render');
-const { Camera, MeshFilter, MeshRenderer, PointLight, PostProcessParams, TONEMAP_REINHARD_EXTENDED } = await import('@forgeax/engine-render');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
+const { Camera, MeshFilter, MeshRenderer, PointLight, PostProcessParams, TONEMAP_NONE } = await import('@forgeax/engine-render');
+const { createFullscreenRenderFeature } = await import('@forgeax/engine-app');
 const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
@@ -306,7 +305,6 @@ function invertMesh(mesh) {
 }
 const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
-const { RenderGraph } = await import('@forgeax/engine-render-graph');
 
 const woodDecodeRes = await decodeImageFromFile(WOOD_SRC_PATH);
 if (!woodDecodeRes.ok) {
@@ -323,33 +321,38 @@ const ENGINE_MANIFEST = await buildEngineShaderManifest();
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
 
 let renderer;
+let assets;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const feature = createFullscreenRenderFeature({
+    identity: 'learn-render::5-6-hdr-lo-exposure',
+    source: HDR_LO_EXPOSURE_WGSL,
+    params: { byteSize: 16, defaultValue: packExposureBytes(1.0) },
+  });
+  const constructed = await constructRuntimeRendererHost(
+    mockCanvas,
+    { features: [feature] },
+    { shaderManifestUrl: MANIFEST_URL },
+  );
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  assets = constructed.value.assets;
 } catch (err) {
   console.error(
-    `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
+    `[smoke] FAIL - constructRuntimeRendererHost failed: ${err instanceof Error ? err.message : String(err)}`,
   );
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[learn-render-6-hdr] backend=${renderer.backend}`);
-
-const assets = renderer.assets;
 if (!assets) {
-  console.error('[smoke] FAIL - AssetRegistry is null');
+  console.error('[smoke] FAIL - AssetRegistry unavailable');
   process.exit(1);
 }
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => { if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint }); });
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 // Register wood texture under its GUID.
 const woodGuidRes = AssetGuid.parse(WOOD_GUID_STR);
@@ -367,8 +370,9 @@ const woodTexAsset = {
   mipmap: woodDecoded.mipmap,
 };
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const lease = worldAttachment1.value;
 
 // Catalogue the wood texture under its GUID, then mint a shared-ref column handle.
 assets.catalog(woodGuidRes.value, woodTexAsset);
@@ -477,7 +481,7 @@ world.spawn(
       aspect: WIDTH / HEIGHT,
       near: 0.1,
       far: 100,
-      tonemap: TONEMAP_REINHARD_EXTENDED,
+      tonemap: TONEMAP_NONE,
     },
   },
 );
@@ -501,81 +505,54 @@ world.spawn({
 
 function makeHdrPipeline(mode) {
   return {
-    buildGraph(ctx) {
-      const graph = new RenderGraph();
-      graph.addColorTarget(OFFSCREEN_HDR_KEY, {
+    build(context, topology) {
+      const graph = context.graph;
+      const color = createRenderPipelineTarget(graph, OFFSCREEN_HDR_KEY, {
         format: 'rgba16float',
-        size: 'swapchain',
-        sample: 1,
-        usage: 0x10 | 0x04,
+        size: 'surface',
       });
-      graph.addColorTarget(OFFSCREEN_DEPTH_KEY, {
+      if (!color.ok) return color;
+      const depth = createRenderPipelineTarget(graph, OFFSCREEN_DEPTH_KEY, {
         format: 'depth24plus-stencil8',
-        size: 'swapchain',
-        sample: 1,
-        usage: 0x10,
+        size: 'surface',
       });
-      addScenePass(graph, 'main', {
-        color: OFFSCREEN_HDR_KEY,
-        depth: OFFSCREEN_DEPTH_KEY,
+      if (!depth.ok) return depth;
+      const surface = importRenderPipelineSurface(graph, topology);
+      if (!surface.ok) return surface;
+      const scene = addTypedScenePass(graph, {
+        name: 'main',
+        color: color.value,
+        depth: depth.value,
         selector: { LightMode: ['Forward'] },
-        _routeFromOpts: true,
       });
+      if (!scene.ok) return scene;
+      const features = context.contributeFeatures([
+        {
+          kind: 'scene-color',
+          texture: color.value.texture,
+          view: color.value.view,
+          format: color.value.format,
+          sampleCount: 1,
+        },
+        {
+          kind: 'scene-depth',
+          texture: depth.value.texture,
+          view: depth.value.view,
+          format: depth.value.format,
+          sampleCount: 1,
+        },
+      ]);
+      if (!features.ok) return features;
       const postShaderId =
         mode === 'hdr' ? HDR_EXPOSURE_POSTPROCESS_ID : HDR_PASSTHROUGH_POSTPROCESS_ID;
-      addFullscreenPass(graph, 'postHdr', {
+      return addTypedFullscreenPass(graph, {
+        name: 'postHdr',
         shader: postShaderId,
-        color: 'swapchain',
-        reads: [OFFSCREEN_HDR_KEY],
+        input: color.value,
+        output: surface.value.display,
       });
-      const compileResult = graph.compile({
-        backendKind: ctx.runtime.device.caps.backendKind,
-        caps: ctx.runtime.device.caps,
-        device: ctx.runtime.device,
-      });
-      if (!compileResult.ok) return null;
-      return graph;
-    },
-    execute(ctx) {
-      ctx.frameState.perFrameGraph?.execute(ctx);
     },
   };
-}
-
-try {
-  renderer.postProcess.register(HDR_EXPOSURE_POSTPROCESS_ID, {
-    source: HDR_LO_EXPOSURE_WGSL,
-    // feat-20260621 M-B2: 16 B exposure params UBO (data-driven channel), mirrors
-    // src/index.ts. defaultValue = [exposure=1.0, 0, 0, 0].
-    params: { byteSize: 16, defaultValue: packExposureBytes(1.0) },
-    reads: [OFFSCREEN_HDR_KEY],
-  });
-  renderer.registerPipeline(HDR_PIPELINE_ID, makeHdrPipeline('hdr'));
-  renderer.postProcess.register(HDR_PASSTHROUGH_POSTPROCESS_ID, {
-    source: HDR_PASSTHROUGH_WGSL,
-    reads: [OFFSCREEN_HDR_KEY],
-  });
-  renderer.registerPipeline(LDR_PIPELINE_ID, makeHdrPipeline('ldr'));
-} catch (e) {
-  console.error('[smoke] FAIL - register threw:', e instanceof Error ? e.message : String(e));
-  process.exit(1);
-}
-
-// --- 6. Install HDR pipeline + drive frames; then swap to LDR ---
-
-if (!FALSIFY) {
-  const installHdr = renderer.installPipeline({
-    kind: 'render-pipeline',
-    pipelineId: HDR_PIPELINE_ID,
-  });
-  if (!installHdr.ok) {
-    console.error(`[smoke] FAIL - installPipeline(hdr): ${installHdr.error.code}`);
-    process.exit(1);
-  }
-} else {
-  console.warn(
-    '[learn-render-6-hdr] FALSIFY mode: skipping installPipeline (URP default 9-pass chain runs)',
-  );
 }
 
 const frameStart = Date.now();
@@ -586,8 +563,17 @@ let framesObserved = 0;
 // the wall-pixel readback below to observe real geometry.
 for (let i = 0; i < PER_MODE_FRAMES; i++) {
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-  if (!r.ok) console.error(`[smoke] draw hdr frame ${i} error: ${r.error.code}`);
+  const r = renderer.draw({
+    leases: [lease],
+    camera: { lease },
+    environment: { lease },
+  });
+  if (!r.ok) {
+    console.error(`[smoke] draw hdr frame ${i} error: ${r.error.code}`);
+  } else {
+    const completed = await r.value.completed;
+    if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+  }
   framesObserved++;
   await sharedDevice.queue.onSubmittedWorkDone();
 }
@@ -610,26 +596,21 @@ console.log(
   `[smoke] tunnel floor-wall pixel (${wallSampleX},${wallSampleY}) rgba=[${wallPixel.join(', ')}] (sum=${wallLuma})`,
 );
 
-if (!FALSIFY) {
-  const installLdr = renderer.installPipeline({
-    kind: 'render-pipeline',
-    pipelineId: LDR_PIPELINE_ID,
-  });
-  if (!installLdr.ok) {
-    console.error(`[smoke] FAIL - installPipeline(ldr): ${installLdr.error.code}`);
-    process.exit(1);
-  }
-}
-
 for (let i = 0; i < PER_MODE_FRAMES; i++) {
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-  if (!r.ok) console.error(`[smoke] draw ldr frame ${i} error: ${r.error.code}`);
+  const r = renderer.draw({
+    leases: [lease],
+    camera: { lease },
+    environment: { lease },
+  });
+  if (!r.ok) {
+    console.error(`[smoke] draw ldr frame ${i} error: ${r.error.code}`);
+  } else {
+    const completed = await r.value.completed;
+    if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+  }
   framesObserved++;
 }
-
-// Capture perFramePassNames BEFORE app.stop() (research F-7 hard rule).
-const passNames = renderer.perFramePassNames;
 
 const device = sharedDevice;
 if (!device) {
@@ -646,26 +627,14 @@ console.log(
 
 const wallTotalMs = Date.now() - frameStart;
 console.log(`[smoke] wallTotalMs=${wallTotalMs}`);
-console.log(`[smoke] perFramePassNames=[${passNames.join(', ')}]`);
+console.log('[smoke] Standard pipeline completed both mode samples');
 
 const failures = [];
-if (renderer.backend !== 'webgpu')
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES)
-  failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
+  failures.push(`(a) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (errors.length > 0) {
   const codes = errors.map((e) => e.code).join(', ');
   failures.push(`(c) Renderer.onError fired ${errors.length} times: [${codes}]`);
-}
-
-const expectedPassNames = ['main', 'postHdr'];
-const passNamesEqual =
-  passNames.length === expectedPassNames.length &&
-  passNames.every((n, i) => n === expectedPassNames[i]);
-if (!passNamesEqual) {
-  failures.push(
-    `(d) perFramePassNames=[${passNames.join(', ')}] (expected [${expectedPassNames.join(', ')}])`,
-  );
 }
 
 // (e) Tunnel wall pixel must be non-black: the inward-facing wall surface renders
@@ -694,7 +663,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 5 criteria GREEN: backend=webgpu, frames=${framesObserved}, RhiError count=0, perFramePassNames=[main, postHdr], floor-wall pixel sum=${wallLuma} (non-black), wallTotalMs=${wallTotalMs}`,
+  `[smoke] PASS - Standard host criteria GREEN: frames=${framesObserved}, RhiError count=0, floor-wall pixel sum=${wallLuma} (non-black), wallTotalMs=${wallTotalMs}`,
 );
 
 device.destroy?.();

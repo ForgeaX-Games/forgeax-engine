@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // apps/bevy/parallax-mapping/scripts/smoke-dawn.mjs
 //
 // Bevy 3D parallax_mapping Dawn smoke.
@@ -135,8 +136,7 @@ if (!existsSync(DIFFUSE_SRC_PATH) || !existsSync(NORMAL_SRC_PATH) || !existsSync
 
 const { World } = await import('@forgeax/engine-ecs');
 const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
-const enginePkg = await import('@forgeax/engine-runtime');
-const { createRenderer } = enginePkg;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const { HANDLE_QUAD } = await import('@forgeax/engine-assets-runtime');
@@ -164,7 +164,10 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  var hostAssets = constructed.value.assets;
 } catch (err) {
   console.error(
     `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
@@ -174,30 +177,15 @@ try {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[bevy-parallax-mapping] backend=${renderer.backend}`);
-
-const assets = renderer.assets;
-if (!assets) {
-  console.error('[smoke] FAIL - AssetRegistry is null');
-  process.exit(1);
-}
+const backend = renderer.inspect().capabilities.backendKind;
+console.log(`[bevy-parallax-mapping] backend=${backend}`);
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+subscribeSmokeErrors(renderer, (err) => errors.push({ code: err.code, hint: err.hint }));
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 // --- 5. Register custom parallax shader from the BUILT composed WGSL ---
 
-const shader = renderer.shader;
-if (shader === null) {
-  console.error('[smoke] FAIL - renderer.shader is null');
-  process.exit(1);
-}
 const DEMO_MANIFEST_PATH = resolve(APP_ROOT, 'dist', 'shaders', 'manifest.json');
 if (!existsSync(DEMO_MANIFEST_PATH)) {
   console.error(`[smoke] FAIL - dist/shaders/manifest.json missing at ${DEMO_MANIFEST_PATH}`);
@@ -214,13 +202,6 @@ if (!parallaxEntry) {
   console.error('[smoke] FAIL - manifest.materialShaders[] missing bevy::parallax_mapping entry');
   process.exit(1);
 }
-if (!shader.findMaterialArtifact('bevy::parallax_mapping').ok) {
-  shader.installMaterialArtifact('bevy::parallax_mapping', {
-    source: parallaxEntry.composedWgsl,
-    paramSchema: JSON.parse(parallaxEntry.paramSchema),
-  });
-}
-
 // --- 6. Catalogue textures + spawn scene ---
 
 const mkTex = (decoded) => ({
@@ -244,8 +225,15 @@ if (!guids.diffuse.ok || !guids.normal.ok || !guids.height.ok) {
 }
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const lease = worldAttachment1.value;
+const drawFrame = () => renderer.draw({
+  leases: [lease],
+  camera: { lease },
+  environment: { lease },
+});
+const assets = hostAssets;
 const diffuseTex = mkTex(diffuseDecoded);
 const normalTex = mkTex(normalDecoded);
 const heightTex = mkTex(heightDecoded);
@@ -305,7 +293,7 @@ const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = drawFrame();
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
 }
@@ -326,8 +314,7 @@ const wallTotalMs = Date.now() - frameStart;
 console.log(`[smoke] wallTotalMs=${wallTotalMs}`);
 
 const failures = [];
-if (renderer.backend !== 'webgpu')
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (backend !== 'webgpu') failures.push(`(a) backend=${backend} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES)
   failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (errors.length > 0) {

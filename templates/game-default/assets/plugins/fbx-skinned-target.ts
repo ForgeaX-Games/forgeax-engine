@@ -3,8 +3,12 @@ import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import type { PhysicsWorld } from '@forgeax/engine-physics';
 import { AnimationPlayer } from '@forgeax/engine-animation';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { SceneInstance, Visibility, VisibilityStateValue, visibilityStateFromU32 } from '@forgeax/engine-render';
-import { Transform } from '@forgeax/engine-scene';
+import {
+  SceneInstance,
+  Visibility,
+  VisibilityStateValue,
+} from '@forgeax/engine-render';
+import { Transform, worldDespawnScene } from '@forgeax/engine-scene';
 import { Skin } from '@forgeax/engine-skinning';
 import type { AnimationClip, Handle, SceneAsset } from '@forgeax/engine-types';
 import { vec3 } from '@forgeax/engine-math';
@@ -47,6 +51,13 @@ type Args = {
   readonly position?: readonly [number, number, number];
   readonly target?: EntityHandle;
 };
+
+function visibilityStateFromU32(value: number): keyof typeof VisibilityStateValue | undefined {
+  if (value === VisibilityStateValue.inherited) return 'inherited';
+  if (value === VisibilityStateValue.hidden) return 'hidden';
+  if (value === VisibilityStateValue.visible) return 'visible';
+  return undefined;
+}
 
 function parseGuid(text: string): ReturnType<typeof AssetGuid.parse> {
   return AssetGuid.parse(text);
@@ -217,7 +228,7 @@ export async function createFbxSkinnedTarget(args: Args): Promise<FbxSkinnedTarg
   };
   const dispose = (): void => {
     if (args.target !== undefined) setVisibility(args.target, targetInitialVisibility);
-    args.world.despawnScene(root);
+    worldDespawnScene(args.world, root);
   };
   return {
     root,

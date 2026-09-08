@@ -30,14 +30,15 @@
 // fixture pattern).
 
 import { World } from '@forgeax/engine-ecs';
-import { packMeshBin } from '@forgeax/engine-import';
+import { packMeshBinV4 } from '@forgeax/engine-import';
+import { decodeMeshBinHeader } from '@forgeax/engine-pack';
 import { pick } from '@forgeax/engine-picking';
 import { Camera, Materials, MeshFilter, MeshRenderer, perspective } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import type { Handle, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { meshIrToMeshAsset } from '../bridge.js';
 import type { GltfMeshIr } from '../parse-gltf.js';
+import { unwrapMeshAsset as meshIrToMeshAsset } from './bridge-test-helpers.js';
 
 // ---- helpers ----
 
@@ -72,23 +73,25 @@ describe('gltf e2e pick probe over pack JSON roundtrip (m5-1)', () => {
 
     // --- 3. Encode via packMeshBin: converts aabb Float32Array to plain
     //       array in the JSON tail (Array.from at import/src/mesh-bin.ts:153) ---
-    const bin = packMeshBin({
-      vertices: meshAsset.vertices,
-      indices: meshAsset.indices,
-      submeshes: meshAsset.submeshes,
-      aabb: meshAsset.aabb,
-      attributes: meshAsset.attributes,
-    });
+    const packed = packMeshBinV4(
+      {
+        vertices: meshAsset.vertices,
+        indices: meshAsset.indices,
+        submeshes: meshAsset.submeshes,
+        aabb: meshAsset.aabb,
+        attributes: meshAsset.attributes,
+      },
+      'gltf://pick',
+    );
+    expect(packed.ok).toBe(true);
+    if (!packed.ok) return;
+    const bin = packed.value;
 
-    // Parse header v2 (28 bytes) to extract the JSON tail.
-    const view = new DataView(bin.buffer, bin.byteOffset, bin.byteLength);
-    const vlen = view.getUint32(12, true);
-    const ilen = view.getUint32(16, true);
-    const iwidth = view.getUint32(20, true);
-    const jsonlen = view.getUint32(24, true);
-    const iBytes = ilen * iwidth;
-    const jsonOffset = 28 + vlen * 4 + iBytes;
-    const jsonBytes = bin.slice(jsonOffset, jsonOffset + jsonlen);
+    const header = decodeMeshBinHeader(bin, 'gltf://pick');
+    expect(header.ok).toBe(true);
+    if (!header.ok) return;
+    const jsonOffset = 80 + header.value.vertexBytes + header.value.indexBytes;
+    const jsonBytes = bin.slice(jsonOffset, jsonOffset + header.value.jsonBytes);
     const metaRaw = new TextDecoder().decode(jsonBytes);
 
     // Verify aabb is encoded as a plain number array in the JSON tail.
@@ -193,8 +196,15 @@ describe('gltf e2e pick probe over pack JSON roundtrip (m5-1)', () => {
       vertices: new Float32Array([-1, -1, -3, 1, -1, -3, 0, 1, -3]),
       indices: new Uint16Array([0, 1, 2]),
       submeshes: [
-        { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' as const },
+        {
+          indexOffset: 0,
+          indexCount: 3,
+          vertexCount: 3,
+          topology: 'triangle-list' as const,
+          materialSlot: 0,
+        },
       ],
+      materialSlots: [{ slotName: 'Default' }],
       attributes: {},
     } satisfies MeshAsset;
 

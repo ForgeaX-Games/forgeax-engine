@@ -1,5 +1,15 @@
 import { parityError, type ColorLightingParityError } from '../errors';
-import type { NamedCaptures, ParityProvenance, PipelineIdentity } from '../contracts/types';
+import type {
+  NamedCaptures,
+  ParityProvenance,
+  PipelineIdentity,
+  VertexColorBackend,
+  VertexColorCaptureOutput,
+  VertexColorDomain,
+  VertexColorReadbackMethod,
+  VertexColorProducerIdentity,
+  VertexColorSemanticFixture,
+} from '../contracts/types';
 import type { AttachmentEvidence } from './attachment-readback';
 import type { ReadbackProbe } from './readback-probe';
 
@@ -21,6 +31,49 @@ export interface CaptureEnvelope {
   readonly captures: NamedCaptures;
   readonly readback?: ReadbackProbe;
   readonly observations?: AttachmentEvidence;
+}
+
+export interface VertexColorNamedCapture {
+  readonly backend: VertexColorBackend;
+  readonly frameCount: 300;
+  readonly colorDomain: VertexColorDomain;
+  readonly sourceSha: string;
+  readonly sourceFixtureHash: string;
+  readonly producer: VertexColorProducerIdentity;
+  readonly captures: NamedCaptures;
+  readonly samples: VertexColorCaptureOutput['samples'];
+  readonly readback: VertexColorReadbackMethod;
+}
+
+export function createVertexColorNamedCapture(
+  fixture: VertexColorSemanticFixture,
+  producer: VertexColorProducerIdentity,
+  output: VertexColorCaptureOutput,
+): Promise<VertexColorNamedCapture> {
+  if (output.backend !== 'browser-webgpu' && output.backend !== 'dawn') {
+    return Promise.reject(new Error('vertex-color capture backend is not a required backend'));
+  }
+  if (output.frameCount !== 300) return Promise.reject(new Error('vertex-color capture must cover 300 frames'));
+  if (output.colorDomain !== fixture.colorDomain) return Promise.reject(new Error('vertex-color capture domain does not match fixture'));
+  if (output.sourceFixtureHash.length !== 64) return Promise.reject(new Error('vertex-color fixture hash is missing'));
+  if (output.linear.length === 0 || output.final.length === 0) return Promise.reject(new Error('vertex-color capture bytes are missing'));
+  const expectedReadback = producer.implementation === 'three'
+    ? 'readRenderTargetPixelsAsync'
+    : 'copyTextureToBuffer';
+  if (output.readback !== expectedReadback) {
+    return Promise.reject(new Error(`vertex-color capture readback must be ${expectedReadback}`));
+  }
+  return createNamedCaptures(output.linear, output.final).then((captures) => ({
+    backend: output.backend,
+    frameCount: 300,
+    colorDomain: output.colorDomain,
+    sourceSha: output.sourceSha,
+    sourceFixtureHash: output.sourceFixtureHash,
+    producer,
+    captures,
+    samples: output.samples,
+    readback: output.readback,
+  }));
 }
 
 export interface ProvenancePair {

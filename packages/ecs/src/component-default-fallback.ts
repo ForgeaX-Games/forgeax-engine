@@ -81,12 +81,14 @@
 //             §8.4 (head JSDoc as discovery anchor)
 
 import type { Component, ComponentSchema } from './component';
+import { componentSchema } from './component';
+import { componentDefinition } from './component-schema';
 import { ENTITY_NULL_RAW } from './entity-handle';
 import { SpawnDataUnknownFieldError } from './errors';
 
 /**
  * Layer-3 silent default for a single schema field type. Returned when
- * the spawn-data raw input (layer 1) and the componentToken.defaults
+ * the spawn-data raw input (layer 1) and the owner definition defaults
  * map (layer 2) both omit a known schema field.
  *
  * Pure function — runs once per missing field per (component, spawn /
@@ -136,7 +138,7 @@ function typeDefault(fieldType: string): unknown {
  *             to the helper (the entity-remap layer is NOT this
  *             helper's responsibility).
  *
- *   layer 2 — `componentToken.defaults?.[field]` (declared via
+ *   layer 2 — owner definition defaults (declared via
  *             `defineComponent(name, schema, { defaults })`). Layer-2
  *             defaults beat layer-3.
  *
@@ -163,10 +165,8 @@ export function fillComponentDefaults<S extends ComponentSchema>(
   token: Component<string, S>,
   raw: Partial<Record<string, unknown>> | undefined,
 ): Record<string, unknown> {
-  const schema = token.schema as Record<string, string>;
-  const layer2: Record<string, unknown> | undefined = (
-    token as unknown as { defaults?: Record<string, unknown> }
-  ).defaults;
+  const schema = componentSchema(token) as Record<string, string>;
+  const layer2 = componentDefinition(token).defaults;
   const out: Record<string, unknown> = Object.create(null);
   const rawObj = (raw as Record<string, unknown> | undefined) ?? undefined;
   for (const fieldName of Object.keys(schema)) {
@@ -218,14 +218,14 @@ export { typeDefault };
  * @param token  Component token (name + schema).
  * @param raw    Caller's `Partial<ShapeOf<S>>` — raw spawn payload.
  * @returns      `null` on success; `SpawnDataUnknownFieldError` on the first
- *               key not declared in `token.schema`.
+ *               key not declared in `componentSchema(token)`.
  */
 export function validateComponentDataKeys<S extends ComponentSchema>(
   token: Component<string, S>,
   raw: Partial<Record<string, unknown>> | undefined,
 ): SpawnDataUnknownFieldError | null {
   if (raw === undefined) return null;
-  const schema = token.schema as Record<string, unknown>;
+  const schema = componentSchema(token) as Record<string, unknown>;
   const rawObj = raw as Record<string, unknown>;
   for (const fieldName of Object.keys(rawObj)) {
     if (!(fieldName in schema)) {

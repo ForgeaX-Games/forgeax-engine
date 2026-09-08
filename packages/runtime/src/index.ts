@@ -1,17 +1,15 @@
 // @forgeax/engine-runtime — public API surface (M3).
 //
 // Surface (K-4):
-//   - createRenderer(canvas, options?) — async factory; uses WebGPU
-//     exclusively; throws EngineEnvironmentError when no adapter is usable.
-//   - Renderer / RendererOptions / RendererBackend / RendererLostInfo /
+//   - createRenderer(canvas, options?) — async Result factory; uses WebGPU
+//     exclusively and returns EngineEnvironmentError or RenderError on failure.
+//   - Renderer / RendererOptions / RendererLostInfo /
 //     RendererLostListener — types for callers.
-//   - EngineEnvironmentError — thrown when no backend is usable.
+//   - EngineEnvironmentError — returned when no backend is usable.
 //
 // What is **NOT** here, by design (acceptance grep checks negative existence):
 //   - any internal backend module — locked by `package.json#exports`
 //     entry `"./internal/*": null`.
-
-import { createRenderer as _createRendererForEngineAlias } from './createRenderer';
 
 /**
  * `acquireCanvasContext` facade re-export (M3 D-P3 / w15).
@@ -26,6 +24,7 @@ import { createRenderer as _createRendererForEngineAlias } from './createRendere
  *   const ctxResult = acquireCanvasContext(canvas);
  */
 export { acquireCanvasContext } from '@forgeax/engine-rhi-webgpu';
+export { defaultAssetDecoderContributions } from './asset-contributions';
 export { createRenderer } from './createRenderer';
 
 // feat-20260704-runtime-tier1-decomposition M2 / w10 (D-3 / D-9): the top-level
@@ -46,41 +45,6 @@ export { EngineEnvironmentError } from './errors/environment';
 // -- recover cluster --
 // -- render cluster --
 // -- skin cluster --
-
-/**
- * `Engine` namespace alias for `createRenderer` (w55 round 2 fix-up F-3
- * closure). Plan-strategy §7.1 / §7.2 / §7.4 + requirements.md §AI User
- * Affordances reference the factory in `Engine.create({ canvas })` form;
- * the concrete code-level entry is `createRenderer(canvas, options?)`. To
- * keep both call sites valid without forcing a doc-wide rewrite (the
- * plan/requirements text is appended-only audit history per architecture
- * principle 7), the namespace alias re-exports `createRenderer` under the
- * `Engine.create` shape — AI users can write either form and TypeScript
- * resolution lands on the same factory.
- *
- * Single SSOT: the runtime behaviour, signatures, and JSDoc all live on
- * `createRenderer`; `Engine.create` is a thin re-export (charter
- * proposition 1 progressive disclosure — both names are grep-able + lead
- * to the same body; proposition 5 consistent abstraction — the alias does
- * not introduce a second factory shape).
- *
- * Usage parity:
- *
- *   import { createRenderer } from '@forgeax/engine-runtime';
- *   const renderer = await createRenderer(canvas, { ... }, bundler?);
- *
- *   // identical:
- *   import { Engine } from '@forgeax/engine-runtime';
- *   const renderer = await Engine.create(canvas, { ... }, bundler?);
- *
- * feat-20260608-create-app-param-surface-trim / M2 / R-8: Engine.create
- * is a thin re-export of createRenderer; the third BundlerOptions arg
- * forwards verbatim through the alias (no separate Engine.create
- * implementation -- `create: createRenderer` shape).
- */
-export const Engine = {
-  create: _createRendererForEngineAlias,
-} as const;
 
 // ─── ECS render bridge (feat-20260509-ecs-render-bridge-mvp) ────────────────
 //
@@ -107,20 +71,19 @@ export const Engine = {
  * Read both fields directly through typed property access after the
  * `code === 'limit-exceeded'` discriminant narrows `err.detail`.
  *
- * The `Renderer.onError` channel fans out **both** error families —
- * `RhiError` (RHI layer) and `RuntimeError` (runtime layer, e.g.
- * `'equirect-projection-failed'`) — so the listener parameter is the
- * `RhiError | RuntimeError` union (feat-20260531-skybox-env-background:
- * widened from `RhiError` only, dropping the prior `as any` fan-out cast).
- * The disjoint `RhiErrorCode` / `RuntimeErrorCode` literal sets let
- * `switch (e.code)` narrow each arm to the concrete class without a default.
+ * The `Renderer.subscribe` channel projects renderer-owned failures through
+ * one `RendererEvent` union. The public operation error is always `RenderError`;
+ * lower-layer causes remain structured in its detail instead of creating a
+ * second listener/error authority.
  *
  * @example
  *   import {
  *     RhiError, type RhiErrorCode, type LimitExceededDetail,
  *   } from '@forgeax/engine-runtime';
- *   import { type EquirectProjectionFailedDetail, type RendererError } from '@forgeax/engine-render';
- *   renderer.onError((e: RendererError) => {
+ *   import { type RenderError } from '@forgeax/engine-render';
+ *   renderer.subscribe((event) => {
+ *     if (event.kind !== 'error') return;
+ *     const e: RenderError = event.error;
  *     switch (e.code) {
  *       case 'limit-exceeded': {
  *         const detail = e.detail as LimitExceededDetail;
@@ -145,20 +108,6 @@ export {
   type RhiShaderCompileDetail,
   type RhiWebgpuRuntimeDetail,
 } from '@forgeax/engine-rhi';
-/**
- * feat-20260527-sprite-nineslice M4 / w16 (D-5 + AC-16): per-Renderer
- * EngineMetrics counter. Surfaced through `renderer.metrics`; exported here
- * so AI users can grep `EngineMetrics` and reach the public type for ts
- * generics, and so test utilities can construct a free-standing instance.
- *
- * @example
- *   const renderer = await createRenderer(canvas);
- *   // ...later, after the world has rendered for a few frames...
- *   const counts = renderer.metrics.snapshot();
- *   if (counts['nineslice.scale-too-small'] !== undefined) {
- *     // surface a once-per-session UI hint, run a regression bench, etc.
- *   }
- */
 /**
  * Asset system SSOT re-exports (feat-20260511-asset-system-v1 / w30 / D-P7 +
  * plan-strategy §7.4 discoverability dual-entry).
@@ -235,9 +184,8 @@ export { createDevImportTransport } from './dev-import-transport';
  * glyphTextLayoutSystem (feat-20260531-world-space-msdf-text-rendering) -- lays
  * out + bakes every `GlyphText` entity, attaching MeshFilter + MeshRenderer on
  * first observation and re-baking in place on a text / size / color change.
- * `renderer.attachWorld(world)` installs this derived-state owner before the
- * first `world.update()`; `renderer.draw()` only reads the published result.
- * `createApp` performs the attachment automatically.
+ * `createApp` attaches the World and owns the returned render lease before
+ * the first frame; `Renderer.draw` consumes only that lease-bound request.
  */
 /**
  * GpuBuffer / GpuTexture runtime wrappers + GpuResource union
@@ -255,9 +203,6 @@ export { createDevImportTransport } from './dev-import-transport';
  * `Result.err({ code: 'destroy-after-destroy' })`.
  */
 /**
- * feat-20260601-gpu-resource-store-extraction M1: the GPU residency store.
- * Reachable as `renderer.store`; exported here so AI users can construct one
- * directly for tests and `grep GpuResourceStore` discovers it.
  */
 // feat-20260705-runtime-tier2-decomposition M1 / w14: the loader-injection
 // surface (LoaderRegistry / wireDefaultLoaders / createDefaultLoaderRegistry)
@@ -306,7 +251,7 @@ export type { SpriteParamValues } from './sprite-param-values';
  *     TRANSPARENT_SORT_CONFIG_KEY,
  *     TRANSPARENT_SORT_MODE_LAYER_Y,
  *     setTransparentSortConfig,
- *   } from '@forgeax/engine-render/internal';
+ *   } from '@forgeax/engine-render/authoring';
  *   const r = setTransparentSortConfig(world,
  *     { mode: TRANSPARENT_SORT_MODE_LAYER_Y, yzAlpha: 1.0 });
  */
@@ -381,7 +326,11 @@ export { quat } from '@forgeax/engine-math';
 // collectSceneAsset removed — replaced by rootsToSceneAsset (forest entry,
 // schema-derived field dispatch, engine-self-contained GUID resolution).
 // serializeSceneAssetToPack now uses schema-derived refs[] index (D-1/D-2).
-export { rootsToSceneAsset, serializeSceneAssetToPack } from './collect-scene-asset';
+export {
+  rootsToSceneAsset,
+  type SceneAssetGuidLookup,
+  serializeSceneAssetToPack,
+} from './collect-scene-asset';
 // feat-20260626 M6 / m6-4: debug-draw auto-attach glue is re-exported from the
 // main barrel (was a separate tsup entry). The separate entry produced a SECOND
 // module copy of the mutable `registeredDebugDraw` registry: createApp set it on
@@ -409,28 +358,22 @@ export { rootsToSceneAsset, serializeSceneAssetToPack } from './collect-scene-as
 // alongside the existing fullscreen post-process register / not-found /
 // reads-not-found codes. AI users `switch (err.code)` over the closed
 // 6-member union without `default`; .detail narrows per-code per charter P3.
-// feat-20260604 M3 / w19: render-graph-primitives — the public AI-user vocabulary
-// for assembling a render pipeline's per-frame graph (addScenePass /
-// addShadowPass / addSkyboxPass / addBloomPasses / addTonemapPass /
-// addFullscreenPass). The urp pipeline (w21) and any custom
-// pipeline use these factories — the dogfood proof of D-5.
+// feat-20260604 M3 / w19: render-graph-primitives — low-level typed record helpers
+// used by the Standard feature graph. Graph topology is declared by RenderFeaturePlan;
+// recordSsao* and encodeFullscreenPass remain the executable RHI-facing leaves.
 // feat-20260601-customizable-render-pipeline-seam-and-dogfood-rend M1.
 /**
- * Render-pipeline surface. `renderer.registerPipeline(id, impl)` registers a
- * `RenderPipeline` logic; `renderer.installPipeline(handle)` installs the pipeline bound
- * by a `RenderPipelineAsset` handle (from `renderer.assets.register(...)`). The built-in
- * `forgeax::urp` (`urpPipeline`) is the authoritative worked
- * example - it is dogfooded through the same public channel inside `createRenderer`.
+ * Render surface. The renderer host assembles one Standard pipeline and
+ * accepts closed RenderFeature declarations at App construction. Pipelines,
+ * device handles, and asset registries remain owner-internal implementation
+ * details rather than renderer methods.
  *
  * @example
- *   import {
- *     type RenderPipeline, urpPipeline, URP_PIPELINE_ID,
- *     PipelineError, type PipelineErrorCode,
- *   } from '@forgeax/engine-render/internal';
+ *   import type {
+ *     RenderFeaturePlan,
+ *   } from '@forgeax/engine-render';
  */
-// feat-20260604 M3 / w20 (AC-14): RenderPipelineContext is now barrel-exported so
-// custom-pipeline buildGraph / execute closures can `import type` the clean,
-// post-narrowing public ctx face from `@forgeax/engine-runtime` directly.
+// RenderPipelineContext is barrel-exported for typed pass encode closures.
 // feat-20260701-rootstosceneasset verify minor-edit (F2): collectSubtree is a
 // reusable "BFS a subtree along Children" primitive (the forgeax-engine-ecs
 // skill documents importing it from the barrel) — re-export so that claim holds.

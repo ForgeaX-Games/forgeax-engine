@@ -135,7 +135,11 @@ async function runMode(label, hash, screenshotPath) {
     // though the engine finished in seconds. Await the promise, budget-capped.
     let ready = false;
     try {
-      await page.waitForFunction(() => '__r5Ready' in window, { timeout: 15000 });
+      // Playwright's second argument is the page-function argument, not the
+      // options object. Passing the timeout as the second argument silently
+      // used the default polling budget and made a completed probe look
+      // hung on slower WebKit cold starts.
+      await page.waitForFunction(() => '__r5Ready' in window, undefined, { timeout: 15000 });
       ready = await evaluateWithDeadline(
         page,
         (ms) =>
@@ -149,6 +153,20 @@ async function runMode(label, hash, screenshotPath) {
       );
     } catch {
       ready = false;
+    }
+
+    let statusText = '';
+    try {
+      statusText = await evaluateWithDeadline(
+        page,
+        () => document.getElementById('status')?.textContent ?? '',
+        undefined,
+        TIMEOUT_MS,
+        'R5 status probe',
+      );
+      console.log(`  STATUS: ${statusText.replace(/\s+/g, ' ').trim().slice(-1000)}`);
+    } catch (e) {
+      console.log(`  STATUS FAILED: ${e}`);
     }
 
     // Real wasm-trap signatures only. Do NOT grep bare 'Validation Error':
@@ -190,16 +208,21 @@ async function runMode(label, hash, screenshotPath) {
       console.log(`  SCREENSHOT FAILED: ${e}`);
     }
 
-    const probe = await evaluateWithDeadline(
-      page,
-      () => window.__r5Probe ?? null,
-      undefined,
-      TIMEOUT_MS,
-      'R5 probe snapshot',
-    );
+    let probe = null;
+    try {
+      probe = await evaluateWithDeadline(
+        page,
+        () => window.__r5Probe ?? null,
+        undefined,
+        TIMEOUT_MS,
+        'R5 probe snapshot',
+      );
+    } catch (e) {
+      console.log(`  PROBE SNAPSHOT FAILED: ${e}`);
+    }
 
     const pixNonBlack = ss && !ss.allBlack;
-    return { navOk, panicSeen, ready, logs, channelProof, ss, probe, pixNonBlack };
+    return { navOk, panicSeen, ready, logs, channelProof, ss, probe, statusText, pixNonBlack };
   } finally {
     await closeBrowserWithDeadline(browser, 10000, 'R5 WebKit browser close');
   }
@@ -230,6 +253,7 @@ function evalModeA(a) {
   console.log(`  RESULT: ${passA ? 'PASS' : 'FAIL'}${crash ? ` (crash=${crash})` : ''}`);
   return {
     ok: passA,
+    retryable: crash !== null,
     summary: passA
       ? 'over-capacity non-black'
       : `over-capacity fail${crash ? ` crash=${crash}` : ''}`,
@@ -266,10 +290,12 @@ function evalModeB(b) {
       (b.pixNonBlack === true ? 'NON-BLACK' : b.pixNonBlack === false ? 'BLACK' : 'SKIP'),
   );
   console.log(`  badSubmit: ${JSON.stringify(bs)}`);
+  console.log(`  drawFailures: ${JSON.stringify(b.probe?.drawFailures ?? [])}`);
   const crash = detectWasmCrash(b.logs);
   console.log(`  RESULT: ${passB ? 'PASS' : 'FAIL'}${crash ? ` (crash=${crash})` : ''}`);
   return {
     ok: passB,
+    retryable: crash !== null,
     summary: passB ? 'bad-submit survived' : `bad-submit fail${crash ? ` crash=${crash}` : ''}`,
   };
 }
@@ -283,10 +309,10 @@ async function run() {
 
   // Each mode is retried independently with a fresh browser per attempt: a
   // WebKit wasm cold-start crash (naga miscompile / wgpu OOB+parking_lot) is
-  // non-deterministic, so a fresh process recovers. Retry never masks a real
-  // regression — a deterministic failure fails every attempt. Mode (b)'s
-  // deliberate (handled) validation error is a PASS under evalModeB, so retry
-  // only fires on genuine failure, never on the expected-error path.
+  // non-deterministic, so a fresh process recovers. Only that recognized crash
+  // is retryable; deterministic navigation, pixel, or semantic failures stop
+  // after one attempt. Mode (b)'s deliberate handled validation error remains
+  // a PASS under evalModeB.
   let a;
   let b;
   const resA = await runWithRetry(

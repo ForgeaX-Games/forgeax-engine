@@ -1,7 +1,8 @@
 // @forgeax/engine-debug-draw -- public types + factory signature (M1 / w4)
 //
 // Decision anchors:
-// - plan-strategy D-1: package depends only on rhi/math/types
+// - plan-strategy D-1: shape generation stays on rhi/math/types; the optional
+//   RenderFeature adapter depends only on the declarative render contract.
 // - plan-strategy D-2: depthMode single-instance single-PSO, no runtime switching
 // - plan-strategy D-4 / D-9: vertex stride 16 B, capacities configurable
 // - plan-strategy D-6: shape color = ColorLike (consumes engine-math existing type)
@@ -16,6 +17,7 @@ import type {
   RhiDevice,
   RhiError,
   RhiQueue,
+  RhiRenderPassEncoder,
   ShaderModule,
   TextureFormat,
   TextureView,
@@ -65,7 +67,9 @@ export interface DebugDrawOptions {
   readonly initialVertexCapacity?: number | undefined;
   /**
    * Hard upper bound on vertex count per flush.
-   * Defaults to {@link MAX_VERTEX_CAPACITY} (1_000_000).
+   * Defaults to {@link MAX_VERTEX_CAPACITY} (1_000_000). Excess vertices are
+   * discarded with one bounded warning per frame; a successful flush resets the
+   * diagnostic and staging for the next frame.
    */
   readonly maxVertexCapacity?: number | undefined;
   /**
@@ -132,6 +136,9 @@ export interface DebugDraw {
     view: TextureView,
     viewProj: Mat4,
   ): Result<void, DebugDrawError>;
+
+  /** Encode into a render pass whose attachments and lifetime are owned by the caller. */
+  encode(pass: RhiRenderPassEncoder, viewProj: Mat4): Result<void, DebugDrawError>;
 
   /** Release GPU buffer + PSO. Subsequent shape calls are no-ops. */
   destroy(): void;

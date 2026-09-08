@@ -1,14 +1,12 @@
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { createStandaloneRuntimeAssetBinding, type EquirectAsset } from '@forgeax/engine-types';
-import { EngineEnvironmentError, createDevImportTransport } from '@forgeax/engine-runtime';
+import { type EquirectAsset } from '@forgeax/engine-types';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { buildClearcoatWorld } from './clearcoat';
 
 const NEWPORT_LOFT_GUID = '019e4a26-3c29-7420-af5d-20f2724a16b0';
-const runtimeBinding = import.meta.env.DEV
-  ? createStandaloneRuntimeAssetBinding('bevy-clearcoat')
-  : undefined;
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('bevy-clearcoat: missing <canvas id="app">');
 
@@ -22,7 +20,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     ...forgeaxBundlerAdapter(),
     ...(runtimeBinding === undefined
       ? {}
-      : { importTransport: createDevImportTransport(runtimeBinding) }),
+      : { importTransport: createRuntimeAssetImportTransport(runtimeBinding) }),
   };
   const result = await createApp(target, {}, bundler);
   if (!result.ok) {
@@ -30,14 +28,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = result.value;
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[bevy-clearcoat] assets unavailable');
+    return;
+  }
   const guid = AssetGuid.parse(NEWPORT_LOFT_GUID);
   if (!guid.ok) {
     console.error('[bevy-clearcoat] HDR GUID failed:', guid.error.code);
     return;
   }
-  if (runtimeBinding === undefined) app.renderer.assets.configurePackIndex('/pack-index.json');
-  else app.renderer.assets.configureRuntimeBinding(runtimeBinding);
-  const hdr = await app.renderer.assets.loadByGuid<EquirectAsset>(guid.value);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
+  const hdr = await assets.loadByGuid<EquirectAsset>(guid.value);
   if (!hdr.ok) {
     console.error('[bevy-clearcoat] HDR load failed:', hdr.error.code);
     return;

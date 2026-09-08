@@ -1,30 +1,25 @@
-import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
-import type { Asset, Result } from '@forgeax/engine-types';
-import { err, ok, toShared } from '@forgeax/engine-types';
+import type { Asset, Handle, Result } from '@forgeax/engine-types';
+import { err, ok } from '@forgeax/engine-types';
 
-/** Closed animation-domain failure codes for World-local asset lookup. */
+/** Closed animation-domain failure codes for durable GUID projection. */
 export type AnimationAssetErrorCode =
   | 'animation-asset-not-found'
   | 'animation-asset-stale'
   | 'animation-asset-kind-mismatch';
 
-/** Machine-readable cause retained from the lower-level World lookup. */
 export interface AnimationAssetErrorDetail {
-  readonly handle: number;
+  readonly guid: string;
   readonly expectedKind: string;
   readonly actualKind?: string;
-  /** The exact code returned by `resolveAssetHandle`, before domain mapping. */
   readonly lookupCode: string;
 }
 
-/**
- * Structured failure for an animation graph or direct clip handle.
- *
- * The domain code is intentionally smaller than the ECS/assets union: callers
- * recover by animation semantics, while `detail.lookupCode` preserves the
- * observable lower-level cause for diagnostics (including `shared-ref-stale`).
- */
+type AnimationAssetTarget<T extends Asset> = T extends { readonly kind: 'animation-clip' }
+  ? 'AnimationClip'
+  : 'AnimationGraph';
+
+/** Structured failure at the animation consumer boundary. */
 export class AnimationAssetError extends Error {
   readonly code: AnimationAssetErrorCode;
   readonly expected: string;
@@ -46,54 +41,88 @@ export class AnimationAssetError extends Error {
   }
 }
 
+export interface ResolvedAnimationAsset<T extends Asset> {
+  readonly guid: string;
+  readonly asset: T;
+  readonly handle: Handle<AnimationAssetTarget<T>, 'shared'>;
+}
+
+export type AnimationAssetLookup<T extends Asset> = T | { readonly code: 'stale' } | undefined;
+
 /**
- * Resolve a graph or clip handle from the owning World.
- *
- * Zero is the component sentinel and returns `ok(undefined)` without touching
- * the asset store. Every non-zero handle takes the single assets-runtime
- * lookup path; misses and stale handles become structured animation errors.
+ * Resolve a durable GUID through the caller's existing payload owner, then
+ * project that payload into the current World. The callback is deliberately a
+ * lookup seam, not a registry: AssetRegistry remains GUID -> payload only.
  */
 export function resolveAnimationAsset<T extends Asset>(
   world: World,
-  raw: number,
-  expectedKind: string,
-): Result<T | undefined, AnimationAssetError> {
-  if (raw === 0) return ok(undefined);
-
-  const lookup = resolveAssetHandle<T>(world, toShared<string>(raw));
-  if (!lookup.ok) {
-    const lookupCode = lookup.error.code;
-    const code: AnimationAssetErrorCode =
-      lookupCode === 'shared-ref-stale' ? 'animation-asset-stale' : 'animation-asset-not-found';
+  guid: string,
+  expectedKind: T['kind'],
+  lookup: (guid: string) => AnimationAssetLookup<T>,
+): Result<ResolvedAnimationAsset<T>, AnimationAssetError> {
+  if (guid.length === 0) {
     return err(
       new AnimationAssetError({
-        code,
-        expected: `a live shared<${expectedKind}> handle owned by this World`,
-        hint:
-          code === 'animation-asset-stale'
-            ? 're-acquire the handle from this World after the previous allocation was released'
-            : 'register or retain the animation asset in this World before evaluating it',
-        detail: { handle: raw, expectedKind, lookupCode },
+        code: 'animation-asset-not-found',
+        expected: `a durable ${expectedKind} GUID`,
+        hint: 'load the animation asset by GUID before evaluating the graph',
+        detail: { guid, expectedKind, lookupCode: 'guid-empty' },
       }),
     );
   }
-
-  const actualKind = lookup.value.kind;
-  if (actualKind !== expectedKind) {
+  let asset: AnimationAssetLookup<T>;
+  try {
+    asset = lookup(guid);
+  } catch {
+    return err(
+      new AnimationAssetError({
+        code: 'animation-asset-not-found',
+        expected: `a loaded ${expectedKind} payload for GUID ${guid}`,
+        hint: 'repair the animation asset lookup provider and retry resolution',
+        detail: { guid, expectedKind, lookupCode: 'lookup-threw' },
+      }),
+    );
+  }
+  if (asset !== undefined && 'code' in asset && asset.code === 'stale') {
+    return err(
+      new AnimationAssetError({
+        code: 'animation-asset-stale',
+        expected: `a current ${expectedKind} payload for GUID ${guid}`,
+        hint: 'rebuild the stale asset projection before evaluating the graph',
+        detail: { guid, expectedKind, lookupCode: 'asset-stale' },
+      }),
+    );
+  }
+  if (asset === undefined) {
+    return err(
+      new AnimationAssetError({
+        code: 'animation-asset-not-found',
+        expected: `a loaded ${expectedKind} payload for GUID ${guid}`,
+        hint: 'load or retain the referenced animation asset before evaluating the graph',
+        detail: { guid, expectedKind, lookupCode: 'asset-not-found' },
+      }),
+    );
+  }
+  const payload = asset as T;
+  if (payload.kind !== expectedKind) {
     return err(
       new AnimationAssetError({
         code: 'animation-asset-kind-mismatch',
         expected: `asset kind '${expectedKind}'`,
-        hint: `replace handle ${raw} with a live ${expectedKind} handle`,
+        hint: `replace GUID ${guid} with a loaded ${expectedKind} asset`,
         detail: {
-          handle: raw,
+          guid,
           expectedKind,
-          actualKind,
+          actualKind: payload.kind,
           lookupCode: 'asset-kind-mismatch',
         },
       }),
     );
   }
-
-  return ok(lookup.value);
+  const target = expectedKind === 'animation-clip' ? 'AnimationClip' : 'AnimationGraph';
+  const handle = world.internSharedRef(target, payload) as Handle<
+    AnimationAssetTarget<T>,
+    'shared'
+  >;
+  return ok({ guid, asset: payload, handle });
 }

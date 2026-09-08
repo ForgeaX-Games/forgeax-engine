@@ -18,8 +18,10 @@
     { "path": "../graphics-extras" },
     { "path": "../image" },
     { "path": "../pack" },
+    { "path": "../plugin" },
     { "path": "../rhi" },
     { "path": "../shader" },
+    { "path": "../scene" },
     { "path": "../skinning" },
     { "path": "../types" }
   ]

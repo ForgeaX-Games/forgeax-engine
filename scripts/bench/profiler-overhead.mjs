@@ -181,13 +181,14 @@ async function createWorkload() {
   ]);
   const allocationReport = { profilerEventObjectAllocations: 0 };
   const profiler = createProfiler({ allocationReport });
-  const renderer = await createRenderer(
+  const rendererResult = await createRenderer(
     makeCanvas(),
     { rhi, profiler },
     { shaderManifestUrl: makeShaderManifest() },
   );
-  const ready = await renderer.ready;
-  if (!ready.ok) throw new Error(`rhi-null renderer was not ready: ${ready.error.code}`);
+  if (!rendererResult.ok)
+    throw new Error(`Renderer workload failed to assemble: ${rendererResult.error.code}`);
+  const renderer = rendererResult.value;
   const world = new World();
   registerPropagateTransforms(world);
   world.spawn(

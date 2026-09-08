@@ -22,7 +22,7 @@ describe('animation target documentation contract', () => {
     expect(quickStart).toBeLessThan(readme.indexOf('## Identity and ownership'));
     const firstSection = readme.slice(quickStart, readme.indexOf('## Identity and ownership'));
     for (const literal of [
-      "import { World } from '@forgeax/engine-ecs'",
+      "import { createWorldContext, World } from '@forgeax/engine-ecs'",
       "import { ChildOf, Name, Transform } from '@forgeax/engine-scene'",
       "import type { AnimationClip } from '@forgeax/engine-types'",
       'AnimationTargetId',

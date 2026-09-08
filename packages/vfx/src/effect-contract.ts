@@ -1,8 +1,6 @@
 import { err, ok, type Result } from '@forgeax/engine-types';
 import type { VfxDataInterfaceRequirement } from './data-interface.js';
 
-export type VfxValueType = 'f32' | 'i32' | 'u32' | 'vec2<f32>' | 'vec3<f32>' | 'vec4<f32>';
-
 export type VfxValue = number | readonly number[];
 export type VfxValueMap = Readonly<Record<string, VfxValue>>;
 
@@ -56,7 +54,7 @@ export interface VfxEffectContract<Values extends VfxValueMap = VfxValueMap> {
   pack(values: Values): Result<Uint8Array, VfxEffectContractError>;
 }
 
-const VECTOR_LENGTH: Readonly<Record<VfxValueType, number>> = {
+const VECTOR_LENGTH = {
   f32: 1,
   i32: 1,
   u32: 1,
@@ -64,6 +62,8 @@ const VECTOR_LENGTH: Readonly<Record<VfxValueType, number>> = {
   'vec3<f32>': 3,
   'vec4<f32>': 4,
 };
+
+export type VfxValueType = keyof typeof VECTOR_LENGTH;
 
 function fieldList(reflection: VfxEffectReflection): readonly VfxReflectedField[] {
   return [...reflection.parameters.fields, ...reflection.custom.fields];

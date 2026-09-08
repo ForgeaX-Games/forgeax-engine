@@ -1,14 +1,18 @@
 ---
 name: forgeax-engine-app
 description: >-
-  ForgeaX application bootstrap and browser frame loop. Use when creating an App,
-  selecting a World time policy, handling Result failures, migrating former frame
-  callbacks to Update systems, wiring input and plugins, or attaching the opt-in
-  Profiler capability. Use also when selecting main-serial, engine-worker, or shared
-  execution and diagnosing capability, performance, poison, or rebuild reports.
+  ForgeaX App assembly, execution tiers, and browser frame ownership. Use when
+  bootstrapping a game, selecting time or worker policy, wiring plugins/input/profiling,
+  or diagnosing execution and rebuild reports.
 ---
 
 # forgeax-engine-app
+
+## Render happy path
+
+The app host follows `RenderScene -> Standard Pipeline -> DeviceScope -> FrameReceipt`.
+Use `createApp`, then let the host perform `attach -> draw`; use `inspect`, `observe`, and `recover`
+with the returned receipt. Domain producers keep their own assets, input, audio, and plugin owners.
 
 > **`createApp` is a host adapter, not a second scheduler.** It measures one browser delta, calls `world.update(deltaSeconds)`, then draws. Game behavior belongs in ECS `Update` or `FixedUpdate` systems.
 
@@ -69,7 +73,8 @@ When a host temporarily hands the presentation surface to another carrier
 `await app.releaseSurfacePreserveWorld()` before mounting the new owner and
 `await app.restoreSurface()` after it is destroyed. This preserves the exact
 Edit World and Renderer identity; `app.stop()` and `renderer.dispose()` are
-terminal teardown and are not relocation APIs.
+not relocation APIs. `app.stop()` only stops frame scheduling; `app.dispose()`
+drains the plugin realm and releases the renderer.
 
 ## Optional CPU profiling
 
@@ -93,14 +98,12 @@ Read `profiler.phaseCatalog` for the App/Render owner relation. Use
 `validateProfileCapture` and `buildProfileModel` from the profiler package for offline analysis;
 do not recreate phase lists or turn this capability into an ECS, GPU, UI, or RPC surface.
 
-## Render-owned deferred membership timing
+## Render-owned evidence boundary
 
-`CreateAppOptions.membershipTiming` is forwarded unchanged to Render through
-Runtime. Omission performs no timing work. `cpu-control` is an independent CPU
-control route and never emits GPU timestamps; `gpu` is a bounded opt-in that
-can be refused by backend capability. App does not define timing statuses,
-reasons, timestamp units, or a generic profiler. Read the Render contract in
-[`packages/render/src/record/membership-timing.ts`](../../packages/render/src/record/membership-timing.ts).
+Render inspection and profiling are the evidence boundary. App exposes the
+renderer `inspect` and `observe` projections and forwards the opt-in profiler;
+it does not define a timing controller, timestamp vocabulary, or
+membership-specific option.
 
 ## Renderer feature assembly
 
@@ -118,30 +121,24 @@ type FrameData = { readonly visibleCount: number };
 const feature = {
   identity: 'package.feature',
   extract: ({ owner }) => ok<FrameData>({ visibleCount: owner }),
-  prepare: (data) => {
+  plan: (data, context) => {
     void data.visibleCount;
-    return ok(undefined);
-  },
-  contribute: (data, context) => {
-    void data.visibleCount;
-    context.staging.addPass('named-pass', {
-      reads: [],
-      writes: [],
-      execute: ({ pass }) => void pass,
-    }).unwrap();
-    return ok(undefined);
+    void context;
+    return ok({ resources: [], passes: [] });
   },
 } satisfies RenderFeature<FrameData>;
 
-const renderer = await createRenderer(canvas, { features: [feature] });
+const created = await createRenderer(canvas, { features: [feature] });
+if (!created.ok) throw created.error;
+const renderer = created.value;
 ```
 
-### Prepared graphics and recovery
+### Declarative graphics and recovery
 
-For a producer that needs prepared graphics or compute, keep the public imports
-split by owner: `RenderFeature` and prepared declarations come from
-`@forgeax/engine-render`; `createRenderer` comes from
-`@forgeax/engine-runtime`; the producer owns its extracted frame data.
+For a producer that needs graphics or compute, declare the work in its plan.
+The public imports stay split by owner: `RenderFeature` and plan declarations
+come from `@forgeax/engine-render`; `createRenderer` comes from
+`@forgeax/engine-runtime`.
 
 ```ts
 import { ok } from '@forgeax/engine-types';
@@ -155,38 +152,42 @@ const frame: PreparedFrame = { visibleCount: 0 };
 const feature = {
   identity: 'package.prepared-feature',
   extract: () => ok(frame),
-  prepare: (_data, context) => {
-    const pipeline = context.graphics.preparePipeline('package.pipeline', {
-      shader: 'package.shader',
-      vertexLayout: 'package.vertices',
-      colorFormats: ['rgba8unorm-srgb'],
+  plan: (_data, context) => {
+    return ok({
+      resources: [{
+        kind: 'graphics-program',
+        name: 'package.pipeline',
+        program: {
+          shader: 'package.shader',
+          vertexLayout: 'package.vertices',
+          colorFormats: [context.targets[0]?.format ?? 'rgba8unorm-srgb'],
+          sampleCount: 1,
+          topology: 'triangle-list',
+        },
+      }],
+      passes: [],
     });
-    if (!pipeline.ok) return pipeline;
-    void pipeline.value;
-    return ok(undefined);
   },
-  contribute: () => ok(undefined),
 } satisfies RenderFeature<PreparedFrame>;
 
-const renderer = await createRenderer(canvas, { features: [feature] });
+const created = await createRenderer(canvas, { features: [feature] });
+if (!created.ok) throw created.error;
+const renderer = created.value;
 ```
 
-This prepares an opaque host reference only. The producer still owns its
-compute, drawing, asset, and lifecycle policy; App remains a transparent host.
+The host derives opaque GPU resources and graph access from this declaration.
+The producer owns extracted facts; it never receives a device, encoder, queue,
+or submit callback.
 
-Use `renderer.renderFeatureDiagnostics()` as the first recovery signal. The
-snapshot has `identity`, `order`, `status`, and `latestError`. Branch on the
-closed `latestError.code` union and read its `hint`/`detail`; do not parse
-console messages or import `@forgeax/engine-render/internal`. Correct a
-`failed` feature for the next frame, call `renderer.recover()` for a
-`disabled` feature after capability/device recovery, fix registration or pass
-order conflicts at the producer boundary, and treat `disposed` as terminal.
-`renderer.dispose()` is idempotent. A pipeline switch preserves registration
-and rebuilds the active graph.
+Use `renderer.inspect()` and the single `renderer.subscribe()` stream as the
+recovery surface. Branch on the closed `RenderError` code and read its
+structured detail; do not parse console messages or import a private assembly
+seam. Call `renderer.recover()` after device loss and treat `disposed` as
+terminal. `renderer.dispose()` is idempotent.
 
 For terminology and the public context boundary, use
 [`@forgeax/engine-render`](../../packages/render/README.md) and its
-[`prepared graphics declaration`](../../packages/render/src/features/prepared-graphics.ts).
+[`declarative feature plan`](../../packages/render/src/features/plan.ts).
 For the runtime host contract, use
 [`packages/runtime/README.md`](../../packages/runtime/README.md). For code-first
 GPU particles, use [`packages/vfx-render/README.md`](../../packages/vfx-render/README.md).
@@ -196,7 +197,7 @@ GPU particles, use [`packages/vfx-render/README.md`](../../packages/vfx-render/R
 Each frame has one host-owned sequence:
 
 ```text
-measured deltaSeconds -> world.update(deltaSeconds) -> renderer.draw([world], { owner: 0 })
+measured deltaSeconds -> world.update(deltaSeconds) -> renderer.draw({ leases, camera, environment })
 ```
 
 `createApp` measures the delta once. A `World` owns time integration, fixed-step catch-up, and `Time` / `FixedTime` resources. Do not add a callback list, app-owned elapsed clock, app-side time clamp, or a second requestAnimationFrame loop.
@@ -292,7 +293,25 @@ const ReadInput = defineSystem({
 app.world.addSystem(Update, ReadInput).unwrap();
 ```
 
-Use `plugins` to compose optional capability packages such as physics and audio. An assemble-form host supplies its own World, renderer, input backend, and plugin set explicitly.
+Use `plugins` to compose optional capability packages such as physics and audio. These are native DeepSeek Cordis plugins: declare `inject`/`provide`, register every reversible side effect through `ctx.effect`, and let the App-owned `pluginContext` own their Fibers.
+
+```ts
+import type { Plugin } from '@forgeax/engine-plugin';
+
+const gameplay: Plugin = {
+  name: 'gameplay',
+  inject: ['world'],
+  apply(ctx) {
+    ctx.effect(() => installGameplaySystems(ctx.world));
+  },
+};
+
+const fiber = await app.pluginContext.plugin(gameplay);
+await fiber.dispose();
+await app.dispose();
+```
+
+`app.stop()` only stops frame scheduling. `app.dispose()` drains the Cordis realm and then releases simulation/Host/renderer ownership. An assemble-form host supplies its own World, renderer, input backend, and plugin set explicitly; the App still owns the Context it assembled around them.
 
 ## Boundaries
 

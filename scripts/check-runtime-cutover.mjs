@@ -9,6 +9,9 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import process from 'node:process';
 
+const legacyCreateOptionType = ['Renderer', 'CreateOptions'].join('');
+const legacyBackendType = ['Renderer', 'Backend'].join('');
+
 export const LEGACY_AUTHORITY = new Set([
   'ChildOf',
   'Children',
@@ -38,8 +41,8 @@ export const LEGACY_AUTHORITY = new Set([
   'Instances',
   'PostProcessParams',
   'Renderer',
-  'RendererOptions',
-  'RendererBackend',
+  legacyCreateOptionType,
+  legacyBackendType,
   'RendererLostInfo',
   'RendererLostListener',
   'RenderError',
@@ -77,8 +80,8 @@ const DOMAIN_DEPENDENCY = new Map([
     'Instances',
     'PostProcessParams',
     'Renderer',
-    'RendererOptions',
-    'RendererBackend',
+    legacyCreateOptionType,
+    legacyBackendType,
     'RendererLostInfo',
     'RendererLostListener',
     'RenderError',

@@ -1,9 +1,13 @@
 import type { World } from '@forgeax/engine-ecs';
-import {
-  extractFrame,
-  extractFrames,
-  type PreparedExtractContext,
-} from '@forgeax/engine-render/internal';
+import type { CatalogDelta } from '@forgeax/engine-types';
+import { expectTypeOf } from 'vitest';
+import type { PreparedExtractContext } from '../render-system-extract';
+import { extractFrame, extractFrames } from '../render-system-extract';
+
+declare const delta: CatalogDelta;
+
+expectTypeOf(delta.scopeId).toEqualTypeOf<string | undefined>();
+expectTypeOf(delta.generation).toEqualTypeOf<number | undefined>();
 
 declare const world: World;
 declare const prepared: PreparedExtractContext;

@@ -50,7 +50,10 @@ export {
   type MaterialShaderArtifact,
 } from './material/artifact-types.js';
 export {
+  DEFAULT_MSDF_TEXT_PARAM_SCHEMA,
+  DEFAULT_SPRITE_PARAM_SCHEMA,
   DEFAULT_STANDARD_PBR_PARAM_SCHEMA,
+  DEFAULT_UNLIT_PARAM_SCHEMA,
   STANDARD_PBR_ALPHA_CUTOFF_DEFAULT,
 } from './material-schemas.js';
 export {
@@ -61,9 +64,13 @@ export { registerDefaultStandardPbrSkin } from './register-default-standard-pbr-
 export {
   FORGEAX_RESERVED_PATH_PREFIX,
   type MaterialShaderEntry,
+  type RegisteredMaterialShaderEntry,
   ShaderRegistry,
+  ShaderRegistry as ShaderCatalog,
   type ShaderRegistryDevice,
+  type ShaderRegistryDevice as ShaderCatalogDevice,
   type ShaderRegistryOptions,
+  type ShaderRegistryOptions as ShaderCatalogOptions,
 } from './ShaderRegistry.js';
 export {
   findVariantByKey,
@@ -76,6 +83,36 @@ export const BUILTIN_MATERIAL_MODULES = {
   unlit: 'forgeax_material::unlit',
   sprite: 'forgeax_material::sprite',
 } as const;
+
+/**
+ * Material modules whose shader source and parameter contract are owned by
+ * the Engine. They live in the runtime ShaderRegistry, so a Pack containing
+ * one of these materials carries authored values only and does not require a
+ * project material-cook artifact.
+ */
+export const ENGINE_MATERIAL_MODULES = [
+  'forgeax::default-standard-pbr',
+  'forgeax::pbr-skin',
+  'forgeax::default-standard-pbr-skin',
+  'forgeax::default-unlit',
+  'forgeax::default-shadow-caster',
+  'forgeax::sprite',
+  'forgeax::sprite-lit',
+  'forgeax::msdf-text',
+  BUILTIN_MATERIAL_MODULES.standard,
+  BUILTIN_MATERIAL_MODULES.unlit,
+  BUILTIN_MATERIAL_MODULES.sprite,
+  'forgeax_material::sprite-lit',
+] as const;
+
+export function isEngineMaterialModule(module: string): boolean {
+  return (ENGINE_MATERIAL_MODULES as readonly string[]).includes(module);
+}
+
+export function isEngineMaterial(material: Pick<MaterialAsset, 'passes'>): boolean {
+  const passes = material.passes ?? [];
+  return passes.length > 0 && passes.every((pass) => isEngineMaterialModule(pass.program.module));
+}
 
 export type BuiltinMaterialKind = keyof typeof BUILTIN_MATERIAL_MODULES;
 

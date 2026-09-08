@@ -73,7 +73,8 @@ if (!cacheHit) {
 
   for (const { source, sourceEntries } of snapshotSources) {
     for (const entry of sourceEntries) {
-      if (entry.name === 'entries' || /^(?:staging|lease|attempt|head)$/.test(entry.name)) continue;
+      if (entry.name === 'entries' || /^(?:staging|lease|attempt|head|ci-empty)$/.test(entry.name))
+        continue;
       if (entry.name === 'ddc-warm-status.json') continue;
       cpSync(join(source, entry.name), join(outputDir, entry.name), {
         recursive: true,

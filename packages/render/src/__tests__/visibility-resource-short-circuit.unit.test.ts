@@ -1,25 +1,32 @@
 import { AssetRegistry, HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
-import {
-  extractFrames,
-  MeshFilter,
-  MeshRenderer,
-  Visibility,
-  VisibilityStateValue,
-} from '@forgeax/engine-render/internal';
 import { Transform } from '@forgeax/engine-scene';
 import { toShared } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MeshFilter } from '../components/mesh-filter';
+import { MeshRenderer } from '../components/mesh-renderer';
+import { Visibility, VisibilityStateValue } from '../components/visibility';
+import { extractFrames } from '../render-system-extract';
 
-function codesForInvalidMaterial(state: number): { hidden: string[]; visible: string[] } {
-  const world = new World();
-  const assets = new AssetRegistry({} as never);
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+function captureWorldErrors(): Array<{ readonly code: string }> {
   const errors: Array<{ readonly code: string }> = [];
-  world.setErrorHandler((error: unknown) => {
+  vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+    const error = args[args.length - 1];
     if (typeof error === 'object' && error !== null && 'code' in error) {
       errors.push(error as { readonly code: string });
     }
   });
+  return errors;
+}
+
+function codesForInvalidMaterial(state: number): { hidden: string[]; visible: string[] } {
+  const world = new World();
+  const assets = new AssetRegistry({} as never);
+  const errors = captureWorldErrors();
   const entity = world
     .spawn(
       { component: Transform, data: {} },
@@ -38,22 +45,17 @@ function codesForInvalidMaterial(state: number): { hidden: string[]; visible: st
 }
 
 describe('visibility resource short circuit', () => {
-  it('does not resolve a bad material while hidden, then restores the error path', () => {
+  it('does not resolve a bad override while hidden, then restores the fallback diagnostic', () => {
     const codes = codesForInvalidMaterial(VisibilityStateValue.hidden);
 
     expect(codes.hidden).toEqual([]);
-    expect(codes.visible).toContain('asset-not-registered');
+    expect(codes.visible).toContain('mesh-renderer-material-override-invalid');
   });
 
-  it('does not validate a bad submesh material count while hidden', () => {
+  it('does not validate override overflow while hidden', () => {
     const world = new World();
     const assets = new AssetRegistry({} as never);
-    const errors: Array<{ readonly code: string }> = [];
-    world.setErrorHandler((error: unknown) => {
-      if (typeof error === 'object' && error !== null && 'code' in error) {
-        errors.push(error as { readonly code: string });
-      }
-    });
+    const errors = captureWorldErrors();
     const entity = world
       .spawn(
         { component: Transform, data: {} },
@@ -73,6 +75,6 @@ describe('visibility resource short circuit', () => {
 
     world.set(entity, Visibility, { state: VisibilityStateValue.visible }).unwrap();
     extractFrames([world], 0, assets);
-    expect(errors.map((error) => error.code)).toContain('mesh-renderer-material-count-mismatch');
+    expect(errors.map((error) => error.code)).toContain('mesh-renderer-material-override-overflow');
   });
 });

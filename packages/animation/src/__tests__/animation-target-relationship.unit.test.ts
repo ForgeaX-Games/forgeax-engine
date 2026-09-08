@@ -1,4 +1,5 @@
 import { Entity, World } from '@forgeax/engine-ecs';
+import { componentSchema } from '@forgeax/engine-ecs/internal';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 import { AnimationPlayer } from '../animation-player';
@@ -25,15 +26,8 @@ function spawnTarget(world: World) {
 
 describe('animation target relationship', () => {
   it('declares an exclusive non-linked relationship', () => {
-    expect(AnimationTargets.transient).toBe(true);
-    expect(AnimationPlayer.fields.clips.simulationTransient).toBe(true);
-    expect(AnimationPlayer.fields.graph.simulationTransient).toBe(true);
-    expect(AnimatedBy.relationship).toEqual({
-      mirror: 'AnimationTargets',
-      field: 'targets',
-      exclusive: true,
-      linkedSpawn: false,
-    });
+    expect(componentSchema(AnimationTargets).targets).toBe('array<entity>');
+    expect(componentSchema(AnimatedBy).player).toBe('entity');
   });
 
   it('keeps add, remove, rebind, and target despawn mirrors synchronized', () => {

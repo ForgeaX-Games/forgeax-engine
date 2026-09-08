@@ -34,10 +34,16 @@ const engineDocuments = [
   [
     'packages/vite-plugin-pack/README.md',
     [
-      'forgeax:catalog-delta',
+      'pluginPack',
       'reloadAssetHost()',
-      'source-only',
-      'static build',
+      'createCatalogClient',
+      'producerReadiness',
+      'runtimeBinding',
+      'sourceKey',
+      'generation',
+      'structured failure',
+      'lastKnownGood',
+      'preview-LKG',
       'AssetEvidence',
       'packageUrl',
       'notCooked',
@@ -53,7 +59,12 @@ const engineDocuments = [
       'CatalogDelta',
       'subscribeCatalog',
       'enumerateCatalog',
+      'pluginPack',
+      'createCatalogClient',
       'reloadAssetHost()',
+      'runtimeBinding',
+      'generation',
+      'sourceKey',
       'editor pinned consumer',
       'AssetEvidence',
       'packageUrl',
@@ -112,6 +123,9 @@ const authorityAuditVocabulary = [
   'lifecycle',
   'lastKnownGood',
   'sourceKey',
+  'producerReadiness',
+  'runtimeBinding',
+  'generation',
   'author authority',
   'runtime source',
   'author-validation',
@@ -137,6 +151,7 @@ const authorityAuditDocuments = [
   'packages/vfx/README.md',
   'packages/vfx-compiler/README.md',
   'packages/ddc/README.md',
+  'packages/devkit/README.md',
 ];
 const materialRouteTokens = [
   'MaterialAsset',
@@ -248,6 +263,59 @@ async function checkDocuments(root, documents, label) {
   return failures;
 }
 
+async function checkVitePluginPackSurface(root) {
+  const relativePath = 'packages/vite-plugin-pack/README.md';
+  const absolutePath = resolve(root, relativePath);
+  const failures = [];
+  let source;
+  try {
+    source = await readFile(absolutePath, 'utf8');
+  } catch (error) {
+    return [
+      'engine/' +
+        relativePath +
+        ': unreadable (' +
+        (error instanceof Error ? error.message : String(error)) +
+        ')',
+    ];
+  }
+
+  for (const token of [
+    'pluginPack',
+    'reloadAssetHost()',
+    'createCatalogClient',
+    'producerReadiness',
+    'runtimeBinding',
+    'sourceKey',
+    'generation',
+    'structured failure',
+    'lastKnownGood',
+    'preview-LKG',
+  ]) {
+    if (!source.includes(token))
+      failures.push(
+        `engine/${relativePath}: add narrow recovery guidance ${JSON.stringify(token)}`,
+      );
+  }
+
+  for (const token of [
+    'buildCatalog()',
+    'createCatalogSource',
+    'createDevImportTransport',
+    'importTransport',
+    'forgeax:catalog-delta',
+    '/__pack/',
+    '/__import/',
+    'event replay',
+    'route wiring',
+    'source-compatible',
+  ]) {
+    if (source.includes(token))
+      failures.push(`engine/${relativePath}: remove retired public term ${JSON.stringify(token)}`);
+  }
+  return failures;
+}
+
 async function checkAuthorityAuditContract(root) {
   const failures = [];
   const schemaPath = resolve(root, 'asset-authority.schema.json');
@@ -295,9 +363,69 @@ async function checkAuthorityAuditContract(root) {
   return failures;
 }
 
+async function checkScriptablePackMatrix(root) {
+  const failures = [];
+  const matrixSource = await readFile(
+    resolve(root, 'packages/pack/src/scriptable-pack.ts'),
+    'utf8',
+  );
+  const matrixBody = matrixSource.match(
+    /SCRIPTABLE_PACK_ASSET_KINDS\s*=\s*\[([\s\S]*?)\]\s+as const/,
+  )?.[1];
+  const kinds = [...(matrixBody?.matchAll(/'([^']+)'/g) ?? [])].map((match) => match[1]);
+  if (kinds.length !== 16) {
+    failures.push(
+      `engine/packages/pack/src/scriptable-pack.ts: expected 16 matrix kinds, got ${kinds.length}`,
+    );
+    return failures;
+  }
+  const matrixDocuments = [
+    'packages/types/README.md',
+    'packages/assets-runtime/README.md',
+    'packages/pack/README.md',
+    'packages/import/README.md',
+    'packages/vite-plugin-pack/README.md',
+  ];
+  for (const relativePath of matrixDocuments) {
+    const source = await readFile(resolve(root, relativePath), 'utf8');
+    for (const kind of kinds) {
+      if (!source.includes(kind)) {
+        failures.push(
+          `engine/${relativePath}: document ScriptablePack kind ${JSON.stringify(kind)}`,
+        );
+      }
+    }
+  }
+  const staleTerms = [
+    '10 engine-owned kinds',
+    '11th kind',
+    '12-kind set',
+    'summary-only',
+    'live handles',
+    'shared<AnimationClip> handle',
+  ];
+  for (const relativePath of [
+    ...matrixDocuments,
+    'packages/assets-runtime/src/wire-default-loaders.ts',
+    'packages/animation/src/graph/serialize-animation-graph.ts',
+  ]) {
+    const source = await readFile(resolve(root, relativePath), 'utf8');
+    for (const term of staleTerms) {
+      if (source.includes(term)) {
+        failures.push(
+          `engine/${relativePath}: remove stale ScriptablePack fact ${JSON.stringify(term)}`,
+        );
+      }
+    }
+  }
+  return failures;
+}
+
 const failures = await checkDocuments(engineRoot, engineDocuments, 'engine');
+failures.push(...(await checkVitePluginPackSurface(engineRoot)));
 failures.push(...(await checkMaterialDocuments(engineRoot)));
 failures.push(...(await checkAuthorityAuditContract(engineRoot)));
+failures.push(...(await checkScriptablePackMatrix(engineRoot)));
 for (const [relativePath, term] of [
   ['packages/assets-runtime/README.md', 'forgeax:asset-changed'],
   ['packages/vite-plugin-pack/README.md', 'forgeax:asset-changed'],

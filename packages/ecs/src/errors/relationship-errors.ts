@@ -177,3 +177,22 @@ export class RelationshipDetachMismatchError extends Error {
     this.detail = { component, child, expectedParent, actualParent };
   }
 }
+
+/** Returned when callers attempt to mutate an engine-maintained target list. */
+export class RelationshipTargetReadonlyError extends Error {
+  override readonly name = 'RelationshipTargetReadonlyError';
+  readonly code = 'component-field-invalid-value' as const;
+  readonly expected = 'relationship source mutation';
+  readonly hint: string;
+  readonly detail: {
+    readonly component: string;
+    readonly operation: string;
+  };
+
+  constructor(component: string, operation: string) {
+    const hint = `Component "${component}" is an engine-maintained relationship target. Mutate its source component instead of ${operation}.`;
+    super(`[RelationshipTargetReadonlyError component-field-invalid-value] ${hint}`);
+    this.hint = hint;
+    this.detail = { component, operation };
+  }
+}

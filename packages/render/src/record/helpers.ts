@@ -8,14 +8,10 @@ import type { EquirectAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { EquirectProjectionFailedError } from '../errors/render';
 import { isStandardPbrMaterialShader } from '../pbr-pipeline';
-import type { RenderSystemInternals } from '../render-system';
-import type {
-  CameraSnapshot,
-  MaterialSnapshot,
-  SkyboxSnapshot,
-  SkylightSnapshot,
-} from '../render-system-extract';
+import type { CameraSnapshot } from '../render-contract';
+import type { MaterialSnapshot, SkyboxSnapshot, SkylightSnapshot } from '../render-system-extract';
 import type { RenderFrameState } from './frame-snapshot';
+import type { RenderSystemInternals } from './render-context';
 
 /** Convert pass-owned shader definitions into the manifest's canonical variant key. */
 export function variantSetFromDefines(
@@ -261,8 +257,7 @@ export function computeViewMatrix(camera: CameraSnapshot): Mat4 {
   // world mat4 (propagateTransforms output) is read straight off the snapshot;
   // no recompose from decomposed TRS.
   const cameraFromWorld = mat4.create();
-  // brand-cast-ok: camera.world is an existing snapshot view read as Mat4 input.
-  mat4.invert(cameraFromWorld, camera.world as unknown as Mat4);
+  mat4.invert(cameraFromWorld, camera.world);
   return cameraFromWorld;
 }
 

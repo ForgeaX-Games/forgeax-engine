@@ -9,9 +9,14 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
+      "browser": "./dist/browser.mjs",
       "import": "./dist/index.mjs"
     },
     "./package.json": "./package.json"
+    ,"./mesh-bin": {
+      "types": "./dist/mesh-bin.d.ts",
+      "import": "./dist/mesh-bin.mjs"
+    }
   },
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -26,9 +31,13 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-ddc": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
     "@forgeax/engine-geometry": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
-    "@forgeax/engine-types": "workspace:*"
+    "@forgeax/engine-types": "workspace:*",
+    "@noble/hashes": "^2.2.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0"

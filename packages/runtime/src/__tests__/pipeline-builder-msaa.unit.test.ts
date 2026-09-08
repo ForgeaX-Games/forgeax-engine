@@ -13,10 +13,6 @@
  */
 
 import {
-  buildPipelineForMaterialShader,
-  type PipelineBuilderContext,
-} from '@forgeax/engine-render/internal';
-import {
   ok,
   type RenderPipeline,
   type Result,
@@ -25,6 +21,10 @@ import {
   type ShaderModule,
 } from '@forgeax/engine-rhi';
 import { describe, expect, it, vi } from 'vitest';
+import {
+  buildPipelineForMaterialShader,
+  type PipelineBuilderContext,
+} from '../../../render/src/pipeline-builder';
 
 function fakeShaderModule(): ShaderModule {
   return { label: 'fake-module' } as unknown as ShaderModule;
@@ -147,10 +147,7 @@ describe('buildPipelineForMaterialShader multisample descriptor (M2)', () => {
     expect(desc.multisample).toEqual({ count: 4, alphaToCoverageEnabled: true });
   });
 
-  it('sampleCount=2 narrowed to 1 per PipelineSpec contract (1 | 4 only)', () => {
-    // M2-T4: PipelineSpec.sampleCount is 1 | 4 (closed set). sampleCount=2
-    // is narrowed to 1 by the pipeline-builder, producing undefined multisample.
-    // When sampleCount=2 is added to the union, this test must be reverted.
+  it('sampleCount=2 preserves the explicit multisample count', () => {
     const spy = vi.fn<(desc: unknown) => Result<RenderPipeline, RhiError>>(
       () => ok(fakeRenderPipeline()) as unknown as Result<RenderPipeline, RhiError>,
     );
@@ -171,7 +168,7 @@ describe('buildPipelineForMaterialShader multisample descriptor (M2)', () => {
 
     expect(spy).toHaveBeenCalledTimes(1);
     const desc = spy.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(desc.multisample).toBeUndefined();
+    expect(desc.multisample).toEqual({ count: 2 });
   });
 
   it('shadow-caster pass with sampleCount=1 produces multisample: undefined', () => {

@@ -45,19 +45,19 @@ interface AssetCtx {
   readonly cwd?: string;
 }
 
-interface ErrorEnvelope {
-  readonly code: 'atlas-empty-input' | 'atlas-size-exceeded' | 'atlas-region-mismatch';
-  readonly expected: string;
-  readonly hint: string;
-  readonly detail: Record<string, unknown>;
-}
-
 const ATLAS_EXPECTED = {
   'atlas-empty-input': 'images.length >= 1',
   'atlas-size-exceeded':
     'image width x height <= maxAtlasSize^2 and each image fits in the atlas footprint',
   'atlas-region-mismatch': 'sum(regions[i].w x regions[i].h) <= atlasWidth x atlasHeight',
 } as const;
+
+interface ErrorEnvelope {
+  readonly code: keyof typeof ATLAS_EXPECTED;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: Record<string, unknown>;
+}
 
 function emitError(ctx: AssetCtx, env: ErrorEnvelope): number {
   ctx.stderrWrite(

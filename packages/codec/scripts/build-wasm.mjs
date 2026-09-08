@@ -29,6 +29,7 @@ const CODEC_ROOT = join(__dirname, '..');
 const VENDOR = join(CODEC_ROOT, 'vendor', 'basis');
 const PKG = join(CODEC_ROOT, 'pkg');
 const PKG_ENCODE = join(PKG, 'encode');
+const REPRODUCIBLE_PATH = `-ffile-prefix-map=${CODEC_ROOT}=/forgeax/codec`;
 
 if (!existsSync(join(VENDOR, 'transcoder', 'basisu_transcoder.cpp'))) {
   console.error('basis source not found. Run `node scripts/fetch-basis.mjs` first.');
@@ -251,7 +252,7 @@ const ENCODER_LINK = [
   '-s', "EXPORTED_RUNTIME_METHODS=['HEAP8']",
 ];
 
-const COMMON_CFLAGS = ['-O3', '-fno-strict-aliasing', '-std=c++17'];
+const COMMON_CFLAGS = ['-O3', REPRODUCIBLE_PATH, '-fno-strict-aliasing', '-std=c++17'];
 
 function emcc(args, label) {
   console.log(`\n[${label}] emcc ${args.length} args ...`);
@@ -271,8 +272,17 @@ function buildTranscoder() {
   // Compile the C zstd unit to an object first (C++ std flag excluded).
   const zstdObj = join(PKG, 'zstddeclib.transcoder.o');
   emcc(
-    ['-O3', '-fno-strict-aliasing', '-DNDEBUG=1', '-DBASISD_SUPPORT_KTX2_ZSTD=1',
-      '-c', join(VENDOR, TRANSCODER_C), '-o', zstdObj],
+    [
+      '-O3',
+      REPRODUCIBLE_PATH,
+      '-fno-strict-aliasing',
+      '-DNDEBUG=1',
+      '-DBASISD_SUPPORT_KTX2_ZSTD=1',
+      '-c',
+      join(VENDOR, TRANSCODER_C),
+      '-o',
+      zstdObj,
+    ],
     'transcoder:zstd',
   );
   emcc(
@@ -295,7 +305,16 @@ function buildEncoder() {
   mkdirSync(PKG_ENCODE, { recursive: true });
   const zstdObj = join(PKG, 'zstd.encoder.o');
   emcc(
-    ['-O3', '-fno-strict-aliasing', '-DNDEBUG=1', '-c', join(VENDOR, ENCODER_C), '-o', zstdObj],
+    [
+      '-O3',
+      REPRODUCIBLE_PATH,
+      '-fno-strict-aliasing',
+      '-DNDEBUG=1',
+      '-c',
+      join(VENDOR, ENCODER_C),
+      '-o',
+      zstdObj,
+    ],
     'encoder:zstd',
   );
   emcc(

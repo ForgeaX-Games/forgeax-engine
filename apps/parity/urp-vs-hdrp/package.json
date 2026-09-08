@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "URP vs HDRP pixel-parity fixture (feat-20260608-cluster-lighting M7 / w26). Renders the SAME scene (≤4 PointLight) twice -- left canvas via URP (default), right canvas via HDRP (installPipeline) -- and exposes window.__captureLeft / __captureRight for scripts/bench/pixel-parity.mjs. AC-22: ε ≤ 0.001 ≤4 lights subset.",
+  "description": "Standard direct-vs-clustered pixel-parity fixture. Renders the same scene (≤4 PointLight) twice through one Standard pipeline with different closed lighting lanes and exposes window.__captureLeft / __captureRight for scripts/bench/pixel-parity.mjs. AC-22: ε ≤ 0.001 ≤4 lights subset.",
   "exports": {
     ".": {
       "types": "./dist/main.d.ts",
@@ -30,7 +30,7 @@
       },
       "bench": {
         "enabled": true,
-        "reportPath": "../../../report/pixel-parity-urp-vs-hdrp.json",
+        "reportPath": "../../../report/pixel-parity-standard-lanes.json",
         "pixelDiff": {
           "threshold": 0,
           "perPixelThreshold": 0.001
@@ -38,11 +38,11 @@
       },
       "gate": {
         "enabled": false,
-        "reason": "no package-level binary gate; AC-22 ε ≤ 0.001 enforced via scripts/bench/pixel-parity.mjs urp-vs-hdrp target"
+        "reason": "no package-level binary gate; AC-22 ε ≤ 0.001 enforced via scripts/bench/pixel-parity.mjs Standard lanes target"
       },
       "spike-report": {
         "enabled": false,
-        "reason": "not a spike app; this is the M7 hdrp parity fixture"
+        "reason": "not a spike app; this is the Standard lighting-lane parity fixture"
       }
     }
   },

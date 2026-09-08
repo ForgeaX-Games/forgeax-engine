@@ -15,6 +15,23 @@ function response(bytes: Uint8Array, ok = true): Response {
 }
 
 describe('artifact I/O', () => {
+  it('rejects an empty media type before fetching artifact bytes', async () => {
+    const fetcher = vi.fn();
+    const result = await readArtifact(
+      {
+        packageUrl: 'https://example.test/packages/main.pack.json',
+        guid: GUID,
+        artifactKey: 'source',
+        descriptor: descriptor('payload.bin', { mediaType: '' }),
+      },
+      fetcher,
+    );
+
+    expect(result.ok).toBe(false);
+    expect(fetcher).not.toHaveBeenCalled();
+    if (!result.ok) expect(result.error.code).toBe('asset-artifact-media-unsupported');
+  });
+
   it.each([
     '../outside.bin',
     '%2e%2e/outside.bin',

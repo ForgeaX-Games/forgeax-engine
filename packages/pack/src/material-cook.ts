@@ -1,0 +1,15 @@
+export {
+  type CookedMaterialRecord,
+  collectMaterialCookRefs,
+  createMaterialArtifactDigest,
+  createMaterialCookIdentity,
+  type MaterialCookArtifact,
+  type MaterialCookReceipt,
+  type MaterialCookRecordError,
+  type MaterialCookRefs,
+  type MaterialCookWasmProvenance,
+  projectCookedMaterialRecord,
+  serializeCookedMaterialRecord,
+  serializeMaterialCookReceipt,
+  validateCookedMaterialRecord,
+} from './evidence/material-cook.js';

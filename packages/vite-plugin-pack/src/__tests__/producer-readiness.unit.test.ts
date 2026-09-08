@@ -1,5 +1,5 @@
+import { type ProducerReadiness, parseProducerReadiness } from '@forgeax/engine-import';
 import { describe, expect, it } from 'vitest';
-import { type ProducerReadiness, parseProducerReadiness } from '../producer/source-package.js';
 
 describe('producer readiness policy', () => {
   it('defaults to before-consume for browser hosts', () => {

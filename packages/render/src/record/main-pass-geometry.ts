@@ -2,7 +2,7 @@
 // feat-20260704 M5/w31: further-split from main-pass.ts (AC-05 <=1500 lines/file).
 // recordGeometryDraws + resolveGeometryInstanceBuffer, moved verbatim.
 
-import { buildMeshAttributeMapForUvSets } from '@forgeax/engine-geometry';
+import type { World } from '@forgeax/engine-ecs';
 import {
   type BindGroup,
   type Buffer,
@@ -20,13 +20,17 @@ import {
 import type { InstanceBufferCacheEntry } from '../instance-buffer-cache';
 import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '../materials';
 import { SKIN_MATERIAL_SHADER_ID } from '../pbr-pipeline';
-import { renderStateHash } from '../pipeline-spec';
-import type { _InternalRenderPipelineContext } from '../render-pipeline-context';
-import { MATERIAL_PER_ENTITY_STRIDE } from '../render-system';
+import { renderStateHash, variantSetFromVertexLayoutProjection } from '../pipeline-spec';
+import type { PointsLinesRecordPlan } from '../points-lines/record';
+import { POINTS_LINES_MATERIAL_SHADER_ID } from '../points-lines/record';
+import type { RenderRecordPhase } from '../render-contract';
 import type { MaterialSnapshot } from '../render-system-extract';
-import type { RenderRecordPhase } from '../renderer';
 import { worldEntityKey } from './frame-snapshot';
-import { isEntityFullyTransparent, selectGeometryPipeline } from './main-pass-material';
+import {
+  geometryRenderStateForTopology,
+  isEntityFullyTransparent,
+  selectGeometryPipeline,
+} from './main-pass-material';
 import {
   getOrCreateFromChain,
   INSTANCE_UBO_FULL_ARRAY_BYTES,
@@ -34,7 +38,11 @@ import {
   MESH_PER_ENTITY_STRIDE,
   MESH_SSBO_BYTES,
   MESH_UBO_FULL_ARRAY_BYTES,
+  packInstanceStorageBuffer,
 } from './mesh-ssbo';
+import type { _InternalRenderPipelineContext } from './render-context';
+import { MATERIAL_PER_ENTITY_STRIDE } from './render-context';
+import { POINTS_LINES_VIEW_SLOT_STRIDE, writePointsLinesViewUbo } from './view-ubo';
 
 type GeometryInstanceDraw = {
   readonly instanceBuffer: Buffer;
@@ -55,7 +63,7 @@ type MaterialPipelineLookup = {
   readonly indexFormat: 'uint16' | 'uint32';
   readonly variantSet: string | undefined;
   readonly passKind: PassKind;
-  readonly uvSetCount: number;
+  readonly layoutProjection: import('@forgeax/engine-geometry').VertexLayoutProjection;
   readonly sampleCount: number;
   readonly colorFormatOverride: GPUTextureFormat | undefined;
   readonly handle: RenderPipeline | null;
@@ -111,6 +119,23 @@ function submitSubmeshDraws(
 }
 
 /**
+ * Issues a prepared Points/Lines draw into the already-open geometry pass.
+ * Pass lifetime, attachments, bind groups, and submission remain owned by the
+ * existing main-pass interpreter.
+ */
+export function recordPointsLinesDraw(
+  pass: RhiRenderPassEncoder,
+  plan: PointsLinesRecordPlan,
+): void {
+  if (plan.drawCount === 0) return;
+  if (plan.indexCount > 0) {
+    pass.drawIndexed(plan.indexCount, 1, 0, 0, 0);
+    return;
+  }
+  pass.draw(plan.vertexCount, 1, 0, 0);
+}
+
+/**
  * feat-20260704 M3/w19: per-entity geometry (main colour) draw loop, extracted
  * verbatim from recordMainPass. Walks `c.validatedOrdered`, selects the
  * per-entity / per-submesh PBR / unlit / skin pipeline, uploads the per-submesh
@@ -119,22 +144,24 @@ function submitSubmeshDraws(
  * transparent entities are skipped here (drawn in the LDR blend sub-pass);
  * mixed meshes draw their opaque submeshes here and skip transparent submeshes.
  * The pass-selector match set, per-entity material-slot start table, MSAA sample
- * count, group(2) bind group, and the shared per-submesh material BG builder are
- * threaded in explicitly.
+ * count, Standard group(2) bind group, fallback mesh group(2) bind group, and
+ * the shared per-submesh material BG builder are threaded in explicitly.
  *
  * @internal
  */
 export function recordGeometryDraws(
   c: _InternalRenderPipelineContext,
   pass: RhiRenderPassEncoder,
-  matchedIndices: Set<number> | null,
+  matchedMaterials: ReadonlyMap<number, ReadonlySet<number>> | null,
   materialSlotIndices: readonly (readonly number[])[],
   sampleCount: number,
   meshGroup2: BindGroup | null,
+  meshBindGroup: BindGroup | null,
   resolveMaterialBindGroup: (
     materialSlot: number,
     submeshMaterial: MaterialSnapshot,
     entityKey: number,
+    materialWorld: World,
   ) => BindGroup,
   passKind: PassKind = 'forward',
 ): void {
@@ -148,17 +175,9 @@ export function recordGeometryDraws(
     msaaActive,
     validatedOrdered,
     splitLdrSprite,
+    viewBindGroup,
   } = c;
-  const linearLdrAttachment =
-    !tonemapActive &&
-    runtime.device.caps.storageBuffer &&
-    frameState.perFrameGraph?.getColorTargetTexture('ldrColor') !== undefined;
-  const ldrColorFormat = linearLdrAttachment
-    ? frameState.perFrameGraph?.getColorTargetDescriptor('ldrColor')?.format
-    : undefined;
-  const colorFormatOverride = linearLdrAttachment
-    ? (ldrColorFormat as GPUTextureFormat | undefined)
-    : undefined;
+  const colorFormatOverride = c.transparentColorFormat as GPUTextureFormat | undefined;
   let lastVertexBuffer: GpuBuffer | null = null;
   let lastIndexBuffer: GpuBuffer | null = null;
   const bindingState: GeometryBindingState = {
@@ -198,8 +217,8 @@ export function recordGeometryDraws(
     topology: PrimitiveTopology,
     indexFormat: 'uint16' | 'uint32',
     variantSet: string | undefined,
-    uvSetCount: number,
     colorFormat: GPUTextureFormat | undefined,
+    layoutProjection: import('@forgeax/engine-geometry').VertexLayoutProjection,
   ): RenderPipeline | null => {
     const renderStateKey = renderStateHash(renderState);
     const shaderLookupCache = materialPipelineLookupCache.get(materialShaderId);
@@ -213,7 +232,7 @@ export function recordGeometryDraws(
           cached.indexFormat === indexFormat &&
           cached.variantSet === variantSet &&
           cached.passKind === passKind &&
-          cached.uvSetCount === uvSetCount &&
+          cached.layoutProjection.digest === layoutProjection.digest &&
           cached.sampleCount === sampleCount &&
           cached.colorFormatOverride === colorFormat
         ) {
@@ -221,7 +240,15 @@ export function recordGeometryDraws(
         }
       }
     }
-    const meshAttributes = uvSetCount > 1 ? buildMeshAttributeMapForUvSets(uvSetCount) : undefined;
+    const resolvedVariantSetResult = variantSetFromVertexLayoutProjection(
+      layoutProjection,
+      variantSet,
+    );
+    if (!resolvedVariantSetResult.ok) {
+      runtime.errorRegistry.fire(resolvedVariantSetResult.error);
+      return null;
+    }
+    const resolvedVariantSet = resolvedVariantSetResult.value;
     const resolvePipeline = () =>
       runtime.getMaterialShaderPipeline?.(
         materialShaderId,
@@ -229,11 +256,15 @@ export function recordGeometryDraws(
         renderState,
         topology,
         indexFormat,
-        variantSet,
+        resolvedVariantSet,
         passKind,
-        meshAttributes,
+        undefined,
         sampleCount,
         colorFormat,
+        undefined,
+        undefined,
+        undefined,
+        layoutProjection,
       ) ?? null;
     const handle =
       profilePhase === undefined
@@ -247,7 +278,7 @@ export function recordGeometryDraws(
       indexFormat,
       variantSet,
       passKind,
-      uvSetCount,
+      layoutProjection,
       sampleCount,
       colorFormatOverride: colorFormat,
       handle,
@@ -266,8 +297,22 @@ export function recordGeometryDraws(
     const entry = validatedOrdered[i];
     if (entry === undefined) continue;
 
+    // Points/Lines share the Standard geometry pass. Their retained source
+    // is prepared once by the renderer owner, while this loop remains the
+    // sole pass/draw submission owner and preserves the authored topology.
+    const pointsLinesSubmission = c.pointsLines?.prepare(entry, frameState.isHdrpActive);
+    if (entry.source.pointsLines !== undefined && pointsLinesSubmission?.plan.drawCount !== 1)
+      continue;
+
+    if (
+      passKind === 'forward' &&
+      c.gpuDrivenEntityKeys.has(worldEntityKey(entry.source.worldId, entry.source.entityKey))
+    ) {
+      continue;
+    }
+
     // feat-20260609 M2: skip entities that don't match the pass selector.
-    if (matchedIndices !== null && !matchedIndices.has(entry.renderableIndex)) continue;
+    if (matchedMaterials !== null && !matchedMaterials.has(entry.renderableIndex)) continue;
 
     // D-2 generalised feat-20260625 M2 / w7: transparent entities are
     // dispatched in the separate sub-pass (bgra8unorm unorm view,
@@ -297,6 +342,70 @@ export function recordGeometryDraws(
     if (stencilReference !== lastStencilReference) {
       pass.setStencilReference(stencilReference);
       lastStencilReference = stencilReference;
+    }
+
+    if (pointsLinesSubmission !== undefined && entry.source.pointsLines !== undefined) {
+      const pointsLinesMaterial: MaterialSnapshot = {
+        ...entry.source.material,
+        materialShaderId: POINTS_LINES_MATERIAL_SHADER_ID,
+        materialParamSchema:
+          runtime.getParamSchema?.(POINTS_LINES_MATERIAL_SHADER_ID) ??
+          entry.source.material.materialParamSchema,
+      };
+      const materialSlot = materialSlotIndices[i]?.[0] ?? 0;
+      const pointsLinesBindGroup = resolveMaterialBindGroup(
+        materialSlot,
+        pointsLinesMaterial,
+        entry.source.entityKey,
+        entry.world ?? c.world,
+      );
+      const pointsLinesPipeline = resolveMaterialPipeline(
+        POINTS_LINES_MATERIAL_SHADER_ID,
+        {
+          ...pointsLinesMaterial.renderState,
+          cullMode: 'none',
+        },
+        'triangle-list',
+        'uint32',
+        undefined,
+        colorFormatOverride,
+        pointsLinesSubmission.layoutProjection,
+      );
+      if (pointsLinesPipeline === null) continue;
+      if (pipelineState.pointsLinesViewBuffer === undefined) continue;
+      writePointsLinesViewUbo(
+        runtime.device.queue,
+        pipelineState.pointsLinesViewBuffer,
+        c.camera,
+        c.targetW,
+        c.targetH,
+        entry.source.transform.world,
+        entry.source.pointsLines.style,
+        i * POINTS_LINES_VIEW_SLOT_STRIDE,
+      );
+      pass.setBindGroup(
+        0,
+        viewBindGroup as BindGroup,
+        new Uint32Array([i * POINTS_LINES_VIEW_SLOT_STRIDE]),
+        0,
+        1,
+      );
+      pass.setPipeline(pointsLinesPipeline);
+      pass.setVertexBuffer(0, pointsLinesSubmission.vertexBuffer);
+      pass.setIndexBuffer(pointsLinesSubmission.indexBuffer, 'uint32');
+      materialGroup1DynamicOffsets[0] = materialSlot * MATERIAL_PER_ENTITY_STRIDE;
+      pass.setBindGroup(1, pointsLinesBindGroup, materialGroup1DynamicOffsets, 0, 1);
+      const pointsLinesMeshGroup = meshBindGroup ?? meshGroup2;
+      if (pointsLinesMeshGroup === null) continue;
+      pass.setBindGroup(2, pointsLinesMeshGroup, meshGroup2DynamicOffsets);
+      pass.setBindGroup(
+        3,
+        identityInstanceDraws[0]?.instanceBindGroup ??
+          resolveGeometryInstancesBindGroup(c, identityInstanceBuffer),
+      );
+      recordPointsLinesDraw(pass, pointsLinesSubmission.plan);
+      pass.setBindGroup(0, viewBindGroup as BindGroup, [0]);
+      continue;
     }
 
     if (entry.mesh.vertexBuffer !== lastVertexBuffer) {
@@ -346,7 +455,7 @@ export function recordGeometryDraws(
     // captured. Mirrors the uniform null skip-draw pattern (M6-T1).
     let group2BindGroup: BindGroup = meshGroup2 as BindGroup;
     // feat-20260612-skin-palette-per-frame-upload M3 / m3-2: dyn-offset
-    // tuple sourced from `_computeSkinGroup2DynOffsets`.  Defaults to the
+    // tuple follows the skin group2 offset contract. Defaults to the
     // length-1 non-skin shape; the skin branch below re-computes with the
     // per-entity `entry.source.skin.byteOffset` cursor.
     meshGroup2DynamicOffsets[0] = i * MESH_PER_ENTITY_STRIDE;
@@ -385,11 +494,16 @@ export function recordGeometryDraws(
     // identical -- skin shader registers a single all-true variant so
     // the canonical empty-key rule applies on HDRP and the URP key is
     // the explicit expanded form, mirroring the standard PBR path).
-    const skinVariantSet = frameState.isHdrpActive
-      ? ''
-      : 'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true';
+    const skinVariantSetResult = variantSetFromVertexLayoutProjection(
+      entry.mesh.layoutProjection,
+      frameState.isHdrpActive
+        ? ''
+        : 'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true',
+    );
+    if (!skinVariantSetResult.ok) runtime.errorRegistry.fire(skinVariantSetResult.error);
+    const skinVariantSet = skinVariantSetResult.ok ? skinVariantSetResult.value : undefined;
     const skinPsoProbe =
-      skinResources !== null
+      skinResources !== null && skinVariantSetResult.ok
         ? (runtime.getMaterialShaderPipeline?.(
             SKIN_MATERIAL_SHADER_ID,
             tonemapActive,
@@ -401,6 +515,10 @@ export function recordGeometryDraws(
             undefined, // meshAttributes — skin probe uses first submesh, derive from entry
             sampleCount,
             colorFormatOverride,
+            undefined,
+            undefined,
+            undefined,
+            entry.mesh.layoutProjection,
           ) ?? null)
         : null;
     if (skinResources !== null && skinPsoProbe !== null) {
@@ -471,8 +589,8 @@ export function recordGeometryDraws(
         else skinStats.hit += 1;
       }
       group2BindGroup = skinBindGroup;
-      // m3-2: dyn-offset tuple via `_computeSkinGroup2DynOffsets` with the
-      // per-entity palette cursor M2 m2-6 wrote at the extract stage.
+      // m3-2: dyn-offset tuple uses the per-entity palette cursor M2 m2-6
+      // wrote at the extract stage.
       // Replaces the prior PR #353 hard-coded `0` second slot -- every
       // skin entry now points the palette window at its own slice while
       // sharing the worst-case BG entry size above.
@@ -489,8 +607,6 @@ export function recordGeometryDraws(
       // null skip-draw shape (M6-T1, charter P3 explicit failure).
       continue;
     }
-    pass.setBindGroup(2, group2BindGroup, group2DynamicOffsets);
-
     // feat-20260520-2d-sprite-layer-mvp M-3 / w25 (@fallback sprite
     // bucket): sprite entries get a per-entity material BindGroup so
     // each sprite carries its own texture binding at @group(1) @binding(2).
@@ -541,8 +657,13 @@ export function recordGeometryDraws(
     for (let smIdx = 0; smIdx < entry.mesh.submeshes.length; smIdx++) {
       const sm = entry.mesh.submeshes[smIdx];
       if (sm === undefined) continue;
-      const matSlotIdx = smIdx < matsForRebind.length ? smIdx : 0;
+      const matSlotIdx = sm.materialSlot;
       const submeshMaterial = matsForRebind[matSlotIdx] ?? entry.source.material;
+      if (matchedMaterials !== null) {
+        const materialHandles = matchedMaterials.get(entry.renderableIndex);
+        const materialHandle = submeshMaterial.materialHandle ?? 0;
+        if (materialHandles === undefined || !materialHandles.has(materialHandle)) continue;
+      }
       // feat-city-glb Bug 5 (per-submesh transparency): in the LDR split, a
       // transparent submesh is drawn in the blend sub-pass (non-sRGB view),
       // NOT here in the sRGB geometry pass. Skip it. Opaque submeshes of the
@@ -574,15 +695,25 @@ export function recordGeometryDraws(
       // feat-city-glb Bug 5: per-submesh material BG assembly extracted to
       // the shared `buildPerSubmeshMaterialBg` closure (also called by the
       // LDR blend sub-pass). Resolves the shader's user-region textures
-      // (baseColor/MR/normal + any custom Nth texture), emissive/occlusion
+      // (baseColor/MR/normal + a custom Nth texture), emissive/occlusion
       // injection, and Skylight merge; deduped cross-entity via the
       // shaderId-outer `materialBgShared` cache.
       const materialSlot = materialSlotIndices[i]?.[matSlotIdx] ?? materialSlotIndices[i]?.[0] ?? 0;
       perSubmeshBg =
         profilePhase === undefined
-          ? resolveMaterialBindGroup(materialSlot, submeshMaterial, entry.source.entityKey)
+          ? resolveMaterialBindGroup(
+              materialSlot,
+              submeshMaterial,
+              entry.source.entityKey,
+              entry.world ?? c.world,
+            )
           : profileGeometrySegment(c, passKind, 'material-bind-groups', () =>
-              resolveMaterialBindGroup(materialSlot, submeshMaterial, entry.source.entityKey),
+              resolveMaterialBindGroup(
+                materialSlot,
+                submeshMaterial,
+                entry.source.entityKey,
+                entry.world ?? c.world,
+              ),
             );
       materialGroup1DynamicOffsets[0] = materialSlot * MATERIAL_PER_ENTITY_STRIDE;
       pass.setBindGroup(1, perSubmeshBg, materialGroup1DynamicOffsets, 0, 1);
@@ -604,25 +735,31 @@ export function recordGeometryDraws(
             cullMode: 'none' as const,
             blend: submeshMaterial.renderState?.blend ?? SPRITE_PREMULTIPLIED_ALPHA_BLEND,
           }
-        : submeshMaterial.renderState;
+        : geometryRenderStateForTopology(smTopology, submeshMaterial.renderState);
       let smPipelineHandle: typeof pipelineState.unlitPipeline;
-      const nonDefaultTopology = smTopology !== 'triangle-list';
       if (smMaterialShaderId === undefined || smMaterialShaderId === 'forgeax::default-unlit') {
         const unlitShaderId = smMaterialShaderId ?? 'forgeax::default-unlit';
-        const unlitRsp =
-          submeshMaterial.renderState !== undefined ||
-          nonDefaultTopology ||
-          colorFormatOverride !== undefined
-            ? resolveMaterialPipeline(
-                unlitShaderId,
-                submeshMaterial.renderState,
-                smTopology,
-                entry.mesh.indexFormat,
-                undefined, // variantSet — unlit path has no variant
-                1, // unlit uses the default 4-attribute layout
-                colorFormatOverride,
-              )
-            : undefined;
+        const unlitProjectionVariantResult = variantSetFromVertexLayoutProjection(
+          entry.mesh.layoutProjection,
+          undefined,
+        );
+        if (!unlitProjectionVariantResult.ok) {
+          runtime.errorRegistry.fire(unlitProjectionVariantResult.error);
+          continue;
+        }
+        const unlitHasColor = unlitProjectionVariantResult.value === 'VERTEX_COLOR_AVAILABLE=true';
+        const unlitVariantSet = unlitHasColor
+          ? ''
+          : 'STORAGE_BUFFER_AVAILABLE=true+VERTEX_COLOR_AVAILABLE=false';
+        const unlitRsp = resolveMaterialPipeline(
+          unlitShaderId,
+          pipelineRenderState,
+          smTopology,
+          entry.mesh.indexFormat,
+          unlitVariantSet,
+          colorFormatOverride,
+          entry.mesh.layoutProjection,
+        );
         smPipelineHandle =
           unlitRsp ??
           (colorFormatOverride === undefined
@@ -643,32 +780,43 @@ export function recordGeometryDraws(
         // variant's manifest definesKey IS that exact non-empty string
         // (CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true)
         // -- the canonical-empty rule only applies to the all-true case.
+        const hasVertexColor = entry.mesh.layoutProjection.attributes.some(
+          (attribute) => attribute.key === 'color',
+        );
+        // The all-true HDRP variant uses the canonical empty key only when
+        // every variant axis is true. A plain mesh adds the geometry-owned
+        // VERTEX_COLOR_AVAILABLE=false axis, so retain the two capability
+        // axes explicitly or the selector would silently choose the URP
+        // group(2) layout for an HDRP cluster bind group.
         const capabilityVariantSet = frameState.isHdrpActive
-          ? ''
+          ? hasVertexColor
+            ? ''
+            : 'CLUSTER_FORWARD_AVAILABLE=true+STORAGE_BUFFER_AVAILABLE=true'
           : 'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true';
-        const authoredVariantSet = entry.variantSet;
+        const authoredVariantSet =
+          isSpriteShader && entry.source.spriteInstances !== undefined ? '' : entry.variantSet;
         const variantSet =
           authoredVariantSet === undefined
             ? capabilityVariantSet
             : capabilityVariantSet === ''
               ? authoredVariantSet
               : `${capabilityVariantSet}+${authoredVariantSet}`;
-        // feat-20260629-multi-uv-set-support: a mesh carrying a real extra UV
-        // set (uvSetCount > 1) has a wider interleaved stride (56 B for two
-        // sets) than the default single-UV layout (48 B). Hand the material
-        // PSO a vertex layout that includes the real @location(6+) attributes
-        // so its stride matches the buffer; without this the PSO reads a 48 B
-        // stride against the 56 B buffer and every vertex after the first
-        // lands off-screen (hello-multi-uv rendered nothing). Single-UV meshes
-        // pass undefined and keep the default 4-attribute layout (zero change).
+        const projectionVariantSetResult = variantSetFromVertexLayoutProjection(
+          entry.mesh.layoutProjection,
+          variantSet,
+        );
+        if (!projectionVariantSetResult.ok) {
+          runtime.errorRegistry.fire(projectionVariantSetResult.error);
+          continue;
+        }
         const cachedPipeline = resolveMaterialPipeline(
           smMaterialShaderId,
           pipelineRenderState,
           smTopology,
           entry.mesh.indexFormat,
-          variantSet,
-          entry.mesh.uvSetCount,
+          projectionVariantSetResult.value,
           colorFormatOverride,
+          entry.mesh.layoutProjection,
         );
         // feat-20260615-pipeline-spec-ssot M6-T1: cache miss resolves to
         // null uniformly across URP / HDRP / skin shaders. Charter P3
@@ -691,6 +839,23 @@ export function recordGeometryDraws(
       if (smPipelineHandle === null) {
         continue;
       }
+      // Standard clustered PBR variants declare the unified cluster/SSAO
+      // group(2) layout. Unlit and other URP-layout materials must bind the
+      // ordinary mesh group instead; choosing one group for the whole pass
+      // makes Dawn reject an otherwise valid unlit pipeline and invalidates
+      // the command buffer before it reaches the surface.
+      const usesStandardClusterBindings = smMaterialShaderId === 'forgeax::default-standard-pbr';
+      if (!isSkinEntry) {
+        if (usesStandardClusterBindings) {
+          if (meshGroup2 === null) continue;
+          group2BindGroup = meshGroup2;
+        } else {
+          const fallbackGroup = meshBindGroup ?? meshGroup2;
+          if (fallbackGroup === null) continue;
+          group2BindGroup = fallbackGroup;
+        }
+      }
+      pass.setBindGroup(2, group2BindGroup, group2DynamicOffsets);
 
       if (profilePhase === undefined) {
         submitSubmeshDraws(
@@ -784,7 +949,10 @@ function resolveGeometryInstanceBuffer(
     {
       // Cap-gate (LimitExceededDetail single emit point — feat-20260514
       // M3 / w15 anchor): `requestedBytes <= maxStorageBufferBindingSize`.
-      const requestedBytes = inst.transforms.byteLength;
+      const instancePayload = uniformFallback
+        ? inst.transforms
+        : packInstanceStorageBuffer(inst.transforms);
+      const requestedBytes = instancePayload.byteLength;
       const cap = runtime.device.limits.maxStorageBufferBindingSize;
       if (!uniformFallback && typeof cap === 'number' && cap > 0 && requestedBytes > cap) {
         runtime.errorRegistry.fire(
@@ -843,7 +1011,7 @@ function resolveGeometryInstanceBuffer(
           const writeRes = runtime.device.queue.writeBuffer(
             active.buffer.handle,
             0,
-            inst.transforms,
+            instancePayload,
           );
           if (!writeRes.ok) {
             runtime.errorRegistry.fire(writeRes.error);

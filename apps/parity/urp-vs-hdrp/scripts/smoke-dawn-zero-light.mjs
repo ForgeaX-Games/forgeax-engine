@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// parity-urp-vs-hdrp 0-light dawn-node smoke (feat-20260609-hdrp-cluster-fragment-ggx M6 / w21).
+// parity-standard-lanes 0-punctual-light dawn-node smoke.
 //
-// Renders the SAME 0-light scene twice through dawn-node (URP default +
-// HDRP installPipeline), reads back pixels from both, and asserts
-// per-pixel epsilon <= 0.001 (AC-09). The only difference is the pipeline;
-// 0 lights means the cluster loop naturally executes 0 iterations, and
-// directional + ambient IBL paths are shared between both pipelines -- so
+// Renders the SAME no-punctual-light scene twice through dawn-node (Standard direct +
+// Standard clustered), reads back pixels from both, and asserts
+// per-pixel epsilon <= 0.001 (AC-09). The only difference is the lane;
+// zero punctual lights means the cluster loop naturally executes 0 iterations;
+// a shared directional light keeps the Standard PBR contract valid -- so
 // pixel output must be byte-identical modulo GPU/driver noise.
 //
 // This is a separate script from the 4-light bench (driven by
@@ -15,8 +15,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
-import { writeReferencePng, readReferencePng } from '../../../shared/png-codec.mjs';
+import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
 const SMOKE_MIN_FRAMES = 300;
 const SMOKE_PIXEL_EPSILON = 0.001;
@@ -26,7 +25,7 @@ const HEIGHT = 512;
 const here = dirname(fileURLToPath(import.meta.url));
 const MONOREPO_ROOT = resolve(here, '..', '..', '..', '..');
 
-// --- Dawn-node bootstrap (mirrors hello-hdrp-lighting smoke pattern) ---
+// --- Dawn-node bootstrap ---
 
 let create;
 let globals;
@@ -55,20 +54,8 @@ Object.defineProperty(globalThis.navigator, 'gpu', { value: gpu, configurable: t
 // BGRA path is exercised through the helper unmodified there.
 gpu.getPreferredCanvasFormat = () => 'rgba8unorm';
 
-let rafQueue = [];
-let rafCounter = 1;
-globalThis.requestAnimationFrame = (cb) => {
-  const id = rafCounter++;
-  rafQueue.push({ id, cb });
-  return id;
-};
-globalThis.cancelAnimationFrame = (id) => {
-  rafQueue = rafQueue.filter((f) => f.id !== id);
-};
-const realPerformanceNow = globalThis.performance?.now?.bind(globalThis.performance) ?? (() => Date.now());
-
-let sharedDevice;
 const devices = [];
+let sharedDevice;
 const originalRequestAdapter = globalThis.navigator.gpu.requestAdapter.bind(globalThis.navigator.gpu);
 globalThis.navigator.gpu.requestAdapter = async (opts) => {
   const adapter = await originalRequestAdapter(opts);
@@ -77,7 +64,7 @@ globalThis.navigator.gpu.requestAdapter = async (opts) => {
   adapter.requestDevice = async (desc) => {
     const dev = await originalRequestDevice(desc);
     devices.push(dev);
-    if (!sharedDevice) sharedDevice = dev;
+    sharedDevice ??= dev;
     return dev;
   };
   return adapter;
@@ -88,15 +75,13 @@ globalThis.navigator.gpu.requestAdapter = async (opts) => {
 // a string label so the readback step can retrieve the right target.
 // Each texture is associated with the device that was passed to configure().
 const renderTargets = new Map();
-let targetSeq = 0;
-
-function ensureRenderTarget(device, format, label) {
+function ensureRenderTarget(device, format, label = 'default') {
   let t = renderTargets.get(label);
-  if (t) return t;
+  if (t) return t.texture;
   t = device.createTexture({
     size: { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
     format,
-    usage: 0x10 | 0x01,
+    usage: 0x10 | 0x04 | 0x01,
     viewFormats: ['rgba8unorm-srgb'],
     label,
   });
@@ -104,99 +89,84 @@ function ensureRenderTarget(device, format, label) {
   return t;
 }
 
-function makeMockCanvas(label) {
-  let configured = false;
-  let configDevice = null;
-  let configFormat = 'rgba8unorm';
-  return {
-    tagName: 'CANVAS',
-    isConnected: true,
-    width: WIDTH,
-    height: HEIGHT,
+const mockCanvas = {
+  tagName: 'CANVAS',
+  isConnected: true,
+  width: WIDTH,
+  height: HEIGHT,
+  getContext(kind) {
+    if (kind !== 'webgpu') return null;
+    return {
+      configure(desc) { ensureRenderTarget(desc.device, desc.format ?? 'rgba8unorm'); },
+      unconfigure() {},
+      getCurrentTexture() {
+        if (!renderTargets.has('default')) {
+          if (!sharedDevice) throw new Error('no shared device captured');
+          ensureRenderTarget(sharedDevice, 'rgba8unorm');
+        }
+        return renderTargets.get('default').texture;
+      },
+    };
+  },
+  addEventListener() {},
+  removeEventListener() {},
+};
+
+async function createStandardRenderer(lighting, label) {
+  let configuredDevice;
+  const canvas = {
+    ...mockCanvas,
     getContext(kind) {
-      if (kind !== 'webgpu') return null;
+      const context = mockCanvas.getContext(kind);
+      if (context === null) return null;
       return {
+        ...context,
         configure(desc) {
-          configDevice = desc.device;
-          configFormat = desc.format ?? 'rgba8unorm';
-          configured = true;
+          configuredDevice = desc.device;
+          ensureRenderTarget(desc.device, desc.format ?? 'rgba8unorm', label);
         },
-        unconfigure() { configured = false; },
         getCurrentTexture() {
-          if (!configured) throw new Error(`mock canvas ${label} not configured`);
-          return ensureRenderTarget(configDevice, configFormat, label);
+          if (!configuredDevice) throw new Error(`canvas ${label} is not configured`);
+          return ensureRenderTarget(configuredDevice, 'rgba8unorm', label);
         },
       };
     },
-    addEventListener() {},
-    removeEventListener() {},
   };
+  return createRenderer(
+    canvas,
+    {
+      rhi,
+      standardProfile: {
+        ...DEFAULT_STANDARD_PROFILE,
+        lighting,
+      },
+    },
+    { shaderManifestUrl: MANIFEST_URL },
+  );
 }
-
-const urpCanvas = makeMockCanvas('urp-0l');
-const hdrpCanvas = makeMockCanvas('hdrp-0l');
 
 // --- Engine bootstrap ---
 
-const engineApp = await import('@forgeax/engine-app');
-const { createApp } = engineApp;
-
-const runtimePkg = await import('@forgeax/engine-runtime');
-const { Transform } = runtimePkg;
-const { Camera, MeshFilter, MeshRenderer, perspective } = await import('@forgeax/engine-render');
-const { HDRP_PIPELINE_ID } = await import('@forgeax/engine-render/internal');
+const { World } = await import('@forgeax/engine-ecs');
+const { Camera, DEFAULT_STANDARD_PROFILE, DirectionalLight, MeshFilter, MeshRenderer, perspective, Skylight } = await import('@forgeax/engine-render');
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { rhi } = await import('@forgeax/engine-rhi-webgpu');
+const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
 } = await import('@forgeax/engine-assets-runtime');
 
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
+const directRenderer = await createStandardRenderer('direct', 'standard-direct-0l');
+const clusteredRenderer = await createStandardRenderer('clustered', 'standard-clustered-0l');
 
-// Build both apps (URP + HDRP) before proceeding.
-const urpAppResult = await createApp(urpCanvas, {}, { shaderManifestUrl: MANIFEST_URL }).catch((err) => {
-  console.error(`[smoke-0l] FAIL - createApp URP: ${err instanceof Error ? err.message : String(err)}`);
-  process.exit(1);
-});
-globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
-
-if (!urpAppResult.ok) {
-  console.error(`[smoke-0l] FAIL - createApp URP err: ${urpAppResult.error.code}`);
-  process.exit(1);
-}
-const urpApp = urpAppResult.value;
-console.log(`[smoke-0l] URP backend=${urpApp.renderer.backend}`);
-
-const hdrpAppResult = await createApp(hdrpCanvas, {}, { shaderManifestUrl: MANIFEST_URL }).catch((err) => {
-  console.error(`[smoke-0l] FAIL - createApp HDRP: ${err instanceof Error ? err.message : String(err)}`);
-  process.exit(1);
-});
-if (!hdrpAppResult.ok) {
-  console.error(`[smoke-0l] FAIL - createApp HDRP err: ${hdrpAppResult.error.code}`);
-  process.exit(1);
-}
-const hdrpApp = hdrpAppResult.value;
-console.log(`[smoke-0l] HDRP backend=${hdrpApp.renderer.backend}`);
-
-// Install HDRP pipeline on the HDRP app.
-const hdrpAssets = hdrpApp.renderer.assets;
-if (hdrpAssets === null) {
-  console.error('[smoke-0l] FAIL - HDRP AssetRegistry null');
-  process.exit(1);
-}
-const installRes = hdrpApp.renderer.installPipeline({
-  kind: 'render-pipeline',
-  pipelineId: HDRP_PIPELINE_ID,
-  config: { clusterGrid: { x: 16, y: 9, z: 24 } },
-});
-if (!installRes.ok) {
-  console.error(`[smoke-0l] FAIL - HDRP installPipeline: ${installRes.error.code} - ${installRes.error.hint}`);
-  process.exit(1);
-}
+// Build both Standard lighting lanes before proceeding.
+console.log(`[smoke-0l] Standard direct backend=${directRenderer.inspect().capabilities.backendKind}`);
+console.log(`[smoke-0l] Standard clustered backend=${clusteredRenderer.inspect().capabilities.backendKind}`);
 
 // Setup both worlds with identical scene minus lights.
-function populateScene(app) {
-  const world = app.world;
-
+function populateScene(world) {
   const matHandle = world.allocSharedRef('MaterialAsset', {
     kind: 'material',
     passes: [
@@ -219,9 +189,16 @@ function populateScene(app) {
     { component: MeshRenderer, data: { materials: [matHandle] } },
   ).unwrap();
 
-  // NO lights -- 0-light scene. Directional + ambient IBL is shared
-  // between URP and HDRP, and the cluster loop naturally executes 0
-  // iterations (list_count=0).
+  // No punctual lights -- the shared directional source keeps Standard PBR
+  // lit while the clustered loop naturally executes 0 punctual iterations.
+  world.spawn({
+    component: DirectionalLight,
+    data: { direction: [-0.4, -1, -0.2], color: [1, 1, 1], intensity: 1 },
+  }).unwrap();
+  world.spawn({
+    component: Skylight,
+    data: { color: [0.22, 0.25, 0.32], intensity: 0.8 },
+  }).unwrap();
 
   // Camera locked: fov = 45deg, aspect = 1 (512x512), z = 3.
   world.spawn(
@@ -230,70 +207,50 @@ function populateScene(app) {
   ).unwrap();
 }
 
-populateScene(urpApp);
-populateScene(hdrpApp);
+const directWorld = new World();
+const clusteredWorld = new World();
+const directAttachment = directRenderer.attach(directWorld);
+const clusteredAttachment = clusteredRenderer.attach(clusteredWorld);
+if (!directAttachment.ok || !clusteredAttachment.ok) {
+  console.error('[smoke-0l] FAIL - Standard renderer attach failed');
+  process.exit(1);
+}
+populateScene(directWorld);
+populateScene(clusteredWorld);
 
 // --- Error tracking ---
 
-const onErrorEventsUrp = [];
-const onErrorEventsHdrp = [];
-urpApp.onError((err) => onErrorEventsUrp.push({ code: err.code, hint: err.hint }));
-hdrpApp.onError((err) => onErrorEventsHdrp.push({ code: err.code, hint: err.hint }));
-
-// --- Ready check ---
-
-const urpReady = await urpApp.renderer.ready;
-if (!urpReady.ok) {
-  console.error(`[smoke-0l] FAIL - URP ready: ${urpReady.error.code}`);
-  process.exit(1);
-}
-const hdrpReady = await hdrpApp.renderer.ready;
-if (!hdrpReady.ok) {
-  console.error(`[smoke-0l] FAIL - HDRP ready: ${hdrpReady.error.code}`);
-  process.exit(1);
-}
-
-// --- Frame pump ---
-
-let fakeNow = 0;
-globalThis.performance.now = () => fakeNow;
-
-const urpStart = urpApp.start();
-if (!urpStart.ok) {
-  console.error(`[smoke-0l] FAIL - URP app.start(): ${urpStart.error.code}`);
-  process.exit(1);
-}
-const hdrpStart = hdrpApp.start();
-if (!hdrpStart.ok) {
-  console.error(`[smoke-0l] FAIL - HDRP app.start(): ${hdrpStart.error.code}`);
-  process.exit(1);
-}
+const onErrorEventsDirect = [];
+const onErrorEventsClustered = [];
+directRenderer.onError((err) => onErrorEventsDirect.push({ code: err.code, hint: err.hint }));
+clusteredRenderer.onError((err) => onErrorEventsClustered.push({ code: err.code, hint: err.hint }));
 
 let totalFrames = 0;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-  const due = rafQueue.shift();
-  if (!due) break;
-  fakeNow += 16.67;
-  due.cb(fakeNow);
+  directWorld.update().unwrap();
+  clusteredWorld.update().unwrap();
+  const directDraw = directRenderer.draw({
+    leases: [directAttachment.value],
+    camera: { lease: directAttachment.value },
+    environment: { lease: directAttachment.value },
+  });
+  const clusteredDraw = clusteredRenderer.draw({
+    leases: [clusteredAttachment.value],
+    camera: { lease: clusteredAttachment.value },
+    environment: { lease: clusteredAttachment.value },
+  });
+  if (!directDraw.ok || !clusteredDraw.ok) {
+    console.error('[smoke-0l] FAIL - Standard receipt-bound draw failed');
+    if (!directDraw.ok) console.error(`[smoke-0l] direct draw error=${JSON.stringify(directDraw.error)}`);
+    if (!clusteredDraw.ok) console.error(`[smoke-0l] clustered draw error=${JSON.stringify(clusteredDraw.error)}`);
+    console.error(`[smoke-0l] direct onError=${JSON.stringify(onErrorEventsDirect.slice(-3))}`);
+    console.error(`[smoke-0l] clustered onError=${JSON.stringify(onErrorEventsClustered.slice(-3))}`);
+    process.exit(1);
+  }
   totalFrames++;
 }
 
-globalThis.performance.now = realPerformanceNow;
-await delay(2000);
-
 console.log(`[smoke-0l] frames=${totalFrames}`);
-
-// Stop both apps.
-const urpStop = urpApp.stop();
-if (!urpStop.ok) {
-  console.error(`[smoke-0l] FAIL - URP app.stop(): ${urpStop.error.code}`);
-  process.exit(1);
-}
-const hdrpStop = hdrpApp.stop();
-if (!hdrpStop.ok) {
-  console.error(`[smoke-0l] FAIL - HDRP app.stop(): ${hdrpStop.error.code}`);
-  process.exit(1);
-}
 
 // --- Pixel readback (both canvases) ---
 
@@ -319,14 +276,14 @@ function readbackFromTexture(device, texture) {
   return { readbackBuffer, bytesPerRow };
 }
 
-const urpEntry = renderTargets.get('urp-0l');
-const hdrpEntry = renderTargets.get('hdrp-0l');
-if (!urpEntry) {
-  console.error('[smoke-0l] FAIL - URP renderTarget never allocated');
+const directEntry = renderTargets.get('standard-direct-0l');
+const clusteredEntry = renderTargets.get('standard-clustered-0l');
+if (!directEntry) {
+  console.error('[smoke-0l] FAIL - direct renderTarget never allocated');
   process.exit(1);
 }
-if (!hdrpEntry) {
-  console.error('[smoke-0l] FAIL - HDRP renderTarget never allocated');
+if (!clusteredEntry) {
+  console.error('[smoke-0l] FAIL - clustered renderTarget never allocated');
   process.exit(1);
 }
 
@@ -350,11 +307,15 @@ async function mapAndTighten(device, rb) {
   return tight;
 }
 
-const urpRb = readbackFromTexture(urpEntry.device, urpEntry.texture);
-const hdrpRb = readbackFromTexture(hdrpEntry.device, hdrpEntry.texture);
+const directRb = readbackFromTexture(directEntry.device, directEntry.texture);
+const clusteredRb = readbackFromTexture(clusteredEntry.device, clusteredEntry.texture);
 
-const urpPixels = await mapAndTighten(urpEntry.device, urpRb);
-const hdrpPixels = await mapAndTighten(hdrpEntry.device, hdrpRb);
+const directPixels = await mapAndTighten(directEntry.device, directRb);
+const clusteredPixels = await mapAndTighten(clusteredEntry.device, clusteredRb);
+if (process.env.FORGEAX_PARITY_DIAGNOSTIC === '1') {
+  const center = ((HEIGHT >> 1) * WIDTH + (WIDTH >> 1)) * 4;
+  console.log(`[smoke-0l] center direct=${Array.from(directPixels.slice(center, center + 4))} clustered=${Array.from(clusteredPixels.slice(center, center + 4))}`);
+}
 
 // Known-transient onError codes in dual-renderer dawn-node setup.
 // The createView error is a dawn-node transient artifact where the
@@ -369,13 +330,13 @@ const KNOWN_NOISE_HINTS = new Set([
 const failures = [];
 
 // (a) onError -- filter known noise.
-const urpUnknown = onErrorEventsUrp.filter((e) => !KNOWN_NOISE_HINTS.has(e.hint));
-if (urpUnknown.length > 0) {
-  failures.push(`(a) URP onError: ${JSON.stringify(urpUnknown.slice(0, 3))}`);
+const directUnknown = onErrorEventsDirect.filter((e) => !KNOWN_NOISE_HINTS.has(e.hint));
+if (directUnknown.length > 0) {
+  failures.push(`(a) direct onError: ${JSON.stringify(directUnknown.slice(0, 3))}`);
 }
-const hdrpUnknown = onErrorEventsHdrp.filter((e) => !KNOWN_NOISE_HINTS.has(e.hint));
-if (hdrpUnknown.length > 0) {
-  failures.push(`(a) HDRP onError: ${JSON.stringify(hdrpUnknown.slice(0, 3))}`);
+const clusteredUnknown = onErrorEventsClustered.filter((e) => !KNOWN_NOISE_HINTS.has(e.hint));
+if (clusteredUnknown.length > 0) {
+  failures.push(`(a) clustered onError: ${JSON.stringify(clusteredUnknown.slice(0, 3))}`);
 }
 
 // (b) frame count
@@ -386,10 +347,10 @@ if (totalFrames < SMOKE_MIN_FRAMES) {
 // (c) pixel parity -- per-pixel epsilon.
 let maxDelta = 0;
 let exceedCount = 0;
-for (let i = 0; i < urpPixels.length; i += 4) {
-  const dr = Math.abs((urpPixels[i] ?? 0) - (hdrpPixels[i] ?? 0)) / 255;
-  const dg = Math.abs((urpPixels[i + 1] ?? 0) - (hdrpPixels[i + 1] ?? 0)) / 255;
-  const db = Math.abs((urpPixels[i + 2] ?? 0) - (hdrpPixels[i + 2] ?? 0)) / 255;
+for (let i = 0; i < directPixels.length; i += 4) {
+  const dr = Math.abs((directPixels[i] ?? 0) - (clusteredPixels[i] ?? 0)) / 255;
+  const dg = Math.abs((directPixels[i + 1] ?? 0) - (clusteredPixels[i + 1] ?? 0)) / 255;
+  const db = Math.abs((directPixels[i + 2] ?? 0) - (clusteredPixels[i + 2] ?? 0)) / 255;
   const d = Math.max(dr, dg, db);
   if (d > maxDelta) maxDelta = d;
   if (d > SMOKE_PIXEL_EPSILON) exceedCount++;
@@ -398,7 +359,7 @@ console.log(`[smoke-0l] pixelDelta=${JSON.stringify({ maxDelta: maxDelta.toFixed
 
 if (exceedCount > 0) {
   failures.push(
-    `(c) 0-light parity: ${exceedCount} pixels exceed eps=${SMOKE_PIXEL_EPSILON} (maxDelta=${maxDelta.toFixed(6)})`,
+    `(c) 0-punctual-light parity: ${exceedCount} pixels exceed eps=${SMOKE_PIXEL_EPSILON} (maxDelta=${maxDelta.toFixed(6)})`,
   );
 }
 
@@ -410,7 +371,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke-0l] PASS - URP-vs-HDRP 0-light parity eps=${SMOKE_PIXEL_EPSILON}, maxDelta=${maxDelta.toFixed(6)}`,
+  `[smoke-0l] PASS - Standard direct-vs-clustered 0-punctual-light parity eps=${SMOKE_PIXEL_EPSILON}, maxDelta=${maxDelta.toFixed(6)}`,
 );
 
 for (const dev of devices) dev.destroy?.();

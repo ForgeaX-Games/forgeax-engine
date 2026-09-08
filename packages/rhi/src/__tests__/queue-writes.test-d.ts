@@ -18,7 +18,7 @@
 //       dataLayout is Pick<GPUTexelCopyBufferLayout, ...>.
 //   (b) copyExternalImageToTexture(source, destination, copySize) where:
 //       source is Pick<GPUCopyExternalImageSourceInfo, ...> (spec rename);
-//       destination is Pick<GPUCopyExternalImageDestInfo, ...> (spec rename).
+//       destination is the opaque-handle ExternalImageTextureDestination.
 //   (c) r12-lint Pick<GPU*Descriptor count >= 20 follow-on (verified by w22
 //       gate, not this test-d).
 //
@@ -30,7 +30,16 @@
 /// <reference types="@webgpu/types" />
 
 import { describe, expectTypeOf, it } from 'vitest';
-import type { Buffer, Result, RhiError, RhiQueue, Texture, TextureView } from '../index';
+import type {
+  Buffer,
+  ExternalImageTextureDestination,
+  Result,
+  RhiError,
+  RhiQueue,
+  Texture,
+  TextureView,
+  TextureWriteDestination,
+} from '../index';
 
 /** Strict structural equality helper. */
 type Equals<X, Y> =
@@ -42,15 +51,11 @@ describe('AC-08 — RhiQueue.writeTexture Pick<spec> narrow', () => {
     expectTypeOf<Method>().toBeFunction();
   });
 
-  it('writeTexture destination param strictly equals Pick<GPUTexelCopyTextureInfo, ...> (no extra fields)', () => {
+  it('writeTexture destination keeps the opaque Texture resource boundary', () => {
     type DestParam = Parameters<RhiQueue['writeTexture']>[0];
-    type ExpectedShape = Pick<
-      GPUTexelCopyTextureInfo,
-      'texture' | 'mipLevel' | 'origin' | 'aspect'
-    >;
-    // Strict equality — DestParam has EXACTLY the four spec fields. AI users
-    // passing extra forgeax-invented fields trip TS2375 at call site;
-    // missing required `texture` field trips TS2741.
+    type ExpectedShape = TextureWriteDestination;
+    // Strict equality — the descriptor has exactly the four spec fields, but
+    // its resource is the RHI-opaque Texture rather than GPUTexture.
     type IsExact = Equals<DestParam, ExpectedShape>;
     expectTypeOf<IsExact>().toEqualTypeOf<true>();
   });
@@ -82,13 +87,9 @@ describe('AC-08 — RhiQueue.copyExternalImageToTexture Pick<spec> narrow + spec
     expectTypeOf<IsExact>().toEqualTypeOf<true>();
   });
 
-  it('destination param strictly equals Pick<GPUCopyExternalImageDestInfo, ...> (spec rename D-P5)', () => {
+  it('destination param keeps the RHI Texture opaque (D-P5)', () => {
     type DestParam = Parameters<RhiQueue['copyExternalImageToTexture']>[1];
-    type ExpectedShape = Pick<
-      GPUCopyExternalImageDestInfo,
-      'texture' | 'mipLevel' | 'origin' | 'aspect' | 'colorSpace' | 'premultipliedAlpha'
-    >;
-    type IsExact = Equals<DestParam, ExpectedShape>;
+    type IsExact = Equals<DestParam, ExternalImageTextureDestination>;
     expectTypeOf<IsExact>().toEqualTypeOf<true>();
   });
 

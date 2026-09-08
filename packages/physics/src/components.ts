@@ -5,32 +5,7 @@
 // CollidingEntities is the runtime set-query component for continuous
 // collision status (started/stopped model, no 'continued' event).
 
-import type { EntityHandle } from '@forgeax/engine-ecs';
-import { defineComponent } from '@forgeax/engine-ecs';
-
-// ─── Collider despawn-cleanup dispatch (plan-strategy D-3) ───
-//
-// The Collider component owns a single `onRemove` lifecycle hook (set at
-// definition time, then frozen). Physics backends cannot mutate the frozen
-// token, so the hook fans out to a mutable listener set instead: backends
-// subscribe via `registerColliderRemoveListener` and are notified when any
-// entity's Collider is removed (despawn / removeComponent). This is the SSOT
-// for "Collider removed -> physics cleanup" — the backend wires removeEntity
-// (body + KCC cache) onto it (feat-20260617 D-3).
-
-type ColliderRemoveListener = (entity: EntityHandle) => void;
-
-const colliderRemoveListeners = new Set<ColliderRemoveListener>();
-
-/**
- * Subscribe to Collider removal (fired by `Collider.onRemove` on despawn /
- * removeComponent). Returns an unsubscribe function. Idempotent — registering
- * the same listener twice is a no-op (Set semantics).
- */
-export function registerColliderRemoveListener(listener: ColliderRemoveListener): () => void {
-  colliderRemoveListeners.add(listener);
-  return () => colliderRemoveListeners.delete(listener);
-}
+import { type Component, defineComponent, type World } from '@forgeax/engine-ecs';
 
 /**
  * RigidBody motion type — 3-state discriminant mirroring Rapier's
@@ -157,33 +132,23 @@ export const RigidBody = defineComponent('RigidBody', {
  * | `collisionGroups` | `u32` | `0x0001_FFFF` | 32-bit packed membership/filter |
  * | `solverGroups` | `u32` | `0xFFFF_FFFF` | 32-bit packed constraint groups |
  */
-export const Collider = defineComponent(
-  'Collider',
-  {
-    shape: { type: 'enum', default: COLLIDER_SHAPE_CUBOID, labels: ColliderShapeValue },
-    // feat-20260709 M4: cuboid half-extents collapsed from 3 per-axis scalar
-    // columns into one inline array<f32,3> column. Explicit layer-2 default
-    // (the array layer-3 fallback is all-zero, which would give a degenerate
-    // zero-size box). radius/halfHeight stay scalar (OOS-1: independent
-    // sphere/capsule params, not part of the cuboid vec).
-    halfExtents: { type: 'array<f32, 3>', default: new Float32Array([0.5, 0.5, 0.5]) },
-    radius: { type: 'f32', default: 0.5 },
-    halfHeight: { type: 'f32', default: 0.5 },
-    friction: { type: 'f32', default: 0.5 },
-    restitution: { type: 'f32', default: 0 },
-    density: { type: 'f32', default: 1 },
-    isSensor: { type: 'bool', default: false },
-    collisionGroups: { type: 'u32', default: 0x0001_ffff },
-    solverGroups: { type: 'u32', default: 0xffff_ffff },
-  },
-  {
-    // D-3: fan removal out to subscribed physics backends so despawn /
-    // removeComponent triggers body + KCC cache cleanup.
-    onRemove: (entity) => {
-      for (const listener of colliderRemoveListeners) listener(entity);
-    },
-  },
-);
+export const Collider = defineComponent('Collider', {
+  shape: { type: 'enum', default: COLLIDER_SHAPE_CUBOID, labels: ColliderShapeValue },
+  // feat-20260709 M4: cuboid half-extents collapsed from 3 per-axis scalar
+  // columns into one inline array<f32,3> column. Explicit layer-2 default
+  // (the array layer-3 fallback is all-zero, which would give a degenerate
+  // zero-size box). radius/halfHeight stay scalar (OOS-1: independent
+  // sphere/capsule params, not part of the cuboid vec).
+  halfExtents: { type: 'array<f32, 3>', default: new Float32Array([0.5, 0.5, 0.5]) },
+  radius: { type: 'f32', default: 0.5 },
+  halfHeight: { type: 'f32', default: 0.5 },
+  friction: { type: 'f32', default: 0.5 },
+  restitution: { type: 'f32', default: 0 },
+  density: { type: 'f32', default: 1 },
+  isSensor: { type: 'bool', default: false },
+  collisionGroups: { type: 'u32', default: 0x0001_ffff },
+  solverGroups: { type: 'u32', default: 0xffff_ffff },
+});
 
 /**
  * ECS Component: kinematic character controller tuning + output state.
@@ -241,3 +206,20 @@ export const CollidingEntities = defineComponent(
   },
   { transient: true },
 );
+
+const PHYSICS_COMPONENTS: readonly Component[] = [
+  CharacterController,
+  Collider,
+  CollidingEntities,
+  RigidBody,
+];
+
+/** Install the physics component vocabulary in a World and release its leases on teardown. */
+export function registerPhysicsComponents(world: World): () => void {
+  const leases = PHYSICS_COMPONENTS.map((component) =>
+    world.components.register(component).unwrap(),
+  );
+  return () => {
+    for (let index = leases.length - 1; index >= 0; index -= 1) leases[index]?.dispose();
+  };
+}

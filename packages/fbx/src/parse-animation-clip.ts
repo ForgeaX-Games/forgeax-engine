@@ -10,9 +10,10 @@
 //     duration: number,
 //     channels: [{
 //       targetNode: string,
-//       property: 'translation'|'rotation'|'scale',
+//       property: 'translation'|'rotation'|'scale'|'weights',
 //       keyTimes: number[],     // ascending, seconds
-//       keyValues: number[],    // interleaved, stride 3 (T/S) or 4 (rotation quat xyzw)
+//       keyValues: number[],    // interleaved, stride 3/4 or weightCount
+//       weightCount?: number,   // required for 'weights'
 //     }],
 //   }]
 //
@@ -36,11 +37,13 @@ import { buildFbxNodePaths } from './parse-scene.js';
 
 export interface FbxRawAnimChannel {
   readonly targetNode: string;
-  readonly property: 'translation' | 'rotation' | 'scale';
+  readonly property: 'translation' | 'rotation' | 'scale' | 'weights';
   /** Ascending key timestamps in seconds. */
   readonly keyTimes?: number[];
-  /** Interleaved key values, stride 3 (translation/scale) or 4 (rotation quat). */
+  /** Interleaved key values, stride 3/4 or weightCount for morph weights. */
   readonly keyValues?: number[];
+  /** Number of morph weight elements in each sampled key. */
+  readonly weightCount?: number;
 }
 
 export interface FbxRawClip {
@@ -69,10 +72,11 @@ function sampleStrided(
   stride: number,
   t: number,
   out: number[],
+  rotation: boolean,
 ): void {
   const n = keyTimes.length;
   if (n === 0) {
-    for (let c = 0; c < stride; c++) out[c] = c === 3 ? 1 : 0;
+    for (let c = 0; c < stride; c++) out[c] = rotation && c === 3 ? 1 : 0;
     return;
   }
   const first = keyTimes[0] as number;
@@ -115,18 +119,25 @@ function buildSampler(ch: FbxRawAnimChannel, duration: number, fps: number): Ani
     input[f] = f * frameInterval;
   }
 
-  const stride = ch.property === 'rotation' ? 4 : 3;
+  const stride =
+    ch.property === 'rotation' ? 4 : ch.property === 'weights' ? (ch.weightCount ?? 0) : 3;
+  if (ch.property === 'weights' && (!Number.isInteger(stride) || stride < 1 || stride > 8)) {
+    throw new Error('fbx-morph-invalid: weight channel count must be an integer in [1, 8]');
+  }
   const output = new Float32Array(frameCount * stride);
 
   const keyTimes = ch.keyTimes ?? [];
   const keyValues = ch.keyValues ?? [];
+  if (keyTimes.length > 0 && keyValues.length !== keyTimes.length * stride) {
+    throw new Error('fbx-morph-invalid: animation key value width does not match key times');
+  }
   const tmp = new Array<number>(stride);
 
   for (let f = 0; f < frameCount; f++) {
     const t = input[f] as number;
-    sampleStrided(keyTimes, keyValues, stride, t, tmp);
+    sampleStrided(keyTimes, keyValues, stride, t, tmp, ch.property === 'rotation');
     const base = f * stride;
-    if (stride === 4) {
+    if (ch.property === 'rotation') {
       const len = Math.hypot(tmp[0] ?? 0, tmp[1] ?? 0, tmp[2] ?? 0, tmp[3] ?? 0);
       const inv = len > 0 ? 1 / len : 0;
       output[base + 0] = (tmp[0] ?? 0) * inv;
@@ -134,9 +145,7 @@ function buildSampler(ch: FbxRawAnimChannel, duration: number, fps: number): Ani
       output[base + 2] = (tmp[2] ?? 0) * inv;
       output[base + 3] = len > 0 ? (tmp[3] ?? 0) * inv : 1;
     } else {
-      output[base + 0] = tmp[0] ?? 0;
-      output[base + 1] = tmp[1] ?? 0;
-      output[base + 2] = tmp[2] ?? 0;
+      for (let c = 0; c < stride; c++) output[base + c] = tmp[c] ?? 0;
     }
   }
 

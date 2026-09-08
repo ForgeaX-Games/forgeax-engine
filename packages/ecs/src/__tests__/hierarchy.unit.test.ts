@@ -1,5 +1,8 @@
 // biome-ignore-all lint/complexity/noUselessLoneBlockStatements: scope isolation between merged source files
 // Consolidated by feat-20260609-test-pool-startup-reduction-merge-tiny-test-files
+
+import { componentId, componentSchema } from '../component';
+import { componentDefinition } from '../component-schema';
 import { Update } from '../schedule-token';
 //
 // Source files (N=25):
@@ -36,16 +39,8 @@ import { Update } from '../schedule-token';
 //   import { Entity as EntityComponent } from '../entity'
 //   + targeted rename in entity-liveness.test.ts body: world.get(..., Entity) -> world.get(..., EntityComponent)
 
-import {
-  type Handle,
-  type LocalEntityId,
-  type SceneAsset,
-  type SceneEntity,
-  unwrapHandle,
-} from '@forgeax/engine-types';
-import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
-import * as componentModule from '../component';
-import { type Component, type ComponentSchema, TYPE_METADATA } from '../component';
+import { describe, expect, it } from 'vitest';
+import { type ComponentSchema, TYPE_METADATA } from '../component';
 import { fillComponentDefaults, typeDefault } from '../component-default-fallback';
 import { Entity as EntityComponent } from '../entity';
 import {
@@ -64,18 +59,12 @@ import {
   type EcsErrorCode,
   EntityIndexOverflowError,
   ManagedArrayElementTypeNotAllowedError,
-  RelationshipMirrorComponentNotRegisteredError,
-  RelationshipMirrorFieldTypeMismatchError,
   SchemaUnsupportedFieldError,
   StaleEntityError,
 } from '../errors';
-import {
-  defineComponent,
-  RelationshipDetachMismatchError,
-  RelationshipSelfCycleError,
-  World,
-} from '../index';
+import { defineComponent } from '../index';
 import { UniqueRefStore } from '../unique-ref-store';
+import { World } from '../world';
 import { handleNumeric } from './utils/handle-numeric';
 
 {
@@ -228,46 +217,6 @@ import { handleNumeric } from './utils/handle-numeric';
   });
 }
 
-describe('reserveArrayCapacity', () => {
-  const Values = defineComponent('ReserveArrayValues', { values: 'array<u32>' });
-
-  it('reserves first allocation and growth without changing array values', () => {
-    const world = new World();
-    const entity = world.spawn({ component: Values, data: {} }).unwrap();
-
-    world.reserveArrayCapacity(entity, Values, 'values', 4).unwrap();
-    expect(world.capacity(entity, Values, 'values').unwrap()).toBeGreaterThanOrEqual(4);
-    expect([...world.get(entity, Values).unwrap().values]).toEqual([]);
-
-    world.push(entity, Values, 'values', 10).unwrap();
-    world.push(entity, Values, 'values', 20).unwrap();
-    const before = world.capacity(entity, Values, 'values').unwrap();
-
-    world.reserveArrayCapacity(entity, Values, 'values', 2).unwrap();
-    expect(world.capacity(entity, Values, 'values').unwrap()).toBe(before);
-    expect([...world.get(entity, Values).unwrap().values]).toEqual([10, 20]);
-
-    world.reserveArrayCapacity(entity, Values, 'values', 20).unwrap();
-    expect(world.capacity(entity, Values, 'values').unwrap()).toBeGreaterThanOrEqual(20);
-    expect([...world.get(entity, Values).unwrap().values]).toEqual([10, 20]);
-  });
-
-  it('leaves allocation, growth, count, content, and order unchanged on failure', () => {
-    const world = new World();
-    const empty = world.spawn({ component: Values, data: {} }).unwrap();
-    const allocFailure = world.reserveArrayCapacity(empty, Values, 'values', 70_000);
-    expect(allocFailure.ok).toBe(false);
-    expect(world.capacity(empty, Values, 'values').unwrap()).toBe(0);
-    expect([...world.get(empty, Values).unwrap().values]).toEqual([]);
-
-    const populated = world.spawn({ component: Values, data: { values: [3, 1, 2] } }).unwrap();
-    const beforeCapacity = world.capacity(populated, Values, 'values').unwrap();
-    const growFailure = world.reserveArrayCapacity(populated, Values, 'values', 70_000);
-    expect(growFailure.ok).toBe(false);
-    expect(world.capacity(populated, Values, 'values').unwrap()).toBe(beforeCapacity);
-    expect([...world.get(populated, Values).unwrap().values]).toEqual([3, 1, 2]);
-  });
-});
 {
   // --- from commands.test.ts ---
   describe('Deferred spawn/despawn (AC-14)', () => {
@@ -505,43 +454,6 @@ describe('reserveArrayCapacity', () => {
 }
 {
   // --- from component-reflection.test.ts ---
-  describe('defineComponent reflection — component.meta (AC-01 layer 1)', () => {
-    it('exposes a component-level open namespace map on the frozen token', () => {
-      const C = defineComponent('MetaCarrier', { x: 'f32' });
-      expect(C.meta).toBeDefined();
-      expect(typeof C.meta).toBe('object');
-    });
-
-    it('freezes the token but keeps component.meta extensible', () => {
-      const C = defineComponent('MetaMutable', { x: 'f32' });
-      expect(Object.isFrozen(C)).toBe(true);
-      expect(Object.isFrozen(C.meta)).toBe(false);
-      C.meta.consumer = { enabled: true };
-      expect(C.meta.consumer).toEqual({ enabled: true });
-    });
-
-    it('aggregates per-field meta sub-keys into the component-level namespace', () => {
-      // Field-descriptor input form: { type, default?, meta? }. The field-level
-      // `meta` slot aggregates into component.meta. The infra gives no key any
-      // special meaning (open namespace).
-      const C = defineComponent('MetaAggregate', {
-        x: { type: 'f32', default: 0, meta: { priority: 7 } },
-      });
-      expect(C.meta).toMatchObject({ priority: 7 });
-    });
-
-    it('merges component-level meta after field-level meta', () => {
-      const C = defineComponent(
-        'MetaComponentOptions',
-        {
-          x: { type: 'f32', meta: { source: 'field', priority: 1 } },
-        },
-        { meta: { source: 'component', enabled: true } },
-      );
-      expect(C.meta).toEqual({ source: 'component', priority: 1, enabled: true });
-    });
-  });
-
   describe('defineComponent reflection — component.fields (AC-01 layer 3)', () => {
     it('exposes per-field reflection carrying type and default', () => {
       const C = defineComponent('FieldsCarrier', { x: 'f32', y: 'i32' });
@@ -568,19 +480,19 @@ describe('reserveArrayCapacity', () => {
   });
 
   describe('defineComponent reflection — derived projections (D-A7 / D-A8)', () => {
-    it('component.schema is derived from fields[k].type (backward-compat projection)', () => {
+    it('component schema is derived from fields[k].type by the owner projection', () => {
       const C = defineComponent('SchemaProjection', {
         x: { type: 'f32', default: 1 },
         v: 'array<f32, 3>',
       });
-      expect(C.schema).toEqual({ x: 'f32', v: 'array<f32, 3>' });
+      expect(componentSchema(C)).toEqual({ x: 'f32', v: 'array<f32, 3>' });
     });
 
-    it('component.defaults is derived from fields[k].default', () => {
+    it('owner defaults are derived from fields[k].default', () => {
       const C = defineComponent('DefaultsProjection', {
         x: { type: 'f32', default: 5 },
       });
-      expect(C.defaults).toMatchObject({ x: 5 });
+      expect(componentDefinition(C).defaults).toMatchObject({ x: 5 });
     });
   });
 
@@ -689,14 +601,6 @@ describe('reserveArrayCapacity', () => {
     });
   });
 
-  describe('component.meta missing-key returns undefined (charter P3)', () => {
-    it('querying an absent reflection key yields undefined, never a silent default', () => {
-      const C = defineComponent('MetaMiss', { x: { type: 'f32', meta: { present: 1 } } });
-      expect(C.meta.present).toBe(1);
-      expect(C.meta.nonexistentKey).toBeUndefined();
-    });
-  });
-
   // ────────────────────────────────────────────────────────────────────────────
   // [w15] AC-10 naming disambiguation: input `fields` vs reflection `component.fields`.
   // ────────────────────────────────────────────────────────────────────────────
@@ -713,57 +617,30 @@ describe('reserveArrayCapacity', () => {
       // Both are named "fields" but occupy distinct scopes (parameter vs
       // property) — per D-A3, this does not constitute a name collision.
     });
-
-    it('component.meta is distinct from component.fields (separate token properties)', () => {
-      const C = defineComponent('MetaVsFields', {
-        x: { type: 'f32', meta: { hint: 'world-x' } },
-      });
-      // component.meta carries component-level open namespace
-      expect(C.meta.hint).toBe('world-x');
-      // component.fields carries per-field pre-parsed reflection
-      expect(C.fields.x?.type).toBe('f32');
-      // No key collision: 'hint' lives in C.meta, not C.fields
-      expect((C.fields as Record<string, unknown>).hint).toBeUndefined();
-    });
-
-    it('component.meta does NOT collide with component.fields property names', () => {
-      // The open namespace key 'fields' would shadow the component.fields
-      // property — the current implementation uses Object.assign to aggregate
-      // meta entries into the component.meta map, keeping component.fields as
-      // a separate token property.  Validate that meta keys do not leak into
-      // the token's own enumerated property set.
-      const C = defineComponent('MetaShadow', {
-        x: { type: 'f32', meta: { fields: 'would-shadow' } },
-      });
-      // meta entry 'fields' is on C.meta, NOT on C itself
-      expect(C.meta.fields).toBe('would-shadow');
-      // token property C.fields is the read-only reflection map (not 'would-shadow')
-      expect(C.fields.x?.type).toBe('f32');
-      // The token-level component.fields is not overwritten by the meta key
-      expect((C as unknown as Record<string, unknown>).fields).not.toBe('would-shadow');
-    });
   });
 }
 {
   // --- from component.test.ts ---
   describe('defineComponent', () => {
-    it('returns a frozen token with .name and .schema', () => {
+    it('returns a frozen token with the three public facts', () => {
       const Pos = defineComponent('Position', { x: { type: 'f32' }, y: { type: 'f32' } });
       expect(Pos.name).toBe('Position');
-      expect(Pos.schema).toEqual({ x: 'f32', y: 'f32' });
+      expect(Pos.fields.x?.type).toBe('f32');
+      expect(Pos.fields.y?.type).toBe('f32');
+      expect(Reflect.ownKeys(Pos)).toEqual(['name', 'fields', 'storage']);
       expect(Object.isFrozen(Pos)).toBe(true);
     });
 
-    it('returns a token with a numeric .id property', () => {
+    it('keeps numeric identity in the owner helper, outside the token', () => {
       const Vel = defineComponent('Velocity', { vx: { type: 'f32' }, vy: { type: 'f32' } });
-      expect(typeof Vel.id).toBe('number');
-      expect(Vel.id).toBeGreaterThanOrEqual(0);
+      expect(typeof componentId(Vel)).toBe('number');
+      expect(componentId(Vel)).toBeGreaterThanOrEqual(0);
     });
 
     it('assigns auto-incrementing ComponentId', () => {
       const A = defineComponent('CompA', { a: { type: 'f32' } });
       const B = defineComponent('CompB', { b: { type: 'f32' } });
-      expect(B.id).toBe(A.id + 1);
+      expect(componentId(B)).toBe(componentId(A) + 1);
     });
 
     it('supports all 11 scalar field types', () => {
@@ -781,14 +658,14 @@ describe('reserveArrayCapacity', () => {
         r: 'ref',
       };
       const comp = defineComponent('AllTypes', allTypes);
-      expect(comp.schema).toEqual(allTypes);
+      expect(componentSchema(comp)).toEqual(allTypes);
     });
 
     it('supports tag component (empty schema {})', () => {
       const Player = defineComponent('Player', {});
       expect(Player.name).toBe('Player');
-      expect(Player.schema).toEqual({});
-      expect(typeof Player.id).toBe('number');
+      expect(componentSchema(Player)).toEqual({});
+      expect(typeof componentId(Player)).toBe('number');
     });
 
     it('throws SchemaUnsupportedFieldError for invalid field type', () => {
@@ -1075,481 +952,6 @@ describe('reserveArrayCapacity', () => {
     });
   });
 }
-{
-  // --- from hierarchy-commands.test.ts ---
-  const RelChildren = defineComponent('RelChildren', { entities: { type: 'array<entity>' } });
-
-  const RelChildOf = defineComponent(
-    'RelChildOf',
-    { parent: { type: 'entity' } },
-    {
-      relationship: { mirror: 'RelChildren', field: 'entities', exclusive: true },
-    },
-  );
-
-  describe('hierarchy Commands API', () => {
-    function setup() {
-      const world = new World();
-      return world;
-    }
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // AC-14: addChild cycle detection fail-fast
-    // ──────────────────────────────────────────────────────────────────────────
-
-    it('addChild self-cycle returns relationship-self-cycle', () => {
-      const world = setup();
-      const e = world.spawn().unwrap();
-      const r = world.addChild(e, e, RelChildOf, { parent: e });
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(r.error.code).toBe('relationship-self-cycle');
-        expect(r.error).toBeInstanceOf(RelationshipSelfCycleError);
-      }
-    });
-
-    it('addChild with parent as descendant returns relationship-self-cycle', () => {
-      const world = setup();
-      const root = world.spawn({ component: RelChildOf, data: { parent: null } }).unwrap();
-      const child = world.spawn({ component: RelChildOf, data: { parent: null } }).unwrap();
-      // Build: root -> child
-      const r1 = world.addChild(root, child, RelChildOf, { parent: root });
-      expect(r1.ok).toBe(true);
-      // Attempt: child -> root (would create cycle). Here parent=child, child=root.
-      const r2 = world.addChild(child, root, RelChildOf, { parent: child });
-      expect(r2.ok).toBe(false);
-      if (!r2.ok) {
-        expect(r2.error.code).toBe('relationship-self-cycle');
-        // AC-16: .detail.entity = the child param of addChild (root entity, raw u32)
-        const detail = (r2.error as RelationshipSelfCycleError).detail;
-        expect(detail.entity).toBe(root as number);
-        expect(detail.ancestor).toBe(root as number);
-      }
-    });
-
-    it('addChild deep ancestor cycle detection', () => {
-      const world = setup();
-      const a = world.spawn({ component: RelChildOf, data: { parent: null } }).unwrap();
-      const b = world.spawn({ component: RelChildOf, data: { parent: null } }).unwrap();
-      const c = world.spawn({ component: RelChildOf, data: { parent: null } }).unwrap();
-      // Build chain: a -> b -> c
-      world.addChild(a, b, RelChildOf, { parent: a }).unwrap();
-      world.addChild(b, c, RelChildOf, { parent: b }).unwrap();
-      // Attempt: c -> a (would create cycle c->a->b->c)
-      const r = world.addChild(c, a, RelChildOf, { parent: c });
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(r.error.code).toBe('relationship-self-cycle');
-      }
-    });
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // AC-17: addChild atomic bidirectional consistency
-    // ──────────────────────────────────────────────────────────────────────────
-
-    it('addChild creates bidirectional reference atomically', () => {
-      const world = setup();
-      const parent = world.spawn().unwrap();
-      const child = world.spawn().unwrap();
-      const r = world.addChild(parent, child, RelChildOf, { parent: parent });
-      expect(r.ok).toBe(true);
-
-      // Child side: RelChildOf.parent === parent
-      const childOf = world.get(child, RelChildOf);
-      expect(childOf.ok).toBe(true);
-      if (childOf.ok) {
-        expect(childOf.value.parent).toBe(parent);
-      }
-
-      // Parent side: RelChildren.entities includes child
-      const childrenVal = world.get(parent, RelChildren);
-      expect(childrenVal.ok).toBe(true);
-      if (childrenVal.ok) {
-        const snapshot = childrenVal.value.entities;
-        let found = false;
-        for (let i = 0; i < snapshot.length; i++) {
-          if (snapshot[i] === child) {
-            found = true;
-            break;
-          }
-        }
-        expect(found).toBe(true);
-      }
-    });
-
-    it('addChild lazily creates mirror component on parent when absent', () => {
-      const world = setup();
-      const parent = world.spawn().unwrap();
-      const child = world.spawn().unwrap();
-      const r = world.addChild(parent, child, RelChildOf, { parent: parent });
-      expect(r.ok).toBe(true);
-
-      // Parent now has RelChildren component (lazy-created by relationship hook)
-      const childrenVal = world.get(parent, RelChildren);
-      expect(childrenVal.ok).toBe(true);
-      if (childrenVal.ok) {
-        const snapshot = childrenVal.value.entities;
-        let found = false;
-        for (let i = 0; i < snapshot.length; i++) {
-          if (snapshot[i] === child) {
-            found = true;
-            break;
-          }
-        }
-        expect(found).toBe(true);
-      }
-    });
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // AC-18: removeChild atomic detach
-    // ──────────────────────────────────────────────────────────────────────────
-
-    it('removeChild breaks bidirectional reference atomically', () => {
-      const world = setup();
-      const parent = world.spawn().unwrap();
-      const child = world.spawn().unwrap();
-      world.addChild(parent, child, RelChildOf, { parent: parent }).unwrap();
-
-      const r = world.removeChild(parent, child, RelChildOf);
-      expect(r.ok).toBe(true);
-
-      // Child no longer has RelChildOf
-      const childOf = world.get(child, RelChildOf);
-      expect(childOf.ok).toBe(false);
-      if (!childOf.ok) {
-        expect(childOf.error.code).toBe('component-not-present');
-      }
-
-      // Parent's RelChildren no longer includes child
-      const childrenVal = world.get(parent, RelChildren);
-      if (childrenVal.ok) {
-        const snapshot = childrenVal.value.entities;
-        for (let i = 0; i < snapshot.length; i++) {
-          expect(snapshot[i]).not.toBe(child);
-        }
-      }
-    });
-
-    it('removeChild with mismatched parent returns relationship-detach-mismatch', () => {
-      const world = setup();
-      const parentA = world.spawn().unwrap();
-      const parentB = world.spawn().unwrap();
-      const child = world.spawn().unwrap();
-      world.addChild(parentA, child, RelChildOf, { parent: parentA }).unwrap();
-
-      // Try to remove from parentB (wrong parent)
-      const r = world.removeChild(parentB, child, RelChildOf);
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(r.error.code).toBe('relationship-detach-mismatch');
-        expect(r.error).toBeInstanceOf(RelationshipDetachMismatchError);
-        const detail = (r.error as RelationshipDetachMismatchError).detail;
-        expect(detail.child).toBe(child);
-        expect(detail.expectedParent).toBe(parentB);
-        expect(detail.actualParent).toBe(parentA);
-      }
-    });
-
-    it('removeChild with no relationship component on child returns relationship-detach-mismatch', () => {
-      const world = setup();
-      const parent = world.spawn().unwrap();
-      const child = world.spawn().unwrap(); // no RelChildOf component
-
-      const r = world.removeChild(parent, child, RelChildOf);
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(r.error.code).toBe('relationship-detach-mismatch');
-      }
-    });
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // AC-19: reparent atomic swap
-    // ──────────────────────────────────────────────────────────────────────────
-
-    it('reparent moves child from old parent to new parent atomically', () => {
-      const world = setup();
-      const oldParent = world.spawn().unwrap();
-      const newParent = world.spawn().unwrap();
-      const child = world.spawn().unwrap();
-      world.addChild(oldParent, child, RelChildOf, { parent: oldParent }).unwrap();
-
-      const r = world.reparent(child, newParent, RelChildOf, { parent: newParent });
-      expect(r.ok).toBe(true);
-
-      // Child now points to newParent
-      const childOf = world.get(child, RelChildOf);
-      expect(childOf.ok).toBe(true);
-      if (childOf.ok) {
-        expect(childOf.value.parent).toBe(newParent);
-      }
-
-      // Old parent no longer lists child
-      const oldChildren = world.get(oldParent, RelChildren);
-      if (oldChildren.ok) {
-        const snapshot = oldChildren.value.entities;
-        for (let i = 0; i < snapshot.length; i++) {
-          expect(snapshot[i]).not.toBe(child);
-        }
-      }
-
-      // New parent lists child
-      const newChildren = world.get(newParent, RelChildren);
-      expect(newChildren.ok).toBe(true);
-      if (newChildren.ok) {
-        const snapshot = newChildren.value.entities;
-        let found = false;
-        for (let i = 0; i < snapshot.length; i++) {
-          if (snapshot[i] === child) {
-            found = true;
-            break;
-          }
-        }
-        expect(found).toBe(true);
-      }
-    });
-
-    it('reparent cycle detection returns relationship-self-cycle', () => {
-      const world = setup();
-      const root = world.spawn().unwrap();
-      const child = world.spawn().unwrap();
-      world.addChild(root, child, RelChildOf, { parent: root }).unwrap();
-
-      // Attempt to reparent root under child (would create cycle)
-      const r = world.reparent(root, child, RelChildOf, { parent: child });
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(r.error.code).toBe('relationship-self-cycle');
-      }
-    });
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // Dead-entity handling
-    // ──────────────────────────────────────────────────────────────────────────
-
-    it('addChild with dead parent returns stale entity error', () => {
-      const world = setup();
-      const parent = world.spawn().unwrap();
-      const child = world.spawn().unwrap();
-      world.despawn(parent).unwrap();
-
-      const r = world.addChild(parent, child, RelChildOf, { parent: parent });
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(r.error.code).toBe('stale-entity');
-      }
-    });
-
-    it('addChild with dead child returns stale entity error', () => {
-      const world = setup();
-      const parent = world.spawn().unwrap();
-      const child = world.spawn().unwrap();
-      world.despawn(child).unwrap();
-
-      const r = world.addChild(parent, child, RelChildOf, { parent: parent });
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(r.error.code).toBe('stale-entity');
-      }
-    });
-
-    it('removeChild is idempotent: second call returns relationship-detach-mismatch', () => {
-      const world = setup();
-      const parent = world.spawn().unwrap();
-      const child = world.spawn().unwrap();
-      world.addChild(parent, child, RelChildOf, { parent: parent }).unwrap();
-      world.removeChild(parent, child, RelChildOf).unwrap();
-
-      // Second removeChild: child no longer has RelChildOf
-      const r = world.removeChild(parent, child, RelChildOf);
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(r.error.code).toBe('relationship-detach-mismatch');
-      }
-    });
-
-    it('removeChild: child entity still alive after detach', () => {
-      const world = setup();
-      const parent = world.spawn().unwrap();
-      const child = world.spawn().unwrap();
-      world.addChild(parent, child, RelChildOf, { parent: parent }).unwrap();
-      world.removeChild(parent, child, RelChildOf).unwrap();
-
-      // Child entity is still alive (not despawned) -- RelChildOf removed but entity persists
-      const childOf = world.get(child, RelChildOf);
-      expect(childOf.ok).toBe(false);
-      if (!childOf.ok) {
-        expect(childOf.error.code).toBe('component-not-present');
-      }
-      // Spawn a new unrelated component on it to verify it's still alive
-      const Tag = defineComponent('Tag', { x: { type: 'u32' } });
-      const addR = world.addComponent(child, { component: Tag, data: { x: 1 } });
-      expect(addR.ok).toBe(true);
-    });
-  });
-}
-{
-  // --- from hierarchy-traversal.test.ts ---
-  defineComponent('TravChildren', { entities: 'array<entity>' });
-
-  const TravChildOf = defineComponent(
-    'TravChildOf',
-    { parent: { type: 'entity' } },
-    {
-      relationship: { mirror: 'TravChildren', field: 'entities', exclusive: true },
-    },
-  );
-
-  describe('hierarchy traversal API', () => {
-    function setup() {
-      const world = new World();
-      return world;
-    }
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // AC-21: iterAncestors child->root order + correct members
-    // ──────────────────────────────────────────────────────────────────────────
-
-    it('iterAncestors returns ancestors in child->root order', () => {
-      const world = setup();
-      const root = world.spawn().unwrap();
-      const mid = world.spawn().unwrap();
-      const leaf = world.spawn().unwrap();
-      world.addChild(root, mid, TravChildOf, { parent: root }).unwrap();
-      world.addChild(mid, leaf, TravChildOf, { parent: mid }).unwrap();
-
-      // iterAncestors from leaf: mid -> root (child->root order, excludes leaf)
-      const ancestors: EntityHandle[] = [];
-      for (const a of world.iterAncestors(leaf)) {
-        ancestors.push(a);
-      }
-      expect(ancestors).toHaveLength(2);
-      expect(ancestors[0]).toBe(mid);
-      expect(ancestors[1]).toBe(root);
-    });
-
-    it('iterAncestors on root entity yields empty iterable', () => {
-      const world = setup();
-      const root = world.spawn().unwrap();
-
-      let count = 0;
-      for (const _a of world.iterAncestors(root)) {
-        count++;
-      }
-      expect(count).toBe(0);
-    });
-
-    it('iterAncestors on entity with no relationship component yields empty', () => {
-      const world = setup();
-      const e = world.spawn().unwrap();
-
-      let count = 0;
-      for (const _a of world.iterAncestors(e)) {
-        count++;
-      }
-      expect(count).toBe(0);
-    });
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // AC-22: iterDescendants DFS full subtree members
-    // ──────────────────────────────────────────────────────────────────────────
-
-    it('iterDescendants covers all subtree members', () => {
-      const world = setup();
-      const root = world.spawn().unwrap();
-      const a = world.spawn().unwrap();
-      const b = world.spawn().unwrap();
-      const a1 = world.spawn().unwrap();
-      world.addChild(root, a, TravChildOf, { parent: root }).unwrap();
-      world.addChild(root, b, TravChildOf, { parent: root }).unwrap();
-      world.addChild(a, a1, TravChildOf, { parent: a }).unwrap();
-
-      // iterDescendants from root: DFS traversal
-      const descendants: EntityHandle[] = [];
-      for (const d of world.iterDescendants(root)) {
-        descendants.push(d);
-      }
-      expect(descendants).toHaveLength(3);
-      // All children and grandchildren present (order is DFS)
-      expect(descendants).toContain(a);
-      expect(descendants).toContain(b);
-      expect(descendants).toContain(a1);
-    });
-
-    it('iterDescendants on leaf entity yields empty iterable', () => {
-      const world = setup();
-      const root = world.spawn().unwrap();
-      const leaf = world.spawn().unwrap();
-      world.addChild(root, leaf, TravChildOf, { parent: root }).unwrap();
-
-      let count = 0;
-      for (const _d of world.iterDescendants(leaf)) {
-        count++;
-      }
-      expect(count).toBe(0);
-    });
-
-    it('iterDescendants on entity with no children component yields empty', () => {
-      const world = setup();
-      const e = world.spawn().unwrap();
-
-      let count = 0;
-      for (const _d of world.iterDescendants(e)) {
-        count++;
-      }
-      expect(count).toBe(0);
-    });
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // AC-23: dirty graph with residual cycles does not infinite-loop
-    // ──────────────────────────────────────────────────────────────────────────
-
-    it('iterAncestors with stale self-cycle terminates', () => {
-      const world = setup();
-      const e = world.spawn().unwrap();
-      // Attach a self-cycle via low-level addComponent (bypassing addChild cycle guard)
-      const addR = world.addComponent(e, { component: TravChildOf, data: { parent: e } });
-      expect(addR.ok).toBe(true);
-      // Directly set a self-cycle via low-level set (this creates the stale cycle)
-      world.set(e, TravChildOf, { parent: e }).unwrap();
-
-      // Must terminate despite stale cycle in column data
-      const ancestors: EntityHandle[] = [];
-      for (const a of world.iterAncestors(e)) {
-        ancestors.push(a);
-      }
-      // With a self-cycle, the walk should terminate
-      expect(ancestors.length).toBeGreaterThanOrEqual(0);
-      // The chain must be finite (not infinite loop)
-      expect(ancestors.length).toBeLessThan(10);
-    });
-
-    it('iterDescendants with stale cycle terminates', () => {
-      const world = setup();
-      const a = world.spawn().unwrap();
-      const b = world.spawn().unwrap();
-      // Build chain: a -> b
-      world.addChild(a, b, TravChildOf, { parent: a }).unwrap();
-      // Create a two-node cycle: add b -> a (creates a <-> b cycle)
-      // Bypass the addChild cycle guard by directly setting the column data:
-      // First, add TravChildOf to b pointing back at a (this triggers
-      // exclusive reparent if b already had TravChildOf, but b does not
-      // have one yet, so it's a fresh add).
-      // The relationship hook will also push b into a's Children list.
-      // Then a's Children now has both a (from the new push) and b
-      // (from the original addChild), creating a cycle.
-      world.addComponent(b, { component: TravChildOf, data: { parent: a } }).unwrap();
-
-      // Must terminate despite the cycle
-      const descendants: EntityHandle[] = [];
-      for (const d of world.iterDescendants(a)) {
-        descendants.push(d);
-      }
-      expect(descendants.length).toBeGreaterThanOrEqual(0);
-      // Finite output -- not infinite
-      expect(descendants.length).toBeLessThan(10);
-    });
-  });
-}
 // `Name` component (schema literal + identity + AC-13 invariant + spawn/set
 // fallback) tests migrated to packages/runtime/src/__tests__/name.unit.test.ts
 // by tweak-20260612-ecs-concept-compression — `Name` now lives in
@@ -1557,621 +959,9 @@ describe('reserveArrayCapacity', () => {
 // framework itself).
 {
   // --- from relationship-define-order.test.ts ---
-  describe('relationship define-order validation (AC-08 / AC-09 / AC-10)', () => {
-    it('AC-08: mirror defined before holder succeeds and resolves metadata', () => {
-      defineComponent('DefOrderChildren1', { entities: 'array<entity>' });
-      const holder = defineComponent(
-        'DefOrderChildOf1',
-        { parent: 'entity' },
-        { relationship: { mirror: 'DefOrderChildren1', field: 'entities', exclusive: true } },
-      );
-      expect(holder.relationship).toEqual({
-        mirror: 'DefOrderChildren1',
-        field: 'entities',
-        exclusive: true,
-        linkedSpawn: true,
-      });
-    });
-
-    it('AC-09: holder before (undefined) mirror throws mirror-not-registered', () => {
-      expect(() =>
-        defineComponent(
-          'DefOrderChildOf2',
-          { parent: 'entity' },
-          { relationship: { mirror: 'DefOrderMissing2', field: 'entities', exclusive: true } },
-        ),
-      ).toThrow(RelationshipMirrorComponentNotRegisteredError);
-    });
-
-    it('AC-09: thrown error carries code + detail and a register-free hint', () => {
-      let caught: unknown;
-      try {
-        defineComponent(
-          'DefOrderChildOf3',
-          { parent: 'entity' },
-          { relationship: { mirror: 'DefOrderMissing3', field: 'entities', exclusive: true } },
-        );
-      } catch (e) {
-        caught = e;
-      }
-      expect(caught).toBeInstanceOf(RelationshipMirrorComponentNotRegisteredError);
-      if (!(caught instanceof RelationshipMirrorComponentNotRegisteredError)) {
-        expect.unreachable('expected RelationshipMirrorComponentNotRegisteredError');
-        return;
-      }
-      expect(caught.code).toBe('relationship-mirror-component-not-registered');
-      expect(caught.detail).toMatchObject({
-        component: 'DefOrderChildOf3',
-        mirror: 'DefOrderMissing3',
-      });
-      expect(caught.hint).not.toMatch(/register/i);
-      expect(caught.hint).toContain('defineComponent');
-    });
-
-    it('AC-10: mirror field type not array<entity> throws field-type-mismatch with detail', () => {
-      defineComponent('DefOrderChildren4', { entities: 'array<f32>' });
-      let caught: unknown;
-      try {
-        defineComponent(
-          'DefOrderChildOf4',
-          { parent: 'entity' },
-          { relationship: { mirror: 'DefOrderChildren4', field: 'entities', exclusive: true } },
-        );
-      } catch (e) {
-        caught = e;
-      }
-      expect(caught).toBeInstanceOf(RelationshipMirrorFieldTypeMismatchError);
-      if (!(caught instanceof RelationshipMirrorFieldTypeMismatchError)) {
-        expect.unreachable('expected RelationshipMirrorFieldTypeMismatchError');
-        return;
-      }
-      expect(caught.code).toBe('relationship-mirror-field-type-mismatch');
-      expect(caught.detail).toMatchObject({
-        component: 'DefOrderChildOf4',
-        mirror: 'DefOrderChildren4',
-        field: 'entities',
-        actualType: 'array<f32>',
-      });
-    });
-
-    it('AC-10: missing mirror field reports actualType <missing>', () => {
-      defineComponent('DefOrderChildren5', { entities: 'array<entity>' });
-      let caught: unknown;
-      try {
-        defineComponent(
-          'DefOrderChildOf5',
-          { parent: 'entity' },
-          { relationship: { mirror: 'DefOrderChildren5', field: 'absent', exclusive: true } },
-        );
-      } catch (e) {
-        caught = e;
-      }
-      expect(caught).toBeInstanceOf(RelationshipMirrorFieldTypeMismatchError);
-      if (!(caught instanceof RelationshipMirrorFieldTypeMismatchError)) {
-        expect.unreachable('expected RelationshipMirrorFieldTypeMismatchError');
-        return;
-      }
-      expect(caught.detail).toMatchObject({
-        component: 'DefOrderChildOf5',
-        mirror: 'DefOrderChildren5',
-        field: 'absent',
-        actualType: '<missing>',
-      });
-    });
-  });
 }
 {
   // --- from relationship-schema.test.ts ---
-  describe('relationship schema', () => {
-    it('defineComponent accepts a relationship nested sub-object option', () => {
-      defineComponent('RelChildren1', { entities: 'array<entity>' });
-      const ChildOf = defineComponent(
-        'RelChildOf1',
-        { parent: { type: 'entity' } },
-        { relationship: { mirror: 'RelChildren1', field: 'entities', exclusive: true } },
-      );
-      expect(ChildOf.relationship).toEqual({
-        mirror: 'RelChildren1',
-        field: 'entities',
-        exclusive: true,
-        linkedSpawn: true,
-      });
-    });
-
-    it('relationship.mirror is a string component name', () => {
-      defineComponent('RelChildren2', { entities: 'array<entity>' });
-      const ChildOf = defineComponent(
-        'RelChildOf2',
-        { parent: { type: 'entity' } },
-        { relationship: { mirror: 'RelChildren2', field: 'entities', exclusive: false } },
-      );
-      expect(typeof ChildOf.relationship?.mirror).toBe('string');
-      expect(ChildOf.relationship?.mirror).toBe('RelChildren2');
-    });
-
-    it('relationship.field names the mirror array<entity> field', () => {
-      defineComponent('RelChildren3', { entities: 'array<entity>' });
-      const ChildOf = defineComponent(
-        'RelChildOf3',
-        { parent: { type: 'entity' } },
-        { relationship: { mirror: 'RelChildren3', field: 'entities', exclusive: false } },
-      );
-      expect(ChildOf.relationship?.field).toBe('entities');
-    });
-
-    it('relationship.exclusive is a boolean', () => {
-      defineComponent('RelChildren4', { entities: 'array<entity>' });
-      const Excl = defineComponent(
-        'RelChildOf4',
-        { parent: { type: 'entity' } },
-        { relationship: { mirror: 'RelChildren4', field: 'entities', exclusive: true } },
-      );
-      expect(Excl.relationship?.exclusive).toBe(true);
-    });
-
-    it('relationship.linkedSpawn defaults to false when omitted', () => {
-      defineComponent('RelChildren5', { entities: 'array<entity>' });
-      const ChildOf = defineComponent(
-        'RelChildOf5',
-        { parent: { type: 'entity' } },
-        { relationship: { mirror: 'RelChildren5', field: 'entities', exclusive: true } },
-      );
-      expect(ChildOf.relationship?.linkedSpawn ?? false).toBe(true);
-    });
-
-    it('relationship.linkedSpawn can be set to true explicitly', () => {
-      defineComponent('RelChildren6', { entities: 'array<entity>' });
-      const ChildOf = defineComponent(
-        'RelChildOf6',
-        { parent: { type: 'entity' } },
-        {
-          relationship: {
-            mirror: 'RelChildren6',
-            field: 'entities',
-            exclusive: true,
-            linkedSpawn: true,
-          },
-        },
-      );
-      expect(ChildOf.relationship?.linkedSpawn).toBe(true);
-    });
-
-    it('defineComponent throws when mirror component is not defined', () => {
-      expect(() =>
-        defineComponent(
-          'RelChildOf7',
-          { parent: 'entity' },
-          { relationship: { mirror: 'MissingMirror7', field: 'entities', exclusive: true } },
-        ),
-      ).toThrow(RelationshipMirrorComponentNotRegisteredError);
-    });
-
-    it('defineComponent throws when mirror field type is not array<entity>', () => {
-      defineComponent('RelChildren8', { entities: 'array<f32>' });
-      expect(() =>
-        defineComponent(
-          'RelChildOf8',
-          { parent: 'entity' },
-          { relationship: { mirror: 'RelChildren8', field: 'entities', exclusive: true } },
-        ),
-      ).toThrow(RelationshipMirrorFieldTypeMismatchError);
-    });
-
-    it('defineComponent throws when mirror field does not exist', () => {
-      defineComponent('RelChildren9', { entities: 'array<entity>' });
-      expect(() =>
-        defineComponent(
-          'RelChildOf9',
-          { parent: 'entity' },
-          { relationship: { mirror: 'RelChildren9', field: 'missing', exclusive: true } },
-        ),
-      ).toThrow(RelationshipMirrorFieldTypeMismatchError);
-    });
-
-    it('defineComponent accepts a valid relationship (mirror defined + array<entity>)', () => {
-      defineComponent('RelChildren10', { entities: 'array<entity>' });
-      const ChildOf = defineComponent(
-        'RelChildOf10',
-        { parent: { type: 'entity' } },
-        { relationship: { mirror: 'RelChildren10', field: 'entities', exclusive: true } },
-      );
-      expect(ChildOf.relationship?.mirror).toBe('RelChildren10');
-    });
-
-    it('defineComponent accepts a component without relationship metadata', () => {
-      const Pos = defineComponent('RelPlainPos', { x: 'f32' });
-      expect(Pos.relationship).toBeUndefined();
-    });
-  });
-}
-{
-  // --- from relationship-sync.test.ts ---
-  type ChildrenComp = Component<'SyncChildren', { entities: 'array<entity>' }>;
-  type ChildOfComp = Component<'SyncChildOf', { parent: 'entity' }>;
-  type MarkerComp = Component<'SyncMarker', { tag: 'u8' }>;
-
-  function setup(opts?: { exclusive?: boolean; linkedSpawn?: boolean }): {
-    world: World;
-    Children: ChildrenComp;
-    ChildOf: ChildOfComp;
-    Marker: MarkerComp;
-  } {
-    const Children = defineComponent('SyncChildren', { entities: { type: 'array<entity>' } });
-    const Marker = defineComponent('SyncMarker', { tag: { type: 'u8' } });
-    const ChildOf = defineComponent(
-      'SyncChildOf',
-      { parent: { type: 'entity' } },
-      {
-        relationship: {
-          mirror: 'SyncChildren',
-          field: 'entities',
-          exclusive: opts?.exclusive ?? true,
-          linkedSpawn: opts?.linkedSpawn ?? false,
-        },
-      },
-    );
-    const world = new World();
-    return { world, Children, ChildOf, Marker };
-  }
-
-  // Liveness probe: a despawned entity returns a stale-entity error from get.
-  function alive(world: World, Marker: MarkerComp, e: EntityHandle): boolean {
-    const r = world.get(e, Marker);
-    if (r.ok) return true;
-    return r.error.code !== 'stale-entity';
-  }
-
-  function mirrorOf(world: World, Children: ChildrenComp, parent: EntityHandle): number[] {
-    const r = world.get(parent, Children);
-    if (!r.ok) return [];
-    return Array.from(r.value.entities);
-  }
-
-  describe('relationship bidirectional sync', () => {
-    it('AC-07: addComponent(child, ChildOf, {parent}) appends child to mirror', () => {
-      const { world, Children, ChildOf } = setup();
-      const parent = world.spawn({ component: Children, data: {} }).unwrap();
-      const child = world.spawn().unwrap();
-      world.addComponent(child, { component: ChildOf, data: { parent } }).unwrap();
-      expect(mirrorOf(world, Children, parent)).toContain(child as number);
-    });
-
-    it('lazy creation: parent without Children gets it auto-created on first link', () => {
-      const { world, Children, ChildOf } = setup();
-      const parent = world.spawn().unwrap();
-      const child = world.spawn().unwrap();
-      // parent has NO Children component yet.
-      expect(world.get(parent, Children).ok).toBe(false);
-      world.addComponent(child, { component: ChildOf, data: { parent } }).unwrap();
-      // Children was lazily created and child appended.
-      expect(world.get(parent, Children).ok).toBe(true);
-      expect(mirrorOf(world, Children, parent)).toContain(child as number);
-    });
-
-    it('AC-07: spawn with ChildOf bundle also appends to mirror', () => {
-      const { world, Children, ChildOf } = setup();
-      const parent = world.spawn({ component: Children, data: {} }).unwrap();
-      const child = world.spawn({ component: ChildOf, data: { parent } }).unwrap();
-      expect(mirrorOf(world, Children, parent)).toContain(child as number);
-    });
-
-    it('AC-08: removeComponent(child, ChildOf) removes child from mirror', () => {
-      const { world, Children, ChildOf } = setup();
-      const parent = world.spawn({ component: Children, data: {} }).unwrap();
-      const child = world.spawn().unwrap();
-      world.addComponent(child, { component: ChildOf, data: { parent } }).unwrap();
-      expect(mirrorOf(world, Children, parent)).toContain(child as number);
-      world.removeComponent(child, ChildOf).unwrap();
-      expect(mirrorOf(world, Children, parent)).not.toContain(child as number);
-    });
-
-    it('AC-09: despawn(child) removes child from mirror', () => {
-      const { world, Children, ChildOf } = setup();
-      const parent = world.spawn({ component: Children, data: {} }).unwrap();
-      const child = world.spawn().unwrap();
-      world.addComponent(child, { component: ChildOf, data: { parent } }).unwrap();
-      expect(mirrorOf(world, Children, parent)).toContain(child as number);
-      world.despawn(child).unwrap();
-      expect(mirrorOf(world, Children, parent)).not.toContain(child as number);
-    });
-
-    it('AC-09: despawn removes only the despawned child, keeps siblings', () => {
-      const { world, Children, ChildOf } = setup();
-      const parent = world.spawn({ component: Children, data: {} }).unwrap();
-      const a = world.spawn().unwrap();
-      const b = world.spawn().unwrap();
-      world.addComponent(a, { component: ChildOf, data: { parent } }).unwrap();
-      world.addComponent(b, { component: ChildOf, data: { parent } }).unwrap();
-      world.despawn(a).unwrap();
-      const list = mirrorOf(world, Children, parent);
-      expect(list).not.toContain(a as number);
-      expect(list).toContain(b as number);
-    });
-
-    it('AC-10: despawn(parent) does NOT cascade-despawn children (linkedSpawn=false)', () => {
-      const { world, Children, ChildOf, Marker } = setup({ linkedSpawn: false });
-      const parent = world.spawn({ component: Children, data: {} }).unwrap();
-      const child = world.spawn({ component: Marker, data: { tag: 1 } }).unwrap();
-      world.addComponent(child, { component: ChildOf, data: { parent } }).unwrap();
-      world.despawn(parent).unwrap();
-      // Child entity is still alive.
-      expect(alive(world, Marker, child)).toBe(true);
-    });
-
-    it('AC-12: exclusive re-add with a new parent auto-reparents', () => {
-      const { world, Children, ChildOf } = setup({ exclusive: true });
-      const parentA = world.spawn({ component: Children, data: {} }).unwrap();
-      const parentB = world.spawn({ component: Children, data: {} }).unwrap();
-      const child = world.spawn().unwrap();
-      world.addComponent(child, { component: ChildOf, data: { parent: parentA } }).unwrap();
-      expect(mirrorOf(world, Children, parentA)).toContain(child as number);
-      // Re-add ChildOf pointing at parentB -> auto reparent, no manual remove.
-      const r = world.addComponent(child, { component: ChildOf, data: { parent: parentB } });
-      expect(r.ok).toBe(true);
-      expect(mirrorOf(world, Children, parentA)).not.toContain(child as number);
-      expect(mirrorOf(world, Children, parentB)).toContain(child as number);
-    });
-
-    it('AC-12: after reparent the child ChildOf.parent reads the new parent', () => {
-      const { world, Children, ChildOf } = setup({ exclusive: true });
-      const parentA = world.spawn({ component: Children, data: {} }).unwrap();
-      const parentB = world.spawn({ component: Children, data: {} }).unwrap();
-      const child = world.spawn().unwrap();
-      world.addComponent(child, { component: ChildOf, data: { parent: parentA } }).unwrap();
-      world.addComponent(child, { component: ChildOf, data: { parent: parentB } }).unwrap();
-      expect(world.get(child, ChildOf).unwrap().parent).toBe(parentB);
-    });
-
-    it('AC-13: reparent is atomic — both mirror lists are consistent (no dup, no leak)', () => {
-      const { world, Children, ChildOf } = setup({ exclusive: true });
-      const parentA = world.spawn({ component: Children, data: {} }).unwrap();
-      const parentB = world.spawn({ component: Children, data: {} }).unwrap();
-      const child = world.spawn().unwrap();
-      world.addComponent(child, { component: ChildOf, data: { parent: parentA } }).unwrap();
-      world.addComponent(child, { component: ChildOf, data: { parent: parentB } }).unwrap();
-      // No leftover in A, exactly one entry in B.
-      expect(mirrorOf(world, Children, parentA)).toHaveLength(0);
-      expect(
-        mirrorOf(world, Children, parentB).filter((v) => v === (child as number)),
-      ).toHaveLength(1);
-    });
-
-    it('non-exclusive re-add with same component returns ComponentAlreadyPresent (no reparent)', () => {
-      const { world, Children, ChildOf } = setup({ exclusive: false });
-      const parentA = world.spawn({ component: Children, data: {} }).unwrap();
-      const parentB = world.spawn({ component: Children, data: {} }).unwrap();
-      const child = world.spawn().unwrap();
-      world.addComponent(child, { component: ChildOf, data: { parent: parentA } }).unwrap();
-      const r = world.addComponent(child, { component: ChildOf, data: { parent: parentB } });
-      expect(r.ok).toBe(false);
-      if (!r.ok) {
-        expect(r.error.code).toBe('component-already-present');
-      }
-    });
-
-    it('linkedSpawn:true skeleton: despawn(parent) recursively despawns children', () => {
-      const { world, Children, ChildOf, Marker } = setup({ linkedSpawn: true });
-      const parent = world.spawn({ component: Children, data: {} }).unwrap();
-      const child = world.spawn({ component: Marker, data: { tag: 1 } }).unwrap();
-      world.addComponent(child, { component: ChildOf, data: { parent } }).unwrap();
-      world.despawn(parent).unwrap();
-      expect(alive(world, Marker, child)).toBe(false);
-    });
-
-    // tweak-20260714 M2 (plan-strategy §4 R-6): tilemap subtree
-    // (Tilemap -> TileLayer -> derived render entity) is depth 3, so
-    // the cascade must walk two levels of `linkedSpawn: true` mirror
-    // lists to collect grandchildren. Prior behaviour stopped at
-    // depth 1 because the recursive `_despawnCore` short-circuited
-    // linkedChildren collection on internal calls.
-    it('linkedSpawn:true depth-3: despawn(grandparent) cascades to grandchildren', () => {
-      const { world, Children, ChildOf, Marker } = setup({ linkedSpawn: true });
-      const grandparent = world.spawn({ component: Children, data: {} }).unwrap();
-      const parent = world
-        .spawn(
-          { component: Marker, data: { tag: 2 } },
-          { component: ChildOf, data: { parent: grandparent } },
-        )
-        .unwrap();
-      const child = world
-        .spawn({ component: Marker, data: { tag: 3 } }, { component: ChildOf, data: { parent } })
-        .unwrap();
-
-      world.despawn(grandparent).unwrap();
-
-      expect(alive(world, Marker, parent)).toBe(false);
-      expect(alive(world, Marker, child)).toBe(false);
-    });
-  });
-}
-{
-  // --- from world-array-reflection.test.ts ---
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  describe('w5 - AC-03(a): array hot paths do not re-parse per operation', () => {
-    it('set / get on a fixed array<f32,N> field never call parseManagedArraySchema', () => {
-      const Inst = defineComponent('ReflSetFixed', { v: { type: 'array<f32, 3>' } });
-      const world = new World();
-      const e = world.spawn({ component: Inst, data: { v: new Float32Array([1, 2, 3]) } }).unwrap();
-      // Spy AFTER registration + spawn so only the per-frame hot path is measured.
-      const spy = vi.spyOn(componentModule, 'parseManagedArraySchema');
-      for (let i = 0; i < 8; i++) {
-        world.set(e, Inst, { v: new Float32Array([i, i + 1, i + 2]) }).unwrap();
-        world.get(e, Inst).unwrap();
-      }
-      expect(spy).not.toHaveBeenCalled();
-      // Behaviour stays correct: last write is observable.
-      expect([...world.get(e, Inst).unwrap().v]).toEqual([7, 8, 9]);
-    });
-
-    it('push / pop / capacity on a variable array<f32> never call parseManagedArraySchema', () => {
-      const Inst = defineComponent('ReflVar', { v: { type: 'array<f32>' } });
-      const world = new World();
-      const e = world.spawn({ component: Inst, data: {} }).unwrap();
-      const spy = vi.spyOn(componentModule, 'parseManagedArraySchema');
-      for (let i = 0; i < 8; i++) {
-        world.push(e, Inst, 'v', i).unwrap();
-        world.capacity(e, Inst, 'v').unwrap();
-      }
-      for (let i = 0; i < 4; i++) {
-        world.pop(e, Inst, 'v').unwrap();
-      }
-      expect(spy).not.toHaveBeenCalled();
-    });
-
-    it('_removeArrayElementByValue never calls parseManagedArraySchema (Finding 2 easiest-missed point)', () => {
-      const Bag = defineComponent('ReflBag', { items: { type: 'array<entity>' } });
-      const world = new World();
-      const parent = world.spawn({ component: Bag, data: {} }).unwrap();
-      for (const v of [10, 20, 30, 40]) {
-        world.push(parent, Bag, 'items', v as unknown as EntityHandle).unwrap();
-      }
-      const spy = vi.spyOn(componentModule, 'parseManagedArraySchema');
-      world
-        ._removeArrayElementByValue(parent, Bag, 'items', 20 as unknown as EntityHandle)
-        .unwrap();
-      world
-        ._removeArrayElementByValue(parent, Bag, 'items', 10 as unknown as EntityHandle)
-        .unwrap();
-      world
-        ._removeArrayElementByValue(parent, Bag, 'items', 99 as unknown as EntityHandle)
-        .unwrap();
-      expect(spy).not.toHaveBeenCalled();
-    });
-
-    it('mixed set/push/pop/capacity/remove sequence stays parse-free end-to-end', () => {
-      const Inst = defineComponent('ReflMixed', { v: { type: 'array<i32>' } });
-      const world = new World();
-      const e = world.spawn({ component: Inst, data: {} }).unwrap();
-      const spy = vi.spyOn(componentModule, 'parseManagedArraySchema');
-      world.set(e, Inst, { v: new Int32Array([5, 6, 7]) }).unwrap();
-      world.push(e, Inst, 'v', 8).unwrap();
-      expect(world.capacity(e, Inst, 'v').unwrap()).toBeGreaterThanOrEqual(4);
-      world._removeArrayElementByValue(e, Inst, 'v', 6).unwrap();
-      world.pop(e, Inst, 'v').unwrap();
-      world.get(e, Inst).unwrap();
-      expect(spy).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('w5 - AC-03(c): arrayMeta object reference is reused, not rebuilt at runtime', () => {
-    it('component.fields[field].arrayMeta is the same reference before and after many ops', () => {
-      const Inst = defineComponent('ReflReuse', { v: { type: 'array<f32, 4>' } });
-      const before = Inst.fields.v?.arrayMeta;
-      const world = new World();
-      const e = world
-        .spawn({ component: Inst, data: { v: new Float32Array([0, 0, 0, 0]) } })
-        .unwrap();
-      for (let i = 0; i < 16; i++) {
-        world.set(e, Inst, { v: new Float32Array([i, i, i, i]) }).unwrap();
-        world.get(e, Inst).unwrap();
-      }
-      const after = Inst.fields.v?.arrayMeta;
-      // Same frozen object identity: parse ran once at registration only.
-      expect(after).toBe(before);
-      expect(after).toEqual({ elementType: 'f32', length: 4 });
-    });
-
-    it('variable array arrayMeta has no own length key and is reference-stable', () => {
-      const Inst = defineComponent('ReflReuseVar', { v: { type: 'array<u32>' } });
-      const before = Inst.fields.v?.arrayMeta;
-      const world = new World();
-      const e = world.spawn({ component: Inst, data: {} }).unwrap();
-      for (let i = 0; i < 16; i++) {
-        world.push(e, Inst, 'v', i).unwrap();
-      }
-      const after = Inst.fields.v?.arrayMeta;
-      expect(after).toBe(before);
-      expect('length' in (after as object)).toBe(false);
-    });
-  });
-}
-{
-  // --- from world-array-view.test.ts ---
-  const Mat = defineComponent('MatHolder', {
-    tag: 'f32',
-    world: 'array<f32, 16>',
-  });
-
-  const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
-
-  describe('world._getArrayView — column-level zero-copy view (AC-15)', () => {
-    it('returns a Float32Array of 16 floats aliasing the slot bytes', () => {
-      const world = new World();
-      const seed = new Float32Array(IDENTITY);
-      const e = world.spawn({ component: Mat, data: { tag: 7, world: seed } }).unwrap();
-
-      const view = world._getArrayView(e, Mat, 'world');
-      expect(view).toBeInstanceOf(Float32Array);
-      expect((view as Float32Array).length).toBe(16);
-      for (let i = 0; i < 16; i++) {
-        expect((view as Float32Array)[i]).toBeCloseTo(IDENTITY[i] as number, 5);
-      }
-    });
-
-    it('repeated calls alias the same underlying ArrayBuffer (zero-copy)', () => {
-      const world = new World();
-      const e = world
-        .spawn({ component: Mat, data: { tag: 0, world: new Float32Array(IDENTITY) } })
-        .unwrap();
-
-      const a = world._getArrayView(e, Mat, 'world') as Float32Array;
-      const b = world._getArrayView(e, Mat, 'world') as Float32Array;
-      expect(b.buffer).toBe(a.buffer);
-      expect(b.byteOffset).toBe(a.byteOffset);
-    });
-
-    it('an existing view reflects new values after world.set updates the slot', () => {
-      const world = new World();
-      const e = world
-        .spawn({ component: Mat, data: { tag: 0, world: new Float32Array(IDENTITY) } })
-        .unwrap();
-
-      const view = world._getArrayView(e, Mat, 'world') as Float32Array;
-      expect(view[12]).toBeCloseTo(0, 5);
-
-      const next = new Float32Array(IDENTITY);
-      next[12] = 5;
-      next[13] = 6;
-      next[14] = 7;
-      world.set(e, Mat, { world: next }).unwrap();
-
-      // The view aliases the slot bytes; the slot is updated in place so the
-      // already-held view reflects the new translation column.
-      expect(view[12]).toBeCloseTo(5, 5);
-      expect(view[13]).toBeCloseTo(6, 5);
-      expect(view[14]).toBeCloseTo(7, 5);
-    });
-
-    it('does not route through world.get (zero {} whole-component materialization)', () => {
-      const world = new World();
-      const e = world
-        .spawn({ component: Mat, data: { tag: 0, world: new Float32Array(IDENTITY) } })
-        .unwrap();
-
-      const getSpy = vi.spyOn(world, 'get');
-      world._getArrayView(e, Mat, 'world');
-      world._getArrayView(e, Mat, 'world');
-      expect(getSpy).toHaveBeenCalledTimes(0);
-      getSpy.mockRestore();
-    });
-
-    it('returns undefined for a non-array field, unknown field, or absent component', () => {
-      const world = new World();
-      const e = world
-        .spawn({ component: Mat, data: { tag: 1, world: new Float32Array(IDENTITY) } })
-        .unwrap();
-
-      expect(world._getArrayView(e, Mat, 'tag')).toBeUndefined();
-      expect(world._getArrayView(e, Mat, 'nope')).toBeUndefined();
-
-      const Other = defineComponent('OtherHolder', { x: { type: 'f32' } });
-      const e2 = world.spawn({ component: Other, data: { x: 0 } }).unwrap();
-      expect(world._getArrayView(e2, Mat, 'world')).toBeUndefined();
-    });
-  });
 }
 {
   // --- from world-buffer-fields.test.ts ---
@@ -2755,23 +1545,23 @@ describe('reserveArrayCapacity', () => {
   // [w8] per-World ID isolation tests (red phase — O-3)
   // ────────────────────────────────────────────────────────────────────────────
 
-  describe('component id — global token.id', () => {
-    it('token.id is globally consistent: same token shares one id across Worlds, distinct tokens differ', () => {
+  describe('component identity — global owner projection', () => {
+    it('the same token keeps one owner id across Worlds, distinct tokens differ', () => {
       const Pos = defineComponent('GlobalIdPos', { x: { type: 'f32' }, y: { type: 'f32' } });
       const Vel = defineComponent('GlobalIdVel', { vx: { type: 'f32' }, vy: { type: 'f32' } });
 
-      // The single id source is the global component.id; it is the same value
+      // The single id source is the global owner projection; it is the same value
       // regardless of which World (or how many) registers the token.
       const worldA = new World();
       const worldB = new World();
       // Both Worlds are created; no per-World register step exists — the token's
       // global id is stable regardless of how many Worlds observe it.
       expect(worldA).not.toBe(worldB);
-      expect(typeof Pos.id).toBe('number');
+      expect(typeof componentId(Pos)).toBe('number');
       // Same token -> same id in every World (no per-World re-numbering).
-      expect(Pos.id).toBe(Pos.id);
+      expect(componentId(Pos)).toBe(componentId(Pos));
       // Distinct tokens -> distinct ids.
-      expect(Pos.id).not.toBe(Vel.id);
+      expect(componentId(Pos)).not.toBe(componentId(Vel));
     });
   });
 }
@@ -3253,209 +2043,9 @@ describe('reserveArrayCapacity', () => {
 }
 {
   // --- from world-spawn-array-fallback.test.ts ---
-  describe('w-aef array fallback empty slot — array<T> (T != entity) layer-3 default raw=0', () => {
-    it('array<f32> variable: missing field yields empty slot snapshot (length 0)', () => {
-      const C = defineComponent('Tr', { transforms: { type: 'array<f32>' } });
-      const w = new World();
-      const e = w.spawn({ component: C, data: { transforms: new Float32Array(0) } }).unwrap();
-      // Sanity: explicit raw=[] path produces the empty-slot baseline.
-      const r0 = w.get(e, C);
-      if (!r0.ok) throw new Error('expected ok');
-      const snap0: Float32Array = r0.value.transforms;
-      expect(snap0).toBeInstanceOf(Float32Array);
-      expect(snap0.length).toBe(0);
-      const cap0 = w.capacity(e, C, 'transforms').unwrap();
-      expect(cap0).toBe(0);
-
-      // Drive the layer-3 fallback path: a SECOND entity spawned with a
-      // helper-style call where the field is omitted. The helper
-      // fillComponentDefaults returns raw=0 for array<f32>; world.spawn
-      // currently still uses the legacy explicit path (M2 wires the
-      // helper). Until then, we directly verify the helper return value
-      // matches plan-strategy §2.3 (D-2 asymmetric) and that explicit
-      // raw=0 produces the same empty-slot column state, which is the
-      // contract the M2 wiring will preserve byte-equally.
-      const e2 = w
-        .spawn({ component: C, data: { transforms: 0 as unknown as Float32Array } })
-        .unwrap();
-      const r2 = w.get(e2, C);
-      if (!r2.ok) throw new Error('expected ok');
-      const snap2: Float32Array = r2.value.transforms;
-      expect(snap2).toBeInstanceOf(Float32Array);
-      expect(snap2.length).toBe(0);
-      expect(w.capacity(e2, C, 'transforms').unwrap()).toBe(0);
-    });
-
-    it('array<f32, 16> fixed-N: missing field yields empty slot (length === N or 0)', () => {
-      const C = defineComponent('FxBox', { mat: { type: 'array<f32, 16>' } });
-      const w = new World();
-      // Explicit raw=Float32Array(16) baseline — fixed-N capacity contract.
-      const e = w.spawn({ component: C, data: { mat: new Float32Array(16) } }).unwrap();
-      const r0 = w.get(e, C);
-      if (!r0.ok) throw new Error('expected ok');
-      expect(r0.value.mat).toBeInstanceOf(Float32Array);
-      expect(r0.value.mat.length).toBe(16);
-
-      // Layer-4 silent fallback: raw=0 is the M2 helper output for fixed-N
-      // when the field is missing. The writeRow bottom-out yields the
-      // empty-slot column state (Float32Array length 0; the fixed-N
-      // capacity contract is enforced at write time, not at empty-slot
-      // construction).
-      const e2 = w.spawn({ component: C, data: { mat: 0 as unknown as Float32Array } }).unwrap();
-      const r2 = w.get(e2, C);
-      if (!r2.ok) throw new Error('expected ok');
-      expect(r2.value.mat).toBeInstanceOf(Float32Array);
-      // empty slot for fixed-N: writeArrayField bottoms-out for raw=0
-      // allocates capacity N pre-zeroed (the fixed-N capacity contract
-      // is enforced at slot allocation, not first write); length === N,
-      // every cell === 0. This is the discovered fact (research §F2 row
-      // 14/15 -> implemented behaviour) — array fallback empty slot.
-      expect(r2.value.mat.length).toBe(16);
-      for (let i = 0; i < 16; i++) {
-        expect(r2.value.mat[i]).toBe(0);
-      }
-    });
-
-    it('array<u32> variable: missing field yields empty slot snapshot (length 0)', () => {
-      const C = defineComponent('Ids', { ids: { type: 'array<u32>' } });
-      const w = new World();
-      const e = w.spawn({ component: C, data: { ids: new Uint32Array(0) } }).unwrap();
-      const r0 = w.get(e, C);
-      if (!r0.ok) throw new Error('expected ok');
-      expect(r0.value.ids).toBeInstanceOf(Uint32Array);
-      expect(r0.value.ids.length).toBe(0);
-
-      const e2 = w.spawn({ component: C, data: { ids: 0 as unknown as Uint32Array } }).unwrap();
-      const r2 = w.get(e2, C);
-      if (!r2.ok) throw new Error('expected ok');
-      expect(r2.value.ids).toBeInstanceOf(Uint32Array);
-      expect(r2.value.ids.length).toBe(0);
-    });
-  });
 }
 {
   // --- from world-spawn-defaults.test.ts ---
-  // M3 ECS-fication: dead world.sceneInstances.* migrated to instantiateScene +
-  // registerSceneAsset (allocUniqueRef + toShared) + read mapping via
-  // SceneInstance component on synthetic root. SceneInstance must be defined
-  // (matches the runtime schema in @forgeax/engine-runtime) so instantiateScene
-  // can resolve it by name.
-  defineComponent('SceneInstance', {
-    source: { type: 'shared<SceneAsset>' },
-    mapping: { type: 'array<entity>' },
-    state: { type: 'unique<SceneInstanceState>' },
-  });
-
-  function localId(n: number): LocalEntityId {
-    return n as LocalEntityId;
-  }
-
-  function buildScene(nodes: readonly SceneEntity[]): SceneAsset {
-    return { kind: 'scene', entities: nodes };
-  }
-
-  function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
-    return world.allocSharedRef('SceneAsset', asset);
-  }
-
-  function firstSceneEntity(world: World, root: EntityHandle): EntityHandle {
-    // Read entityToLocalId from the SceneInstanceState payload — its Map
-    // iterates in insertion order (= sceneTopoSort order); first key is the
-    // first owned entity of localId 0. Avoids the mapping[0]===0 ambiguity
-    // when an Entity encodes to a raw u32 of 0 (gen=0+idx=0).
-    const stateRes = world.getSceneInstanceState(root);
-    if (!stateRes.ok) throw new Error('SceneInstance state lookup failed');
-    const it = stateRes.value.entityToLocalId.keys();
-    const first = it.next();
-    if (first.done) throw new Error('entityToLocalId empty');
-    return first.value;
-  }
-
-  // ────────────────────────────────────────────────────────────────────────
-  // t7 — 3-layer routing cross-test (spawn vs SceneAsset.instantiate)
-  // ────────────────────────────────────────────────────────────────────────
-
-  describe('w-spawn-fallback t7 — 3-layer routing cross-test (AC-04 + AC-09)', () => {
-    // Mixed schema covering all three resolution layers in a single
-    // component; the helper walks each field and routes to the correct
-    // layer.
-    //
-    //   layer-1 (explicit):       posX
-    //   layer-2 (token defaults): aspect
-    //   layer-3 (typeDefault):    fov, near, far  (f32 -> 0 fallback)
-    const Mixed = defineComponent('t7-mixed', {
-      posX: { type: 'f32' }, // layer-1: caller passes value
-      aspect: { type: 'f32', default: 16 / 9 }, // layer-2: token defaults wins
-      fov: { type: 'f32' }, // layer-3: f32 -> 0
-      near: { type: 'f32' }, // layer-3: f32 -> 0
-      far: { type: 'f32' }, // layer-3: f32 -> 0
-    });
-
-    it('AC-04 cross-route — spawn partial data routes layer-1 / layer-2 / layer-3 in the same order as SceneAsset.instantiate', () => {
-      // Spawn route: drop fov / near / far / aspect; layer-3 fills 0,
-      // layer-2 fills 16/9.
-      const wSpawn = new World();
-      const eSpawn = wSpawn.spawn({ component: Mixed, data: { posX: 7 } }).unwrap();
-      const spawnRow = wSpawn.get(eSpawn, Mixed).unwrap();
-
-      // SceneAsset.instantiate route: SceneEntity.components carries the
-      // SAME partial raw (only posX).
-      const wScene = new World();
-      const handle = registerSceneAsset(
-        wScene,
-        buildScene([{ localId: localId(0), components: { 't7-mixed': { posX: 7 } } }]),
-      );
-      const root = wScene.instantiateScene(handle).unwrap().root;
-      const eScene = firstSceneEntity(wScene, root);
-      const sceneRow = wScene.get(eScene, Mixed).unwrap();
-
-      // Byte-equivalence on every field (this is the AC-09 "byte-level
-      // diff = 0" assertion in concrete terms). f32 column rounds the
-      // JS f64 16/9 literal to the nearest representable f32 -- both
-      // routes round identically, so toBeCloseTo with high precision
-      // proves byte-equivalence without overconstraining the literal.
-      expect(spawnRow.posX).toBe(7);
-      expect(spawnRow.aspect).toBeCloseTo(16 / 9, 6);
-      expect(spawnRow.fov).toBe(0);
-      expect(spawnRow.near).toBe(0);
-      expect(spawnRow.far).toBe(0);
-
-      expect(sceneRow.posX).toBe(spawnRow.posX);
-      expect(sceneRow.aspect).toBe(spawnRow.aspect);
-      expect(sceneRow.fov).toBe(spawnRow.fov);
-      expect(sceneRow.near).toBe(spawnRow.near);
-      expect(sceneRow.far).toBe(spawnRow.far);
-    });
-
-    it('AC-09 cross-route — empty spawn data: {} matches SceneAsset.instantiate with empty SceneEntity.components', () => {
-      const wSpawn = new World();
-      const eSpawn = wSpawn.spawn({ component: Mixed, data: {} }).unwrap();
-      const spawnRow = wSpawn.get(eSpawn, Mixed).unwrap();
-
-      const wScene = new World();
-      const handle = registerSceneAsset(
-        wScene,
-        buildScene([{ localId: localId(0), components: { 't7-mixed': {} } }]),
-      );
-      const root = wScene.instantiateScene(handle).unwrap().root;
-      const eScene = firstSceneEntity(wScene, root);
-      const sceneRow = wScene.get(eScene, Mixed).unwrap();
-
-      // posX has no layer-1 + no layer-2 -> layer-3 fallback 0.
-      expect(spawnRow.posX).toBe(0);
-      expect(spawnRow.aspect).toBeCloseTo(16 / 9, 6); // layer-2 still wins (f32 round)
-      expect(spawnRow.fov).toBe(0);
-      expect(spawnRow.near).toBe(0);
-      expect(spawnRow.far).toBe(0);
-
-      expect(sceneRow.posX).toBe(spawnRow.posX);
-      expect(sceneRow.aspect).toBe(spawnRow.aspect);
-      expect(sceneRow.fov).toBe(spawnRow.fov);
-      expect(sceneRow.near).toBe(spawnRow.near);
-      expect(sceneRow.far).toBe(spawnRow.far);
-    });
-  });
-
   // ────────────────────────────────────────────────────────────────────────
   // t8 — addComponent / spawn symmetry (research §F4 + §RD-4)
   // ────────────────────────────────────────────────────────────────────────
@@ -3513,78 +2103,6 @@ describe('reserveArrayCapacity', () => {
   // ────────────────────────────────────────────────────────────────────────
   // t10 — brand-class NULL sentinel cross-test (handle<T> / entity / ref<T>)
   // ────────────────────────────────────────────────────────────────────────
-
-  describe('w-spawn-fallback t10 — brand-class NULL sentinel cross-route (AC-10 + A-3)', () => {
-    // Three brand fields covering the three NULL semantics:
-    //   handle<MeshAsset>     -> u32 column; layer-3 default 0
-    //                            (NULL sentinel for unmanaged Handle).
-    //   entity                -> u32 column; layer-3 default ENTITY_NULL_RAW
-    //                            (0xffffffff). FieldValueType<'entity'>
-    //                            resolves to `Entity | null` -- the read
-    //                            path returns null when the raw equals
-    //                            ENTITY_NULL_RAW.
-    //   ref<MaterialAsset>    -> u32 column (uniqueRefs handle); layer-3
-    //                            default 0 (NULL sentinel managedRef
-    //                            handle). The read path surfaces the raw
-    //                            u32 directly (not a resolved payload --
-    //                            FieldValueType<'unique<T>'> = Handle<T,
-    //                            'unique'>, a u32 brand). spawn vs
-    //                            SceneAsset.instantiate must produce the
-    //                            SAME u32 column value (0) for the
-    //                            byte-equivalence contract to hold.
-    const Brands = defineComponent('t10-brands', {
-      handle: { type: 'shared<MeshAsset>' },
-      parent: { type: 'entity' },
-      mat: { type: 'unique<MaterialAsset>' },
-    });
-
-    it('AC-10 brand-null — spawn data: {} produces NULL sentinel column state byte-equivalent to SceneAsset.instantiate', () => {
-      // Spawn route: data: {} on a 3-brand schema; layer-3 fills the
-      // NULL sentinel for each field via fillComponentDefaults.
-      const wSpawn = new World();
-      const eSpawn = wSpawn.spawn({ component: Brands, data: {} }).unwrap();
-      const spawnRow = wSpawn.get(eSpawn, Brands).unwrap();
-
-      // SceneAsset.instantiate route: SceneEntity.components carries an
-      // empty record for the same component token -- the M1-wired
-      // helper produces the SAME column state.
-      const wScene = new World();
-      const handle = registerSceneAsset(
-        wScene,
-        buildScene([{ localId: localId(0), components: { 't10-brands': {} } }]),
-      );
-      const root = wScene.instantiateScene(handle).unwrap().root;
-      const eScene = firstSceneEntity(wScene, root);
-      const sceneRow = wScene.get(eScene, Brands).unwrap();
-
-      // handle<MeshAsset>: column u32 default 0 (NULL sentinel for
-      // unmanaged Handle). Both routes write 0 to the column.
-      expect(unwrapHandle(spawnRow.handle)).toBe(0);
-      expect(unwrapHandle(sceneRow.handle)).toBe(0);
-
-      // entity: column u32 default ENTITY_NULL_RAW; the read path
-      // surfaces null when the raw equals ENTITY_NULL_RAW (Entity |
-      // null per FieldValueType<'entity'>).
-      expect(spawnRow.parent).toBe(null);
-      expect(sceneRow.parent).toBe(null);
-      void ENTITY_NULL_RAW; // anchor the constant the contract relies on.
-
-      // ref<MaterialAsset>: column u32 default 0 (NULL managedRef
-      // handle). FieldValueType<'unique<T>'> = Handle<T, 'unique'> --
-      // the read returns the raw u32 directly (no resolve()). Both
-      // routes must produce the SAME u32 (0) for byte-equivalence.
-      expect(unwrapHandle(spawnRow.mat)).toBe(0);
-      expect(unwrapHandle(sceneRow.mat)).toBe(0);
-
-      // Cross-route byte-equivalence: the per-field equalities above
-      // imply the row is bit-identical between spawn and
-      // SceneAsset.instantiate -- the AC-10 / AC-09 cross-route
-      // contract.
-      expect(spawnRow.mat).toBe(sceneRow.mat);
-      expect(spawnRow.parent).toBe(sceneRow.parent);
-      expect(spawnRow.handle).toBe(sceneRow.handle);
-    });
-  });
 }
 {
   // --- from world-spawn-direct.test.ts ---
@@ -3651,9 +2169,10 @@ describe('reserveArrayCapacity', () => {
   });
 
   describe('AC-05 — EcsErrorCode remains a closed source-owned union', () => {
-    it('includes the mutation epoch exhaustion fail-fast', () => {
+    it('keeps the mutation epoch infrastructure failure out of the core union', () => {
+      // @ts-expect-error mutation epoch exhaustion is an infrastructure throw, not a World Result code.
       const code: EcsErrorCode = 'change-epoch-exhausted';
-      expectTypeOf(code).toEqualTypeOf<'change-epoch-exhausted'>();
+      expect(code).toBe('change-epoch-exhausted');
     });
 
     it('the dropped register codes are not assignable to EcsErrorCode', () => {
@@ -3792,120 +2311,6 @@ describe('reserveArrayCapacity', () => {
 }
 {
   // --- from relationshipSyncDepth-elimination.test.ts (w10) ---
-  type RSDChildrenComp = Component<'RSDChildren', { entities: 'array<entity>' }>;
-  type RSDChildOfComp = Component<'RSDChildOf', { parent: 'entity' }>;
-
-  function rsdSetup(opts?: { exclusive?: boolean; linkedSpawn?: boolean }): {
-    world: World;
-    Children: RSDChildrenComp;
-    ChildOf: RSDChildOfComp;
-  } {
-    const Children = defineComponent('RSDChildren', { entities: { type: 'array<entity>' } });
-    const ChildOf = defineComponent(
-      'RSDChildOf',
-      { parent: { type: 'entity' } },
-      {
-        relationship: {
-          mirror: 'RSDChildren',
-          field: 'entities',
-          exclusive: opts?.exclusive ?? true,
-          linkedSpawn: opts?.linkedSpawn ?? false,
-        },
-      },
-    );
-    const world = new World();
-    return { world, Children, ChildOf };
-  }
-
-  function rsdMirrorOf(world: World, Children: RSDChildrenComp, parent: EntityHandle): number[] {
-    const r = world.get(parent, Children);
-    if (!r.ok) return [];
-    return Array.from(r.value.entities);
-  }
-
-  describe('w10: relationshipSyncDepth elimination verification', () => {
-    // AC-01: reentry guard prevents infinite recursion during hierarchy
-    // reparent. The exclusive re-add triggers relationshipOnInsert ->
-    // internal addComponent for lazy mirror creation. The reentry guard
-    // (_xxxCore internal=true path) must skip the secondary relationship
-    // hook to avoid infinite recursion.
-    it('reentry guard: deep reparent chain completes without infinite recursion', () => {
-      const { world, Children, ChildOf } = rsdSetup({ exclusive: true });
-
-      // Build a chain: root -> a -> b -> c -> d
-      const root = world.spawn({ component: Children, data: {} }).unwrap();
-      const a = world.spawn().unwrap();
-      const b = world.spawn().unwrap();
-      const c = world.spawn().unwrap();
-      const d = world.spawn().unwrap();
-
-      world.addChild(root, a, ChildOf, { parent: root }).unwrap();
-      world.addChild(a, b, ChildOf, { parent: a }).unwrap();
-      world.addChild(b, c, ChildOf, { parent: b }).unwrap();
-      world.addChild(c, d, ChildOf, { parent: c }).unwrap();
-
-      // All entities alive and correctly linked.
-      expect(rsdMirrorOf(world, Children, root)).toContain(a as number);
-      expect(rsdMirrorOf(world, Children, a)).toContain(b as number);
-      expect(rsdMirrorOf(world, Children, b)).toContain(c as number);
-      expect(rsdMirrorOf(world, Children, c)).toContain(d as number);
-      expect(world.get(d, ChildOf).unwrap().parent).toBe(c);
-    });
-
-    it('reentry guard: reparent from one branch to another is atomic and terminates', () => {
-      const { world, Children, ChildOf } = rsdSetup({ exclusive: true });
-
-      const parentA = world.spawn({ component: Children, data: {} }).unwrap();
-      const parentB = world.spawn({ component: Children, data: {} }).unwrap();
-      const child = world.spawn().unwrap();
-
-      // Attach to parentA first.
-      world.addComponent(child, { component: ChildOf, data: { parent: parentA } }).unwrap();
-      expect(rsdMirrorOf(world, Children, parentA)).toContain(child as number);
-
-      // Reparent to parentB. The re-add triggers the exclusive reparent path:
-      // removeComponent (onRemove -> prune mirror) + addComponent (onInsert ->
-      // lazy-create mirror on B + push). The reentry guard prevents the
-      // internal addComponent from re-entering relationshipOnInsert when
-      // adding the mirror component to B (if it doesn't already have one).
-      const r = world.addComponent(child, { component: ChildOf, data: { parent: parentB } });
-      expect(r.ok).toBe(true);
-
-      // Atomicity: child removed from A, visible in B.
-      expect(rsdMirrorOf(world, Children, parentA)).not.toContain(child as number);
-      expect(rsdMirrorOf(world, Children, parentB)).toContain(child as number);
-      expect(world.get(child, ChildOf).unwrap().parent).toBe(parentB);
-    });
-
-    // AC-02: commands flush deferred spawn routes through public API
-    // (internal=false default) and correctly triggers relationship hooks.
-    it('commands flush: deferred spawn with relationship fires onInsert hook', () => {
-      const { world, Children, ChildOf } = rsdSetup({ exclusive: true });
-      const parent = world.spawn({ component: Children, data: {} }).unwrap();
-
-      world.addSystem(Update, {
-        name: 'rsd-spawner',
-        queries: [],
-        fn: (_world, _queries, commands) => {
-          commands.spawn({ component: ChildOf, data: { parent } });
-        },
-      });
-
-      world.update();
-
-      // The deferred spawn should be materialized by flush, and its
-      // ChildOf relationship should have mirrored onto parent's Children.
-      const mirror = rsdMirrorOf(world, Children, parent);
-      expect(mirror.length).toBeGreaterThanOrEqual(1);
-    });
-
-    // AC-03: World class does NOT carry relationshipSyncDepth field.
-    it('World instance has no relationshipSyncDepth field', () => {
-      const world = new World();
-      // The field should not exist on the instance (own or prototype).
-      expect('relationshipSyncDepth' in world).toBe(false);
-    });
-  });
   describe('feat-20260611 M-6 w12 recordIsLive liveness predicate', () => {
     const Tag = defineComponent('Tag', {});
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // Dawn smoke for Bevy `sprite_flipping`: three asymmetric sprite instances
 // exercise identity, horizontal UV flip, and vertical UV flip.
 
@@ -68,13 +69,11 @@ gpu.requestAdapter = async (options) => {
   };
   return adapter;
 };
-const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: manifestUrl });
+const renderer = await createSmokeRenderer(createRenderer, canvas, {}, { shaderManifestUrl: manifestUrl });
 gpu.requestAdapter = originalRequestAdapter;
-console.log(`[bevy-sprite-flipping] backend=${renderer.backend}`);
+console.log(`[bevy-sprite-flipping] backend=${rendererBackend(renderer)}`);
 const errors = [];
-renderer.onError((error) => errors.push(error));
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
+subscribeSmokeErrors(renderer, (error) => errors.push(error));
 
 const pixels = new Uint8Array(SPRITE_SIZE * SPRITE_SIZE * 4);
 for (let y = 0; y < SPRITE_SIZE; y++) {
@@ -96,15 +95,11 @@ for (let y = 0; y < SPRITE_SIZE; y++) {
   }
 }
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const texture = { kind: 'texture', width: SPRITE_SIZE, height: SPRITE_SIZE, format: 'rgba8unorm-srgb', data: pixels, colorSpace: 'srgb', mipmap: false };
 const textureHandle = world.allocSharedRef('TextureAsset', texture);
 const textureId = unwrapHandle(textureHandle);
-const upload = await renderer.store.uploadTexture(textureHandle, texture, {
-  bytes: pixels, width: SPRITE_SIZE, height: SPRITE_SIZE, mime: 'image/png', colorSpace: 'srgb', mipmap: false,
-});
-if (!upload.ok) throw new Error(`${upload.error.code}: ${upload.error.hint}`);
 
 const sampler = world.allocSharedRef('SamplerAsset', {
   kind: 'sampler', magFilter: 'linear', minFilter: 'linear', addressModeU: 'repeat', addressModeV: 'repeat',
@@ -141,7 +136,7 @@ world.spawn(
 
 for (let i = 0; i < FRAMES; i++) {
   world.update().unwrap();
-  const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const result = drawSmokeFrame(renderer, world);
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.hint}`);
 }
 await device.queue.onSubmittedWorkDone();
@@ -177,7 +172,7 @@ const visible = [samples.normalTopLeft, samples.flipXLeft, samples.flipYTop].fil
 const normalHasDistinctSides = samples.normalTopLeft[2] > 150 && samples.normalTopRight[1] > 150;
 const flipXHasSwappedSides = samples.flipXLeft[1] > 150 && samples.flipXRight[2] > 150;
 const flipYHasSwappedVerticals = samples.flipYTop[0] > 150 && samples.flipYBottom[2] > 150;
-if (renderer.backend !== 'webgpu' || visible !== 3 || !normalHasDistinctSides || !flipXHasSwappedSides || !flipYHasSwappedVerticals || errors.length > 0) {
+if (rendererBackend(renderer) !== 'webgpu' || visible !== 3 || !normalHasDistinctSides || !flipXHasSwappedSides || !flipYHasSwappedVerticals || errors.length > 0) {
   console.error('[smoke] FAIL - backend/visibility/flip/error criterion failed');
   process.exit(1);
 }

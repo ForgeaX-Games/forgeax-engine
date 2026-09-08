@@ -18,13 +18,95 @@
 // section 2 (math skeleton) and section 2.2 (per-vertex average +
 // handedness). Risk anchor: R-4 (vec4 + .w forward compatibility).
 //
-// Pure function, zero deps. Indices may be Uint16Array, Uint32Array, or
+// Pure function with shared Result/AssetError vocabulary and no mutable state
+// or side effects. Indices may be Uint16Array, Uint32Array, or
 // undefined (sequential 0..vertexCount-1 -- triangle list). Degenerate
 // triangles (zero area UV; det ~ 0) are skipped from the accumulation;
 // vertices touched only by degenerate triangles fall back to a stable
 // frame: tangent perpendicular to the supplied normal with .w = +1.
 
+import { ASSET_ERROR_HINTS, AssetError, err, ok, type Result } from '@forgeax/engine-types';
+
 const EPSILON = 1e-8;
+
+function tangentInputError(field: string, value: number, reason: string): AssetError {
+  return new AssetError({
+    code: 'asset-parse-failed',
+    expected: `valid tangent topology: ${reason}`,
+    hint: ASSET_ERROR_HINTS['asset-parse-failed'],
+    detail: { field, value, reason },
+  });
+}
+
+function preflightTangentInput(
+  positions: Float32Array,
+  normals: Float32Array,
+  uvs: Float32Array,
+  indices: Uint16Array | Uint32Array | undefined,
+): Result<number, AssetError> {
+  if (positions.length % 3 !== 0) {
+    return err(
+      tangentInputError(
+        'positions',
+        positions.length,
+        'positions.length must be divisible by the position stride of 3',
+      ),
+    );
+  }
+  const vertexCount = positions.length / 3;
+  if (normals.length !== vertexCount * 3) {
+    return err(
+      tangentInputError(
+        'normals',
+        normals.length,
+        `normals.length must equal vertexCount * 3 (${vertexCount * 3})`,
+      ),
+    );
+  }
+  if (uvs.length !== vertexCount * 2) {
+    return err(
+      tangentInputError(
+        'uvs',
+        uvs.length,
+        `uvs.length must equal vertexCount * 2 (${vertexCount * 2})`,
+      ),
+    );
+  }
+  if (indices === undefined) {
+    if (vertexCount % 3 !== 0) {
+      return err(
+        tangentInputError(
+          'positions',
+          vertexCount,
+          'non-indexed vertexCount must be divisible by the triangle size of 3',
+        ),
+      );
+    }
+    return ok(vertexCount);
+  }
+  if (indices.length % 3 !== 0) {
+    return err(
+      tangentInputError(
+        'indices',
+        indices.length,
+        'indices.length must be divisible by the triangle size of 3',
+      ),
+    );
+  }
+  for (let indexPosition = 0; indexPosition < indices.length; indexPosition++) {
+    const index = indices[indexPosition];
+    if (index === undefined || !Number.isInteger(index) || index < 0 || index >= vertexCount) {
+      return err(
+        tangentInputError(
+          'indices',
+          index ?? -1,
+          `indices[${indexPosition}] must be an integer in [0, ${vertexCount})`,
+        ),
+      );
+    }
+  }
+  return ok(vertexCount);
+}
 
 /**
  * Compute per-vertex tangent (vec4) for a procedural mesh using path A
@@ -37,8 +119,10 @@ const EPSILON = 1e-8;
  * @param uvs Float32Array, vertexCount * 2 (uv interleaved).
  * @param indices optional Uint16Array | Uint32Array triangle list; when
  *   undefined, sequential triangulation 0,1,2,3,4,5,... is assumed.
- * @returns Float32Array (vertexCount * 4) with .xyz tangent + .w
- *   handedness sign in {+1, -1}.
+ * @returns `Result<Float32Array, AssetError>` with a Float32Array of
+ *   vertexCount * 4 on success. `.xyz` is the tangent and `.w` is the
+ *   handedness sign in {+1, -1}; malformed topology returns the existing
+ *   `asset-parse-failed` AssetError before working or output buffers exist.
  *
  * @remarks
  * Path A formula (per triangle):
@@ -60,18 +144,10 @@ export function computeTangentVec4(
   normals: Float32Array,
   uvs: Float32Array,
   indices?: Uint16Array | Uint32Array,
-): Float32Array {
-  const vertexCount = positions.length / 3;
-  if (normals.length !== vertexCount * 3) {
-    throw new Error(
-      `computeTangentVec4: normals.length=${normals.length} mismatched positions vertexCount=${vertexCount}`,
-    );
-  }
-  if (uvs.length !== vertexCount * 2) {
-    throw new Error(
-      `computeTangentVec4: uvs.length=${uvs.length} mismatched positions vertexCount=${vertexCount}`,
-    );
-  }
+): Result<Float32Array, AssetError> {
+  const preflight = preflightTangentInput(positions, normals, uvs, indices);
+  if (!preflight.ok) return preflight;
+  const vertexCount = preflight.value;
 
   // Working buffers: per-vertex accumulated tangent + accumulated handedness
   // signed weight (sum of (face area * sign(det))). The dominant sign of
@@ -240,5 +316,5 @@ export function computeTangentVec4(
     out[v * 4 + 3] = w;
   }
 
-  return out;
+  return ok(out);
 }

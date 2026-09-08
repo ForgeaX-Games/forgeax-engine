@@ -1,12 +1,12 @@
-import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { CharacterController, Collider, ColliderShapeValue, CollidingEntities, RigidBody, RigidBodyTypeValue } from '@forgeax/engine-physics';
-import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { Materials, MeshFilter, MeshRenderer, SceneInstance } from '@forgeax/engine-render';
+import type { GameHost } from '@forgeax/engine-app';
+import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import type { Handle, MaterialAsset, SceneAsset } from '@forgeax/engine-types';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { Transform } from '@forgeax/engine-scene';
-import type { BootstrapContext } from '@forgeax/engine-app';
-import type { Handle, MaterialAsset } from '@forgeax/engine-runtime';
-import type { SceneAsset } from '@forgeax/engine-types';
 import { Rotatable } from './rotating-target';
 import { ScoringTarget } from './scoring-target';
 import { cloneWithClearcoat } from './clearcoat-material';
@@ -16,7 +16,7 @@ import { ProjectileCover, Sentinel } from './components/gameplay';
 export type MatHandle = Handle<'MaterialAsset', 'shared'>;
 export type GameContext = {
   world: World;
-  assets?: import('@forgeax/engine-assets-runtime').AssetRegistry;
+  assets?: AssetRegistry;
 };
 export type PackNode = {
   localId: number;
@@ -38,6 +38,15 @@ export const YELLOW_TARGET_SOLVER_GROUPS = 0x0001_0001;
 export const PROJECTILE_COVER_SOLVER_GROUPS = 0x0002_ffff;
 
 type NestedSceneAsset = Pick<SceneAsset, 'entities' | 'mounts'>;
+
+function isNestedSceneAsset(value: unknown): value is NestedSceneAsset {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { kind?: unknown }).kind === 'scene' &&
+    Array.isArray((value as { entities?: unknown }).entities)
+  );
+}
 
 function normalizeComponents(raw: unknown): Record<string, Record<string, unknown>> {
   const components: Record<string, Record<string, unknown>> = {};
@@ -67,6 +76,7 @@ function remapNestedNode(node: NestedSceneAsset['entities'][number], offset: num
  * public asset path instead of adding a second scene traversal in main.ts.
  */
 async function expandNestedNodes(
+  world: World,
   assets: NonNullable<GameContext['assets']>,
   asset: NestedSceneAsset,
   offset = 0,
@@ -80,28 +90,37 @@ async function expandNestedNodes(
         components: normalizeComponents(mount.components),
       });
     }
-    if (typeof mount.source !== 'string') {
-      throw new Error(`Nested SceneAsset mount ${mount.localId} has no resolved GUID`);
-    }
-    const guid = AssetGuid.parse(mount.source);
-    if (!guid.ok) throw new Error(`Nested SceneAsset mount GUID is invalid: ${mount.source}`);
-    const key = mount.source.toLowerCase();
+    const key =
+      typeof mount.source === 'string' ? `guid:${mount.source.toLowerCase()}` : `handle:${mount.source}`;
     if (ancestors.has(key)) throw new Error(`Nested SceneAsset cycle detected at ${mount.source}`);
-    const child = await assets.loadByGuid<SceneAsset>(guid.value);
-    if (!child.ok) throw new Error(`Nested SceneAsset load failed: ${child.error.code}`);
+    let child: NestedSceneAsset;
+    if (typeof mount.source === 'string') {
+      const parsed = AssetGuid.parse(mount.source);
+      if (!parsed.ok) throw new Error(`Nested SceneAsset GUID is invalid: ${mount.source}`);
+      const loaded = await assets.loadByGuid<SceneAsset>(parsed.value);
+      if (!loaded.ok) throw new Error(`Nested SceneAsset load failed: ${loaded.error.code}`);
+      child = loaded.value;
+    } else {
+      const resolved = world.sharedRefs.resolve(mount.source as Handle<'SceneAsset', 'shared'>);
+      if (!resolved.ok || !isNestedSceneAsset(resolved.value)) {
+        throw new Error(`Nested SceneAsset handle ${mount.source} has no resolved SceneAsset`);
+      }
+      child = resolved.value;
+    }
     ancestors.add(key);
-    nodes.push(...await expandNestedNodes(assets, child.value, offset + mount.memberFirst, ancestors));
+    nodes.push(...await expandNestedNodes(world, assets, child, offset + mount.memberFirst, ancestors));
     ancestors.delete(key);
   }
   return nodes;
 }
 
 export async function expandLoadedScene(
+  world: World,
   assets: NonNullable<GameContext['assets']>,
   authored: SceneAsset,
   loaded: LoadedScene,
 ): Promise<LoadedScene> {
-  const nestedNodes = await expandNestedNodes(assets, authored);
+  const nestedNodes = await expandNestedNodes(world, assets, authored);
   return nestedNodes.length === loaded.nodes.length && loaded.nodes.every((node, i) => node.localId === nestedNodes[i]?.localId)
     ? loaded
     : { ...loaded, nodes: nestedNodes };
@@ -109,16 +128,26 @@ export async function expandLoadedScene(
 
 export async function loadScene(ctx: GameContext): Promise<LoadedScene | null> {
   if (!ctx.assets) return null;
-  const guid = AssetGuid.parse(SCENE_GUID);
-  if (!guid.ok) return null;
-  const loaded = await ctx.assets.loadByGuid<SceneAsset>(guid.value);
-  if (!loaded.ok) return null;
+  const assets = ctx.assets;
+  const parsed = AssetGuid.parse(SCENE_GUID);
+  if (!parsed.ok) {
+    console.warn(`[game] authored scene GUID is invalid: ${parsed.error.code} — ${parsed.error.hint}`);
+    return null;
+  }
+  const loaded = await assets.loadByGuid<SceneAsset>(parsed.value);
+  if (!loaded.ok) {
+    console.warn(`[game] authored scene load failed: ${loaded.error.code} — ${loaded.error.hint}`, loaded.error.detail);
+    return null;
+  }
   const handle = ctx.world.allocSharedRef('SceneAsset', loaded.value);
-  const instance = ctx.assets.instantiate<SceneAsset>(handle, ctx.world);
-  if (!instance.ok) return null;
+  const instance = assets.instantiate(handle, ctx.world);
+  if (!instance.ok) {
+    console.warn(`[game] authored scene instantiate failed: ${instance.error.code} — ${instance.error.hint}`);
+    return null;
+  }
   const scene = ctx.world.get(instance.value, SceneInstance);
   if (!scene.ok) return null;
-  const nodes = await expandNestedNodes(ctx.assets, loaded.value);
+  const nodes = await expandNestedNodes(ctx.world, ctx.assets, loaded.value);
   const mapping = new Map<number, EntityHandle>();
   const mappingArray = scene.value.mapping as unknown as { [index: number]: number };
   for (const node of nodes) {
@@ -130,7 +159,7 @@ export async function loadScene(ctx: GameContext): Promise<LoadedScene | null> {
   return { mapping, nodes };
 }
 
-export function loadedFromHost(world: World, ctx: BootstrapContext): LoadedScene | null {
+export function loadedFromHost(world: World, ctx: GameHost): LoadedScene | null {
   const root = ctx.defaultSceneRoot;
   if (root === undefined || ctx.defaultScene === undefined) return null;
   const scene = world.get(root, SceneInstance);
@@ -147,12 +176,13 @@ export function loadedFromHost(world: World, ctx: BootstrapContext): LoadedScene
 }
 
 export function spawnFallbackScene(ctx: GameContext): void {
+  const cubeMesh = ctx.world.internSharedRef('MeshAsset', createBoxGeometry(1, 1, 1).unwrap());
   const material = ctx.world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({
     baseColor: [0.48, 0.62, 0.35, 1], roughness: 0.95, metallic: 0,
   }));
   ctx.world.spawn(
     { component: Transform, data: { pos: [0, -0.1, 0], scale: [24, 0.2, 24] } },
-    { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+    { component: MeshFilter, data: { assetHandle: cubeMesh } },
     { component: MeshRenderer, data: { materials: [material] } },
   );
 }

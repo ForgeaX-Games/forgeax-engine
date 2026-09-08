@@ -1,5 +1,5 @@
+import { type BuildDdcInput, semanticBuildKey } from '@forgeax/engine-ddc';
 import { describe, expect, it } from 'vitest';
-import { type SemanticDdcInput, semanticDdcKey } from '../ddc-cache.js';
 
 const base = {
   schemaVersion: '2.0.0',
@@ -12,7 +12,7 @@ const base = {
 } as const;
 
 function key(input: Record<string, unknown> = {}): string {
-  return semanticDdcKey({ ...base, ...input } as SemanticDdcInput);
+  return semanticBuildKey({ ...base, ...input } as BuildDdcInput);
 }
 
 describe('semantic DDC key for source overrides', () => {
@@ -37,5 +37,9 @@ describe('semantic DDC key for source overrides', () => {
     expect(key({ sourceOverrides: { 'mesh/main': { lod: 1 } }, sourcePath: 'one' })).toBe(
       key({ sourceOverrides: { 'mesh/main': { lod: 1 } }, sourcePath: 'two' }),
     );
+  });
+
+  it('invalidates the fingerprint when the producer implementation version changes', () => {
+    expect(key({ importerVersion: 'fixture@2' })).not.toBe(key({ importerVersion: 'fixture@1' }));
   });
 });

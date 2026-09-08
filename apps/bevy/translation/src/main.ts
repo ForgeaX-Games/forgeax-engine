@@ -42,7 +42,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = appResult.value;
-  console.warn(`[bevy-translation] backend=${app.renderer.backend}`);
+  console.warn(`[bevy-translation] state=${app.renderer.inspect().state}`);
 
   buildTranslationWorld(app.world);
 

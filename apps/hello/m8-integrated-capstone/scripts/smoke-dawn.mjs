@@ -53,7 +53,6 @@ const { FixedUpdate } = await import('@forgeax/engine-ecs');
 app.world.addSystem(FixedUpdate, { name: 'm8-dawn-fixed-oracle', queries: [], fn: () => { fixedTicks.value += 1; } }).unwrap();
 const errors = [];
 app.onError((error) => errors.push({ code: error.code, hint: error.hint, detail: error.detail }));
-if (!(await app.renderer.ready).ok) throw new Error('M8 Dawn renderer.ready failed');
 const originalNow = globalThis.performance.now.bind(globalThis.performance);
 let fakeNow = 0;
 globalThis.performance.now = () => fakeNow;

@@ -1,8 +1,9 @@
 import { Transform } from '@forgeax/engine-scene';
 import { PointLight } from '@forgeax/engine-render';
 import { type EntityHandle, type World } from '@forgeax/engine-ecs';
-import type { BootstrapContext } from '@forgeax/engine-app';
+import type { GameHost } from '@forgeax/engine-app';
 import type { PhysicsWorld } from '@forgeax/engine-physics';
+import type { Context } from '@forgeax/engine-plugin';
 import { installGameplayInput } from './gameplay-input';
 import { installGameplayLifecycle } from './gameplay-lifecycle';
 import { installGameplayAudio } from './gameplay-audio';
@@ -79,14 +80,15 @@ export type GameplaySession = {
 
 /** Build the one gameplay session that systems consume; no feature state stays in bootstrap. */
 export async function createGameplaySession(
+  context: Context,
   world: World,
-  host: BootstrapContext | undefined,
+  host: GameHost | undefined,
   canvas: HTMLCanvasElement,
   targets: GameplayTargetFeatures,
 ): Promise<GameplaySession> {
   world.insertResource(GAME_DEFAULT_MATERIAL_ELAPSED_ORIGIN, 0);
-  world.registerSimulationTransientResource(GAME_DEFAULT_MATERIAL_ELAPSED_ORIGIN);
   const cameraController = await createCameraController({
+    context,
     world,
     canvas,
     host,
@@ -99,35 +101,35 @@ export async function createGameplaySession(
   const lightingMode = installLightingModeProjection({ world, camera, loaded: targets.loaded, hud });
   const vfxTarget = targets.primaryTarget();
   const gameplayVfx = await createGameplayVfx({
+    context,
     world,
     ...(host?.assets ? { assets: host.assets } : {}),
-    ...(host?.renderer ? { renderer: host.renderer } : {}),
     ...(vfxTarget === undefined ? {} : { target: vfxTarget }),
     ...(targets.sentinel.available ? { sentinel: targets.sentinel.identity.sentinel } : {}),
     camera,
   });
   const vfxHitLoop = gameplayVfx;
-  host?.registerCleanup?.(() => gameplayVfx.dispose());
-  const multiWorldOverlay = host?.app === undefined ? undefined : installMultiWorldOverlay(host.app, host.registerCleanup);
+  context.effect(() => () => gameplayVfx.dispose(), 'game-default/vfx');
+  const multiWorldOverlay = host?.app === undefined ? undefined : installMultiWorldOverlay(context, host.app);
   const worldScoreText = await createWorldScoreText(world, host?.assets);
-  host?.registerCleanup?.(() => worldScoreText?.dispose());
+  context.effect(() => () => worldScoreText?.dispose(), 'game-default/world-score-text');
   const changeDetection = installGameplayChangeDetection({ world, targetQuery: targets.targetQuery, hud });
   const hitStreak = createHitStreak(world, targets.player, hud);
   const healthPickup = targets.player === undefined || targets.healthPickups.length === 0
     ? undefined
     : createHealthPickups(world, targets.player, targets.healthPickups);
-  host?.registerCleanup?.(() => healthPickup?.dispose());
+  context.effect(() => () => healthPickup?.dispose(), 'game-default/health-pickup');
   const repairCache = healthPickup === undefined || targets.repairCache === undefined
     ? undefined
     : createRepairCache(world, targets.repairCache, healthPickup);
   const extraction = targets.player === undefined || targets.extraction === undefined
     ? undefined
     : createEnergyCoreExtraction(world, targets.player, targets.extraction);
-  host?.registerCleanup?.(() => extraction?.dispose());
+  context.effect(() => () => extraction?.dispose(), 'game-default/extraction');
   const barrierRoute = targets.barrierRoute === undefined
     ? undefined
     : createBarrierRoute(world, targets.barrierRoute);
-  host?.registerCleanup?.(() => barrierRoute?.dispose());
+  context.effect(() => () => barrierRoute?.dispose(), 'game-default/barrier-route');
   const counterattack = targets.player === undefined
     ? undefined
     : createCounterattack(world, targets.player, () => extraction?.snapshot().collected ?? 0);
@@ -245,14 +247,14 @@ export async function createGameplaySession(
         onSpawn: () => recordGameplayCommand(world, 'spawned'),
       });
   const debugAxes = installDebugAxes({
+    context,
     world,
     camera,
     targetQuery: targets.targetQuery,
     debugDraw: host?.app?.debugDraw,
-    ...(host?.registerCleanup ? { registerCleanup: host.registerCleanup } : {}),
   });
   const gameplayAudio = targets.player === undefined ? undefined : await installGameplayAudio(world, targets.player, host?.assets);
-  installAudioEvidence({ world, gameplayAudio, ...(host?.registerCleanup ? { registerCleanup: host.registerCleanup } : {}) });
+  installAudioEvidence({ context, world, gameplayAudio });
   installAudioSettingsSystem(world, settingsState, gameplayAudio);
   const resetGameplay = createGameplayReset({
     world,
@@ -314,6 +316,7 @@ export async function createGameplaySession(
     },
   });
   const gameplayState = installGameplayState({
+    context,
     world,
     reset: resetGameplay,
     onTerminal: () => { attackPresentation?.stop(); gameplayVfx.stopHostile(); sentinel?.cleanupHostileProjectiles(); },

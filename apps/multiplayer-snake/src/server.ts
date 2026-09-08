@@ -1,11 +1,19 @@
-import { type EntityHandle, FixedTime, FixedUpdate, World } from '@forgeax/engine-ecs';
+import {
+  createWorldContext,
+  type EntityHandle,
+  FixedTime,
+  FixedUpdate,
+  World,
+} from '@forgeax/engine-ecs';
 import {
   createAuthorityCoordinator,
   type NetEndpoint,
   type NetSession,
   netPlugin,
+  type SessionId,
 } from '@forgeax/engine-net';
 import { listenWebSocketEndpoint } from '@forgeax/engine-net-websocket/node';
+import type { Context } from '@forgeax/engine-plugin';
 import type { Direction } from './shared/commands';
 import {
   decodeCommand,
@@ -30,6 +38,7 @@ import { SNAKE_MOVE_INTERVAL_SECONDS, type SnakeGameState, tickSimulation } from
 export interface SnakeServer {
   readonly world: World;
   readonly game: SnakeGameState;
+  readonly pluginContext: Context;
 }
 
 const directionValue: Record<Direction, number> = { up: 0, right: 1, down: 2, left: 3 };
@@ -56,7 +65,7 @@ function initialSnakeCells(index: number) {
 function projectGameState(
   world: World,
   game: SnakeGameState,
-  byPeer: Map<number, SnakeEntities>,
+  bySession: Map<SessionId, SnakeEntities>,
   foodRef: { entity?: EntityHandle },
 ): void {
   if (foodRef.entity === undefined) {
@@ -67,22 +76,23 @@ function projectGameState(
         { component: GridPosition, data: game.food },
       )
       .unwrap();
-  } else world.set(foodRef.entity, GridPosition, game.food).unwrap();
+  } else world.set(foodRef.entity, GridPosition, { x: game.food.x, y: game.food.y }).unwrap();
 
-  const livePeers = new Set(game.snakes.keys());
-  for (const [peerId, entities] of [...byPeer]) {
-    const snake = game.snakes.get(peerId);
+  const liveSessions = new Set([...game.snakes.keys()].map((value) => value as SessionId));
+  for (const [sessionId, entities] of [...bySession]) {
+    const snake = game.snakes.get(sessionId);
     if (snake === undefined || snake.cells.length === 0) {
       for (const segment of entities.segments) world.despawn(segment).unwrap();
       world.despawn(entities.snake).unwrap();
-      byPeer.delete(peerId);
+      bySession.delete(sessionId);
     }
   }
 
-  for (const [peerId, snake] of game.snakes) {
+  for (const [playerId, snake] of game.snakes) {
     if (snake.cells.length === 0) continue;
+    const sessionId = playerId as SessionId;
     const head = snake.cells[0] ?? { x: 0, y: 0 };
-    let entities = byPeer.get(peerId);
+    let entities = bySession.get(sessionId);
     if (entities === undefined) {
       const created = world
         .spawn(
@@ -92,26 +102,26 @@ function projectGameState(
             data: {
               direction: directionValue[snake.direction],
               score: snake.score,
-              playerNetworkId: peerId,
+              playerNetworkId: Number(sessionId),
             },
           },
           { component: GridPosition, data: head },
           { component: SnakeBody, data: { segments: [] } },
-          { component: ControlledBy, data: { peer: peerId } },
+          { component: ControlledBy, data: { sessionId: Number(sessionId) } },
           { component: PendingDirection, data: { value: directionValue[snake.direction] } },
         )
         .unwrap();
       entities = { snake: created, segments: [] };
-      byPeer.set(peerId, entities);
+      bySession.set(sessionId, entities);
     }
     world
       .set(entities.snake, Snake, {
         direction: directionValue[snake.direction],
         score: snake.score,
-        playerNetworkId: peerId,
+        playerNetworkId: Number(sessionId),
       })
       .unwrap();
-    world.set(entities.snake, GridPosition, head).unwrap();
+    world.set(entities.snake, GridPosition, { x: head.x, y: head.y }).unwrap();
     world
       .set(entities.snake, PendingDirection, { value: directionValue[snake.direction] })
       .unwrap();
@@ -126,7 +136,7 @@ function projectGameState(
             { component: Networked, data: { enabled: true } },
             {
               component: SnakeSegment,
-              data: { playerNetworkId: peerId, order: entities.segments.length + 1 },
+              data: { playerNetworkId: Number(sessionId), order: entities.segments.length + 1 },
             },
             { component: GridPosition, data: { x: 0, y: 0 } },
           )
@@ -134,20 +144,20 @@ function projectGameState(
       );
     }
     for (const [index, segment] of entities.segments.entries()) {
-      world.set(segment, GridPosition, snake.cells[index + 1] ?? { x: 0, y: 0 }).unwrap();
+      const cell = snake.cells[index + 1] ?? { x: 0, y: 0 };
+      world.set(segment, GridPosition, { x: cell.x, y: cell.y }).unwrap();
     }
     world.set(entities.snake, SnakeBody, { segments: entities.segments }).unwrap();
   }
   // The set above is authoritative; this guard documents that disconnected
   // peers never retain a projected entity even when no simulation tick ran.
-  for (const peerId of byPeer.keys()) if (!livePeers.has(peerId)) byPeer.delete(peerId);
+  for (const sessionId of bySession.keys())
+    if (!liveSessions.has(sessionId)) bySession.delete(sessionId);
 }
 
-export function createServerWorld(endpoint: NetEndpoint): SnakeServer {
+export async function createServerWorld(endpoint: NetEndpoint): Promise<SnakeServer> {
   const world = new World();
-  const built = netPlugin({ endpoint }).build(world);
-  if (built instanceof Promise) throw new Error('Snake net plugin must build synchronously');
-  if (!built.ok) throw built.error;
+  const pluginContext = await createWorldContext(world, [netPlugin({ endpoint })]);
   const session = world.getResource<NetSession>('net-session');
   session.attachAuthority(createAuthorityCoordinator(world, snakeProfile));
   const game: SnakeGameState = {
@@ -180,62 +190,70 @@ export function createServerWorld(endpoint: NetEndpoint): SnakeServer {
       },
     )
     .unwrap();
-  const projected = new Map<number, SnakeEntities>();
-  const readyPeers = new Set<number>();
+  const projected = new Map<SessionId, SnakeEntities>();
+  const readySessions = new Set<number>();
   const foodRef: { entity?: EntityHandle } = {};
   projectGameState(world, game, projected, foodRef);
   world.addSystem(FixedUpdate, {
     name: 'snake-fixed-tick',
     queries: [],
-    resources: ['net-session', 'snake-game'],
     fn: (world) => {
       const activeSession = world.getResource<NetSession>('net-session');
       const activeGame = world.getResource<SnakeGameState>('snake-game');
       const fixedDeltaSeconds = world.getResource(FixedTime).delta;
+      const recoverySnapshot = activeSession.getRecoverySnapshot();
+      if (recoverySnapshot.state.kind === 'failed' || recoverySnapshot.state.kind === 'retired')
+        return;
       const wasStarted = activeGame.started;
       const rawMessages = activeSession.drainRawMessages();
-      const peerIds = activeSession.getPeerSnapshot().peerIds;
-      for (const peerId of [...readyPeers])
-        if (!peerIds.includes(peerId as (typeof peerIds)[number])) readyPeers.delete(peerId);
+      const sessionIds = activeSession.getSessionSnapshot().sessionIds;
+      const connectedSessions = new Set(sessionIds.map(Number));
+      const commandMessages = rawMessages.map((message) => ({
+        sessionId: Number(message.sessionId),
+        data: message.data,
+      }));
+      for (const sessionId of [...readySessions])
+        if (!connectedSessions.has(sessionId)) readySessions.delete(sessionId);
       const joined = new Set(activeGame.snakes.keys());
-      for (const peerId of processJoinCommands(rawMessages, new Set(peerIds))) joined.add(peerId);
-      for (const peerId of processReadyCommands(rawMessages, new Set(peerIds)))
-        readyPeers.add(peerId);
-      for (const peerId of [...joined])
-        if (!peerIds.includes(peerId as (typeof peerIds)[number])) joined.delete(peerId);
-      for (const peerId of [...activeGame.snakes.keys()])
-        if (!joined.has(peerId)) activeGame.snakes.delete(peerId);
-      for (const peerId of joined) {
-        if (activeGame.snakes.has(peerId)) continue;
+      for (const sessionId of processJoinCommands(commandMessages, connectedSessions))
+        joined.add(sessionId);
+      for (const sessionId of processReadyCommands(commandMessages, connectedSessions))
+        readySessions.add(sessionId);
+      for (const sessionId of [...joined])
+        if (!connectedSessions.has(sessionId)) joined.delete(sessionId);
+      for (const sessionId of [...activeGame.snakes.keys()])
+        if (!joined.has(sessionId)) activeGame.snakes.delete(sessionId);
+      for (const sessionId of joined) {
+        if (activeGame.snakes.has(sessionId)) continue;
         if (activeGame.snakes.size >= activeGame.maxPeers) continue;
-        activeGame.snakes.set(peerId, {
-          peerId,
+        activeGame.snakes.set(sessionId, {
+          sessionId,
           direction: 'right',
           score: 0,
           cells: initialSnakeCells(activeGame.snakes.size),
           respawnAt: null,
         });
-        activeSession.requestFullBaseline(peerId as never);
+        activeSession.requestFullBaselineForSession(sessionId as SessionId);
       }
       // Admission is complete only after both peers have a projected snake.
       // This keeps the replicated waiting state observable until the second
       // peer has actually been accepted and baselined.
-      if (!activeGame.started && readyPeers.size >= 2) {
+      if (!activeGame.started && readySessions.size >= 2) {
         activeGame.started = true;
         activeGame.startedAtGameplayTick = activeGame.gameplayTick ?? 0;
       }
       const directions = new Map(
-        [...activeGame.snakes.values()].map((snake) => [snake.peerId, snake.direction]),
+        [...activeGame.snakes.values()].map((snake) => [snake.sessionId, snake.direction]),
       );
-      const directionMessages = rawMessages.filter((message) => {
+      const directionMessages = commandMessages.filter((message) => {
         const decoded = decodeCommand(message.data);
         return decoded.ok && !('kind' in decoded.value);
       });
-      for (const [peerId, direction] of processCommands(directionMessages, directions)) {
-        const snake = activeGame.snakes.get(peerId);
+      for (const [sessionId, direction] of processCommands(directionMessages, directions)) {
+        const snake = activeGame.snakes.get(sessionId);
         if (snake === undefined) continue;
         snake.direction = direction;
-        activeGame.lastDirectionCommandPlayerNetworkId = peerId;
+        activeGame.lastDirectionCommandPlayerNetworkId = sessionId;
         activeGame.lastDirectionCommandGameplayTick = activeGame.gameplayTick ?? 0;
       }
       if (wasStarted) tickSimulation(activeGame, fixedDeltaSeconds);
@@ -251,12 +269,12 @@ export function createServerWorld(endpoint: NetEndpoint): SnakeServer {
       projectGameState(world, activeGame, projected, foodRef);
     },
   });
-  return { world, game };
+  return { world, game, pluginContext };
 }
 
 export async function startServer(port: number) {
   const listened = await listenWebSocketEndpoint({ port, maxPeers: 4 });
   if (!listened.ok) throw listened.error;
-  const server = createServerWorld(listened.value);
+  const server = await createServerWorld(listened.value);
   return { ...server, port, close: () => listened.value.close() };
 }

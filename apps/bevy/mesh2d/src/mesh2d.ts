@@ -42,8 +42,9 @@ function planeMesh(vertices: readonly Vertex[], indices: readonly number[]): Mes
     vertices: interleaved,
     attributes: { position, normal, uv, tangent },
     indices: new Uint32Array(indices),
-    submeshes: [{ indexOffset: 0, indexCount: indices.length, vertexCount: vertices.length, topology: 'triangle-list' }],
+    submeshes: [{ indexOffset: 0, indexCount: indices.length, vertexCount: vertices.length, topology: 'triangle-list', materialSlot: 0 }],
     aabb,
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 

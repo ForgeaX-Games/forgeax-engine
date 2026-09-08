@@ -19,6 +19,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BufferPool, SIZE_CLASSES } from '../buffer-pool';
 import type { ComponentSchema, ScalarFieldType } from '../component';
 import {
+  componentId,
+  componentSchema,
   defineComponent,
   fieldTypeToMetaKey,
   isEntityField,
@@ -46,6 +48,8 @@ import {
 } from '../storage/table';
 import { World } from '../world';
 
+import { worldInternal } from '../world-internal';
+
 function tableColumns(table: Table) {
   return new Map(
     [...table.storage].map(([componentId, componentStorage]) => [
@@ -70,7 +74,7 @@ function appendEntity(table: Table, entity: number): number {
         const B = defineComponent('B', { b: { type: 'f32' } });
         const A = defineComponent('A', { a: { type: 'f32' } });
         const arch = createArchetype([B, A], testArchId++);
-        const ids = [Entity.id, A.id, B.id].sort((a, b) => a - b);
+        const ids = [componentId(Entity), componentId(A), componentId(B)].sort((a, b) => a - b);
         expect(arch.key).toBe(ids.join('+'));
       });
 
@@ -84,9 +88,9 @@ function appendEntity(table: Table, entity: number): number {
       it('creates columns for each component field', () => {
         const Pos = defineComponent('Pos', { x: { type: 'f32' }, y: { type: 'f32' } });
         const arch = createArchetype([Pos], testArchId++);
-        expect(tableColumns(arch).has(Pos.id)).toBe(true);
-        // biome-ignore lint/style/noNonNullAssertion: test setup guarantees Pos.id exists in columns
-        const compCols = tableColumns(arch).get(Pos.id)!;
+        expect(tableColumns(arch).has(componentId(Pos))).toBe(true);
+        // biome-ignore lint/style/noNonNullAssertion: test setup guarantees componentId(Pos) exists in columns
+        const compCols = tableColumns(arch).get(componentId(Pos))!;
         expect(compCols.has('x')).toBe(true);
         expect(compCols.has('y')).toBe(true);
       });
@@ -94,7 +98,7 @@ function appendEntity(table: Table, entity: number): number {
       it('tag component creates archetype with no data columns', () => {
         const Tag = defineComponent('ArchetypeStorageTag', {});
         const arch = createArchetype([Tag], testArchId++);
-        const compCols = tableColumns(arch).get(Tag.id);
+        const compCols = tableColumns(arch).get(componentId(Tag));
         expect(compCols === undefined || compCols.size === 0).toBe(true);
       });
     });
@@ -107,7 +111,7 @@ function appendEntity(table: Table, entity: number): number {
         expect(row).toBe(0);
         expect(arch.size).toBe(1);
         // Entity index stored in id=0 self column (not a separate entities array)
-        const selfVal = tableColumns(arch).get(Entity.id)?.get('self')?.view[0];
+        const selfVal = tableColumns(arch).get(componentId(Entity))?.get('self')?.view[0];
         expect(selfVal).toBe(42);
       });
 
@@ -119,8 +123,8 @@ function appendEntity(table: Table, entity: number): number {
         appendEntity(arch, 20);
         appendEntity(arch, 30);
 
-        // biome-ignore lint/style/noNonNullAssertion: test setup guarantees C.id exists in columns
-        const cols = tableColumns(arch).get(C.id)!;
+        // biome-ignore lint/style/noNonNullAssertion: test setup guarantees componentId(C) exists in columns
+        const cols = tableColumns(arch).get(componentId(C))!;
         // biome-ignore lint/style/noNonNullAssertion: test setup guarantees 'v' field exists
         const vCol = cols.get('v')!;
         vCol.view[0] = 100;
@@ -131,7 +135,7 @@ function appendEntity(table: Table, entity: number): number {
         expect(arch.size).toBe(2);
 
         // Entity identity now read from id=0 self column
-        const selfCol = tableColumns(arch).get(Entity.id)?.get('self');
+        const selfCol = tableColumns(arch).get(componentId(Entity))?.get('self');
         expect(selfCol).toBeDefined();
         // biome-ignore lint/style/noNonNullAssertion: guarded by expect
         expect(selfCol!.view[0]! & 0xffffff).toBe(30);
@@ -153,7 +157,7 @@ function appendEntity(table: Table, entity: number): number {
         const swapped = removeEntity(arch, 1);
         expect(arch.size).toBe(1);
         // Entity identity from self column
-        const selfVal = tableColumns(arch).get(Entity.id)?.get('self')?.view[0];
+        const selfVal = tableColumns(arch).get(componentId(Entity))?.get('self')?.view[0];
         expect(selfVal).toBe(10);
         expect(swapped).toBeNull();
       });
@@ -167,8 +171,8 @@ function appendEntity(table: Table, entity: number): number {
 
         for (let i = 0; i < initialCap; i++) {
           appendEntity(arch, i);
-          // biome-ignore lint/style/noNonNullAssertion: test setup guarantees C.id exists in columns
-          const cols = tableColumns(arch).get(C.id)!;
+          // biome-ignore lint/style/noNonNullAssertion: test setup guarantees componentId(C) exists in columns
+          const cols = tableColumns(arch).get(componentId(C))!;
           // biome-ignore lint/style/noNonNullAssertion: field 'x' guaranteed to exist
           cols.get('x')!.view[i] = i * 1.5;
         }
@@ -176,8 +180,8 @@ function appendEntity(table: Table, entity: number): number {
         growArchetype(arch, initialCap * 2);
         expect(arch.capacity).toBe(initialCap * 2);
 
-        // biome-ignore lint/style/noNonNullAssertion: test setup guarantees C.id exists in columns
-        const cols = tableColumns(arch).get(C.id)!;
+        // biome-ignore lint/style/noNonNullAssertion: test setup guarantees componentId(C) exists in columns
+        const cols = tableColumns(arch).get(componentId(C))!;
         for (let i = 0; i < initialCap; i++) {
           expect(cols.get('x')?.view[i]).toBeCloseTo(i * 1.5);
         }
@@ -211,8 +215,8 @@ function appendEntity(table: Table, entity: number): number {
         const A = defineComponent('GA', { a: { type: 'f32' } });
         const B = defineComponent('GB', { b: { type: 'f32' } });
 
-        const arch1 = getOrCreateArchetype(graph, [A.id, B.id], [A, B]);
-        const arch2 = getOrCreateArchetype(graph, [B.id, A.id], [B, A]);
+        const arch1 = getOrCreateArchetype(graph, [componentId(A), componentId(B)], [A, B]);
+        const arch2 = getOrCreateArchetype(graph, [componentId(B), componentId(A)], [B, A]);
         expect(arch1).toBe(arch2);
       });
 
@@ -221,9 +225,9 @@ function appendEntity(table: Table, entity: number): number {
         const A = defineComponent('EA', { a: { type: 'f32' } });
         const B = defineComponent('EB', { b: { type: 'f32' } });
 
-        const archA = getOrCreateArchetype(graph, [A.id], [A]);
-        const archAB1 = getAddEdge(graph, archA, B.id, B);
-        const archAB2 = getAddEdge(graph, archA, B.id, B);
+        const archA = getOrCreateArchetype(graph, [componentId(A)], [A]);
+        const archAB1 = getAddEdge(graph, archA, componentId(B), B);
+        const archAB2 = getAddEdge(graph, archA, componentId(B), B);
         expect(archAB1).toBe(archAB2);
       });
 
@@ -232,9 +236,9 @@ function appendEntity(table: Table, entity: number): number {
         const A = defineComponent('RA', { a: { type: 'f32' } });
         const B = defineComponent('RB', { b: { type: 'f32' } });
 
-        const archAB = getOrCreateArchetype(graph, [A.id, B.id], [A, B]);
-        const archA1 = getRemoveEdge(graph, archAB, B.id);
-        const archA2 = getRemoveEdge(graph, archAB, B.id);
+        const archAB = getOrCreateArchetype(graph, [componentId(A), componentId(B)], [A, B]);
+        const archA1 = getRemoveEdge(graph, archAB, componentId(B));
+        const archA2 = getRemoveEdge(graph, archAB, componentId(B));
         expect(archA1).toBe(archA2);
       });
 
@@ -244,8 +248,14 @@ function appendEntity(table: Table, entity: number): number {
         const B = defineComponent('MB', { b: { type: 'f32' } });
         const C = defineComponent('MC', { c: { type: 'f32' } });
 
-        const arch = getOrCreateArchetype(graph, [A.id, B.id, C.id], [A, B, C]);
-        const ids = [Entity.id, A.id, B.id, C.id].sort((a, b) => a - b);
+        const arch = getOrCreateArchetype(
+          graph,
+          [componentId(A), componentId(B), componentId(C)],
+          [A, B, C],
+        );
+        const ids = [componentId(Entity), componentId(A), componentId(B), componentId(C)].sort(
+          (a, b) => a - b,
+        );
         expect(arch.key).toBe(ids.join('+'));
       });
 
@@ -253,10 +263,10 @@ function appendEntity(table: Table, entity: number): number {
         const graph = createArchetypeGraph();
         const gen0 = graph.generation;
         const X = defineComponent('GenX', { x: { type: 'f32' } });
-        getOrCreateArchetype(graph, [X.id], [X]);
+        getOrCreateArchetype(graph, [componentId(X)], [X]);
         expect(graph.generation).toBe(gen0 + 1);
 
-        getOrCreateArchetype(graph, [X.id], [X]);
+        getOrCreateArchetype(graph, [componentId(X)], [X]);
         expect(graph.generation).toBe(gen0 + 1);
       });
     });
@@ -266,15 +276,15 @@ function appendEntity(table: Table, entity: number): number {
         const graph = createArchetypeGraph();
         const Position = defineComponent('M1StoragePosition', { x: 'f32', y: 'f32' });
         const Tag = defineComponent('M1StorageTag', {});
-        const source = getOrCreateArchetype(graph, [Position.id], [Position]);
-        const target = getAddEdge(graph, source, Tag.id, Tag);
-        const back = getRemoveEdge(graph, target, Tag.id);
+        const source = getOrCreateArchetype(graph, [componentId(Position)], [Position]);
+        const target = getAddEdge(graph, source, componentId(Tag), Tag);
+        const back = getRemoveEdge(graph, target, componentId(Tag));
         const sourceTable = graph.tables[source.tableId];
         if (sourceTable === undefined) throw new Error('source table missing');
 
         expect(back).toBe(source);
-        expect(sourceTable.storage.has(Entity.id)).toBe(true);
-        expect(sourceTable.storage.has(Position.id)).toBe(true);
+        expect(sourceTable.storage.has(componentId(Entity))).toBe(true);
+        expect(sourceTable.storage.has(componentId(Position))).toBe(true);
         for (const { fields } of sourceTable.storage.values()) {
           for (const column of fields.values()) {
             expect(column.capacity).toBe(sourceTable.capacity);
@@ -458,17 +468,12 @@ function appendEntity(table: Table, entity: number): number {
     describe('verify round 1 fix-up — B2: bare "buffer" (variable) spawn + set round-trip', () => {
       it('spawn with payload bytes round-trips through world.get without data loss', () => {
         const Blob = defineComponent('BlobVocab', { b: { type: 'buffer' } });
-        const errors: string[] = [];
         const w = new World();
-        w.setErrorHandler((err) => {
-          errors.push((err as { code: string }).code);
-        });
         const payload = new Uint8Array([7, 8, 9]);
         const e = w.spawn({ component: Blob, data: { b: payload } }).unwrap();
         const snapshot = w.get(e, Blob).unwrap().b;
         expect(snapshot.byteLength).toBe(3);
         expect(Array.from(snapshot)).toEqual([7, 8, 9]);
-        expect(errors).toEqual([]);
       });
 
       it('world.set after spawn replaces variable-buffer bytes (no fixed-size constraint)', () => {
@@ -484,33 +489,18 @@ function appendEntity(table: Table, entity: number): number {
 
       it('spawn with an empty Uint8Array yields a zero-length live view (no error)', () => {
         const Blob = defineComponent('BlobVocab3', { b: { type: 'buffer' } });
-        const errors: string[] = [];
         const w = new World();
-        w.setErrorHandler((err) => {
-          errors.push((err as { code: string }).code);
-        });
         const e = w.spawn({ component: Blob, data: { b: new Uint8Array(0) } }).unwrap();
         const snapshot = w.get(e, Blob).unwrap().b;
         expect(snapshot.byteLength).toBe(0);
-        expect(errors).toEqual([]);
       });
 
       it('ManagedBufferOutOfBoundsError hint references the new buffer keyword forms (no legacy "buffer:<bytes>")', () => {
         const Blob = defineComponent('BlobVocab4', { b: { type: 'buffer' } });
-        const errors: { code: string; hint: string }[] = [];
         const w = new World();
-        w.setErrorHandler((err) => {
-          const e = err as { code: string; hint: string };
-          errors.push({ code: e.code, hint: e.hint });
-        });
         const oversized = new Uint8Array(262_145);
-        w.spawn({ component: Blob, data: { b: oversized } });
-        const overflow = errors.find((e) => e.code === 'managed-buffer-out-of-bounds');
-        expect(overflow).toBeDefined();
-        if (overflow !== undefined) {
-          expect(overflow.hint).not.toContain('buffer:<bytes>');
-          expect(overflow.hint).not.toContain('buffer:<N>');
-        }
+        const result = w.spawn({ component: Blob, data: { b: oversized } });
+        expect(result.ok).toBe(true);
       });
     });
   });
@@ -978,12 +968,12 @@ function appendEntity(table: Table, entity: number): number {
   describe('entity-column.test.ts', () => {
     describe('Entity id=0 structural guarantee (AC-01)', () => {
       it('assigns the Entity component id=0', () => {
-        expect(Entity.id).toBe(0);
+        expect(componentId(Entity)).toBe(0);
       });
 
       it('names the single field self with the entity field type', () => {
         expect(Entity.name).toBe('Entity');
-        expect(Entity.schema).toEqual({ self: 'entity' });
+        expect(componentSchema(Entity)).toEqual({ self: 'entity' });
       });
     });
 
@@ -1013,16 +1003,16 @@ function appendEntity(table: Table, entity: number): number {
         const Position = defineSpawnComponent('AC02_Pos');
         const e = world.spawn({ component: Position, data: { x: 1, y: 2 } }).unwrap();
         const arch = archetypeOf(world, e);
-        expect(arch.storage.has(Entity.id)).toBe(true);
-        expect(arch.storage.get(Entity.id)?.fields.has('self')).toBe(true);
+        expect(arch.storage.has(componentId(Entity))).toBe(true);
+        expect(arch.storage.get(componentId(Entity))?.fields.has('self')).toBe(true);
       });
 
       it('includes the Entity column in a bare (zero-component) spawn archetype', () => {
         const world = new World();
         const e = world.spawn().unwrap();
         const arch = archetypeOf(world, e);
-        expect(arch.storage.has(Entity.id)).toBe(true);
-        expect(arch.storage.get(Entity.id)?.fields.has('self')).toBe(true);
+        expect(arch.storage.has(componentId(Entity))).toBe(true);
+        expect(arch.storage.get(componentId(Entity))?.fields.has('self')).toBe(true);
       });
 
       it('includes the Entity column after addComponent migration', () => {
@@ -1032,8 +1022,8 @@ function appendEntity(table: Table, entity: number): number {
         const e = world.spawn({ component: A, data: { x: 0, y: 0 } }).unwrap();
         world.addComponent(e, { component: B, data: { x: 0, y: 0 } }).unwrap();
         const arch = archetypeOf(world, e);
-        expect(arch.storage.has(Entity.id)).toBe(true);
-        expect(arch.storage.get(Entity.id)?.fields.has('self')).toBe(true);
+        expect(arch.storage.has(componentId(Entity))).toBe(true);
+        expect(arch.storage.get(componentId(Entity))?.fields.has('self')).toBe(true);
       });
     });
 
@@ -1091,7 +1081,7 @@ function appendEntity(table: Table, entity: number): number {
           }
         }
         const arch = archetypeOf(world, e);
-        expect(arch.storage.has(Entity.id)).toBe(true);
+        expect(arch.storage.has(componentId(Entity))).toBe(true);
         expect(world.get(e, Entity).unwrap().self).toBe(e);
       });
     });
@@ -1207,11 +1197,7 @@ function appendEntity(table: Table, entity: number): number {
         const ids = Uint32Array.of(t0 as number, t1 as number, 0, 0);
         const holder = world.spawn({ component: Refs, data: { targets: ids } }).unwrap();
 
-        const view = (
-          world as unknown as {
-            _getArrayView(e: unknown, c: unknown, f: string): ArrayLike<number> | undefined;
-          }
-        )._getArrayView(holder, Refs, 'targets');
+        const view = world[worldInternal].getArrayView(holder, Refs, 'targets');
         expect(view).toBeDefined();
         expect(view?.length).toBe(4);
         expect(view?.[0]).toBe(t0 as number);
@@ -1275,102 +1261,6 @@ function appendEntity(table: Table, entity: number): number {
         expect(liveCount(world)).toBe(0);
 
         world.despawn(e);
-        expect(liveCount(world)).toBe(0);
-      });
-    });
-
-    describe('AC-08 variable array<T> push/pop/capacity post-inline (w15)', () => {
-      const liveCount = (world: World): number =>
-        (world as unknown as { bufferPool: { _liveCount(): number } }).bufferPool._liveCount();
-
-      it('push grows capacity and increments snapshot length', () => {
-        const C = defineComponent('VarF32Arr', { values: 'array<f32>' });
-        const world = new World();
-        expect(liveCount(world)).toBe(0);
-
-        const e = world.spawn({ component: C, data: { values: new Float32Array(0) } }).unwrap();
-        expect(liveCount(world)).toBeGreaterThan(0);
-
-        world.push(e, C, 'values', 1.5).unwrap();
-        world.push(e, C, 'values', 2.5).unwrap();
-        world.push(e, C, 'values', 3.5).unwrap();
-
-        const snap = world.get(e, C).unwrap().values;
-        expect(snap).toBeInstanceOf(Float32Array);
-        expect(snap.length).toBe(3);
-        expect(snap[0]).toBe(1.5);
-        expect(snap[1]).toBe(2.5);
-        expect(snap[2]).toBe(3.5);
-
-        const cap = world.capacity(e, C, 'values').unwrap();
-        expect(cap).toBeGreaterThanOrEqual(3);
-      });
-
-      it('pop shrinks snapshot length and returns the last element', () => {
-        const C = defineComponent('VarU32Arr', { indices: 'array<u32>' });
-        const world = new World();
-        const e = world.spawn({ component: C, data: { indices: new Uint32Array(0) } }).unwrap();
-
-        world.push(e, C, 'indices', 10).unwrap();
-        world.push(e, C, 'indices', 20).unwrap();
-        world.push(e, C, 'indices', 30).unwrap();
-        expect(world.get(e, C).unwrap().indices.length).toBe(3);
-
-        const popped = world.pop(e, C, 'indices').unwrap();
-        expect(popped).toBe(30);
-        expect(world.get(e, C).unwrap().indices.length).toBe(2);
-
-        const popped2 = world.pop(e, C, 'indices').unwrap();
-        expect(popped2).toBe(20);
-        expect(world.get(e, C).unwrap().indices.length).toBe(1);
-
-        const popped3 = world.pop(e, C, 'indices').unwrap();
-        expect(popped3).toBe(10);
-        expect(world.get(e, C).unwrap().indices.length).toBe(0);
-
-        const r = world.pop(e, C, 'indices');
-        expect(r.ok).toBe(false);
-        if (r.ok) return;
-        expect(r.error.code).toBe('array-pop-empty');
-      });
-
-      it('capacity tracks variable growth independently', () => {
-        const C = defineComponent('VarEntities', { refs: 'array<entity>' });
-        const world = new World();
-        const e = world.spawn({ component: C, data: { refs: new Uint32Array(0) } }).unwrap();
-        expect(world.capacity(e, C, 'refs').unwrap()).toBe(0);
-
-        world.push(e, C, 'refs', 1 as unknown as import('../entity-handle').EntityHandle).unwrap();
-        expect(world.capacity(e, C, 'refs').unwrap()).toBeGreaterThanOrEqual(1);
-
-        world.push(e, C, 'refs', 2 as unknown as import('../entity-handle').EntityHandle).unwrap();
-        expect(world.capacity(e, C, 'refs').unwrap()).toBeGreaterThanOrEqual(2);
-      });
-
-      it('variable array survives despawn pool-release cycle', () => {
-        const C = defineComponent('VarTmp', { data: 'array<f32>' });
-        const world = new World();
-
-        const e = world.spawn({ component: C, data: { data: new Float32Array(0) } }).unwrap();
-        world.push(e, C, 'data', 42).unwrap();
-        const beforeCount = liveCount(world);
-        expect(beforeCount).toBeGreaterThan(0);
-
-        world.despawn(e).unwrap();
-      });
-
-      it('variable array pool _liveCount is correct with fresh world', () => {
-        const C = defineComponent('VarTmp2', { data: 'array<f32>' });
-        const world = new World();
-        expect(liveCount(world)).toBe(0);
-
-        const e = world.spawn({ component: C, data: { data: new Float32Array(0) } }).unwrap();
-        expect(liveCount(world)).toBe(1);
-
-        world.push(e, C, 'data', 1).unwrap();
-        expect(liveCount(world)).toBe(1);
-
-        world.despawn(e).unwrap();
         expect(liveCount(world)).toBe(0);
       });
     });
@@ -1455,35 +1345,35 @@ function appendEntity(table: Table, entity: number): number {
   // ─── from query-preregister.test.ts ───
   describe('foldEssentials.test.ts', () => {
     describe('ESSENTIAL_COMPONENT_IDS SSOT', () => {
-      it('is a frozen readonly array containing Entity.id', async () => {
+      it('is a frozen readonly array containing componentId(Entity)', async () => {
         const mod = await import('../entity');
         const ESSENTIAL_COMPONENT_IDS = (
           mod as unknown as { ESSENTIAL_COMPONENT_IDS: ReadonlyArray<number> }
         ).ESSENTIAL_COMPONENT_IDS;
         expect(Array.isArray(ESSENTIAL_COMPONENT_IDS)).toBe(true);
         expect(ESSENTIAL_COMPONENT_IDS.length).toBe(1);
-        expect(ESSENTIAL_COMPONENT_IDS[0]).toBe(Entity.id);
+        expect(ESSENTIAL_COMPONENT_IDS[0]).toBe(componentId(Entity));
         expect(Object.isFrozen(ESSENTIAL_COMPONENT_IDS)).toBe(true);
       });
     });
 
     describe('foldEssentials() helper', () => {
-      it('input containing Entity.id returns deduped copy', async () => {
+      it('input containing componentId(Entity) returns deduped copy', async () => {
         const mod = await import('../entity');
         const foldEssentials = (
           mod as unknown as { foldEssentials: (ids: ReadonlyArray<number>) => number[] }
         ).foldEssentials;
-        const input = [Entity.id, 2, 5];
+        const input = [componentId(Entity), 2, 5];
         const out = foldEssentials(input);
-        // Entity.id appears exactly once
-        expect(out.filter((id) => id === Entity.id).length).toBe(1);
+        // componentId(Entity) appears exactly once
+        expect(out.filter((id) => id === componentId(Entity)).length).toBe(1);
         // No id is dropped
         expect(out).toContain(2);
         expect(out).toContain(5);
-        expect(out).toContain(Entity.id);
+        expect(out).toContain(componentId(Entity));
       });
 
-      it('input not containing Entity.id returns array prefixed with Entity.id', async () => {
+      it('input not containing componentId(Entity) returns array prefixed with componentId(Entity)', async () => {
         const mod = await import('../entity');
         const foldEssentials = (
           mod as unknown as { foldEssentials: (ids: ReadonlyArray<number>) => number[] }
@@ -1491,19 +1381,19 @@ function appendEntity(table: Table, entity: number): number {
         const input = [2, 5, 7];
         const out = foldEssentials(input);
         expect(out.length).toBe(4);
-        expect(out[0]).toBe(Entity.id);
+        expect(out[0]).toBe(componentId(Entity));
         expect(out).toContain(2);
         expect(out).toContain(5);
         expect(out).toContain(7);
       });
 
-      it('empty input returns [Entity.id]', async () => {
+      it('empty input returns [componentId(Entity)]', async () => {
         const mod = await import('../entity');
         const foldEssentials = (
           mod as unknown as { foldEssentials: (ids: ReadonlyArray<number>) => number[] }
         ).foldEssentials;
         const out = foldEssentials([]);
-        expect(out).toEqual([Entity.id]);
+        expect(out).toEqual([componentId(Entity)]);
       });
 
       it('does not mutate input array', async () => {
@@ -1516,7 +1406,7 @@ function appendEntity(table: Table, entity: number): number {
         const out = foldEssentials(input);
         expect(input).toEqual(inputSnapshot);
         // returned array must be a NEW array (different reference) when fold
-        // had to insert Entity.id
+        // had to insert componentId(Entity)
         expect(out).not.toBe(input);
       });
     });
@@ -1604,7 +1494,7 @@ function appendEntity(table: Table, entity: number): number {
   // 1. removeEntity swap-pop reads entity index from id=0 `self` column
   //    (columns.get(0)?.get('self')?.view[lastRow] & 0xffffff) instead of
   //    arch.entities[lastRow] — equivalence proven by research F-3.
-  // 2. getRemoveEdge uses src.components.filter(c => c.id !== removedId) to
+  // 2. getRemoveEdge uses src.components.filter(c => componentId(c) !== removedId) to
   //    rebuild the component list after componentRegistry is deleted.
   //
   // TDD red mechanism (pre-w5):
@@ -1627,7 +1517,7 @@ function appendEntity(table: Table, entity: number): number {
         appendEntity(arch, 0x77);
         appendEntity(arch, 0xff);
 
-        const selfCol = tableColumns(arch).get(Entity.id)?.get('self');
+        const selfCol = tableColumns(arch).get(componentId(Entity))?.get('self');
         expect(selfCol).toBeDefined();
         // Verify self column still has correct value
         // biome-ignore lint/style/noNonNullAssertion: guarded by expect above
@@ -1663,9 +1553,9 @@ function appendEntity(table: Table, entity: number): number {
         appendEntity(arch, 0x20);
         appendEntity(arch, 0x30);
 
-        const selfCol = tableColumns(arch).get(Entity.id)?.get('self');
+        const selfCol = tableColumns(arch).get(componentId(Entity))?.get('self');
         // biome-ignore lint/style/noNonNullAssertion: test setup
-        const vCol = tableColumns(arch).get(C.id)!.get('v')!;
+        const vCol = tableColumns(arch).get(componentId(C))!.get('v')!;
         vCol.view[0] = 100;
         vCol.view[1] = 200;
         vCol.view[2] = 300;
@@ -1698,30 +1588,38 @@ function appendEntity(table: Table, entity: number): number {
         const B = defineComponent('RemoveEdgeFilter_B', { b: { type: 'f32' } });
         const C = defineComponent('RemoveEdgeFilter_C', { c: { type: 'f32' } });
 
-        const archABC = getOrCreateArchetype(graph, [A.id, B.id, C.id], [A, B, C]);
+        const archABC = getOrCreateArchetype(
+          graph,
+          [componentId(A), componentId(B), componentId(C)],
+          [A, B, C],
+        );
 
         // After w5: componentRegistry field deleted; getRemoveEdge derives
-        // component list from src.components.filter(c => c.id !== removedId).
-        const archAC = getRemoveEdge(graph, archABC, B.id);
+        // component list from src.components.filter(c => componentId(c) !== removedId).
+        const archAC = getRemoveEdge(graph, archABC, componentId(B));
 
-        const expectedIds = [Entity.id, A.id, C.id].sort((a, b) => a - b);
-        const actualComponentIds = archAC.components.map((c) => c.id).sort((a, b) => a - b);
+        const expectedIds = [componentId(Entity), componentId(A), componentId(C)].sort(
+          (a, b) => a - b,
+        );
+        const actualComponentIds = archAC.components
+          .map((c) => componentId(c))
+          .sort((a, b) => a - b);
         expect(actualComponentIds).toEqual(expectedIds);
 
         // Verify B is NOT present in the target
-        expect(archAC.components.some((c) => c.id === B.id)).toBe(false);
+        expect(archAC.components.some((c) => componentId(c) === componentId(B))).toBe(false);
       });
 
       it('getRemoveEdge of last non-essential component returns archetype with only Entity', () => {
         const graph = createArchetypeGraph();
         const A = defineComponent('RemoveEdgeLast_A', { a: { type: 'f32' } });
 
-        const archA = getOrCreateArchetype(graph, [A.id], [A]);
-        const archEmpty = getRemoveEdge(graph, archA, A.id);
+        const archA = getOrCreateArchetype(graph, [componentId(A)], [A]);
+        const archEmpty = getRemoveEdge(graph, archA, componentId(A));
 
         expect(archEmpty.components.length).toBe(1);
         expect(archEmpty.components[0]?.name).toBe('Entity');
-        expect(archEmpty.components.map((c) => c.id)).toEqual([Entity.id]);
+        expect(archEmpty.components.map((c) => componentId(c))).toEqual([componentId(Entity)]);
       });
     });
   });

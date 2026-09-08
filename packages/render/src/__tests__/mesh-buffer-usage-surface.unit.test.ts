@@ -4,6 +4,7 @@ import {
   GPU_BUFFER_USAGE_COPY_DST,
   GPU_BUFFER_USAGE_COPY_SRC,
   GPU_BUFFER_USAGE_INDEX,
+  GPU_BUFFER_USAGE_INDIRECT,
   GPU_BUFFER_USAGE_MAP_READ,
   GPU_BUFFER_USAGE_STORAGE,
   GPU_BUFFER_USAGE_UNIFORM,
@@ -13,12 +14,12 @@ import {
 const ownerSource = readFileSync(new URL('../gpu-usage.ts', import.meta.url), 'utf8');
 const meshSsboSource = readFileSync(new URL('../record/mesh-ssbo.ts', import.meta.url), 'utf8');
 const rendererFactorySource = readFileSync(
-  new URL('../renderer/renderer-factory.ts', import.meta.url),
+  new URL('../assembly/factory.ts', import.meta.url),
   'utf8',
 );
 const consumerSources = [
   readFileSync(new URL('../render-data.ts', import.meta.url), 'utf8'),
-  readFileSync(new URL('../gpu-resource-store.ts', import.meta.url), 'utf8'),
+  readFileSync(new URL('../device/gpu-residency.ts', import.meta.url), 'utf8'),
   rendererFactorySource,
 ];
 const featureBufferSources = [
@@ -31,7 +32,7 @@ const featureBufferSources = [
     names: ['GPU_BUFFER_USAGE_UNIFORM', 'GPU_BUFFER_USAGE_COPY_DST'],
   },
   {
-    source: readFileSync(new URL('../ibl/face-uniforms.ts', import.meta.url), 'utf8'),
+    source: readFileSync(new URL('../device/gpu-residency.ts', import.meta.url), 'utf8'),
     names: ['GPU_BUFFER_USAGE_UNIFORM', 'GPU_BUFFER_USAGE_COPY_DST'],
   },
   {
@@ -66,10 +67,11 @@ describe('render buffer usage owner', () => {
     expect(GPU_BUFFER_USAGE_INDEX).toBe(0x10);
     expect(GPU_BUFFER_USAGE_COPY_DST).toBe(0x08);
     expect(GPU_BUFFER_USAGE_COPY_SRC).toBe(0x04);
+    expect(GPU_BUFFER_USAGE_INDIRECT).toBe(0x100);
     expect(GPU_BUFFER_USAGE_UNIFORM).toBe(0x40);
     expect(GPU_BUFFER_USAGE_STORAGE).toBe(0x80);
     expect(GPU_BUFFER_USAGE_MAP_READ).toBe(0x01);
-    expect(ownerSource.match(/export const GPU_BUFFER_USAGE_/g)).toHaveLength(7);
+    expect(ownerSource.match(/export const GPU_BUFFER_USAGE_/g)).toHaveLength(8);
   });
 
   it('routes mesh descriptor, update, and bootstrap consumers through the owner', () => {
@@ -91,10 +93,8 @@ describe('render buffer usage owner', () => {
     }
   });
 
-  it('routes shadow-depth readback staging through the owner', () => {
-    expect(rendererFactorySource).toContain(
-      'GPU_BUFFER_USAGE_COPY_DST | GPU_BUFFER_USAGE_MAP_READ',
-    );
+  it('keeps shadow-depth readback out of the renderer factory', () => {
+    expect(rendererFactorySource).not.toContain('GPU_BUFFER_USAGE_MAP_READ');
     expect(rendererFactorySource).not.toMatch(/const (COPY_DST|MAP_READ)\s*=\s*0x/);
   });
 

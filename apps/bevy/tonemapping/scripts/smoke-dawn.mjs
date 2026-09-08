@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // bevy-tonemapping headless dawn smoke (pixel falsifier + structural gate).
 // Strategy: render one shared HDR sphere field through all seven Camera tone-map
 // modes; the modes must produce materially different readbacks.
@@ -95,24 +96,19 @@ const manifestUrl = `data:application/json,${encodeURIComponent(readFileSync(man
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: manifestUrl });
+  renderer = await createSmokeRenderer(createRenderer, mockCanvas, {}, { shaderManifestUrl: manifestUrl });
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 
-console.log(`[tonemapping] backend=${renderer.backend}`);
+console.log(`[tonemapping] backend=${rendererBackend(renderer)}`);
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
+subscribeSmokeErrors(renderer, (err) => errors.push({ code: err.code, hint: err.hint }));
 
 const scene = buildTonemappingWorld(world, WIDTH / HEIGHT);
 console.log(`[tonemapping] scene spheres=${scene.sphereCount} modes=${TONEMAP_NAMES.join(',')}`);
@@ -161,7 +157,7 @@ for (let i = 0; i < TONEMAP_MODES.length; i += 1) {
   world.set(scene.camera, Camera, { tonemap });
   for (let frame = 0; frame < modeFrames; frame += 1) {
     world.update().unwrap();
-    const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const result = drawSmokeFrame(renderer, world);
     if (!result.ok) drawErrors += 1;
     framesObserved += 1;
   }
@@ -170,7 +166,7 @@ for (let i = 0; i < TONEMAP_MODES.length; i += 1) {
 const remainingFrames = targetFrames - framesObserved;
 for (let frame = 0; frame < remainingFrames; frame += 1) {
   world.update().unwrap();
-  const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const result = drawSmokeFrame(renderer, world);
   if (!result.ok) drawErrors += 1;
   framesObserved += 1;
 }
@@ -184,13 +180,13 @@ writeFileSync(agxPng, writeReferencePng(modePixels[5], WIDTH, HEIGHT));
 
 const modeDiffs = modePixels.map((pixels, index) => diff(modePixels[0], pixels));
 const distinctModes = modeDiffs.filter((value) => value.mean > 0.25 && value.changedPixels > 20).length;
-const passNames = renderer.perFramePassNames;
+const passNames = renderer.inspect().perFramePassNames;
 const device = sharedDevice;
 if (device) await device.queue.onSubmittedWorkDone();
 console.log(`[smoke] frames observed=${framesObserved} distinctModes=${distinctModes} diffs=${modeDiffs.map((value, i) => `${TONEMAP_NAMES[i]}:${value.mean.toFixed(4)}/${value.changedPixels}`).join(',')} passes=${passNames.join(',')} none=${nonePng} agx=${agxPng}`);
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (rendererBackend(renderer) !== 'webgpu') failures.push(`(a) backend=${rendererBackend(renderer)} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (errors.length > 0) failures.push(`(c) Renderer.onError fired ${errors.length} times: [${errors.map((err) => err.code).join(', ')}]`);
 if (drawErrors > 0) failures.push(`(c) draw returned ${drawErrors} errors`);

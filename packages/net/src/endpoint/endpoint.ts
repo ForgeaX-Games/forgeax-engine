@@ -48,3 +48,11 @@ export interface NetEndpoint {
   /** Close the endpoint. No further send/poll should succeed after close. */
   close(): Result<void, EndpointError>;
 }
+
+/**
+ * Realm-neutral capability for creating a replacement endpoint.
+ * Session policy, retry bounds, and replication semantics remain in net.
+ */
+export interface NetEndpointConnector {
+  connect(signal: AbortSignal): Promise<Result<NetEndpoint, EndpointError>>;
+}

@@ -8,9 +8,9 @@ import {
   Visibility,
   VisibilityStateValue,
 } from '@forgeax/engine-render';
-import { extractFrames } from '@forgeax/engine-render/internal';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
+import { extractFrames } from '../../../render/src/render-system-extract';
 import { pick } from '../pick';
 
 const VIEWPORT = 600;

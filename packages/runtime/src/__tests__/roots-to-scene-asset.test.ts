@@ -1,3 +1,5 @@
+import * as SceneOwner from '@forgeax/engine-scene';
+
 // M2 test -- rootsToSceneAsset forest entry + schema-derived field conversion
 // (plan-strategy D-1/D-2/D-4/D-7/D-8).
 //
@@ -8,6 +10,7 @@
 //   m2-t4: root ChildOf strip + cross-root closure refs (AC-09/10)
 //   m2-t5: out-of-bounds fail-fast + GUID unresolved fail-fast + exhaustive switch (AC-11/12/17)
 
+import { AnimationPlayer } from '@forgeax/engine-animation';
 import type { Asset } from '@forgeax/engine-assets-runtime';
 import {
   AssetRegistry,
@@ -17,14 +20,28 @@ import {
 } from '@forgeax/engine-assets-runtime';
 import { defineComponent, type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { SceneInstance } from '@forgeax/engine-render';
+import { ChildOf } from '@forgeax/engine-scene';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '../collect-scene-asset';
-import '@forgeax/engine-render/internal';
-import { AnimationPlayer } from '@forgeax/engine-animation';
-import { SceneInstance } from '@forgeax/engine-render/internal';
-import { ChildOf, Children } from '@forgeax/engine-scene';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+import { registerSceneComponents } from './helpers/register-scene-components';
+
+function linkChildren(
+  world: World,
+  parent: EntityHandle,
+  children: readonly (EntityHandle | number)[],
+): void {
+  registerSceneComponents(world);
+  for (const child of children) {
+    const result = world.addComponent(child as EntityHandle, {
+      component: ChildOf,
+      data: { parent },
+    });
+    if (!result.ok) throw new Error(result.error.code);
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Helpers
@@ -44,6 +61,7 @@ const Tag = defineComponent('Tag', { value: 'f32' });
 /** Spawn an entity with a component; return raw id. */
 // biome-ignore lint/suspicious/noExplicitAny: test helper bridging typed component tokens to World.spawn
 function s(w: World, comp: any, data: any): number {
+  registerSceneComponents(w, [comp]);
   // biome-ignore lint/suspicious/noExplicitAny: test helper adapter for World.spawn overload
   const r = w.spawn({ component: comp, data } as any);
   if (!r.ok) throw new Error('spawn failed');
@@ -76,19 +94,10 @@ describe('m2-t1: forest multi-root BFS closure + localId renumbering', () => {
     const e5 = stag(world, 5);
 
     // Tree A: e0 -> e1 -> e2
-    world.addComponent(e0 as EntityHandle, {
-      component: Children,
-      data: { entities: [e1 as EntityHandle] },
-    });
-    world.addComponent(e1 as EntityHandle, {
-      component: Children,
-      data: { entities: [e2 as EntityHandle] },
-    });
+    linkChildren(world, e0 as EntityHandle, [e1 as EntityHandle]);
+    linkChildren(world, e1 as EntityHandle, [e2 as EntityHandle]);
     // Tree C: e4 -> e5
-    world.addComponent(e4 as EntityHandle, {
-      component: Children,
-      data: { entities: [e5 as EntityHandle] },
-    });
+    linkChildren(world, e4 as EntityHandle, [e5 as EntityHandle]);
 
     const result = rootsToSceneAsset(reg, world, [
       e0 as EntityHandle,
@@ -107,18 +116,9 @@ describe('m2-t1: forest multi-root BFS closure + localId renumbering', () => {
     const e1 = stag(world, 1);
     const e2 = stag(world, 2);
     const e3 = stag(world, 3);
-    world.addComponent(e0 as EntityHandle, {
-      component: Children,
-      data: { entities: [e1 as EntityHandle] },
-    });
-    world.addComponent(e1 as EntityHandle, {
-      component: Children,
-      data: { entities: [e2 as EntityHandle] },
-    });
-    world.addComponent(e2 as EntityHandle, {
-      component: Children,
-      data: { entities: [e3 as EntityHandle] },
-    });
+    linkChildren(world, e0 as EntityHandle, [e1 as EntityHandle]);
+    linkChildren(world, e1 as EntityHandle, [e2 as EntityHandle]);
+    linkChildren(world, e2 as EntityHandle, [e3 as EntityHandle]);
 
     const result = rootsToSceneAsset(reg, world, [e0 as EntityHandle, e1 as EntityHandle]);
     expect(result.ok).toBe(true);
@@ -134,18 +134,9 @@ describe('m2-t1: forest multi-root BFS closure + localId renumbering', () => {
     const e2 = stag(world, 2);
     const e3 = stag(world, 3);
     const e4 = stag(world, 4);
-    world.addComponent(e0 as EntityHandle, {
-      component: Children,
-      data: { entities: [e1 as EntityHandle, e2 as EntityHandle] },
-    });
-    world.addComponent(e1 as EntityHandle, {
-      component: Children,
-      data: { entities: [e3 as EntityHandle] },
-    });
-    world.addComponent(e2 as EntityHandle, {
-      component: Children,
-      data: { entities: [e4 as EntityHandle] },
-    });
+    linkChildren(world, e0 as EntityHandle, [e1 as EntityHandle, e2 as EntityHandle]);
+    linkChildren(world, e1 as EntityHandle, [e3 as EntityHandle]);
+    linkChildren(world, e2 as EntityHandle, [e4 as EntityHandle]);
 
     const result = rootsToSceneAsset(reg, world, [e0 as EntityHandle]);
     expect(result.ok).toBe(true);
@@ -178,10 +169,7 @@ describe('m2-t2: entity / array<entity> -> localId', () => {
 
     const r0 = stag(world, 0);
     const r1 = s(world, Test_EntityRef, { target: r0 });
-    world.addComponent(r0 as EntityHandle, {
-      component: Children,
-      data: { entities: [r1 as EntityHandle] },
-    });
+    linkChildren(world, r0 as EntityHandle, [r1 as EntityHandle]);
 
     const result = rootsToSceneAsset(reg, world, [r0 as EntityHandle]);
     expect(result.ok).toBe(true);
@@ -205,10 +193,8 @@ describe('m2-t2: entity / array<entity> -> localId', () => {
     const r0 = stag(world, 0);
     const r1 = stag(world, 1);
     const r2 = stag(world, 2);
-    world.addComponent(r0 as EntityHandle, {
-      component: Children,
-      data: { entities: [r1 as EntityHandle, r2 as EntityHandle] },
-    });
+    linkChildren(world, r0 as EntityHandle, [r1 as EntityHandle, r2 as EntityHandle]);
+    registerSceneComponents(world, [Test_EntityArray]);
     world.addComponent(r0 as EntityHandle, {
       component: Test_EntityArray,
       // biome-ignore lint/suspicious/noExplicitAny: entity handle arrays typed as EntityHandle[]; data schema matches component definition
@@ -489,10 +475,7 @@ describe('m2-t4: root ChildOf strip + cross-root closure refs', () => {
     const bRoot = stag(world, 1);
     const aChild = s(world, Test_EntityRef, { target: bRoot });
 
-    world.addComponent(aRoot as EntityHandle, {
-      component: Children,
-      data: { entities: [aChild as EntityHandle] },
-    });
+    linkChildren(world, aRoot as EntityHandle, [aChild as EntityHandle]);
 
     const result = rootsToSceneAsset(reg, world, [aRoot as EntityHandle, bRoot as EntityHandle]);
     expect(result.ok).toBe(true);
@@ -636,7 +619,7 @@ function findMember(w: World, root: EntityHandle): EntityHandle {
   for (const c of w.iterDescendants(root)) {
     if (c === root) continue;
     if (!w.get(c, SceneInstance).ok) continue;
-    const st = w.getSceneInstanceState(c);
+    const st = SceneOwner.worldGetSceneInstanceState(w, c);
     if (!st.ok) continue;
     for (const [member] of st.value.entityToLocalId) return member;
   }
@@ -647,6 +630,7 @@ describe('w19 — end-to-end round-trip value equivalence (AC-07)', () => {
   it('mount + addComponent(AnimationPlayer) survives save/reopen with value-equal clip', () => {
     const reg = makeRegistry();
     const w = new World();
+    registerSceneComponents(w, [AnimationPlayer]);
 
     // Catalogue the clip asset that the AnimationPlayer will reference.
     const clipAsset = { kind: 'animation-clip', duration: 1.5 } as unknown as Asset;
@@ -686,7 +670,7 @@ describe('w19 — end-to-end round-trip value equivalence (AC-07)', () => {
     const collect = rootsToSceneAsset(reg, w, [root]);
     expect(collect.ok).toBe(true);
     if (!collect.ok) return;
-    const ser = serializeSceneAssetToPack(collect.value, W19_SAVED);
+    const ser = serializeSceneAssetToPack(collect.value, w.components.entries(), W19_SAVED);
     expect(ser.ok).toBe(true);
     if (!ser.ok) return;
 

@@ -18,7 +18,7 @@
 // (charter proposition 1 progressive disclosure):
 //   (1) import 5-component schemas + HANDLE_CUBE.
 //   (2) world.spawn(...) cube + Camera + DirectionalLight.
-//   (3) await renderer.ready (D-S3 manifest -> pipeline -> assets serial).
+//   (3) await host initialization (D-S3 manifest -> pipeline -> assets serial).
 //   (4) raf -> renderer.draw(world) (D-S2 RenderSystem internal phase).
 //
 // M4 RHI canvas-context migration (feat-20260510-rhi-resource-creation /
@@ -37,6 +37,7 @@
 
 import type { CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
+import { ok } from '@forgeax/engine-rhi';
 import { Name } from '@forgeax/engine-scene';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -54,6 +55,38 @@ import { populateDemoWorld } from '../../../shared/src/populate-demo-world';
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('hello-cube: missing <canvas id="app"> in index.html');
 
+const deviceLossProbe = new URLSearchParams(location.search).has('m7-device-loss');
+let adapterRequestCount = 0;
+let deviceRequestCount = 0;
+let deviceRefusalCount = 0;
+let deviceRefusalRemaining = 0;
+const browserRhi = deviceLossProbe ? await import('@forgeax/engine-rhi-webgpu') : undefined;
+if (browserRhi !== undefined) {
+  const requestAdapter = browserRhi.rhi.requestAdapter;
+  browserRhi.rhi.requestAdapter = async (
+    ...args: Parameters<typeof browserRhi.rhi.requestAdapter>
+  ): ReturnType<typeof browserRhi.rhi.requestAdapter> => {
+    adapterRequestCount += 1;
+    const adapterResult = await requestAdapter(...args);
+    if (!adapterResult.ok) return adapterResult;
+    const adapter = adapterResult.value;
+    return ok({
+      ...adapter,
+      requestDevice: async (
+        ...deviceArgs: Parameters<typeof adapter.requestDevice>
+      ): ReturnType<typeof adapter.requestDevice> => {
+        deviceRequestCount += 1;
+        if (deviceRefusalRemaining > 0) {
+          deviceRefusalRemaining -= 1;
+          deviceRefusalCount += 1;
+          throw new Error('M7 controlled transient requestDevice refusal');
+        }
+        return adapter.requestDevice(...deviceArgs);
+      },
+    });
+  };
+}
+
 const app = await createApp(canvas, {}, forgeaxBundlerAdapter());
 if (!app.ok) {
   reportError(app.error);
@@ -64,11 +97,38 @@ if (!app.ok) {
   // M7 browser/driver device-loss probe. Keep this opt-in so the normal Hello
   // Cube surface remains unchanged; the probe still calls only public Renderer
   // health/recover methods and observes the same World instance.
-  const deviceLossProbe = new URLSearchParams(location.search).has('m7-device-loss');
+  const renderer = app.value.renderer;
+  const identityIds = new WeakMap<object, number>();
+  let nextIdentityId = 1;
+  const identityOf = (value: object): number => {
+    const existing = identityIds.get(value);
+    if (existing !== undefined) return existing;
+    const identity = nextIdentityId++;
+    identityIds.set(value, identity);
+    return identity;
+  };
+  const cpuScene = () => {
+    const inspection = world.inspect();
+    const query = world.query({});
+    if (!query.ok) throw new Error(`M7 CPU scene query failed: ${query.error.code}`);
+    return {
+      entityCount: inspection.entityCount,
+      entityHandles: Array.from(query.value, (row) => row.entity as number),
+      activeComponents: [...inspection.activeComponents],
+    };
+  };
   const healthTransitions: unknown[] = [];
   if (deviceLossProbe) {
-    app.value.renderer.onHealthChange((snapshot) => healthTransitions.push(snapshot));
+    renderer.subscribe((event) => {
+      if (event.kind === 'state-changed' && event.current === 'device-lost') {
+        healthTransitions.push({ state: event.current, previous: event.previous });
+      }
+    });
   }
+
+  const attached = renderer.attach(world);
+  if (!attached.ok) throw new Error(`hello-cube: attach failed: ${attached.error.code}`);
+  const lease = attached.value;
 
   // feat-20260515-ecs-name-component-and-string-schema M3 / w3-hello-cube-app
   // (AC-14): canonical Name + 'string' schema vocab end-to-end exemplar. AI
@@ -87,27 +147,65 @@ if (!app.ok) {
   if (deviceLossProbe) {
     Object.assign(globalThis, {
       __forgeaxM7DeviceRecovery: {
-        health: () => app.value.renderer.health(),
-        recover: () => app.value.renderer.recover(),
-        entityCount: () => world.inspect().entityCount,
-        healthTransitions: () => healthTransitions.slice(),
-        debug: () => {
-          const debugRhi = (app.value as typeof app.value & { _debugRhi?: {
-            getState(): string;
-            getEvents(): readonly unknown[];
-            _getDescriptorTable(): ReadonlyMap<unknown, unknown>;
-            _getCapturedDevice(): unknown;
-          } })._debugRhi;
-          return debugRhi === undefined
-            ? undefined
+        health: () => renderer.inspect().state,
+        recover: async () => {
+          const result = await renderer.recover();
+          return result.ok
+            ? result
             : {
-                state: debugRhi.getState(),
-                events: debugRhi.getEvents().length,
-                descriptors: debugRhi._getDescriptorTable().size,
-                capturedDevice: debugRhi._getCapturedDevice() !== undefined,
+                ok: false,
+                error: {
+                  name: result.error.name,
+                  code: result.error.code,
+                  expected: result.error.expected,
+                  hint: result.error.hint,
+                },
               };
         },
-        drawOnce: () => app.value.renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }),
+        state: () => ({
+          health: renderer.inspect().state,
+          worldIdentity: identityOf(world),
+          rendererIdentity: identityOf(renderer),
+          deviceIdentity: renderer.inspect().frame.deviceGeneration,
+          cpu: cpuScene(),
+          adapterRequestCount,
+          deviceRequestCount,
+          deviceRefusalCount,
+          deviceRefusalRemaining,
+        }),
+        armDeviceRefusal: () => {
+          deviceRefusalRemaining = 1;
+        },
+        clearDeviceRefusal: () => {
+          deviceRefusalRemaining = 0;
+        },
+        disposeTwice: () => {
+          app.value.stop();
+          renderer.dispose();
+          renderer.dispose();
+          return { ok: true };
+        },
+        entityCount: () => world.inspect().entityCount,
+        healthTransitions: () => healthTransitions.slice(),
+        debug: () => ({ rhiCaptureAvailable: app.value.rhiCapture !== undefined }),
+        drawOnce: () => {
+          const result = renderer.draw({
+            leases: [lease],
+            camera: { lease },
+            environment: { lease },
+          });
+          return result.ok
+            ? result
+            : {
+                ok: false,
+                error: {
+                  name: result.error.name,
+                  code: result.error.code,
+                  expected: result.error.expected,
+                  hint: result.error.hint,
+                },
+              };
+        },
       },
     });
   }

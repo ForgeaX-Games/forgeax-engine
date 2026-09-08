@@ -39,6 +39,7 @@
         "stdoutIncludes": [
           "[smoke] GATE 2 PASS: playerCount === 1, player survived cross-state",
           "[smoke] GATE 4/5 PASS: falsification check",
+          "[smoke] M29 PASS: partial commit, later-token deferral, same-world forced retry, exact-once callback, cleanup",
           "[smoke] PASS - all gates GREEN: 10 switches perf OK"
         ]
       }

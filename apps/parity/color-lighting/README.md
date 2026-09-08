@@ -89,6 +89,63 @@ The engine-side recovery entry points are [`forgeax-engine-material`](../../../s
 [`forgeax-engine-render-pipeline`](../../../skills/forgeax-engine-render-pipeline/SKILL.md),
 and [`forgeax-engine-rhi`](../../../skills/forgeax-engine-rhi/SKILL.md).
 
+## M5 vertex-color parity lane
+
+M5 adds seven named cases. The semantic JSON under
+[`cases/vertex-color/`](./cases/vertex-color/) is the only shared input; the
+ForgeaX and Three.js r184 adapters build their own scene, shader, capture, and
+readback. The report records `sourceSha`, fixture hash, producer/build/backend,
+color domain, samples, expected/observed RGBA, verdict, confidence, and
+artifact references. The schema and TypeScript owner remain the authority:
+[`case-report.schema.json`](./schemas/case-report.schema.json),
+[`visual-evidence.schema.json`](./schemas/visual-evidence.schema.json), and
+[`required-cases.ts`](./src/coverage/required-cases.ts).
+
+| Case | Semantic input | Declared evidence domain | Falsifier |
+| :-- | :-- | :-- | :-- |
+| `vertex-color-vec3` | glTF VEC3 FLOAT, implicit alpha `1` | `displayEncoded` | white color changes a colored sample |
+| `vertex-color-vec4` | RGBA / VEC4 FLOAT, non-`1` alpha | `linearHdr` | white color changes RGB |
+| `vertex-color-normalized` | normalized UBYTE/USHORT endpoints and midpoint | `linearHdr` | raw integer values are not treated as normalized |
+| `vertex-color-skinning` | colored mesh plus deterministic joint motion | `displayEncoded` | color survives all 300 frames |
+| `vertex-color-mixed-primitives` | colored and absent-color primitives | `displayEncoded` | plain primitive is not given prior primitive color |
+| `vertex-color-mask-taa` | vertex alpha drives MASK and TAA history | `displayEncoded` | cutout/history samples retain alpha coverage |
+| `vertex-color-no-color-baseline` | `COLOR_0` absent, same geometry/material | `displayEncoded` | stream absence and baseline bytes stay unchanged |
+
+Each case requires Browser WebGPU and Dawn, exactly 300 frames, live
+`copyTextureToBuffer` readback, and RGB/alpha $arepsilon \le 0.05$ in the
+declared domain. `linearHdr` is linear working space; `displayEncoded` is the
+final display space; alpha is coverage and is never sRGB encoded.
+
+```mermaid
+flowchart LR
+    F["semantic fixture"] --> A["ForgeaX producer"]
+    F --> B["independent Three r184 producer"]
+    A --> C["Browser or Dawn 300-frame readback"]
+    B --> C
+    C --> D{"provenance, domain, samples, falsifier"}
+    D -->|"complete"| E["named CaseReport"]
+    D -->|"missing or self-comparison"| X["fail closed"]
+```
+
+Run the lane from the repository root with
+`FORGEAX_BROWSER_HEADLESS=0 pnpm bench:color-lighting-parity`. The gate writes
+one report per case/backend under
+`report/color-lighting-parity/vertex-color/`. Missing producer, readback,
+domain, threshold, provenance, or visual evidence is `blocked`/`failed`; a
+visible canvas, `RhiNull`, WGSL text assertion, self-comparison, all-zero
+capture, or analytic-only result is not a pass.
+
+<details>
+<summary>Recovery owners</summary>
+
+- `producer` / `backend`: the owning Browser or Dawn scene probe.
+- `readback` / `domain`: [`attachment-readback.ts`](./src/capture/attachment-readback.ts).
+- `provenance` / `samples` / `epsilon`: [`evaluate-case.ts`](./src/evaluator/evaluate-case.ts).
+- `falsifier`: the named case producer; restore the semantic fixture before rerunning.
+- `report` / `visual artifact`: the parity evidence writer and visual reader.
+
+</details>
+
 ## Raw capture and reruns
 
 The live observation path is:

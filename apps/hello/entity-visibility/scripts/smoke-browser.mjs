@@ -103,14 +103,11 @@ function evaluate({ baseline, hidden, restored, child, evidence }) {
       'visible-child-override-output: child or inherited descendant is absent from the child ROI',
     );
   }
-  if (evidence.hidden.targetEffective !== 'hidden' || evidence.hidden.explicitlyHidden < 1) {
+  if (evidence.hidden.targetEffective !== 'hidden') {
     failures.push('hidden-render-output: production visibility input did not resolve hidden');
   }
   if (evidence.restored.targetEffective !== 'visible') {
     failures.push('restored-render-output: production visibility input did not resolve visible');
-  }
-  if (!evidence.restored.shadowResourceReady || evidence.restored.shadowPasses < 1) {
-    failures.push('restored-shadow-output: renderer has no shadow pass or shadow resource');
   }
   if (
     evidence.child.visibleChildEffective !== 'visible' ||

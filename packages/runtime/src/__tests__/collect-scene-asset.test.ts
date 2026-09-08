@@ -1,3 +1,5 @@
+import * as SceneOwner from '@forgeax/engine-scene';
+
 // w9 — writeback round-trip semantic equivalence tests, migrated to
 // rootsToSceneAsset (plan-strategy D-1: semantic equivalence not byte
 // equivalence because full writeback materializes defaults — decisions #8 OOS).
@@ -20,16 +22,29 @@
 //   component-level keys, not entity-level entries.
 //   VERDICT: zero expectations encoded pre-fix bug.
 
-import { defineComponent, World } from '@forgeax/engine-ecs';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import { type Component, defineComponent as defineEcsComponent, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { SceneInstance } from '@forgeax/engine-render';
+import { ChildOf, Children, Transform } from '@forgeax/engine-scene';
 import type { LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import '@forgeax/engine-render/internal';
-import '@forgeax/engine-render/internal';
-import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { Transform } from '@forgeax/engine-scene';
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '../collect-scene-asset';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+
+const TEST_COMPONENTS: Component[] = [];
+
+function defineComponent(name: string, fields: Record<string, unknown>): Component {
+  const component = defineEcsComponent(name, fields as never);
+  TEST_COMPONENTS.push(component);
+  return component;
+}
+
+function registerSceneComponents(world: World): void {
+  for (const component of [SceneInstance, ChildOf, Children, Transform, ...TEST_COMPONENTS]) {
+    world.components.register(component).unwrap();
+  }
+}
 
 function makeRegistry(): AssetRegistry {
   return new AssetRegistry(makeMockShaderRegistry());
@@ -41,6 +56,7 @@ function localId(n: number): LocalEntityId {
 
 // biome-ignore lint/suspicious/noExplicitAny: allocSharedRef('SceneAsset') returns branded Handle<"SceneAsset", ...> but instantiateScene expects Handle<string, ...>
 function registerSceneAsset(world: World, asset: SceneAsset): any {
+  registerSceneComponents(world);
   return world.allocSharedRef('SceneAsset', asset);
 }
 
@@ -83,7 +99,7 @@ describe('w9 — round-trip semantic equivalence', () => {
     const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
     if (sg.ok) reg.catalog(sg.value, asset);
     const handle = registerSceneAsset(world, asset);
-    const res = world.instantiateScene(handle);
+    const res = SceneOwner.worldInstantiateScene(world, handle);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const root = res.value.root;
@@ -117,7 +133,7 @@ describe('w9 — round-trip semantic equivalence', () => {
     const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
     if (sg.ok) reg.catalog(sg.value, asset);
     const handle = registerSceneAsset(world, asset);
-    const res = world.instantiateScene(handle);
+    const res = SceneOwner.worldInstantiateScene(world, handle);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const root = res.value.root;
@@ -151,7 +167,7 @@ describe('w9 — round-trip semantic equivalence', () => {
     const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
     if (sg.ok) reg.catalog(sg.value, asset);
     const handle = registerSceneAsset(world, asset);
-    const res = world.instantiateScene(handle);
+    const res = SceneOwner.worldInstantiateScene(world, handle);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const root = res.value.root;
@@ -174,7 +190,7 @@ describe('w9 — round-trip semantic equivalence', () => {
     const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
     if (sg.ok) reg.catalog(sg.value, asset);
     const handle = registerSceneAsset(world, asset);
-    const res = world.instantiateScene(handle);
+    const res = SceneOwner.worldInstantiateScene(world, handle);
     // Empty scene may still instantiate; root should be present.
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -204,7 +220,7 @@ describe('w9 — round-trip semantic equivalence', () => {
     const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
     if (sg.ok) reg.catalog(sg.value, asset);
     const handle = registerSceneAsset(world, asset);
-    const res = world.instantiateScene(handle);
+    const res = SceneOwner.worldInstantiateScene(world, handle);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const root = res.value.root;
@@ -243,7 +259,7 @@ describe('w9 — round-trip semantic equivalence', () => {
     const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
     if (sg.ok) reg.catalog(sg.value, asset);
     const handle = registerSceneAsset(world, asset);
-    const res = world.instantiateScene(handle);
+    const res = SceneOwner.worldInstantiateScene(world, handle);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const root = res.value.root;
@@ -275,7 +291,7 @@ describe('w9 — round-trip semantic equivalence', () => {
     const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
     if (sg.ok) reg.catalog(sg.value, asset);
     const handle = registerSceneAsset(world, asset);
-    const res = world.instantiateScene(handle);
+    const res = SceneOwner.worldInstantiateScene(world, handle);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const root = res.value.root;
@@ -309,7 +325,11 @@ describe('w9 — round-trip semantic equivalence', () => {
       entities: [{ localId: localId(0), components: { Test_Pack: { a: 99 } } }],
     };
 
-    const packResult = serializeSceneAssetToPack(asset, 'aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee');
+    const packResult = serializeSceneAssetToPack(
+      asset,
+      new Map(),
+      'aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee',
+    );
     expect(packResult.ok).toBe(true);
     if (!packResult.ok) return;
     const pack = packResult.value;
@@ -331,7 +351,7 @@ describe('w9 — round-trip semantic equivalence', () => {
   it('(i) serializeSceneAssetToPack without guid uses a generated guid', () => {
     const asset: SceneAsset = { kind: 'scene', entities: [] };
 
-    const packResult = serializeSceneAssetToPack(asset);
+    const packResult = serializeSceneAssetToPack(asset, new Map());
     expect(packResult.ok).toBe(true);
     if (!packResult.ok) return;
     const pack = packResult.value;
@@ -366,7 +386,7 @@ describe('w9 — round-trip semantic equivalence', () => {
     const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
     if (sg.ok) reg.catalog(sg.value, asset);
     const handle = registerSceneAsset(world, asset);
-    const res = world.instantiateScene(handle);
+    const res = SceneOwner.worldInstantiateScene(world, handle);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const root = res.value.root;
@@ -379,6 +399,7 @@ describe('w9 — round-trip semantic equivalence', () => {
 
     const packResult = serializeSceneAssetToPack(
       collected.value,
+      world.components.entries(),
       '11111111-2222-4333-8444-555555555555',
     );
     expect(packResult.ok).toBe(true);
@@ -431,7 +452,7 @@ describe('w1 — field-level transient collect skip (AC-02 + AC-03)', () => {
     const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
     if (sg.ok) reg.catalog(sg.value, asset);
     const handle = registerSceneAsset(world, asset);
-    const res = world.instantiateScene(handle);
+    const res = SceneOwner.worldInstantiateScene(world, handle);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 
@@ -485,7 +506,7 @@ describe('w1 — field-level transient collect skip (AC-02 + AC-03)', () => {
     const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
     if (sg.ok) reg.catalog(sg.value, asset);
     const handle = registerSceneAsset(world, asset);
-    const res = world.instantiateScene(handle);
+    const res = SceneOwner.worldInstantiateScene(world, handle);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 
@@ -517,7 +538,7 @@ describe('w1 — field-level transient collect skip (AC-02 + AC-03)', () => {
     const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
     if (sg.ok) reg.catalog(sg.value, asset);
     const handle = registerSceneAsset(world, asset);
-    const res = world.instantiateScene(handle);
+    const res = SceneOwner.worldInstantiateScene(world, handle);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 
@@ -548,7 +569,7 @@ describe('marker component scene-pack round-trip', () => {
     const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
     if (sg.ok) reg.catalog(sg.value, asset);
     const handle = registerSceneAsset(world, asset);
-    const instantiated = world.instantiateScene(handle);
+    const instantiated = SceneOwner.worldInstantiateScene(world, handle);
     expect(instantiated.ok).toBe(true);
     if (!instantiated.ok) return;
 
@@ -560,6 +581,7 @@ describe('marker component scene-pack round-trip', () => {
 
     const serialized = serializeSceneAssetToPack(
       collected.value,
+      world.components.entries(),
       '11111111-2222-4333-8444-555555555555',
     );
     expect(serialized.ok).toBe(true);
@@ -581,6 +603,7 @@ describe('marker component scene-pack round-trip', () => {
 describe('w4 -- Transform vec serialization shape (AC-05)', () => {
   it('rootsToSceneAsset emits pos/quat/scale plain arrays, no per-axis keys, no world', () => {
     const world = new World();
+    registerSceneComponents(world);
     const reg = makeRegistry();
     const e = world
       .spawn({
@@ -632,7 +655,7 @@ describe('w4 -- old-shape scene JSON downgrade regression (research Finding 3)',
     const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
     if (sg.ok) reg.catalog(sg.value, asset);
     const handle = registerSceneAsset(world, asset);
-    const res = world.instantiateScene(handle);
+    const res = SceneOwner.worldInstantiateScene(world, handle);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 
@@ -681,7 +704,7 @@ describe('m3 — runtime collector kernel parity', () => {
       entities: [{ localId: localId(0), components: { CollectorParity: { count: 42 } } }],
     };
     const handle = registerSceneAsset(world, asset);
-    const r = world.instantiateScene(handle);
+    const r = SceneOwner.worldInstantiateScene(world, handle);
     expect(r.ok).toBe(true);
 
     // Kernel projection with same input
@@ -706,7 +729,7 @@ describe('m3 — runtime collector kernel parity', () => {
       ],
     };
     const handle = registerSceneAsset(world, asset);
-    const r = world.instantiateScene(handle);
+    const r = SceneOwner.worldInstantiateScene(world, handle);
     expect(r.ok).toBe(true);
     if (r.ok) {
       const root = r.value.root;
@@ -752,7 +775,7 @@ describe('m3 — runtime collector kernel parity', () => {
       ],
     };
     const handle = registerSceneAsset(world, asset);
-    const r = world.instantiateScene(handle);
+    const r = SceneOwner.worldInstantiateScene(world, handle);
     expect(r.ok).toBe(true);
     if (r.ok) {
       const root = r.value.root;
@@ -809,7 +832,7 @@ describe('m3 — runtime collector kernel parity supplemental', () => {
       entities: [{ localId: localId(0), components: { RoundTripComp_Sup: { val: 99 } } }],
     };
     const handle = registerSceneAsset(world, asset);
-    const r = world.instantiateScene(handle);
+    const r = SceneOwner.worldInstantiateScene(world, handle);
     expect(r.ok).toBe(true);
 
     // Kernel projection with same input
@@ -832,7 +855,7 @@ describe('m3 — runtime collector kernel parity supplemental', () => {
       ],
     };
     const handle = registerSceneAsset(world, asset);
-    const r = world.instantiateScene(handle);
+    const r = SceneOwner.worldInstantiateScene(world, handle);
     expect(r.ok).toBe(true);
     if (r.ok) {
       const root = r.value.root;

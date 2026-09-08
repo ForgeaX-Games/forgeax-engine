@@ -6,10 +6,10 @@ import { defineConfig } from 'vite';
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
 
-// parity-urp-vs-hdrp vite config (feat-20260608-cluster-lighting M7 / w26).
-// Single page hosting two canvases: left URP (default), right HDRP (installPipeline).
+// Standard direct-vs-clustered parity vite config.
+// Single page hosting two canvases: left Standard direct, right Standard clustered.
 // Preview port 4175 + strictPort=true: scripts/bench/pixel-parity.mjs spawns
-// this preview alongside parity-forgeax (port 4174) for the urp-vs-hdrp target.
+// this preview alongside parity-forgeax (port 4174) for the Standard lanes target.
 export default defineConfig({
   plugins: [forgeaxShader() as never],
   server: {

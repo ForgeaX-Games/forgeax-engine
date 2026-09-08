@@ -106,11 +106,14 @@ const mockCanvas = {
 
 // --- 3. Engine + Fox.glb pipeline (load side, mirrors smoke-dawn.mjs) ------
 
-const { World } = await import('@forgeax/engine-ecs');
-const { ChildOf, Transform } = await import('@forgeax/engine-scene');
-const { createRenderer, rootsToSceneAsset, serializeSceneAssetToPack } = await import('@forgeax/engine-runtime');
+const { createWorldContext, World } = await import('@forgeax/engine-ecs');
+const { animationPlugin } = await import('@forgeax/engine-animation');
+const { renderComponentsPlugin } = await import('@forgeax/engine-render');
+const { ChildOf, scenePlugin, Transform } = await import('@forgeax/engine-scene');
+const { rootsToSceneAsset, serializeSceneAssetToPack } = await import('@forgeax/engine-runtime');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { SceneInstance } = await import('@forgeax/engine-render');
-const { Skin } = await import('@forgeax/engine-skinning');
+const { Skin, skinningPlugin } = await import('@forgeax/engine-skinning');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 // Fox scene nodes carry AnimationTargetId; importing the animation entrypoint
 // registers that component before SceneAsset instantiation resolves its names.
@@ -124,7 +127,10 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  var hostAssets = constructed.value.assets;
 } catch (err) {
   console.error(
     `[writeback] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
@@ -134,11 +140,7 @@ try {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-const assets = renderer.assets;
-if (!assets) {
-  console.error('[writeback] FAIL - AssetRegistry is null');
-  process.exit(1);
-}
+const assets = hostAssets;
 
 // --- Fox.glb parse + POD register (mirrors smoke-dawn.mjs exact logic) -----
 
@@ -175,6 +177,12 @@ if (!skeletonRec) {
 }
 
 const world = new World();
+const worldContext = await createWorldContext(world, [
+  renderComponentsPlugin(),
+  scenePlugin(),
+  animationPlugin(),
+  skinningPlugin(),
+]);
 assets.catalog(skeletonGuid, {
   kind: 'skeleton',
   inverseBindMatrices: skeletonRec.inverseBindMatrices,
@@ -187,7 +195,9 @@ assets.catalog(skinGuid, {
 });
 
 const meshIrs = doc.meshes.filter((m) => m.meshIndex === 0);
-const meshAsset = meshIrToMeshAsset(meshIrs);
+const meshResult = meshIrToMeshAsset(meshIrs);
+if (!meshResult.ok) throw meshResult.error;
+const meshAsset = meshResult.value;
 assets.catalog(meshGuid, meshAsset);
 const meshHandle = world.allocSharedRef('MeshAsset', meshAsset);
 
@@ -294,7 +304,7 @@ console.log('[writeback] save: OK');
 // 4c. Serialize: verify the round-trip produces valid pack JSON.
 // Pass a real UUID; serializeSceneAssetToPack uses crypto.randomUUID()
 // which is shadowed by dawn-node's global crypto (different from Node crypto).
-const serRes = serializeSceneAssetToPack(savedScene, writebackGuid);
+const serRes = serializeSceneAssetToPack(savedScene, world.components.entries(), writebackGuid);
 if (!serRes.ok) {
   console.error('[writeback] FAIL - serializeSceneAssetToPack:', serRes.error.code);
   process.exit(1);

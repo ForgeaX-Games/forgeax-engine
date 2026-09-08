@@ -12,9 +12,8 @@
 //    ensureReady() retries _loadWasm(). A second init that succeeds returns the
 //    wasm namespace.
 //
-// The pkg/* imports are mocked because the wasm artefact does not exist until w4
-// runs `bash build.sh`; tests focus on the singleton wrapper logic only — wasm load
-// itself is exercised by integration tests in @forgeax/engine-rhi-wgpu + @forgeax/engine-naga.
+// The wasm namespace is mocked, while the provenance inputs are deterministic
+// real bytes so the singleton tests exercise the same integrity gate as Node.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -43,11 +42,29 @@ vi.mock('../../pkg/wgpu_wasm.js', () => {
   };
 });
 
-// Mock node:fs/promises so the Node branch of _loadWasm() does not require a
-// real wasm artefact on disk (the singleton wrapper's contract is the wasm-load
-// boundary itself; the byte content is irrelevant to the contract tests).
+const MOCK_ARTIFACT = new Uint8Array([1, 2, 3]);
+const MOCK_GLUE = new TextEncoder().encode('mock glue');
+const MOCK_MANIFEST = new TextEncoder().encode(
+  JSON.stringify({
+    schemaVersion: 'wgpu-wasm-provenance/1',
+    sourceContentKey: 'sha256-test',
+    artifactSha256: '039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81',
+    artifactBytes: 3,
+    glueSha256: 'f858c73a03609210271a7318f80bcec0cf278e0d86f7d098768993b83ed2f761',
+    glueBytes: 9,
+    toolchain: { rustc: 'test', wasmPack: 'test', wasmBindgen: 'test' },
+    dependencies: { wgpu: 'test', naga: 'test', nagaOil: 'test', wasmBindgen: 'test' },
+    compilerFingerprint: 'sha256-453c78d3ce45ec508b01c3f8319f99934c544599baf6aeeae1914e3bcc8723df',
+  }),
+);
+let mockManifestBytes = MOCK_MANIFEST;
+
 vi.mock('node:fs/promises', () => ({
-  readFile: vi.fn(async () => new Uint8Array(0)),
+  readFile: vi.fn(async (path: string) => {
+    if (path.endsWith('provenance.json')) return mockManifestBytes;
+    if (path.endsWith('wgpu_wasm.js')) return MOCK_GLUE;
+    return MOCK_ARTIFACT;
+  }),
 }));
 
 describe('ensureReady singleton wrapper', () => {
@@ -55,11 +72,13 @@ describe('ensureReady singleton wrapper', () => {
     // Reset module state so each test exercises a fresh _instance closure.
     _initCallCount = 0;
     _initBehaviour = 'success';
+    mockManifestBytes = MOCK_MANIFEST;
     vi.resetModules();
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('returns the same Promise reference across N calls (charter proposition 6 idempotency)', async () => {
@@ -94,5 +113,44 @@ describe('ensureReady singleton wrapper', () => {
     const ns = await mod.ensureReady();
     expect(_initCallCount).toBe(2);
     expect(typeof ns).toBe('object');
+  });
+
+  it('rejects tampered provenance before invoking wasm init', async () => {
+    mockManifestBytes = new TextEncoder().encode(
+      new TextDecoder().decode(MOCK_MANIFEST).replace('sha256-test', 'sha256-tampered'),
+    );
+    const mod = await import('../index.js');
+    await expect(mod.ensureReady()).rejects.toThrow('compiler fingerprint');
+    expect(_initCallCount).toBe(0);
+  });
+
+  it('normalizes Vite raw glue transport before provenance verification', async () => {
+    vi.stubGlobal('process', undefined);
+    const fetchMock = vi.fn(async (input: URL) => {
+      const url = new URL(input.href);
+      const response = (bytes: Uint8Array): Response =>
+        ({
+          ok: true,
+          arrayBuffer: async () => bytes.slice().buffer,
+        }) as Response;
+
+      if (url.pathname.endsWith('/provenance.json')) {
+        return response(MOCK_MANIFEST);
+      }
+      if (url.pathname.endsWith('/wgpu_wasm_bg.wasm')) {
+        return response(MOCK_ARTIFACT);
+      }
+      expect(url.pathname.endsWith('/wgpu_wasm.js')).toBe(true);
+      expect(url.search).toBe('?raw');
+      expect(url.searchParams.has('raw')).toBe(true);
+      const glueSource = new TextDecoder().decode(MOCK_GLUE);
+      return response(new TextEncoder().encode(`export default ${JSON.stringify(glueSource)}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('../index.js');
+    await expect(mod.ensureReady()).resolves.toBeDefined();
+    expect(_initCallCount).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

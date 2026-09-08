@@ -1,101 +1,59 @@
-// w5td - runtime public surface negative assertions (feat-20260516-console-dependency-inversion).
-//
-// Asserts the post-M5 dependency-inversion contract on the Renderer surface:
-//   1. `Renderer` interface no longer exposes a `startConsole` method.
-//   2. `StartConsoleOptions` / `ConsoleHandle` are not importable from
-//      `@forgeax/engine-runtime` (host wires inspector via `new Registry()`
-//      + `wireDefaultInspectors()` + `startConsoleServer()` from
-//      `@forgeax/engine-remote`; plan-strategy section 2.8 one-shot cut).
-//
-// Source: requirements AC-11 (Renderer.startConsole literally absent) +
-// plan-strategy section 5.3 key test points (type-level surface assertion).
+// Renderer public-surface and event-contract type assertions.
 
-import type { AssetRuntimeError } from '@forgeax/engine-assets-runtime';
+import type { RenderError, Renderer, RendererEvent } from '@forgeax/engine-render';
+
+type RendererEventListener = (event: RendererEvent) => void;
+
 import type {
-  EquirectProjectionFailedError,
-  PostProcessError,
-  RenderError,
-  Renderer,
-  RendererErrorListener,
-} from '@forgeax/engine-render/internal';
-import type { RhiError } from '@forgeax/engine-rhi';
-import type {
-  // @ts-expect-error - BundlerOptions must be imported from @forgeax/engine-render/internal
+  // @ts-expect-error - BundlerOptions is an internal construct seam
   BundlerOptions as _BundlerOptionsRemoved,
   // @ts-expect-error - ConsoleHandle must not be exported from @forgeax/engine-runtime
   ConsoleHandle as _ConsoleHandleRemoved,
   // @ts-expect-error - StartConsoleOptions must not be exported from @forgeax/engine-runtime
   StartConsoleOptions as _StartConsoleOptionsRemoved,
 } from '@forgeax/engine-runtime';
-import type { SkinError } from '@forgeax/engine-skinning';
-import type { ImageError } from '@forgeax/engine-types';
 import { describe, expectTypeOf, it } from 'vitest';
 
-// feat-20260704-runtime-tier1-decomposition M2 / w12: the eliminated top-level
-// RuntimeError aggregate union (D-3) reconstituted as a test-local alias so the
-// onError-channel type assertions below stay byte-identical (AC-09). Equal to
-// RenderError | AssetRuntimeError | SkinError (the 27-class fanned-out set); it
-// doubles as a check that RendererError equals the pre-decomposition union.
-type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
-
-// Reference the imported aliases so TS does not strip them before reaching
-// the @ts-expect-error attached to each import specifier.
 type _UnusedSink = _StartConsoleOptionsRemoved | _ConsoleHandleRemoved | _BundlerOptionsRemoved;
 
-describe('w5td runtime surface - Renderer.startConsole literally absent (AC-11)', () => {
-  it('Renderer has no startConsole property (TS index access fails)', () => {
-    // @ts-expect-error - 'startConsole' must not exist on Renderer
+describe('Renderer public surface', () => {
+  it('does not expose removed console or legacy listener members', () => {
+    // @ts-expect-error - startConsole is internal to the runtime host
     type _StartConsoleAbsent = Renderer['startConsole'];
-    // Sanity: known members still present (regression baseline).
+    // @ts-expect-error - onLost was replaced by subscribe(RendererEventListener)
+    type _OnLostAbsent = Renderer['onLost'];
+    // @ts-expect-error - onError was replaced by subscribe(RendererEventListener)
+    type _OnErrorAbsent = Renderer['onError'];
+    void (undefined as unknown as _StartConsoleAbsent | _OnLostAbsent | _OnErrorAbsent);
+
     type RendererKey = keyof Renderer;
-    expectTypeOf<'backend'>().toExtend<RendererKey>();
+    expectTypeOf<'attach'>().toExtend<RendererKey>();
     expectTypeOf<'draw'>().toExtend<RendererKey>();
     expectTypeOf<'dispose'>().toExtend<RendererKey>();
-    expectTypeOf<'onLost'>().toExtend<RendererKey>();
-    expectTypeOf<'onError'>().toExtend<RendererKey>();
-    expectTypeOf<'ready'>().toExtend<RendererKey>();
+    expectTypeOf<'subscribe'>().toExtend<RendererKey>();
+    expectTypeOf<'observe'>().toExtend<RendererKey>();
   });
 });
 
-describe('onError channel includes concrete image capability errors', () => {
-  it('RendererErrorListener parameter is the RhiError | RuntimeError | PostProcessError union', () => {
-    // The listener parameter must accept all three error families so the
-    // 'equirect-projection-failed' RuntimeError
-    // PostProcessError fan out with no `as any` cast.
-    expectTypeOf<RendererErrorListener>()
-      .parameter(0)
-      .toEqualTypeOf<RhiError | ImageError | RuntimeLayerError | PostProcessError>();
+describe('subscribe projects the discriminated Renderer event contract', () => {
+  it('passes RendererEvent and exposes RenderError on the error arm', () => {
+    expectTypeOf<RendererEventListener>().parameter(0).toEqualTypeOf<RendererEvent>();
+    type ErrorEvent = Extract<RendererEvent, { readonly kind: 'error' }>;
+    expectTypeOf<ErrorEvent['error']>().toEqualTypeOf<RenderError>();
   });
 
-  it('exhaustive switch narrows RuntimeError arms to the concrete class', () => {
-    // AI-user view: switch (e.code) over the union narrows the runtime arms.
-    const probe = (e: RhiError | RuntimeLayerError): EquirectProjectionFailedError | undefined => {
-      switch (e.code) {
-        case 'equirect-projection-failed':
-          // e narrows to EquirectProjectionFailedError; .detail.handle is a number.
-          expectTypeOf(e.detail.handle).toEqualTypeOf<number>();
-          return e;
-        default:
-          return undefined;
+  it('keeps state changes and errors exhaustively distinguishable', () => {
+    const describeEvent = (event: RendererEvent): string => {
+      switch (event.kind) {
+        case 'state-changed':
+          return `${event.previous}->${event.current}`;
+        case 'error':
+          return event.error.code;
+        case 'frame-submitted':
+          return `frame:${event.frameId}@${event.deviceGeneration}`;
       }
     };
-    expectTypeOf(probe).returns.toEqualTypeOf<EquirectProjectionFailedError | undefined>();
-  });
-
-  it('RhiError arms remain reachable in the same switch (no regression)', () => {
-    const probe = (e: RhiError | RuntimeLayerError): string => {
-      switch (e.code) {
-        case 'limit-exceeded':
-          // e narrows to RhiError; .code is a RhiErrorCode literal.
-          expectTypeOf(e.code).toEqualTypeOf<'limit-exceeded'>();
-          return e.code;
-        case 'device-lost':
-          return e.code;
-        default:
-          return 'other';
-      }
-    };
-    expectTypeOf(probe).returns.toEqualTypeOf<string>();
+    expectTypeOf(describeEvent).returns.toEqualTypeOf<string>();
   });
 });
 

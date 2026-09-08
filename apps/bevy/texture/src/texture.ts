@@ -6,7 +6,7 @@
 //
 // forgeax mapping (thin over existing primitives):
 //   - procedural checkerboard texture (64x64 RGBA8-sRGB) as TextureAsset POD,
-//     uploaded to GPU via renderer.store.uploadTexture before building the world
+//     retained by the World shared-ref owner for lazy render residency
 //   - 3 flat-scaled HANDLE_CUBE quads at z=-1.5/0/+1.5, each with a distinct
 //     unlit material (white=normal, red-tinted, blue-tinted) sharing one texture
 //   - unlit material with baseColorTexture — engine fix: UnlitOpts now accepts
@@ -44,8 +44,7 @@ export function makeCheckerboardPixels(): Uint8Array {
 }
 
 /**
- * Build the texture demo world. The caller must have already uploaded
- * `texId` (a `Handle<TextureAsset>` ID) to the GPU via `renderer.store.uploadTexture`.
+ * Build the texture demo world from the World-owned TextureAsset shared ref.
  */
 export function buildTextureWorld(world: World, texId: number): void {
   const normalMat = world.allocSharedRef('MaterialAsset', Materials.unlit([1, 1, 1, 1], { baseColorTexture: texId, castShadow: false }));

@@ -36,7 +36,7 @@ flowchart LR
 
 // 1. engine usage - 引擎公开符号集
 import { World } from '@forgeax/engine-ecs';
-import { Engine, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { Camera, MeshRenderer, MeshFilter } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { HANDLE_TRIANGLE } from '@forgeax/engine-assets-runtime';

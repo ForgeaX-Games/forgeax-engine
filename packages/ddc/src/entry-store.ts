@@ -1,7 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { DdcStoreError } from './errors.js';
 import { canonicalDdcJson } from './key.js';
+
+export { DdcStoreError } from './errors.js';
 
 export interface DdcArtifact {
   readonly mediaType: string;
@@ -33,27 +36,6 @@ export interface StagedDdcEntry {
 export interface PublishDdcEntryResult {
   readonly result: 'published' | 'existing' | 'conflict';
   readonly key: string;
-}
-
-export class DdcStoreError extends Error {
-  public readonly code: 'ddc-entry-incomplete' | 'ddc-entry-invalid' | 'ddc-entry-conflict';
-  public readonly detail: string;
-  public readonly expected: string;
-  public readonly hint: string;
-
-  public constructor(code: DdcStoreError['code'], detail: string) {
-    super(detail);
-    this.name = 'DdcStoreError';
-    this.code = code;
-    this.detail = detail;
-    this.expected = 'a complete DDC entry whose receipt and integrity digests validate';
-    this.hint =
-      code === 'ddc-entry-incomplete'
-        ? 'discard the partial entry and cold-cook from author authority'
-        : code === 'ddc-entry-conflict'
-          ? 'keep the verified entry and reject the competing publication'
-          : 'discard the invalid entry, preview last-known-good, then cold-cook';
-  }
 }
 
 interface ArtifactIntegrity {
@@ -187,19 +169,24 @@ export class DdcEntryStore {
       throw new DdcStoreError('ddc-entry-invalid', 'receipt output digest does not match entry');
     }
     const path = join(this.staging, `${entry.key}-${randomUUID()}`);
-    await mkdir(join(path, 'artifacts'), { recursive: true });
-    await writeFile(join(path, 'payload.json'), canonicalDdcJson(entry.payload));
-    await writeFile(join(path, 'refs.json'), canonicalDdcJson(entry.refs));
-    await writeFile(join(path, 'receipt.json'), canonicalDdcJson(entry.receipt));
-    const artifacts: Record<string, { mediaType: string; file: string }> = {};
-    for (const [key, artifact] of sortedArtifacts(entry)) {
-      const file = artifactFile(key);
-      artifacts[key] = { mediaType: artifact.mediaType, file };
-      await writeFile(join(path, 'artifacts', `${file}.bin`), artifact.bytes);
+    try {
+      await mkdir(join(path, 'artifacts'), { recursive: true });
+      await writeFile(join(path, 'payload.json'), canonicalDdcJson(entry.payload));
+      await writeFile(join(path, 'refs.json'), canonicalDdcJson(entry.refs));
+      await writeFile(join(path, 'receipt.json'), canonicalDdcJson(entry.receipt));
+      const artifacts: Record<string, { mediaType: string; file: string }> = {};
+      for (const [key, artifact] of sortedArtifacts(entry)) {
+        const file = artifactFile(key);
+        artifacts[key] = { mediaType: artifact.mediaType, file };
+        await writeFile(join(path, 'artifacts', `${file}.bin`), artifact.bytes);
+      }
+      await writeFile(join(path, 'artifacts.json'), canonicalDdcJson(artifacts));
+      await writeFile(join(path, 'integrity.json'), canonicalDdcJson(integrityFor(entry)));
+      return { key: entry.key, path };
+    } catch (error) {
+      await rm(path, { recursive: true, force: true }).catch(() => {});
+      throw error;
     }
-    await writeFile(join(path, 'artifacts.json'), canonicalDdcJson(artifacts));
-    await writeFile(join(path, 'integrity.json'), canonicalDdcJson(integrityFor(entry)));
-    return { key: entry.key, path };
   }
 
   public async publish(staged: StagedDdcEntry): Promise<PublishDdcEntryResult> {
@@ -207,11 +194,14 @@ export class DdcEntryStore {
     const candidate = await this.readDirectory(staged.path, true);
     const target = join(this.entries, staged.key);
     await mkdir(this.entries, { recursive: true });
-    try {
-      await stat(target);
+    const useExisting = async (): Promise<PublishDdcEntryResult> => {
       const existing = await this.readDirectory(target, false);
       await rm(staged.path, { recursive: true, force: true });
       return existingResult(existing, candidate, staged.key);
+    };
+    try {
+      await stat(target);
+      return useExisting();
     } catch (error) {
       if (error instanceof DdcStoreError) throw error;
       if (errorCode(error) !== 'ENOENT') throw error;
@@ -221,10 +211,12 @@ export class DdcEntryStore {
       return { result: 'published', key: staged.key };
     } catch (error) {
       if (!['EEXIST', 'ENOTEMPTY', 'EISDIR'].includes(errorCode(error) ?? '')) throw error;
-      const existing = await this.readDirectory(target, false);
-      await rm(staged.path, { recursive: true, force: true });
-      return existingResult(existing, candidate, staged.key);
+      return useExisting();
     }
+  }
+
+  public async discard(staged: StagedDdcEntry): Promise<void> {
+    await rm(staged.path, { recursive: true, force: true });
   }
 
   public async write(entry: DdcEntry): Promise<PublishDdcEntryResult> {
@@ -239,6 +231,19 @@ export class DdcEntryStore {
     } catch {
       return null;
     }
+  }
+
+  public async listKeys(): Promise<readonly string[]> {
+    const entries = await readdir(this.entries, { withFileTypes: true }).catch(() => []);
+    return entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+  }
+
+  public async remove(key: string): Promise<void> {
+    validateKey(key);
+    await rm(join(this.entries, key), { recursive: true, force: false });
   }
 
   /** Read with a machine-readable corruption result for recovery tooling. */

@@ -17,8 +17,18 @@
 //   requirements AC-04/AC-05/AC-06
 
 import { World } from '@forgeax/engine-ecs';
+import { Transform } from '@forgeax/engine-scene';
+import { describe, expect, it } from 'vitest';
+import {
+  Camera,
+  DirectionalLight,
+  PostProcessParams,
+  SkyboxBackground,
+  Skylight,
+  SpotLight,
+} from '../../../render/src/components';
+import type { CameraSnapshot } from '../../../render/src/render-contract';
 import type {
-  CameraSnapshot,
   DirectionalLightSnapshot,
   DispatchEntry,
   ExtractedFrame,
@@ -28,20 +38,12 @@ import type {
   SkyboxSnapshot,
   SkylightSnapshot,
   SpotLightSnapshot,
-} from '@forgeax/engine-render/internal';
+} from '../../../render/src/render-system-extract';
 import {
-  Camera,
-  DirectionalLight,
   extractFrame,
   extractFrames,
-  PostProcessParams,
   prepareExtractContext,
-  SkyboxBackground,
-  Skylight,
-  SpotLight,
-} from '@forgeax/engine-render/internal';
-import { Transform } from '@forgeax/engine-scene';
-import { describe, expect, it } from 'vitest';
+} from '../../../render/src/render-system-extract';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 

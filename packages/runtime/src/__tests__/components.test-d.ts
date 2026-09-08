@@ -14,19 +14,15 @@
 //   physically gone. AC-04 / AC-05 literals follow plan-strategy
 //   decision §2.6.
 
-import type { Handle, InputShapeOf, ShapeOf } from '@forgeax/engine-ecs';
-import type {
-  Camera,
-  DirectionalLight,
-  MeshFilter,
-  MeshRenderer,
-} from '@forgeax/engine-render/internal';
+import type { InputShapeOf, SchemaOf, ShapeOf } from '@forgeax/engine-ecs';
+import type { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import type { ChildOf, Transform } from '@forgeax/engine-scene';
+import type { Handle } from '@forgeax/engine-types';
 import { describe, expectTypeOf, it } from 'vitest';
 
 describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeOf', () => {
   it('Transform data shape has 3 local inline-array fields + world array<f32,16>', () => {
-    type Data = ShapeOf<typeof Transform.schema>;
+    type Data = ShapeOf<SchemaOf<typeof Transform>>;
     expectTypeOf<keyof Data>().toEqualTypeOf<'pos' | 'quat' | 'scale' | 'world'>();
     expectTypeOf<Data['pos']>().toEqualTypeOf<Float32Array>();
     expectTypeOf<Data['quat']>().toEqualTypeOf<Float32Array>();
@@ -35,20 +31,20 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
     // Write side widens `array<f32, N>` to also accept plain number[] literals
     // (InputShapeOf asymmetry): `pos: [1, 2, 3]` spawns without a
     // Float32Array wrapper at the call site.
-    type Input = InputShapeOf<typeof Transform.schema>;
+    type Input = InputShapeOf<SchemaOf<typeof Transform>>;
     expectTypeOf<Input['pos']>().toEqualTypeOf<Float32Array | readonly number[]>();
     expectTypeOf<Input['quat']>().toEqualTypeOf<Float32Array | readonly number[]>();
     expectTypeOf<Input['scale']>().toEqualTypeOf<Float32Array | readonly number[]>();
   });
 
   it("MeshFilter data shape has 1 Handle<'MeshAsset','shared'> field (assetHandle; M5 / w19)", () => {
-    type Data = ShapeOf<typeof MeshFilter.schema>;
+    type Data = ShapeOf<SchemaOf<typeof MeshFilter>>;
     expectTypeOf<keyof Data>().toEqualTypeOf<'assetHandle'>();
     expectTypeOf<Data['assetHandle']>().toEqualTypeOf<Handle<'MeshAsset', 'shared'>>();
   });
 
   it('MeshRenderer data shape has 1 field (materials; feat-20260608 M2 / w7 multi-material array)', () => {
-    type Data = ShapeOf<typeof MeshRenderer.schema>;
+    type Data = ShapeOf<SchemaOf<typeof MeshRenderer>>;
     expectTypeOf<keyof Data>().toEqualTypeOf<'materials'>();
     expectTypeOf<Data['materials']>().toEqualTypeOf<readonly Handle<'MaterialAsset', 'shared'>[]>();
   });
@@ -59,7 +55,7 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
     // (case B path — missing-spec fallback to mid-grey default), and
     // `materials: [0]` plain numeric literal is rejected by brand discipline
     // (charter prop 4).
-    type SpawnData = Partial<ShapeOf<typeof MeshRenderer.schema>>;
+    type SpawnData = Partial<ShapeOf<SchemaOf<typeof MeshRenderer>>>;
     // AC-04 application point: brand-undefined union surfaces at the call site.
     expectTypeOf<SpawnData['materials']>().toEqualTypeOf<
       readonly Handle<'MaterialAsset', 'shared'>[] | undefined
@@ -71,8 +67,8 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
     expectTypeOf<{ materials: readonly [0] }>().not.toMatchTypeOf<SpawnData>();
   });
 
-  it('Camera data shape has 19 fields (17 number + clearColor array + autoAspect boolean: w9 9 + tonemap trio + antialias + bloom quartet + clearColor + autoAspect)', () => {
-    type Data = ShapeOf<typeof Camera.schema>;
+  it('Camera data shape has 20 fields (18 number + clearColor array + autoAspect boolean)', () => {
+    type Data = ShapeOf<SchemaOf<typeof Camera>>;
     expectTypeOf<keyof Data>().toEqualTypeOf<
       | 'fov'
       | 'aspect'
@@ -87,6 +83,7 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
       | 'exposure'
       | 'whitePoint'
       | 'antialias'
+      | 'historyVersion'
       | 'bloom'
       | 'bloomThreshold'
       | 'bloomIntensity'
@@ -103,6 +100,7 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
     expectTypeOf<Data['tonemap']>().toEqualTypeOf<number>();
     expectTypeOf<Data['exposure']>().toEqualTypeOf<number>();
     expectTypeOf<Data['whitePoint']>().toEqualTypeOf<number>();
+    expectTypeOf<Data['historyVersion']>().toEqualTypeOf<number>();
     // feat-20260709 M3: clear-color quartet collapsed into one inline
     // array<f32,4> column; read side resolves to Float32Array (mirrors the
     // Transform pos/quat/scale precedent).
@@ -115,7 +113,7 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
     // feat-20260621: DirectionalLightShadow merged into DirectionalLight via castShadow toggle.
     // shadowDistance replaced the nearPlane/farPlane pair (near derives from camera).
     // feat-20260709 M2: direction/color collapsed to array<f32,3> columns.
-    type Data = ShapeOf<typeof DirectionalLight.schema>;
+    type Data = ShapeOf<SchemaOf<typeof DirectionalLight>>;
     expectTypeOf<keyof Data>().toEqualTypeOf<
       | 'direction'
       | 'color'
@@ -153,7 +151,7 @@ describe('w7 type-level - component name literal types are preserved', () => {
     // schema carries the merged surface; AC-13 routes per-frame via
     // `switch (mat.shadingModel)` in the canonical dispatch site.
     expectTypeOf<typeof MeshRenderer.name>().toEqualTypeOf<'MeshRenderer'>();
-    expectTypeOf<keyof typeof MeshRenderer.schema>().toEqualTypeOf<'materials'>();
+    expectTypeOf<keyof SchemaOf<typeof MeshRenderer>>().toEqualTypeOf<'materials'>();
   });
 
   it('Camera.name has the literal type "Camera"', () => {
@@ -166,16 +164,16 @@ describe('w7 type-level - component name literal types are preserved', () => {
 
   it('ChildOf.name has the literal type "ChildOf" and parent ref field is keyof', () => {
     expectTypeOf<typeof ChildOf.name>().toEqualTypeOf<'ChildOf'>();
-    expectTypeOf<keyof typeof ChildOf.schema>().toEqualTypeOf<'parent'>();
+    expectTypeOf<keyof SchemaOf<typeof ChildOf>>().toEqualTypeOf<'parent'>();
   });
 });
 
 // ────────────────────────────────────────────────────────────────────────────
-// [w15] AC-04 type constraint: the ShapeOf<typeof Component.schema> derivation
+// [w15] AC-04 type constraint: the ShapeOf<SchemaOf<typeof Component>> derivation
 //       from the field-descriptor input guarantees that every field's default
 //       value type aligns with the schema `type` (compile-time SSOT).
 //       Proof points:
-//         (a) ShapeOf<typeof Transform.schema> => 4 Float32Array view fields
+//         (a) ShapeOf<SchemaOf<typeof Transform>> => 4 Float32Array view fields
 //         (b) Transform's field descriptor uses `default: Float32Array` for each
 //             `type:'array<f32, N>'`
 //         (c) A mismatched default (e.g. `default: "zero"` for `type:'array<f32, 3>'`)
@@ -185,16 +183,16 @@ describe('w7 type-level - component name literal types are preserved', () => {
 // ────────────────────────────────────────────────────────────────────────────
 
 describe('w15 AC-04 type constraint — ShapeOf derivation from field-payload', () => {
-  it("ShapeOf<typeof Transform.schema> yields Float32Array views (all 'array<f32, N>' -> Float32Array)", () => {
-    type T = ShapeOf<typeof Transform.schema>;
+  it("ShapeOf<SchemaOf<typeof Transform>> yields Float32Array views (all 'array<f32, N>' -> Float32Array)", () => {
+    type T = ShapeOf<SchemaOf<typeof Transform>>;
     expectTypeOf<T['pos']>().toEqualTypeOf<Float32Array>();
     expectTypeOf<T['quat']>().toEqualTypeOf<Float32Array>();
     expectTypeOf<T['scale']>().toEqualTypeOf<Float32Array>();
     expectTypeOf<T['world']>().toEqualTypeOf<Float32Array>();
   });
 
-  it("ShapeOf<typeof Camera.schema> yields 21 number fields ('f32' -> number) + autoAspect boolean ('bool' -> boolean)", () => {
-    type T = ShapeOf<typeof Camera.schema>;
+  it("ShapeOf<SchemaOf<typeof Camera>> yields 21 number fields ('f32' -> number) + autoAspect boolean ('bool' -> boolean)", () => {
+    type T = ShapeOf<SchemaOf<typeof Camera>>;
     expectTypeOf<T['fov']>().toEqualTypeOf<number>();
     expectTypeOf<T['projection']>().toEqualTypeOf<number>();
     expectTypeOf<T['tonemap']>().toEqualTypeOf<number>();
@@ -206,8 +204,8 @@ describe('w15 AC-04 type constraint — ShapeOf derivation from field-payload', 
     expectTypeOf<T['autoAspect']>().toEqualTypeOf<boolean>();
   });
 
-  it('ShapeOf<typeof Transform.schema> is non-empty (field cardinality > 0)', () => {
-    type T = ShapeOf<typeof Transform.schema>;
+  it('ShapeOf<SchemaOf<typeof Transform>> is non-empty (field cardinality > 0)', () => {
+    type T = ShapeOf<SchemaOf<typeof Transform>>;
     // If the schema were empty {}, keyof T would be never.
     // Transform has 4 keys (pos/quat/scale/world) => keyof T is a non-never union.
     type Keys = keyof T;
@@ -226,7 +224,7 @@ describe('w15 AC-04 type constraint — ShapeOf derivation from field-payload', 
     //   field.type='array<f32, 3>' -> FieldValueType<'array<f32, 3>'> = Float32Array
     //   -> default must satisfy Float32Array
     // The ShapeOf projection is the final consumer evidence.
-    type T = ShapeOf<typeof Transform.schema>;
+    type T = ShapeOf<SchemaOf<typeof Transform>>;
     expectTypeOf<T['pos']>().toEqualTypeOf<Float32Array>();
     // If FieldValueType<'array<f32, 3>'> had resolved to, say, number[], this would fail.
   });

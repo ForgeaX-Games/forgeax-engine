@@ -5,52 +5,17 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "RenderDoc-inspired RHI frame record + deterministic replay + offline inspect for forgeax-engine. First user is AI subagent; exposed via WS:5732 JSON-RPC, CLI, and direct import.",
+  "description": "Single-file v7 RHI tape capture, FrameModel projection, deterministic fresh-backend replay, and structured AI-readable inspection for forgeax-engine.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs"
     },
-    "./adapter": {
-      "types": "./dist/adapter.d.ts",
-      "import": "./dist/adapter.mjs"
-    },
-    "./capture-browser": {
-      "types": "./dist/capture-browser.d.ts",
-      "import": "./dist/capture-browser.mjs"
-    },
-    "./dev-routes": {
-      "types": "./dist/dev-routes.d.ts",
-      "import": "./dist/dev-routes.mjs"
-    },
-    "./inspector": {
-      "types": "./dist/inspector.d.ts",
-      "import": "./dist/inspector.mjs"
-    },
-    "./inspect-core": {
-      "types": "./dist/inspect-core.d.ts",
-      "import": "./dist/inspect-core.mjs"
-    },
-    "./frame-model": {
-      "types": "./dist/frame-model.d.ts",
-      "import": "./dist/frame-model.mjs"
-    },
-    "./resource-lifecycle": {
-      "types": "./dist/resource-lifecycle.d.ts",
-      "import": "./dist/resource-lifecycle.mjs"
-    },
-    "./rt-to-canvas": {
-      "types": "./dist/rt-to-canvas.d.ts",
-      "import": "./dist/rt-to-canvas.mjs"
-    },
-    "./cli": {
-      "types": "./dist/cli.d.ts",
-      "import": "./dist/cli.mjs"
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.mjs"
     },
     "./package.json": "./package.json"
-  },
-  "bin": {
-    "forgeax-rhi-debug": "./dist/cli.mjs"
   },
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -65,16 +30,15 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@noble/hashes": "^2.2.0",
     "@forgeax/engine-rhi": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
-    "pako": "^1.0.11",
-    "pngjs": "^7.0.0"
+    "pako": "^1.0.11"
   },
   "devDependencies": {
+    "@forgeax/engine-rhi-null": "workspace:*",
     "@types/node": "^20.14.0",
-    "@types/pngjs": "^6.0.5",
-    "@webgpu/types": "^0.1.71",
-    "webgpu": "^0.4.0"
+    "@webgpu/types": "^0.1.71"
   },
   "peerDependencies": {
     "@forgeax/engine-rhi-webgpu": "workspace:*",

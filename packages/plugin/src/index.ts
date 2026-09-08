@@ -1,276 +1,30 @@
-// @forgeax/engine-plugin -- thin protocol-layer package for Plugin interface + PluginError.
-//
-// Only depends on @forgeax/engine-ecs (for World, Result, ok, err).
-// Public consumption through @forgeax/engine-app re-export (D-1c).
-// Capability package authors import Plugin/PluginError directly from this package.
-//
-// charter awareness:
-//   P3 explicit failure: PluginError carries .code / .expected / .hint / .detail
-//       -- AI users consume by property access, not message parsing.
-//   P4 consistent abstraction: one Plugin shape for all capability packages.
+/** Open service vocabulary projected onto Cordis Context by capability packages. */
+// biome-ignore lint/suspicious/noEmptyInterface: domain packages augment this interface
+export interface EngineContextServices {}
 
-import type { Result, World } from '@forgeax/engine-ecs';
-
-// ---------------------------------------------------------------------------
-// Plugin interface (AC-01) -- the unified entry point for wiring capability
-// packages into a forgeax Engine World.
-//
-// Constraints:
-//   - C-8: `name` is kebab-case (e.g. 'physics', 'audio', 'my-tool').
-//     Factory functions are camelCase (e.g. `physicsPlugin()`).
-//   - `build` may be async; the plugin runner awaits each in order (D-1).
-//   - `build` returns `Result<void, PluginError>` -- plugins that wrap
-//     existing void register functions signal success with
-//     `return ok(undefined)` (D-10).
-// ---------------------------------------------------------------------------
-export interface Plugin {
-  readonly name: string;
-  build(world: World): Result<void, PluginError> | Promise<Result<void, PluginError>>;
+declare module '@deepseek-ai/cordis' {
+  interface Context extends EngineContextServices {}
 }
 
-/** A named, preconfigured set of plugins that expands through the normal runner. */
-export interface PluginGroup {
-  readonly name: string;
-  readonly plugins: readonly Plugin[];
-}
-
-/** A plugin input accepted by `runPlugins` and `createApp`. */
-export type PluginSource = Plugin | PluginGroup;
-
-/**
- * Mutable construction helper for a PluginGroup. The mutable builder is scoped
- * to definition time; the resulting group owns a frozen plugin snapshot.
- */
-export class PluginGroupBuilder {
-  private readonly plugins: Plugin[] = [];
-
-  add(plugin: Plugin): this {
-    this.plugins.push(plugin);
-    return this;
-  }
-
-  disable(name: string): this {
-    for (let index = this.plugins.length - 1; index >= 0; index -= 1) {
-      if (this.plugins[index]?.name === name) this.plugins.splice(index, 1);
-    }
-    return this;
-  }
-
-  addBefore(name: string, plugin: Plugin): this {
-    const index = this.plugins.findIndex((candidate) => candidate.name === name);
-    if (index < 0) this.plugins.push(plugin);
-    else this.plugins.splice(index, 0, plugin);
-    return this;
-  }
-
-  addAfter(name: string, plugin: Plugin): this {
-    const index = this.plugins.findIndex((candidate) => candidate.name === name);
-    if (index < 0) this.plugins.push(plugin);
-    else this.plugins.splice(index + 1, 0, plugin);
-    return this;
-  }
-
-  snapshot(): readonly Plugin[] {
-    return Object.freeze([...this.plugins]);
-  }
-}
-
-/** Define a named group; its plugins still use the ordinary Plugin runner. */
-export function definePluginGroup(
-  name: string,
-  configure: (builder: PluginGroupBuilder) => void,
-): PluginGroup {
-  const builder = new PluginGroupBuilder();
-  configure(builder);
-  return Object.freeze({ name, plugins: builder.snapshot() });
-}
-
-/** Expand groups while preserving source order for the single runner seam. */
-export function flattenPluginSources(sources: readonly PluginSource[]): readonly Plugin[] {
-  const plugins: Plugin[] = [];
-  for (const source of sources) {
-    if ('plugins' in source) plugins.push(...source.plugins);
-    else plugins.push(source);
-  }
-  return plugins;
-}
-
-// ---------------------------------------------------------------------------
-// PluginError -- closed 2-member union mirroring AppError template (D-7).
-//
-// PluginErrorCode is a separate closed union from AppErrorCode (C-7 / AC-11);
-// the two never intersect. AI users switch-exhaust on PluginErrorCode without
-// a default branch, same pattern as AppErrorCode.
-//
-// Related: requirements AC-04 / AC-05 / AC-11; plan-strategy D-7; charter P3.
-// ---------------------------------------------------------------------------
-
-/**
- * Closed PluginErrorCode union (2 members).
- *
- * | code | trigger |
- * |:--|:--|
- * | `'duplicate-plugin'` | two or more plugins share the same `name` in the merged plugins list |
- * | `'plugin-build-failed'` | one or more `plugin.build(world)` calls returned `Result.err` |
- *
- * Independent closed union -- does NOT extend AppErrorCode (C-7 / AC-11).
- */
-export type PluginErrorCode = 'duplicate-plugin' | 'plugin-build-failed';
-
-/**
- * Detail variant for the `'duplicate-plugin'` arm.
- *
- * `name` carries the conflicting plugin name so AI users can locate the
- * duplicate without scanning the full plugin list.
- */
-export interface PluginDetailDuplicatePlugin {
-  readonly name: string;
-}
-
-/**
- * Detail variant for the `'plugin-build-failed'` arm.
- *
- * `pluginName` / `cause` carry the first failure (AC-05 lower bound: first
- * failure is always readable). `failures` accumulates every failed plugin
- * so AI users can diagnose multi-plugin build failures in one pass (D-7).
- */
-export interface PluginDetailBuildFailed {
-  readonly pluginName: string;
-  readonly cause: string;
-  readonly failures?: ReadonlyArray<{
-    readonly pluginName: string;
-    readonly cause: string;
-  }>;
-}
-
-/**
- * Conditional resolver from `PluginErrorCode` to its detail payload type.
- */
-export type PluginErrorDetailFor<C extends PluginErrorCode> = C extends 'duplicate-plugin'
-  ? PluginDetailDuplicatePlugin
-  : C extends 'plugin-build-failed'
-    ? PluginDetailBuildFailed
-    : never;
-
-/**
- * Tagged union of `.detail` payloads carried by structured PluginError.
- */
-export type PluginErrorDetail = PluginErrorDetailFor<PluginErrorCode>;
-
-class PluginErrorClass extends Error {
-  readonly code: PluginErrorCode;
-  readonly expected: string;
-  readonly hint: string;
-  readonly detail: PluginErrorDetail;
-
-  constructor(args: {
-    code: PluginErrorCode;
-    expected: string;
-    hint: string;
-    detail: PluginErrorDetail;
-  }) {
-    let suffix = '';
-    if (args.code === 'duplicate-plugin') {
-      const d = args.detail as PluginDetailDuplicatePlugin;
-      suffix = ` (name=${d.name})`;
-    } else if (args.code === 'plugin-build-failed') {
-      const d = args.detail as PluginDetailBuildFailed;
-      const failureCount =
-        d.failures !== undefined && d.failures.length > 0 ? ` +${d.failures.length} more` : '';
-      suffix = ` (plugin=${d.pluginName}, cause=${d.cause}${failureCount})`;
-    }
-    super(`[PluginError ${args.code}] expected: ${args.expected}; hint: ${args.hint}${suffix}`);
-    this.name = 'PluginError';
-    this.code = args.code;
-    this.expected = args.expected;
-    this.hint = args.hint;
-    this.detail = args.detail;
-  }
-}
-
-/**
- * Variant intersection: a PluginErrorClass instance whose `code` literal
- * narrows to `C` and whose `detail` narrows to `PluginErrorDetailFor<C>`.
- */
-type PluginErrorVariant<C extends PluginErrorCode> = PluginErrorClass & {
-  readonly code: C;
-  readonly detail: PluginErrorDetailFor<C>;
-};
-
-/**
- * Public PluginError type -- discriminated union of every code variant.
- */
-export type PluginError = {
-  [C in PluginErrorCode]: PluginErrorVariant<C>;
-}[PluginErrorCode];
-
-interface PluginErrorConstructor {
-  new <C extends PluginErrorCode>(args: {
-    code: C;
-    expected: string;
-    hint: string;
-    detail: PluginErrorDetailFor<C>;
-  }): PluginErrorVariant<C>;
-  readonly prototype: PluginErrorClass;
-}
-
-/**
- * PluginError constructor -- `new PluginError({ code, expected, hint, detail })`.
- *
- * Mirrors the AppError constructor pattern: generic `C` is inferred from the
- * literal `code` argument, narrowing `detail` to the per-code payload and the
- * return type to the corresponding `PluginErrorVariant<C>`.
- */
-export const PluginError: PluginErrorConstructor =
-  PluginErrorClass as unknown as PluginErrorConstructor;
-
-const pluginErrorPolicy = {
-  'duplicate-plugin': {
-    expected: 'each plugin name must be unique within the merged plugins list',
-    hint: 'remove or rename the duplicate plugin; check both default and user-provided plugins for name collisions',
-  },
-  'plugin-build-failed': {
-    expected: 'every plugin.build(world) call must return Result.ok',
-    hint: 'inspect detail.failures for the complete failure list; check each plugin build implementation for missing resources or invalid world state',
-  },
-} satisfies {
-  [Code in PluginErrorCode]: {
-    readonly expected: string;
-    readonly hint: string;
-  };
-};
-
-/**
- * `expected` table -- the engine-side invariant that was violated when each
- * code surfaces.
- *
- * Derived from the private exhaustive policy owner; the focused policy-owner
- * proof locks its exact membership, values, order, and property descriptors.
- */
-export const PLUGIN_EXPECTED: Readonly<Record<PluginErrorCode, string>> = Object.fromEntries(
-  Object.entries(pluginErrorPolicy).map(([code, policy]) => [code, policy.expected]),
-) as Readonly<Record<PluginErrorCode, string>>;
-
-/** Actionable recovery guidance per code (charter P3), derived from the same owner. */
-export const PLUGIN_ERROR_HINTS: Readonly<Record<PluginErrorCode, string>> = Object.fromEntries(
-  Object.entries(pluginErrorPolicy).map(([code, policy]) => [code, policy.hint]),
-) as Readonly<Record<PluginErrorCode, string>>;
-
-/**
- * Type guard for narrowing an unknown error to PluginError.
- *
- * Mirrors `isAppError` -- AI users call `if (isPluginError(err))` before
- * walking `.code`.
- */
-export function isPluginError(err: unknown): err is PluginError {
-  return err instanceof PluginErrorClass;
-}
-
-// ---------------------------------------------------------------------------
-// runPlugins -- host-neutral plugin assembly authority.
-//
-// The single seam that builds a World from a merged plugin set. App and
-// headless Node hosts both consume this same function. Exported from
-// @forgeax/engine-plugin so consumers do not depend on app internals.
-// ---------------------------------------------------------------------------
-export { runPlugins } from './run-plugins';
+export * from '@deepseek-ai/cordis';
+export { createContextCapabilityResolver } from './capability.js';
+export {
+  bootstrapCatalogLoader,
+  CatalogLoader,
+  type CatalogLoaderBootstrapOptions,
+  type CatalogLoaderBootstrapResult,
+  type CatalogLoaderBootstrapValue,
+  CatalogLoaderError,
+  type CatalogLoaderErrorCode,
+  type GamePluginEntry,
+  installCatalogLoader,
+  type PluginCatalog,
+  type PluginCatalogRecord,
+  type PluginRealm,
+  projectPluginEntries,
+} from './loader.js';
+export {
+  defineToolPlugin,
+  isToolPlugin,
+  type ToolPlugin,
+} from './tool-plugin.js';

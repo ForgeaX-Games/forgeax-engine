@@ -75,23 +75,31 @@ function fixture() {
     },
     ...contract.timingRoster
       .filter((consumer) => !consumer.notApplicable)
-      .map((consumer) => ({
-        name: consumer.jobIdentity,
-        started_at:
-          consumer.jobIdentity === 'webkit-fallback'
-            ? '2026-07-16T00:00:05Z'
-            : consumer.allowedNonArtifactPrerequisites?.includes('webkit-fallback')
-              ? '2026-07-16T00:01:20Z'
-              : '2026-07-16T00:00:20Z',
-        completed_at:
-          consumer.jobIdentity === 'webkit-fallback'
-            ? '2026-07-16T00:00:10Z'
-            : consumer.allowedNonArtifactPrerequisites?.includes('webkit-fallback')
-              ? '2026-07-16T00:02:00Z'
-              : '2026-07-16T00:01:00Z',
-        conclusion: 'success',
-        run_attempt: 1,
-      })),
+      .map((consumer) => {
+        const isMetricsJoin = consumer.jobIdentity === 'metrics-validate';
+        const waitsForSmoke = consumer.allowedNonArtifactPrerequisites?.includes('smoke-fleet');
+        return {
+          name: consumer.jobIdentity,
+          started_at:
+            consumer.jobIdentity === 'webkit-fallback'
+              ? '2026-07-16T00:00:05Z'
+              : isMetricsJoin
+                ? '2026-07-16T00:02:20Z'
+                : waitsForSmoke
+                  ? '2026-07-16T00:01:20Z'
+                  : '2026-07-16T00:00:20Z',
+          completed_at:
+            consumer.jobIdentity === 'webkit-fallback'
+              ? '2026-07-16T00:00:10Z'
+              : isMetricsJoin
+                ? '2026-07-16T00:03:00Z'
+                : waitsForSmoke
+                  ? '2026-07-16T00:02:00Z'
+                  : '2026-07-16T00:01:00Z',
+          conclusion: 'success',
+          run_attempt: 1,
+        };
+      }),
   ];
   for (const [index, job] of jobs.entries()) {
     job.created_at = job.started_at ? '2026-07-16T00:00:00Z' : null;
@@ -145,6 +153,7 @@ function fixture() {
           startedAt: '2026-07-16T00:00:16Z',
           completedAt: '2026-07-16T00:00:18Z',
           elapsedSeconds: 2,
+          transferAttempt: 1,
         },
       ]),
     ),
@@ -239,6 +248,7 @@ function sharePhysicalArtifacts(input) {
         startedAt: '2026-07-16T00:00:16Z',
         completedAt: '2026-07-16T00:00:18Z',
         elapsedSeconds: 2,
+        transferAttempt: 1,
       },
     ]),
   );
@@ -263,7 +273,11 @@ test('t19: resolves artifact facts only through merged provenance IDs across pag
   const result = run(input);
   assert.equal(result.exitCode, 0, result.stdout);
   assert.equal(result.facts.artifacts.length, contract.provenance.payloadClasses.length);
-  assert.equal(result.facts.ac06.status, 'pass');
+  assert.equal(
+    result.facts.ac06.status,
+    'pass',
+    JSON.stringify(result.facts.ac06.perConsumer, null, 2),
+  );
   assert.equal(
     result.facts.ac06.perConsumer.every(
       (consumer) => consumer.status === 'pass' || consumer.status === 'notApplicable',
@@ -273,7 +287,7 @@ test('t19: resolves artifact facts only through merged provenance IDs across pag
   assert.equal(
     result.facts.consumers.find((consumer) => consumer.name === 'primary-pnpm')
       .lastRequiredArtifactReadyAt,
-    '2026-07-16T00:00:09Z',
+    '2026-07-16T00:00:06Z',
   );
 });
 
@@ -696,6 +710,44 @@ test('does not synthesize missing physical transfer timing from metadata or zero
   );
 });
 
+test('fails closed for missing, invalid, or duplicate download attempts', () => {
+  for (const mutate of [
+    (observation) => {
+      delete observation.transferAttempt;
+    },
+    (observation) => {
+      observation.transferAttempt = 0;
+    },
+    (observation) => [observation, { ...observation }],
+  ]) {
+    const input = fixture();
+    sharePhysicalArtifacts(input);
+    const coreId = input.mergedProvenance.artifacts.find(
+      ({ class: className }) => className === 'engine-dist',
+    ).artifactId;
+    const observation = input.downloadObservationsByArtifactId[coreId];
+    input.downloadObservationsByArtifactId[coreId] = mutate(observation);
+    const result = run(input);
+    assert.equal(result.exitCode, 0, result.stdout);
+    const coreRows = result.facts.returnEvidence.families.filter(({ family }) =>
+      ['engine-dist', 'wasm-runtime', 'wasm-fbx', 'wasm-codec'].includes(family),
+    );
+    assert.equal(
+      coreRows.every(
+        ({ status, code, detail }) =>
+          status === 'invalidEvidence' &&
+          code === 'owner-fact-missing' &&
+          detail.field === 'download',
+      ),
+      true,
+    );
+    assert.equal(
+      result.facts.physicalArtifacts.some(({ artifactId }) => artifactId === coreId),
+      false,
+    );
+  }
+});
+
 test('t19: preserves an absent expanded payload as an explicit null ratio', () => {
   const input = fixture();
   const artifact = input.mergedProvenance.artifacts.find((entry) => entry.class === 'wasm-codec');
@@ -772,7 +824,7 @@ test('anchors effective ready-to-start timing after the artifact provider aggreg
   );
   assert.equal(timing.artifactProviderReadyAt, '2026-07-16T00:00:19Z');
   assert.equal(timing.effectiveReadyAt, '2026-07-16T00:00:19Z');
-  assert.equal(timing.observedArtifactReadyToJobStartDelaySeconds, 11);
+  assert.equal(timing.observedArtifactReadyToJobStartDelaySeconds, 14);
   assert.equal(timing.unattributedStartDelaySeconds, 1);
 
   const missingProvider = fixture();
@@ -832,7 +884,7 @@ test('w19: records provenance-bound cold and warm shared production facts withou
     assert.equal(result.exitCode, 0, result.stdout);
     assert.equal(result.facts.sharedProduction.cacheState, cacheState);
     assert.equal(result.facts.sharedProduction.artifactBytes, 2009);
-    assert.equal(result.facts.sharedProduction.transferBytes, 6027);
+    assert.equal(result.facts.sharedProduction.transferBytes, 12054);
     assert.equal(result.facts.sharedProduction.totalDurationSeconds, 15);
     assert.deepEqual(result.facts.sharedProduction.provenance, {
       runId: 42,

@@ -32,6 +32,7 @@ function hintFor(code: ImportErrorCode): string {
     case 'source-read-failed':
     case 'import-produced-no-assets':
     case 'guid-mismatch':
+    case 'mesh-material-slot-topology-change':
     case 'import-internal-error':
     case 'source-validation-failed':
     case 'unknown-source-key':

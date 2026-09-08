@@ -9,11 +9,11 @@
 //
 // charter mapping:
 //   - P3 explicit failure as value: out-of-bounds and "every layer empty"
-//     resolve to `Result.ok(null)` -- never throws or fires onError. The
-//     only `Result.err` path is a structural break (entity carries no
-//     Tilemap component); the `PickTileError` union is closed to two
-//     variants and stays a runtime-only type (not exported through
-//     `@forgeax/engine-types`, since pickTile is a runtime-only system).
+//     resolve to `Result.ok(null)` -- never throws or fires onError. Dead
+//     handles and live entities without Tilemap are separate structural
+//     failures; the `PickTileError` union is closed to two variants and stays
+//     a runtime-only type (not exported through `@forgeax/engine-types`, since
+//     pickTile is a runtime-only system).
 //   - P4 consistent abstraction: matches the `pick(world, ...)` raycast
 //     surface in pick.ts -- free function, world+entity input, structured
 //     error union, hit-or-null return.
@@ -23,7 +23,8 @@
 // plan-tasks m0-t8; plan-strategy §D-5 file-by-file ECS API adaptation
 // (World-owned Query pattern from render-system-extract.ts).
 
-import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import { Entity, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { mat4, vec3 } from '@forgeax/engine-math';
 import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
 import { ChildOf, Transform } from '@forgeax/engine-scene';
 import { err, ok, type Result } from '@forgeax/engine-types';
@@ -57,7 +58,14 @@ export interface PickTileHit {
  * @returns
  *   - `Result.ok(PickTileHit)` for a non-zero cell on some layer.
  *   - `Result.ok(null)` for an empty cell or out-of-bounds query.
- *   - `Result.err(PickTileError)` when the supplied entity is not a Tilemap.
+ *   - `Result.err({ code: 'tilemap-not-found' })` for a dead handle.
+ *   - `Result.err({ code: 'tilemap-component-missing' })` for a live entity
+ *     without a Tilemap component.
+ *
+ * The caller must propagate the World so `Transform.world` is current. A
+ * singular world transform follows `mat4.invert`'s deterministic identity
+ * fallback, which keeps this error union structural rather than adding a
+ * third diagnostic arm.
  */
 export function pickTile(
   world: World,
@@ -65,6 +73,11 @@ export function pickTile(
   worldX: number,
   worldY: number,
 ): Result<PickTileHit | null, PickTileError> {
+  const entityResult = world.get(tilemapEntity, Entity);
+  if (!entityResult.ok) {
+    return err({ code: 'tilemap-not-found', tilemapEntity });
+  }
+
   const tilemapResult = world.get(tilemapEntity, Tilemap);
   if (!tilemapResult.ok) {
     return err({ code: 'tilemap-component-missing', tilemapEntity });
@@ -77,23 +90,25 @@ export function pickTile(
   const tileSizeX = tilemap.tileSize[0] ?? 1;
   const tileSizeY = tilemap.tileSize[1] ?? 1;
 
-  // Tilemap origin in world space comes from its Transform.world translation
-  // (column-major mat4 columns 12 / 13 carry world-X / world-Y). Tilemap
-  // entities without a Transform default to origin (0, 0) -- the charter F1
-  // "spawn(...) without Transform" path stays valid.
-  let originX = 0;
-  let originY = 0;
+  // Tilemap entities without a Transform retain the origin-default path. For
+  // transformed maps, the full propagated affine inverse is the only correct
+  // way to recover local cell coordinates under rotation and non-uniform scale.
+  let localX = worldX;
+  let localY = worldY;
   const transformResult = world.get(tilemapEntity, Transform);
   if (transformResult.ok) {
     const w = transformResult.value.world;
-    if (w !== undefined && w.length >= 14) {
-      originX = w[12] ?? 0;
-      originY = w[13] ?? 0;
+    if (w !== undefined && w.length >= 16) {
+      const local = mat4.transformPoint(vec3.create(), mat4.invert(mat4.create(), w), [
+        worldX,
+        worldY,
+        0,
+      ]);
+      localX = local[0] ?? 0;
+      localY = local[1] ?? 0;
     }
   }
 
-  const localX = worldX - originX;
-  const localY = worldY - originY;
   if (tileSizeX <= 0 || tileSizeY <= 0) return ok(null);
   if (localX < 0 || localY < 0) return ok(null);
 

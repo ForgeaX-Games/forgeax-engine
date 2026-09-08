@@ -1,9 +1,17 @@
 ---
 name: forgeax-engine-vfx
-description: ForgeaX code-first GPU VFX: author two WGSL hooks, cook Pack v2, play through ECS, and render executable billboard, mesh, ribbon, trail, or beam output. Use when creating, loading, debugging, or extending VFX effects.
+description: ForgeaX code-first GPU VFX authoring, cooking, playback, and rendering. Use when creating, loading, debugging, or extending particle, ribbon, trail, beam, billboard, or mesh effects.
 ---
 
 # ForgeaX VFX
+
+## Render happy path
+
+VFX is a producer of a closed `RenderFeaturePlan` in the single
+`RenderScene -> Standard Pipeline -> DeviceScope -> FrameReceipt`
+path. The host performs `attach` and `draw`; use receipt-bound `inspect`,
+`observe`, and `recover` for diagnostics. VFX never owns device, queue,
+encoder, finish, or submit.
 
 Use one path:
 

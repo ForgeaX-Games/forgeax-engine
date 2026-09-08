@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defineComponent } from '../component';
-import { FixedUpdate, FrameEnd, Update } from '../schedule-token';
+import { FixedUpdate, Update } from '../schedule-token';
 import { World } from '../world';
 
 describe('schedule-scoped inspection', () => {
@@ -16,7 +16,6 @@ describe('schedule-scoped inspection', () => {
     expect(inspection.schedules).toEqual([
       { schedule: Update, systems: [{ name: 'update-system', sets: [] }] },
       { schedule: FixedUpdate, systems: [{ name: 'fixed-system', sets: [] }] },
-      { schedule: FrameEnd, systems: [] },
     ]);
   });
 
@@ -28,7 +27,6 @@ describe('schedule-scoped inspection', () => {
     world.addSystem(Update, {
       name: 'producer',
       queries: [{ with: [Position] }],
-      resources: ['Clock'],
       fn: () => {},
     });
     world.addSystem(Update, {
@@ -58,7 +56,7 @@ describe('schedule-scoped inspection', () => {
         queries: [
           { with: ['ScheduleDataPosition'], without: [], optional: [], changed: [], added: [] },
         ],
-        resources: ['Clock'],
+        resources: [],
       },
       {
         name: 'consumer',

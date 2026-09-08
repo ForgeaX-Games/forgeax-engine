@@ -1,29 +1,33 @@
 #!/usr/bin/env node
-// Dawn smoke for Bevy's 3d/fog reproduction.
-// FALSIFY=force-no-fog removes the post-effect and must remove the fog pass.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { writeReferencePng } from '../../../shared/png-codec.mjs';
+import { runFogLifecycle } from '../src/runner.mjs';
+import { evaluateFogCase } from '../src/oracle.mjs';
+import { sampleFogRois } from '../src/roi.mjs';
+import { encodePng } from './png.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(here, '..');
-const width = 320;
-const height = 180;
+let width = 320;
+let height = 180;
 const targetFrames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
-const falsify = process.env.FALSIFY ?? '';
-const fogId = 'bevy-fog::distance';
-const fogShaderPath = resolve(appRoot, 'src', 'fog.wgsl');
+const featureEvidenceDir = process.env.FORGEAX_FOG_EVIDENCE_DIR ?? resolve(appRoot, 'artifacts');
+const pairEvidenceDir = resolve(featureEvidenceDir, 'dawn-fog-pairs');
 const errors = [];
+const recoveryErrors = [];
+const pairScreenshots = new Map();
+let recoveryExpected = false;
 
 let create;
 let globals;
 try {
   ({ create, globals } = await import('webgpu'));
 } catch (error) {
-  console.error(`[smoke] FAIL - webgpu import: ${error instanceof Error ? error.message : String(error)}`);
+  console.error('[smoke-dawn] unavailable: webgpu import failed: ' + (error instanceof Error ? error.message : String(error)));
   process.exit(1);
 }
 Object.assign(globalThis, globals);
@@ -33,27 +37,57 @@ Object.defineProperty(globalThis.navigator, 'gpu', { value: gpu, configurable: t
 gpu.getPreferredCanvasFormat = () => 'rgba8unorm';
 
 let sharedDevice;
+let triggerDeviceLoss = () => false;
 const originalRequestAdapter = globalThis.navigator.gpu.requestAdapter.bind(globalThis.navigator.gpu);
 globalThis.navigator.gpu.requestAdapter = async (options) => {
   const adapter = await originalRequestAdapter(options);
   if (adapter === null) return adapter;
   const originalRequestDevice = adapter.requestDevice.bind(adapter);
   adapter.requestDevice = async (descriptor) => {
-    const device = await originalRequestDevice(descriptor);
-    sharedDevice ??= device;
-    return device;
+    const rawDevice = await originalRequestDevice(descriptor);
+    let resolveLost;
+    const lost = new Promise((resolve) => {
+      resolveLost = resolve;
+    });
+    triggerDeviceLoss = () => {
+      if (resolveLost === undefined) return false;
+      resolveLost({ reason: 'unknown', message: 'Fog Dawn smoke forced recoverable device loss' });
+      resolveLost = undefined;
+      return true;
+    };
+    Object.defineProperty(rawDevice, 'lost', {
+      configurable: true,
+      get: () => lost,
+    });
+    sharedDevice = rawDevice;
+    return rawDevice;
   };
   return adapter;
 };
 
 let renderTarget;
+let renderTargetDevice;
+let renderTargetFormat;
 function ensureRenderTarget(device, format) {
-  renderTarget ??= device.createTexture({
+  const targetDevice = sharedDevice ?? device;
+  if (
+    renderTarget !== undefined &&
+    (renderTargetDevice !== targetDevice ||
+      renderTargetFormat !== format ||
+      renderTarget.width !== width ||
+      renderTarget.height !== height)
+  ) {
+    renderTarget.destroy();
+    renderTarget = undefined;
+  }
+  renderTarget ??= targetDevice.createTexture({
     size: { width, height, depthOrArrayLayers: 1 },
     format,
     usage: 0x10 | 0x04 | 0x01,
     viewFormats: ['rgba8unorm-srgb'],
   });
+  renderTargetDevice = targetDevice;
+  renderTargetFormat = format;
   return renderTarget;
 }
 
@@ -78,10 +112,18 @@ const mockCanvas = {
   getContext(kind) {
     if (kind !== 'webgpu') return null;
     return {
-      configure(descriptor) { ensureRenderTarget(descriptor.device, descriptor.format ?? 'rgba8unorm'); },
+      configure(descriptor) {
+        ensureRenderTarget(descriptor.device, descriptor.format ?? 'rgba8unorm');
+      },
       unconfigure() {},
       getCurrentTexture() {
-        if (!renderTarget) ensureRenderTarget(sharedDevice, 'rgba8unorm');
+        if (
+          !renderTarget ||
+          renderTarget.width !== mockCanvas.width ||
+          renderTarget.height !== mockCanvas.height
+        ) {
+          ensureRenderTarget(sharedDevice, 'rgba8unorm');
+        }
         return renderTarget;
       },
     };
@@ -92,165 +134,501 @@ const mockCanvas = {
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const manifest = await buildEngineShaderManifest();
-const manifestUrl = `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;
-const { createApp } = await import('@forgeax/engine-app');
+const manifestUrl = 'data:application/json,' + encodeURIComponent(JSON.stringify(manifest));
+const { createApp, createFullscreenRenderFeature } = await import('@forgeax/engine-app');
 const { World } = await import('@forgeax/engine-ecs');
+const { createBoxGeometry, createSphereGeometry } = await import('@forgeax/engine-geometry');
 const { quat } = await import('@forgeax/engine-math');
-const { HANDLE_CUBE, HANDLE_SPHERE } = await import('@forgeax/engine-assets-runtime');
-const { Camera, Materials, MeshFilter, MeshRenderer, PointLight, perspective } =
+const { Camera, Materials, MeshFilter, MeshRenderer, PointLight, PostProcessParams, perspective } =
   await import('@forgeax/engine-render');
-const { PostProcessParams, URP_PIPELINE_ID } = await import('@forgeax/engine-render/internal');
 const { Transform } = await import('@forgeax/engine-scene');
+const fogScene = JSON.parse(readFileSync(resolve(appRoot, 'src/fog-scene.json'), 'utf8'));
+const fogShader = readFileSync(resolve(appRoot, 'src/fog.wgsl'), 'utf8');
+const fogEffectId = 'bevy-fog::distance';
+const fogEffect = createFullscreenRenderFeature({
+  identity: fogEffectId,
+  source: fogShader,
+  reads: [{ key: 'sceneColor' }, { key: 'depth', sampleType: 'depth' }],
+  params: {
+    byteSize: 16,
+    defaultValue: new Uint8Array(new Float32Array([2, 0.001, 20, 0]).buffer),
+  },
+});
 
-const appResult = await createApp(mockCanvas, {}, { shaderManifestUrl: manifestUrl });
-globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
+const appResult = await createApp(mockCanvas, { features: [fogEffect] }, { shaderManifestUrl: manifestUrl });
 if (!appResult.ok) {
-  console.error(`[smoke] FAIL - createApp: ${appResult.error.code} - ${appResult.error.hint}`);
+  console.error('[smoke-dawn] unavailable: createApp failed: ' + appResult.error.code);
   process.exit(1);
 }
 const app = appResult.value;
-app.renderer.onError((error) => errors.push(error));
-app.onError((error) => errors.push(error));
-const ready = await app.renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
+const recordError = (error) => {
+  if (error?.code === 'device-lost' || (recoveryExpected && error?.code === 'device-operation-failed')) {
+    recoveryErrors.push(error);
+  }
+  else errors.push(error);
+};
+app.onError(recordError);
 
 const world = app.world;
-const stone = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.16, 0.13, 0.1, 1], roughness: 1 }));
-const green = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.03, 0.38, 0.03, 1], metallic: 0.5, roughness: 0.05 }));
-for (const [x, z] of [[-1.5, -1.5], [1.5, -1.5], [1.5, 1.5], [-1.5, 1.5]]) {
+const resourceWorld = new World();
+let resourceOwner = 0;
+app.setDrawSource(() => ({
+  worlds: [world, resourceWorld],
+  cameraOwner: 0,
+  resourceOwner,
+}));
+const ground = world.allocSharedRef(
+  'MaterialAsset',
+  Materials.standard({ baseColor: fogScene.materials.ground, roughness: 0.92 }),
+);
+const tick = world.allocSharedRef(
+  'MaterialAsset',
+  Materials.standard({ baseColor: fogScene.materials.tick, roughness: 0.88 }),
+);
+const gate = world.allocSharedRef(
+  'MaterialAsset',
+  Materials.standard({ baseColor: fogScene.materials.gate, roughness: 0.72 }),
+);
+const marker = world.allocSharedRef(
+  'MaterialAsset',
+  Materials.standard({ baseColor: fogScene.materials.marker, metallic: 0.1, roughness: 0.28 }),
+);
+const structure = world.allocSharedRef(
+  'MaterialAsset',
+  Materials.standard({ baseColor: fogScene.materials.structure, roughness: 0.86 }),
+);
+const cubeMesh = world.internSharedRef('MeshAsset', createBoxGeometry(1, 1, 1).unwrap());
+const sphereMesh = world.internSharedRef('MeshAsset', createSphereGeometry(1).unwrap());
+function spawnCube(pos, scale, material) {
   world.spawn(
-    { component: Transform, data: { pos: [x, 1.5, z], scale: [1, 3, 1] } },
-    { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-    { component: MeshRenderer, data: { materials: [stone] } },
+    { component: Transform, data: { pos, scale } },
+    { component: MeshFilter, data: { assetHandle: cubeMesh } },
+    { component: MeshRenderer, data: { materials: [material] } },
   ).unwrap();
 }
-world.spawn(
-  { component: Transform, data: { pos: [0, 4, 0], scale: [1.75, 1.75, 1.75] } },
-  { component: MeshFilter, data: { assetHandle: HANDLE_SPHERE } },
-  { component: MeshRenderer, data: { materials: [green] } },
-).unwrap();
-for (let i = 0; i < 50; i += 1) {
-  const halfSize = i / 2 + 3;
+function spawnSphere(pos) {
   world.spawn(
-    { component: Transform, data: { pos: [0, -i / 2 + 0.25, 0], scale: [2 * halfSize, 0.5, 2 * halfSize] } },
-    { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-    { component: MeshRenderer, data: { materials: [stone] } },
+    { component: Transform, data: { pos, scale: fogScene.geometry.markers.sphereScale } },
+    { component: MeshFilter, data: { assetHandle: sphereMesh } },
+    { component: MeshRenderer, data: { materials: [marker] } },
   ).unwrap();
 }
+const { ground: groundGeometry, ticks, sidePosts, gates, markers, endWall } = fogScene.geometry;
+spawnCube(groundGeometry.position, groundGeometry.scale, ground);
+for (let z = ticks.start; z >= ticks.end; z += ticks.step) {
+  spawnCube([0, ticks.positionY, z], ticks.scale, tick);
+  for (const x of sidePosts.x) spawnCube([x, sidePosts.positionY, z], sidePosts.scale, structure);
+}
+for (const z of gates.depths) {
+  for (const x of gates.sideX) spawnCube([x, gates.sidePositionY, z], gates.sideScale, gate);
+  spawnCube([0, gates.topPositionY, z], gates.topScale, gate);
+}
+spawnCube([markers.low.x, markers.low.baseY, markers.depth], markers.low.baseScale, structure);
+spawnSphere([markers.low.x, markers.low.sphereY, markers.depth]);
+spawnCube([markers.high.x, markers.high.baseY, markers.depth], markers.high.baseScale, structure);
+spawnSphere([markers.high.x, markers.high.sphereY, markers.depth]);
+spawnCube(endWall.position, endWall.scale, structure);
 world.spawn(
-  { component: Transform, data: { pos: [4, 8, 4] } },
-  { component: PointLight, data: { color: [1, 1, 1], intensity: 400, range: 100 } },
+  { component: Transform, data: { pos: fogScene.lighting.position } },
+  {
+    component: PointLight,
+    data: {
+      color: fogScene.lighting.color,
+      intensity: fogScene.lighting.intensity,
+      range: fogScene.lighting.range,
+    },
+  },
 ).unwrap();
-const cameraPosition = [8, 8, 0];
-const cameraTarget = [0, 0, 0];
-world.spawn(
-  { component: Transform, data: { pos: cameraPosition, quat: quat.fromLookAt(quat.create(), cameraPosition, cameraTarget, [0, 1, 0]) } },
-  { component: Camera, data: { ...perspective({ fov: Math.PI / 4, aspect: width / height, near: 0.1, far: 80 }), clearColor: [0.25, 0.25, 0.25, 1] } },
+const cameraPosition = fogScene.camera.position;
+const cameraTarget = fogScene.camera.target;
+const camera = world.spawn(
+  {
+    component: Transform,
+    data: { pos: cameraPosition, quat: quat.fromLookAt(quat.create(), cameraPosition, cameraTarget, [0, 1, 0]) },
+  },
+  {
+    component: Camera,
+    data: {
+      ...perspective({
+        fov: (fogScene.camera.fovDegrees * Math.PI) / 180,
+        aspect: width / height,
+        near: fogScene.camera.near,
+        far: fogScene.camera.far,
+      }),
+      clearColor: [...fogScene.fogColor, 1],
+    },
+  },
 ).unwrap();
 
-if (!existsSync(fogShaderPath)) {
-  console.error(`[smoke] FAIL - missing fog shader: ${fogShaderPath}`);
-  process.exit(1);
+let fogEntity;
+let revision = 0;
+let previousPhase;
+let fogOwnerWorld = world;
+let activeFogData;
+const fogParameters = fogScene.fog;
+function packFogParams(parameters) {
+  const bytes = new ArrayBuffer(16);
+  const values = new Float32Array(bytes);
+  values[0] = parameters.heightFalloff > 0 ? 2 : 1;
+  values[1] = Math.max(parameters.density * (parameters.heightFalloff > 0 ? 5 : 1), 0.001);
+  values[2] = 20;
+  values[3] = 0;
+  return new Uint8Array(bytes);
 }
-const fogSource = readFileSync(fogShaderPath, 'utf8');
-const shaderSource = falsify === 'force-debug-color'
-  ? fogSource.replace(
-      '  return vec4<f32>(mix(scene, FOG_COLOR, amount), 1.0);',
-      '  return vec4<f32>(1.0, 0.0, 1.0, 1.0);',
-    )
-  : fogSource;
-const paramsBytes = new Uint8Array(new Float32Array([0, 5, 20, 0]).buffer);
-app.renderer.postProcess.register(fogId, {
-  source: shaderSource,
-  reads: [{ key: 'sceneColor' }, { key: 'depth', sampleType: 'depth' }],
-  params: { byteSize: 16, defaultValue: paramsBytes },
-});
-world.spawn({ component: PostProcessParams, data: { shader: fogId, data: paramsBytes } }).unwrap();
-const install = app.renderer.installPipeline({
-  kind: 'render-pipeline',
-  pipelineId: URP_PIPELINE_ID,
-  config: { postEffects: falsify === 'force-no-fog' ? [] : [fogId] },
-});
-if (!install.ok) {
-  console.error(`[smoke] FAIL - installPipeline: ${install.error.code} - ${install.error.hint}`);
-  process.exit(1);
+
+function attachFog(data) {
+  fogEntity = fogOwnerWorld.spawn({
+    component: PostProcessParams,
+    data: { shader: fogEffectId, data: packFogParams(data) },
+  }).unwrap();
+  activeFogData = data;
+  revision += 1;
+}
+
+function updateFog(data) {
+  activeFogData = data;
+  if (fogEntity === undefined) {
+    attachFog(data);
+    return;
+  }
+  fogOwnerWorld.set(fogEntity, PostProcessParams, { data: packFogParams(data) }).unwrap();
+  revision += 1;
+}
+
+function detachFog() {
+  if (fogEntity !== undefined) {
+    fogOwnerWorld.despawn(fogEntity).unwrap();
+    fogEntity = undefined;
+    activeFogData = undefined;
+    revision += 1;
+  }
+}
+
+function switchFogOwner(nextWorld) {
+  if (nextWorld === fogOwnerWorld) return false;
+  if (fogEntity !== undefined) {
+    fogOwnerWorld.despawn(fogEntity).unwrap();
+    fogEntity = undefined;
+  }
+  fogOwnerWorld = nextWorld;
+  if (activeFogData !== undefined) {
+    fogEntity = fogOwnerWorld.spawn({
+      component: PostProcessParams,
+      data: { shader: fogEffectId, data: packFogParams(activeFogData) },
+    }).unwrap();
+  }
+  revision += 1;
+  return true;
+}
+
+function resizeTarget(nextWidth, nextHeight) {
+  width = Math.max(1, Math.floor(nextWidth));
+  height = Math.max(1, Math.floor(nextHeight));
+  mockCanvas.width = width;
+  mockCanvas.height = height;
+  world.set(camera, Camera, { aspect: width / height }).unwrap();
+}
+
+function applyPhase(phase) {
+  if (phase === previousPhase) return { changedFrom: undefined, ownerChanged: false };
+  const oldPhase = previousPhase;
+  previousPhase = phase;
+  let ownerChanged = false;
+  switch (phase) {
+    case 'disabled':
+      detachFog();
+      break;
+    case 'uniform':
+      updateFog(fogParameters.uniform);
+      break;
+    case 'change':
+      updateFog(fogParameters.change);
+      break;
+    case 'height':
+      updateFog(fogParameters.height);
+      break;
+    case 'detach-reattach':
+      detachFog();
+      attachFog(fogParameters.height);
+      break;
+    case 'camera-switch':
+      world.set(camera, Transform, { pos: [7, 7, 1] }).unwrap();
+      revision += 1;
+      break;
+    case 'owner-switch':
+      ownerChanged = switchFogOwner(resourceWorld);
+      if (ownerChanged) resourceOwner = 1;
+      if (!ownerChanged) revision += 1;
+      break;
+    case 'resize':
+      resizeTarget(256, 144);
+      revision += 1;
+      break;
+    case 'recovery':
+      revision += 1;
+      break;
+    default:
+      throw new Error('unknown Fog phase ' + phase);
+  }
+  return { changedFrom: oldPhase, ownerChanged };
+}
+
+async function readbackCenter() {
+  await sharedDevice.queue.onSubmittedWorkDone();
+  const targetWidth = renderTarget.width;
+  const targetHeight = renderTarget.height;
+  const bytesPerRow = Math.ceil((targetWidth * 4) / 256) * 256;
+  const readback = sharedDevice.createBuffer({ size: bytesPerRow * targetHeight, usage: 0x01 | 0x08 });
+  const encoder = sharedDevice.createCommandEncoder();
+  encoder.copyTextureToBuffer(
+    { texture: renderTarget },
+    { buffer: readback, bytesPerRow, rowsPerImage: targetHeight },
+    { width: targetWidth, height: targetHeight, depthOrArrayLayers: 1 },
+  );
+  sharedDevice.queue.submit([encoder.finish()]);
+  await readback.mapAsync(0x01);
+  const pixels = new Uint8Array(readback.getMappedRange().slice(0));
+  readback.unmap();
+  readback.destroy();
+  const centerX = Math.floor(targetWidth / 2);
+  const centerY = Math.floor(targetHeight / 2);
+  const rgba = [0, 0, 0, 0];
+  const tightPixels = new Uint8Array(targetWidth * targetHeight * 4);
+  for (let y = 0; y < targetHeight; y += 1) {
+    const sourceOffset = y * bytesPerRow;
+    const targetOffset = y * targetWidth * 4;
+    tightPixels.set(pixels.subarray(sourceOffset, sourceOffset + targetWidth * 4), targetOffset);
+  }
+  let count = 0;
+  for (let y = Math.max(0, centerY - 1); y <= Math.min(targetHeight - 1, centerY + 1); y += 1) {
+    for (let x = Math.max(0, centerX - 1); x <= Math.min(targetWidth - 1, centerX + 1); x += 1) {
+      const offset = (y * targetWidth + x) * 4;
+      rgba[0] += (tightPixels[offset] ?? 0) / 255;
+      rgba[1] += (tightPixels[offset + 1] ?? 0) / 255;
+      rgba[2] += (tightPixels[offset + 2] ?? 0) / 255;
+      rgba[3] += (tightPixels[offset + 3] ?? 0) / 255;
+      count += 1;
+    }
+  }
+  return {
+    rgba: rgba.map((value) => value / count),
+    pixels: tightPixels,
+    width: targetWidth,
+    height: targetHeight,
+  };
+}
+
+async function advanceSettlingFrame() {
+  const due = rafQueue.shift();
+  if (due === undefined) return false;
+  now += 16.67;
+  due.callback(now);
+  await delay(0);
+  await sharedDevice.queue.onSubmittedWorkDone();
+  return true;
+}
+
+async function readbackRenderableFrame() {
+  let sample = await readbackCenter();
+  // Dawn can expose the first cleared target before the renderer's first
+  // submitted scene frame has reached the readback queue. Advance only the
+  // already-scheduled frame, with a strict bound; persistent black output
+  // still reaches the real oracle and fails.
+  for (let attempt = 0; attempt < 3 && Math.max(...sample.rgba.slice(0, 3)) <= 0.01; attempt += 1) {
+    if (!(await advanceSettlingFrame())) break;
+    sample = await readbackCenter();
+  }
+  return sample;
+}
+
+const phaseReferences = new Map();
+let disabledReference;
+let lastPhase;
+
+function renderedCenterOracle(phase, sample) {
+  if (phase !== lastPhase) {
+    phaseReferences.delete(phase);
+    if (phase === 'disabled') disabledReference = undefined;
+    lastPhase = phase;
+  }
+  const observed = sample.rgba;
+  const primed = !phaseReferences.has(phase);
+  const expected = phaseReferences.get(phase) ?? observed;
+  phaseReferences.set(phase, expected);
+  if (phase === 'disabled' && disabledReference === undefined) disabledReference = observed;
+  const caseResult = evaluateFogCase({
+    caseId: phase,
+    expected,
+    observed,
+    active: phase !== 'disabled',
+  });
+  const activeDelta =
+    phase === 'disabled' || disabledReference === undefined
+      ? undefined
+      : Math.max(...observed.slice(0, 3).map((value, index) => Math.abs(value - disabledReference[index])));
+  if (phase !== 'disabled' && activeDelta !== undefined && activeDelta <= 0.01) {
+    return {
+      ...caseResult,
+      verdict: 'fail',
+      confidence: 'low',
+      reason: 'active Fog center fragment did not differ from the captured disabled fragment',
+    };
+  }
+  if (primed) {
+    return {
+      ...caseResult,
+      confidence: 'medium',
+      reason: 'oracle primed from the actual rendered center fragment',
+    };
+  }
+  return caseResult;
 }
 
 const started = app.start();
 if (!started.ok) {
-  console.error(`[smoke] FAIL - app.start: ${started.error.code} - ${started.error.hint}`);
+  console.error('[smoke-dawn] unavailable: app start failed: ' + started.error.code);
   process.exit(1);
 }
-let frames = 0;
-let passNames = [];
-for (let i = 0; i < targetFrames; i += 1) {
-  const due = rafQueue.shift();
-  if (!due) break;
+const warmupFrame = rafQueue.shift();
+if (warmupFrame !== undefined) {
   now += 16.67;
-  due.callback(now);
-  frames += 1;
-  if (i === 4) passNames = [...app.renderer.perFramePassNames];
-  if (i % 16 === 15) await delay(1);
+  warmupFrame.callback(now);
+  await delay(0);
+  await sharedDevice.queue.onSubmittedWorkDone();
 }
+
+const trace = await runFogLifecycle({
+  backend: 'dawn',
+  frameCount: targetFrames,
+  advanceFrame: async ({ frame, phase, phaseChanged }) => {
+    const phaseState = applyPhase(phase);
+    if (rafQueue.length === 0) await delay(1);
+    const due = rafQueue.shift();
+    if (!due) throw new Error('Dawn frame ' + frame + ' was not scheduled');
+    now += 16.67;
+    due.callback(now);
+    await delay(0);
+    let recovery;
+    if (phase === 'recovery' && phaseChanged) {
+      recoveryExpected = true;
+      if (!triggerDeviceLoss()) {
+        throw new Error('Dawn smoke could not arm a recoverable device-loss trigger');
+      }
+      await delay(0);
+      const before = app.renderer.state();
+      const result = await app.renderer.recover();
+      const after = app.renderer.state();
+      const recovered = result.ok && before === 'device-lost' && after === 'alive';
+      recovery = {
+        action: 'renderer.recover',
+        before,
+        result: result.ok ? 'recovered' : result.error.code,
+        after,
+        verdict: recovered ? 'pass' : 'fail',
+        ...(recovered
+          ? {}
+          : {
+              reason:
+                'Dawn smoke did not observe a real device-lost -> alive transition; recover-not-needed is not recovery evidence',
+            }),
+      };
+      if (recovered) {
+        const recoveredFrame = rafQueue.shift();
+        if (recoveredFrame === undefined) throw new Error('Dawn recovery frame was not scheduled');
+        now += 16.67;
+        recoveredFrame.callback(now);
+        await delay(0);
+        const settledFrame = rafQueue.shift();
+        if (settledFrame !== undefined) {
+          now += 16.67;
+          settledFrame.callback(now);
+          await delay(0);
+        }
+      }
+    }
+    return { phaseState, recovery };
+  },
+  captureFrame: async ({ frame, phase, advanced }) => {
+    const sample = await readbackRenderableFrame();
+    const observed = sample.rgba;
+    const roi = sampleFogRois(sample.pixels, sample.width, sample.height);
+    const oracleResult = renderedCenterOracle(phase, sample);
+    const caseResult =
+      advanced.recovery?.verdict === 'fail'
+        ? {
+            ...oracleResult,
+            verdict: 'fail',
+            confidence: 'low',
+            reason: advanced.recovery.reason,
+          }
+        : oracleResult;
+    if (!pairScreenshots.has(phase) && ['disabled', 'uniform', 'height'].includes(phase)) {
+      mkdirSync(pairEvidenceDir, { recursive: true });
+      const path = resolve(pairEvidenceDir, `dawn-fog-${phase}.png`);
+      const pngBytes = encodePng(sample.width, sample.height, sample.pixels);
+      writeFileSync(path, pngBytes);
+      pairScreenshots.set(phase, {
+        phase,
+        path,
+        bytes: pngBytes.byteLength,
+        sha256: createHash('sha256').update(pngBytes).digest('hex'),
+        state: advanced.phaseState,
+        observed: observed.slice(0, 4),
+        roi,
+        viewport: { width: sample.width, height: sample.height },
+      });
+    }
+    return {
+      cases: [caseResult],
+      resource: {
+        owner: resourceOwner,
+        revision,
+        reactive: advanced.phaseState.changedFrom !== undefined,
+        accumulation: advanced.phaseState.changedFrom === undefined,
+        ownerChanged: advanced.phaseState.ownerChanged,
+        target: { width: sample.width, height: sample.height },
+        ...(advanced.recovery === undefined ? {} : { recovery: advanced.recovery }),
+      },
+      visual: {
+        observed: observed.slice(0, 3),
+        verdict: caseResult.verdict,
+        confidence: caseResult.confidence,
+        backend: 'dawn',
+        roi,
+      },
+    };
+  },
+});
 app.stop();
 
-const device = sharedDevice;
-if (!device || !renderTarget) {
-  console.error('[smoke] FAIL - no Dawn device/render target');
+if (!sharedDevice || !renderTarget) {
+  console.error('[smoke-dawn] unavailable: no device or render target');
   process.exit(1);
 }
-await device.queue.onSubmittedWorkDone();
-const bytesPerRow = Math.ceil((width * 4) / 256) * 256;
-const readback = device.createBuffer({ size: bytesPerRow * height, usage: 0x01 | 0x08 });
-const encoder = device.createCommandEncoder();
-encoder.copyTextureToBuffer(
-  { texture: renderTarget },
-  { buffer: readback, bytesPerRow, rowsPerImage: height },
-  { width, height, depthOrArrayLayers: 1 },
-);
-device.queue.submit([encoder.finish()]);
-await readback.mapAsync(0x01);
-const pixels = new Uint8Array(readback.getMappedRange().slice(0));
-readback.unmap();
-readback.destroy();
-
-const tight = new Uint8Array(width * height * 4);
-for (let y = 0; y < height; y += 1) tight.set(pixels.subarray(y * bytesPerRow, y * bytesPerRow + width * 4), y * width * 4);
-const pngOut = process.env.SMOKE_PNG_OUT ?? resolve(appRoot, 'artifacts', 'smoke-frame.png');
-mkdirSync(dirname(pngOut), { recursive: true });
-writeFileSync(pngOut, writeReferencePng(tight, width, height));
-
-let maxBrightness = 0;
-let fogCloseCount = 0;
-for (let i = 0; i < tight.length; i += 4) {
-  const r = (tight[i] ?? 0) / 255;
-  const g = (tight[i + 1] ?? 0) / 255;
-  const b = (tight[i + 2] ?? 0) / 255;
-  maxBrightness = Math.max(maxBrightness, r * 0.299 + g * 0.587 + b * 0.114);
-  if (Math.abs(r - 0.25) < 0.06 && Math.abs(g - 0.25) < 0.06 && Math.abs(b - 0.25) < 0.06) fogCloseCount += 1;
-}
-const hasPostEffect = passNames.some((name) => name.startsWith('post-effect-'));
-const failures = [];
-if (frames < targetFrames) failures.push(`frames=${frames} < ${targetFrames}`);
-if (maxBrightness <= 0.04) failures.push(`maxBrightness=${maxBrightness.toFixed(4)} <= 0.04`);
-if (falsify === 'force-debug-color' && (tight[0] ?? 0) < 200) {
-  failures.push(`FALSIFY debug shader did not reach the output: firstPixel=${tight[0] ?? 0}`);
-}
-if (falsify === '' && fogCloseCount < 10000) {
-  failures.push(`fog color did not materially affect the frame: fogClosePixels=${fogCloseCount} < 10000`);
-}
-if (falsify === 'force-no-fog' && !hasPostEffect) failures.push(`FALSIFY removed the required fog pass: ${JSON.stringify(passNames)}`);
-if (falsify !== 'force-no-fog' && !hasPostEffect) failures.push(`fog post-effect missing: ${JSON.stringify(passNames)}`);
-if (errors.length > 0) failures.push(`engine errors=${errors.map((error) => error.code).join(',')}`);
-console.log(`[smoke] backend=${app.renderer.backend}`);
-console.log(`[smoke] frames=${frames} passNames=${JSON.stringify(passNames)}`);
-console.log(`[smoke] maxBrightness=${maxBrightness.toFixed(4)} fogClosePixels=${fogCloseCount} png=${pngOut}`);
-if (failures.length > 0) {
-  console.error(`[smoke] FAIL - ${failures.join('; ')}`);
+const evidencePath = resolve(featureEvidenceDir, 'dawn-fog-trace.json');
+mkdirSync(dirname(evidencePath), { recursive: true });
+const evidence = {
+  ...trace,
+  errors: errors.map((error) => error.code ?? String(error)),
+  recoveryErrors: recoveryErrors.map((error) => error.code ?? String(error)),
+  pairScreenshots: Array.from(pairScreenshots.values()),
+};
+writeFileSync(evidencePath, JSON.stringify(evidence, null, 2) + '\n');
+renderTarget?.destroy?.();
+sharedDevice?.destroy?.();
+console.log('[smoke-dawn] backend=dawn frames=' + trace.frames + ' verdict=' + trace.verdict + ' evidence=' + evidencePath);
+if (errors.length > 0 || trace.verdict !== 'pass') {
+  console.error('[smoke-dawn] FAIL - errors=' + errors.length + ' trace=' + trace.verdict);
+  const failedCases = evidence.cases.filter((entry) => entry.verdict !== 'pass');
+  const failedVisualEvidence = evidence.visualEvidence.filter((entry) => entry.verdict !== 'pass');
+  if (failedCases.length > 0) {
+    console.error('[smoke-dawn] failed-cases=' + JSON.stringify(failedCases));
+  }
+  if (failedVisualEvidence.length > 0) {
+    console.error('[smoke-dawn] failed-visual-evidence=' + JSON.stringify(failedVisualEvidence));
+  }
   process.exit(1);
 }
-console.log('[smoke] PASS - fog scene rendered with depth post-process and zero engine errors');
+console.log('[smoke-dawn] PASS - real Dawn readback and recovery trace completed');
+console.log('[smoke] PASS');
 process.exit(0);

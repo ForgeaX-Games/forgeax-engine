@@ -15,10 +15,16 @@ import { fileURLToPath } from 'node:url';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PKG = join(SCRIPT_DIR, '..', 'pkg');
-const presenceMarkers = [join(PKG, 'wgpu_wasm.js')];
+const presenceMarkers = [join(PKG, 'wgpu_wasm.js'), join(PKG, 'provenance.json')];
+const { verifyProvenance } = await import('./provenance.mjs');
 if (presenceMarkers.every(existsSync)) {
-  process.stdout.write('[wgpu-wasm] pkg/ WASM already present -- skipping fetch.\n');
-  process.exit(0);
+  try {
+    await verifyProvenance();
+    process.stdout.write('[wgpu-wasm] pkg/ WASM and provenance already present -- skipping fetch.\n');
+    process.exit(0);
+  } catch (error) {
+    process.stderr.write(`[wgpu-wasm] existing pkg/ provenance rejected: ${error.message}\n`);
+  }
 }
 const { ensureWasm } = await import('../../../scripts/lib/ensure-wasm-lib.mjs');
 

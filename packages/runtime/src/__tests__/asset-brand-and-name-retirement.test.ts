@@ -2,8 +2,9 @@
 //
 //   AC-05: storedNameOf retired; per-GUID stored name lives on the envelope and
 //          feeds resolveName's `storedName` argument. resolveName's three-arg
-//          XOR derivation (single-asset basename / multi-asset stored name /
-//          no-package '' fallback / 1->N promotion freeze) must be unchanged.
+//          display-name derivation (stored-name precedence / package basename
+//          fallback / no-package '' fallback / promotion freeze) must remain
+//          coherent.
 //   AC-06: the 14-arm assetBrand switch retired for the ASSET_BRAND Record
 //          table. The table maps every Asset.kind to its brand, and the two
 //          consumption points (instantiate -> allocSharedRef brand arg;
@@ -19,7 +20,7 @@ function makeReg(): AssetRegistry {
 
 const sampler = { kind: 'sampler' as const };
 
-// ── AC-05: resolveName XOR derivation unchanged after storedNameOf retirement ──
+// ── AC-05: resolveName remains coherent after storedNameOf retirement ──
 
 describe('AC-05 resolveName regression (storedNameOf retired, name on envelope)', () => {
   it('single-asset package -> basename(path), no stored name needed', () => {

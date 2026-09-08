@@ -1,0 +1,429 @@
+{
+  "schemaVersion": "format-tier1-ktx2-gpu/1",
+  "featureId": "feat-20260812-format-classification-tier1",
+  "generatedAt": "2026-08-25T20:16:32.105Z",
+  "sourceCodeSha": "3ee7050912de6b6c025e852134057ed2fc7d2a67",
+  "status": "complete",
+  "rows": [
+    {
+      "source": "ktx2-etc1s",
+      "guid": "40000000-0000-4000-8000-000000000001",
+      "arm": "rgba",
+      "selected": "rgba8unorm-srgb",
+      "selection": "fallback",
+      "colorSpace": "srgb",
+      "status": "pass",
+      "readbackBytes": 64,
+      "normalized": {
+        "status": "pass",
+        "maxAbsError": 0.00784313725490196,
+        "threshold": 0.05,
+        "verdict": "pass"
+      },
+      "reference": {
+        "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+        "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+        "byteLength": 64
+      }
+    },
+    {
+      "source": "ktx2-etc1s",
+      "guid": "40000000-0000-4000-8000-000000000002",
+      "arm": "astc",
+      "selected": "astc-4x4-unorm-srgb",
+      "selection": "selected",
+      "colorSpace": "srgb",
+      "status": "pass",
+      "readbackBytes": 64,
+      "normalized": {
+        "status": "pass",
+        "maxAbsError": 0.00784313725490196,
+        "threshold": 0.05,
+        "verdict": "pass"
+      },
+      "reference": {
+        "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+        "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+        "byteLength": 64
+      }
+    },
+    {
+      "source": "ktx2-etc1s",
+      "guid": "40000000-0000-4000-8000-000000000003",
+      "arm": "bc",
+      "selected": "bc7-rgba-unorm-srgb",
+      "selection": "selected",
+      "colorSpace": "srgb",
+      "status": "pass",
+      "readbackBytes": 64,
+      "normalized": {
+        "status": "pass",
+        "maxAbsError": 0.00784313725490196,
+        "threshold": 0.05,
+        "verdict": "pass"
+      },
+      "reference": {
+        "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+        "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+        "byteLength": 64
+      }
+    },
+    {
+      "source": "ktx2-etc1s",
+      "guid": "40000000-0000-4000-8000-000000000004",
+      "arm": "etc",
+      "selected": "etc2-rgba8unorm-srgb",
+      "selection": "selected",
+      "colorSpace": "srgb",
+      "status": "pass",
+      "readbackBytes": 64,
+      "normalized": {
+        "status": "pass",
+        "maxAbsError": 0.00784313725490196,
+        "threshold": 0.05,
+        "verdict": "pass"
+      },
+      "reference": {
+        "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+        "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+        "byteLength": 64
+      }
+    },
+    {
+      "source": "ktx2-etc1s",
+      "guid": "40000000-0000-4000-8000-000000000005",
+      "arm": "all",
+      "selected": "bc7-rgba-unorm-srgb",
+      "selection": "selected",
+      "colorSpace": "srgb",
+      "status": "pass",
+      "readbackBytes": 64,
+      "normalized": {
+        "status": "pass",
+        "maxAbsError": 0.00784313725490196,
+        "threshold": 0.05,
+        "verdict": "pass"
+      },
+      "reference": {
+        "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+        "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+        "byteLength": 64
+      }
+    },
+    {
+      "source": "ktx2-uastc-ldr",
+      "guid": "40000000-0000-4000-8000-000000000006",
+      "arm": "rgba",
+      "selected": "rgba8unorm-srgb",
+      "selection": "fallback",
+      "colorSpace": "srgb",
+      "status": "pass",
+      "readbackBytes": 64,
+      "normalized": {
+        "status": "pass",
+        "maxAbsError": 0,
+        "threshold": 0.05,
+        "verdict": "pass"
+      },
+      "reference": {
+        "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+        "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+        "byteLength": 64
+      }
+    },
+    {
+      "source": "ktx2-uastc-ldr",
+      "guid": "40000000-0000-4000-8000-000000000007",
+      "arm": "astc",
+      "selected": "astc-4x4-unorm-srgb",
+      "selection": "selected",
+      "colorSpace": "srgb",
+      "status": "pass",
+      "readbackBytes": 64,
+      "normalized": {
+        "status": "pass",
+        "maxAbsError": 0,
+        "threshold": 0.05,
+        "verdict": "pass"
+      },
+      "reference": {
+        "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+        "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+        "byteLength": 64
+      }
+    },
+    {
+      "source": "ktx2-uastc-ldr",
+      "guid": "40000000-0000-4000-8000-000000000008",
+      "arm": "bc",
+      "selected": "bc7-rgba-unorm-srgb",
+      "selection": "selected",
+      "colorSpace": "srgb",
+      "status": "pass",
+      "readbackBytes": 64,
+      "normalized": {
+        "status": "pass",
+        "maxAbsError": 0,
+        "threshold": 0.05,
+        "verdict": "pass"
+      },
+      "reference": {
+        "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+        "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+        "byteLength": 64
+      }
+    },
+    {
+      "source": "ktx2-uastc-ldr",
+      "guid": "40000000-0000-4000-8000-000000000009",
+      "arm": "etc",
+      "selected": "etc2-rgba8unorm-srgb",
+      "selection": "selected",
+      "colorSpace": "srgb",
+      "status": "pass",
+      "readbackBytes": 64,
+      "normalized": {
+        "status": "pass",
+        "maxAbsError": 0.00784313725490196,
+        "threshold": 0.05,
+        "verdict": "pass"
+      },
+      "reference": {
+        "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+        "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+        "byteLength": 64
+      }
+    },
+    {
+      "source": "ktx2-uastc-ldr",
+      "guid": "40000000-0000-4000-8000-000000000010",
+      "arm": "all",
+      "selected": "bc7-rgba-unorm-srgb",
+      "selection": "selected",
+      "colorSpace": "srgb",
+      "status": "pass",
+      "readbackBytes": 64,
+      "normalized": {
+        "status": "pass",
+        "maxAbsError": 0,
+        "threshold": 0.05,
+        "verdict": "pass"
+      },
+      "reference": {
+        "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+        "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+        "byteLength": 64
+      }
+    },
+    {
+      "source": "ktx2-uastc-hdr",
+      "guid": "40000000-0000-4000-8000-000000000011",
+      "arm": "rgba",
+      "selected": "rgba16float",
+      "selection": "fallback",
+      "colorSpace": "linear",
+      "status": "pass",
+      "readbackBytes": 128,
+      "normalized": {
+        "status": "pass",
+        "maxAbsError": 0,
+        "threshold": 0.05,
+        "verdict": "pass"
+      },
+      "reference": {
+        "source": "format-tier1-authored-4x4-rgba16-pattern-v1",
+        "sha256": "3e1b24d558ee3363f60d8d3857a0b61bd74a77093dc68af71fb72ab860ce28fd",
+        "byteLength": 128
+      }
+    },
+    {
+      "source": "ktx2-uastc-hdr",
+      "guid": "40000000-0000-4000-8000-000000000012",
+      "arm": "astc",
+      "selected": "rgba16float",
+      "selection": "fallback",
+      "colorSpace": "linear",
+      "status": "pass",
+      "readbackBytes": 128,
+      "normalized": {
+        "status": "pass",
+        "maxAbsError": 0,
+        "threshold": 0.05,
+        "verdict": "pass"
+      },
+      "reference": {
+        "source": "format-tier1-authored-4x4-rgba16-pattern-v1",
+        "sha256": "3e1b24d558ee3363f60d8d3857a0b61bd74a77093dc68af71fb72ab860ce28fd",
+        "byteLength": 128
+      }
+    },
+    {
+      "source": "ktx2-uastc-hdr",
+      "guid": "40000000-0000-4000-8000-000000000013",
+      "arm": "bc",
+      "selected": "bc6h-rgb-ufloat",
+      "selection": "selected",
+      "colorSpace": "linear",
+      "status": "pass",
+      "readbackBytes": 128,
+      "normalized": {
+        "status": "pass",
+        "maxAbsError": 0,
+        "threshold": 0.05,
+        "verdict": "pass"
+      },
+      "reference": {
+        "source": "format-tier1-authored-4x4-rgba16-pattern-v1",
+        "sha256": "3e1b24d558ee3363f60d8d3857a0b61bd74a77093dc68af71fb72ab860ce28fd",
+        "byteLength": 128
+      }
+    },
+    {
+      "source": "ktx2-uastc-hdr",
+      "guid": "40000000-0000-4000-8000-000000000014",
+      "arm": "etc",
+      "selected": "rgba16float",
+      "selection": "fallback",
+      "colorSpace": "linear",
+      "status": "pass",
+      "readbackBytes": 128,
+      "normalized": {
+        "status": "pass",
+        "maxAbsError": 0,
+        "threshold": 0.05,
+        "verdict": "pass"
+      },
+      "reference": {
+        "source": "format-tier1-authored-4x4-rgba16-pattern-v1",
+        "sha256": "3e1b24d558ee3363f60d8d3857a0b61bd74a77093dc68af71fb72ab860ce28fd",
+        "byteLength": 128
+      }
+    },
+    {
+      "source": "ktx2-uastc-hdr",
+      "guid": "40000000-0000-4000-8000-000000000015",
+      "arm": "all",
+      "selected": "bc6h-rgb-ufloat",
+      "selection": "selected",
+      "colorSpace": "linear",
+      "status": "pass",
+      "readbackBytes": 128,
+      "normalized": {
+        "status": "pass",
+        "maxAbsError": 0,
+        "threshold": 0.05,
+        "verdict": "pass"
+      },
+      "reference": {
+        "source": "format-tier1-authored-4x4-rgba16-pattern-v1",
+        "sha256": "3e1b24d558ee3363f60d8d3857a0b61bd74a77093dc68af71fb72ab860ce28fd",
+        "byteLength": 128
+      }
+    },
+    {
+      "source": "basis-uastc-ldr",
+      "guid": "40000000-0000-4000-8000-000000000016",
+      "arm": "rgba",
+      "selected": "rgba8unorm-srgb",
+      "selection": "fallback",
+      "colorSpace": "srgb",
+      "status": "pass",
+      "readbackBytes": 64,
+      "normalized": {
+        "status": "pass",
+        "maxAbsError": 0,
+        "threshold": 0.05,
+        "verdict": "pass"
+      },
+      "reference": {
+        "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+        "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+        "byteLength": 64
+      }
+    },
+    {
+      "source": "basis-uastc-ldr",
+      "guid": "40000000-0000-4000-8000-000000000017",
+      "arm": "astc",
+      "selected": "astc-4x4-unorm-srgb",
+      "selection": "selected",
+      "colorSpace": "srgb",
+      "status": "pass",
+      "readbackBytes": 64,
+      "normalized": {
+        "status": "pass",
+        "maxAbsError": 0,
+        "threshold": 0.05,
+        "verdict": "pass"
+      },
+      "reference": {
+        "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+        "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+        "byteLength": 64
+      }
+    },
+    {
+      "source": "basis-uastc-ldr",
+      "guid": "40000000-0000-4000-8000-000000000018",
+      "arm": "bc",
+      "selected": "bc7-rgba-unorm-srgb",
+      "selection": "selected",
+      "colorSpace": "srgb",
+      "status": "pass",
+      "readbackBytes": 64,
+      "normalized": {
+        "status": "pass",
+        "maxAbsError": 0,
+        "threshold": 0.05,
+        "verdict": "pass"
+      },
+      "reference": {
+        "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+        "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+        "byteLength": 64
+      }
+    },
+    {
+      "source": "basis-uastc-ldr",
+      "guid": "40000000-0000-4000-8000-000000000019",
+      "arm": "etc",
+      "selected": "etc2-rgba8unorm-srgb",
+      "selection": "selected",
+      "colorSpace": "srgb",
+      "status": "pass",
+      "readbackBytes": 64,
+      "normalized": {
+        "status": "pass",
+        "maxAbsError": 0.00784313725490196,
+        "threshold": 0.05,
+        "verdict": "pass"
+      },
+      "reference": {
+        "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+        "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+        "byteLength": 64
+      }
+    },
+    {
+      "source": "basis-uastc-ldr",
+      "guid": "40000000-0000-4000-8000-000000000020",
+      "arm": "all",
+      "selected": "bc7-rgba-unorm-srgb",
+      "selection": "selected",
+      "colorSpace": "srgb",
+      "status": "pass",
+      "readbackBytes": 64,
+      "normalized": {
+        "status": "pass",
+        "maxAbsError": 0,
+        "threshold": 0.05,
+        "verdict": "pass"
+      },
+      "reference": {
+        "source": "format-tier1-authored-4x4-rgba8-pattern-v1",
+        "sha256": "3cf988bebb81414254c661d72d7900e687ac1f2363c348140a7ec319496e9bc0",
+        "byteLength": 64
+      }
+    }
+  ]
+}

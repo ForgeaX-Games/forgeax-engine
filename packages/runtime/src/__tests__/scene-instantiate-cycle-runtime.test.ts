@@ -1,3 +1,4 @@
+import * as SceneOwner from '@forgeax/engine-scene';
 // feat-20260608-scene-nesting-ecs-fication M2 / w21 (red phase) — runtime
 // cycle fail-fast (AC-13). Constructs a hand-authored SceneAsset graph
 // A -> B -> C -> A via mount.source resolved through a test-only
@@ -6,15 +7,18 @@
 // stack (Set<Guid>) and fail-fast pack-cyclic-reference + detail.kind:
 // 'mount-asset' + detail.cycle: GUID[] (plan-strategy §D-3).
 
-import { err, ok, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
+import { err, ok } from '@forgeax/engine-types';
 // Side-effect import: register Transform / ChildOf etc. via the runtime
 // component barrel so the implementation's resolveComponent('ChildOf') call
 // in _spawnMountEntity sees a defined token.
 import '@forgeax/engine-runtime';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { registerSceneComponents } from './helpers/register-scene-components';
 
 function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
+  registerSceneComponents(world);
   return world.allocSharedRef('SceneAsset', asset);
 }
 
@@ -42,7 +46,7 @@ describe('runtime cycle fail-fast (w21)', () => {
     const handleA = registerSceneAsset(world, assetA);
     const handleB = registerSceneAsset(world, assetB);
     const handleC = registerSceneAsset(world, assetC);
-    world._setSceneAssetResolver?.((sourceIdx, parentHandle) => {
+    SceneOwner.worldSetSceneAssetResolver(world, (sourceIdx, parentHandle) => {
       void sourceIdx;
       const raw = parentHandle as unknown as number;
       if (raw === (handleA as unknown as number)) return ok(handleB);
@@ -50,7 +54,7 @@ describe('runtime cycle fail-fast (w21)', () => {
       if (raw === (handleC as unknown as number)) return ok(handleA);
       return err({ code: 'asset-not-found' });
     });
-    const r = world.instantiateScene(handleA);
+    const r = SceneOwner.worldInstantiateScene(world, handleA);
     expect(r.ok).toBe(false);
     if (r.ok) return;
     const e = r.error as { code: string; detail?: { kind?: string; cycle?: readonly string[] } };

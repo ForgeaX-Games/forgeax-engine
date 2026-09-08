@@ -2,6 +2,7 @@ import { Update } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
 import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
+import { captureCanvasPixels } from '../../../shared/src/canvas-capture';
 import { buildScreenshotWorld, stepScreenshot } from './screenshot.js';
 
 let screenshotDue = false;
@@ -33,13 +34,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  // Poll screenshotDue after each frame — readPixels is async and reads the
-  // canvas's current content (drawn in the most recent renderer.draw).
+  // Poll screenshotDue after each frame and capture the host canvas.
   let counter = 0;
   const poll = async () => {
     if (screenshotDue) {
       screenshotDue = false;
-      const pixelsResult = await app.renderer.readPixels();
+      const pixelsResult = await captureCanvasPixels(target);
       if (pixelsResult.ok) {
         const pixels = pixelsResult.value;
         const tmpCanvas = document.createElement('canvas');
@@ -61,7 +61,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           console.log(`[screenshot] saved screenshot-${counter - 1}.png`);
         }
       } else {
-        console.error('[screenshot] readPixels failed:', pixelsResult.error);
+        console.error('[screenshot] canvas capture failed:', pixelsResult.error);
       }
     }
     requestAnimationFrame(poll);

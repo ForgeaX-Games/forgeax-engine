@@ -1,16 +1,15 @@
 import { animationPlugin } from '@forgeax/engine-animation';
-import { World } from '@forgeax/engine-ecs';
+import { createWorldContext, World } from '@forgeax/engine-ecs';
 import { scenePlugin } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 
 describe('scene plugin policy', () => {
   it('can be composed on a host-owned world', async () => {
     const world = new World();
-    const result = await scenePlugin().build(world);
-    expect(result.ok).toBe(true);
+    await createWorldContext(world, [scenePlugin()]);
   });
 });
 
-it('extracted animation plugin has a stable build contract', () => {
+it('extracted animation plugin has a stable identity', () => {
   expect(animationPlugin().name).toBe('animation');
 });

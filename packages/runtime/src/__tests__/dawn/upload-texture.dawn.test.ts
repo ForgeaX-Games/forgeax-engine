@@ -29,12 +29,12 @@
 
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
-import { GpuResourceStore } from '@forgeax/engine-render/internal';
 import { ok } from '@forgeax/engine-rhi';
 import { rhi } from '@forgeax/engine-rhi-webgpu';
 import type { DecodedImage, EquirectAsset, TextureAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { GpuResidencyCache } from '../../../../render/src/device/gpu-residency';
 
 const mockCaps = {
   backendKind: 'webgpu' as const,
@@ -58,8 +58,8 @@ const mockCaps = {
   maxColorAttachments: 8,
 };
 
-// feat-20260601-gpu-resource-store-extraction M1: uploadTexture moved to
-// GpuResourceStore (POD carries format, decoded carries colorSpace; D-2). The
+// feat-20260601-device/gpu-residency-extraction M1: uploadTexture moved to
+// GpuResidencyCache (POD carries format, decoded carries colorSpace; D-2). The
 // store holds no registry reference -- the asset-not-found arm now lives at the
 // registry get the caller runs before reaching the store.
 
@@ -100,7 +100,7 @@ function decodedFromBytes(
 
 describe('T-M3-02 dawn uploadTexture format <-> colorSpace consistency', () => {
   it('rejects format=rgba8unorm-srgb + decoded.colorSpace=linear (real GPU path)', async () => {
-    const store = new GpuResourceStore();
+    const store = new GpuResidencyCache();
     const pod = makeTexture('rgba8unorm-srgb', 1, 1, 'srgb', false);
     const handle = toShared<'TextureAsset'>(1);
     const decoded = decodedFromBytes(new Uint8Array([188, 188, 188, 255]), 1, 1, 'linear', false);
@@ -114,7 +114,7 @@ describe('T-M3-02 dawn uploadTexture format <-> colorSpace consistency', () => {
   });
 
   it('accepts format=rgba8unorm-srgb + decoded.colorSpace=srgb (1x1 mid-gray byte 188)', async () => {
-    const store = new GpuResourceStore();
+    const store = new GpuResidencyCache();
     const pod = makeTexture('rgba8unorm-srgb', 1, 1, 'srgb', false);
     const handle = toShared<'TextureAsset'>(1);
     const decoded = decodedFromBytes(new Uint8Array([188, 188, 188, 255]), 1, 1, 'srgb', false);
@@ -123,7 +123,7 @@ describe('T-M3-02 dawn uploadTexture format <-> colorSpace consistency', () => {
   });
 
   it('accepts format=rgba8unorm + decoded.colorSpace=linear (1x1 linear byte 128)', async () => {
-    const store = new GpuResourceStore();
+    const store = new GpuResidencyCache();
     const pod = makeTexture('rgba8unorm', 1, 1, 'linear', false);
     const handle = toShared<'TextureAsset'>(1);
     const decoded = decodedFromBytes(new Uint8Array([128, 64, 192, 255]), 1, 1, 'linear', false);
@@ -158,7 +158,7 @@ describe('AC-04: uploadTexture non-256-aligned width (real GPU path)', () => {
     if (!deviceResult.ok) return;
     const device = deviceResult.value;
 
-    const store = new GpuResourceStore();
+    const store = new GpuResidencyCache();
     const world = new World();
     // Literal configureGpuDevice required -- this is the anti-short-circuit
     // guard verified by acceptanceCheck grep gate. Wires the device + register

@@ -141,10 +141,7 @@ const mockCanvas = {
 // --- 3. Engine imports + renderer bootstrap ---------------------------------
 
 const { World } = await import('@forgeax/engine-ecs');
-const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  createRenderer,
-} = enginePkg;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { ANTIALIAS_MSAA, ANTIALIAS_NONE, Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const {
@@ -159,33 +156,27 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  var hostAssets = constructed.value.assets;
 } catch (err) {
   console.error(
-    `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
+    `[smoke] FAIL - constructRuntimeRendererHost failed: ${err instanceof Error ? err.message : String(err)}`,
   );
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
 
-console.log(`[learn-render-msaa] backend=${renderer.backend}`);
+console.log(`[learn-render-msaa] backend=${renderer.inspect().capabilities.backendKind}`);
 
-const assets = renderer.assets;
+const assets = hostAssets;
 if (!assets) {
   console.error('[smoke] FAIL - AssetRegistry is null');
   process.exit(1);
 }
 
-if (!renderer.ready) {
-  console.error('[smoke] FAIL - renderer.ready is null');
-  process.exit(1);
-}
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 // Standard PBR material POD (same as demo main.ts). feat-20260614 M8
 // (D-15/D-17): the material is minted per-World via allocSharedRef inside
@@ -313,7 +304,7 @@ async function doReadPixels() {
 // --- 6. Error tracker -----------------------------------------------------
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => { if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint }); });
 
 // --- 7. Dual-pass render ---------------------------------------------------
 
@@ -326,14 +317,24 @@ const falsifyLabel = FALSIFY === 'msaa-noop' ? ' (FALSIFY=msaa-noop)' : '';
 
 // Pass 1: ANTIALIAS_NONE baseline.
 const worldNone = new World();
-const worldAttachment1 = renderer.attachWorld(worldNone);
+const worldAttachment1 = renderer.attach(worldNone);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const leaseNone = worldAttachment1.value;
 spawnScene(worldNone, ANTIALIAS_NONE);
 
 worldNone.update().unwrap();
-const drawNoneRes = renderer.draw([worldNone], { cameraOwner: 0, resourceOwner: 0 });
+const drawNoneRes = renderer.draw({
+  leases: [leaseNone],
+  camera: { lease: leaseNone },
+  environment: { lease: leaseNone },
+});
 if (!drawNoneRes.ok) {
   console.error(`[smoke] FAIL - draw (none) failed: ${drawNoneRes.error.code}`);
+  process.exit(1);
+}
+const completedNone = await drawNoneRes.value.completed;
+if (!completedNone.ok) {
+  console.error(`[smoke] FAIL - draw (none) completion failed: ${completedNone.error.code}`);
   process.exit(1);
 }
 await device.queue.onSubmittedWorkDone();
@@ -341,14 +342,24 @@ const pixelsNone = await doReadPixels();
 
 // Pass 2: ANTIALIAS_MSAA (or ANTIALIAS_NONE under FALSIFY).
 const worldMsaa = new World();
-const worldAttachment2 = renderer.attachWorld(worldMsaa);
+const worldAttachment2 = renderer.attach(worldMsaa);
 if (!worldAttachment2.ok) throw worldAttachment2.error;
+const leaseMsaa = worldAttachment2.value;
 spawnScene(worldMsaa, antialiasForPass2);
 
 worldMsaa.update().unwrap();
-const drawMsaaRes = renderer.draw([worldMsaa], { cameraOwner: 0, resourceOwner: 0 });
+const drawMsaaRes = renderer.draw({
+  leases: [leaseMsaa],
+  camera: { lease: leaseMsaa },
+  environment: { lease: leaseMsaa },
+});
 if (!drawMsaaRes.ok) {
   console.error(`[smoke] FAIL - draw (msaa${falsifyLabel}) failed: ${drawMsaaRes.error.code}`);
+  process.exit(1);
+}
+const completedMsaa = await drawMsaaRes.value.completed;
+if (!completedMsaa.ok) {
+  console.error(`[smoke] FAIL - draw (msaa${falsifyLabel}) completion failed: ${completedMsaa.error.code}`);
   process.exit(1);
 }
 await device.queue.onSubmittedWorkDone();
@@ -359,8 +370,8 @@ const pixelsMsaa = await doReadPixels();
 const failures = [];
 
 // (a) Backend must be webgpu.
-if (renderer.backend !== 'webgpu') {
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (renderer.inspect().capabilities.backendKind !== 'webgpu') {
+  failures.push(`(a) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
 }
 
 // (b) Both passes must produce valid buffers.

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // bevy-translation headless dawn smoke — reproduces the app's translation World
 // in node-dawn and asserts a real lit render THAT MOVES: the cube slides along
 // its local X axis, so a frame early in the slide and a frame later must differ.
@@ -14,8 +15,9 @@
 // a fixed dt so the two capture points are reproducible). Verdict criteria:
 //   (a) backend === 'webgpu'
 //   (b) frames >= SMOKE_MIN_FRAMES
-//   (c) NDC-center pixel is NOT black at the EARLY capture — the cube starts at
-//       the origin (row center), so a not-black center proves it rendered lit.
+//   (c) the cube observation window contains a lit pixel at the EARLY capture.
+//       The yawed cube puts one dark face over the exact center pixel, so a
+//       small projected window is the stable visibility witness.
 //   (d) MOTION: the frame captured near t=0 differs from a frame captured after
 //       the cube has slid ~2 units along local X (mean per-pixel delta >
 //       MOTION_THRESHOLD). A static render (broken Time wiring / quat.right
@@ -137,26 +139,21 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  renderer = await createSmokeRenderer(createRenderer, mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
-console.log(`[bevy-translation] backend=${renderer.backend}`);
+console.log(`[bevy-translation] backend=${rendererBackend(renderer)}`);
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+subscribeSmokeErrors(renderer, (err) => errors.push({ code: err.code, hint: err.hint }));
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 buildTranslationWorld(world);
 
@@ -196,7 +193,7 @@ let earlyFrame;
 let lateFrame;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = drawSmokeFrame(renderer, world);
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
   if (i === CAPTURE_EARLY) earlyFrame = await capture(sharedDevice);
@@ -226,16 +223,45 @@ const readRgba = (buf, px, py) => {
   const off = (py * WIDTH + px) * 4;
   return [(buf[off] ?? 0) / 255, (buf[off + 1] ?? 0) / 255, (buf[off + 2] ?? 0) / 255];
 };
-// The cube starts at the origin (frame center) → sample the EARLY frame for the
-// not-black lit-cube check; by the LATE frame it has slid away from center.
+const cubeWindow = {
+  xMin: Math.floor(WIDTH * 0.4),
+  xMax: Math.floor(WIDTH * 0.65),
+  yMin: Math.floor(HEIGHT * 0.35),
+  yMax: Math.floor(HEIGHT * 0.62),
+};
 const ndcCenter = readRgba(earlyFrame, Math.floor(WIDTH / 2), Math.floor(HEIGHT / 2));
 const corner = readRgba(earlyFrame, Math.floor(WIDTH * 0.05), Math.floor(HEIGHT * 0.05));
-console.log(`[smoke] pixelSamples=${JSON.stringify({ ndcCenter, corner })}`);
+let cubeWindowPeak = 0;
+let cubeWindowPeakColor = [0, 0, 0];
+let cubeWindowMotion = 0;
+let cubeWindowPixels = 0;
+for (let y = cubeWindow.yMin; y < cubeWindow.yMax; y++) {
+  for (let x = cubeWindow.xMin; x < cubeWindow.xMax; x++) {
+    const early = readRgba(earlyFrame, x, y);
+    const luma = early[0] * 0.2126 + early[1] * 0.7152 + early[2] * 0.0722;
+    if (luma > cubeWindowPeak) {
+      cubeWindowPeak = luma;
+      cubeWindowPeakColor = early;
+    }
+    const late = readRgba(lateFrame, x, y);
+    cubeWindowMotion +=
+      Math.abs(early[0] - late[0]) +
+      Math.abs(early[1] - late[1]) +
+      Math.abs(early[2] - late[2]);
+    cubeWindowPixels++;
+  }
+}
+const cubeWindowMotionMean = cubeWindowMotion / (cubeWindowPixels * 3);
+console.log(
+  `[smoke] pixelSamples=${JSON.stringify({ ndcCenter, corner, cubeWindowPeak: cubeWindowPeakColor })}`,
+);
 
 let sum = 0;
 for (let i = 0; i < earlyFrame.length; i++) sum += Math.abs((earlyFrame[i] ?? 0) - (lateFrame[i] ?? 0));
 const motionMeanDelta = sum / earlyFrame.length / 255;
-console.log(`[smoke] motionMeanDelta=${motionMeanDelta.toFixed(5)} (threshold ${MOTION_THRESHOLD})`);
+console.log(
+  `[smoke] motionMeanDelta=${motionMeanDelta.toFixed(5)} cubeWindowMotionMean=${cubeWindowMotionMean.toFixed(5)} (threshold ${MOTION_THRESHOLD})`,
+);
 
 // --- dump both PNGs so the loop eyeballs the slide + compares to Bevy ---
 try {
@@ -251,17 +277,18 @@ try {
   console.warn(`[smoke] (non-fatal) PNG dump skipped: ${err instanceof Error ? err.message : String(err)}`);
 }
 
-const distance = (a, b) => Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2);
-const dist = distance(ndcCenter, [0, 0, 0]);
-
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (rendererBackend(renderer) !== 'webgpu') failures.push(`(a) backend=${rendererBackend(renderer)} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
-if (dist <= SMOKE_PIXEL_THRESHOLD) {
-  failures.push(`(c) NDC-center ${JSON.stringify(ndcCenter)} too close to black (dist ${dist.toFixed(4)} <= ${SMOKE_PIXEL_THRESHOLD}) — lit cube not visible`);
+if (cubeWindowPeak <= SMOKE_PIXEL_THRESHOLD) {
+  failures.push(
+    `(c) cube observation window peak ${cubeWindowPeak.toFixed(4)} <= ${SMOKE_PIXEL_THRESHOLD} — lit cube not visible`,
+  );
 }
-if (motionMeanDelta <= MOTION_THRESHOLD) {
-  failures.push(`(d) motionMeanDelta ${motionMeanDelta.toFixed(5)} <= ${MOTION_THRESHOLD} — cube did NOT visibly slide (Time/quat.right wiring broken?)`);
+if (cubeWindowMotionMean <= MOTION_THRESHOLD) {
+  failures.push(
+    `(d) cubeWindowMotionMean ${cubeWindowMotionMean.toFixed(5)} <= ${MOTION_THRESHOLD} — cube did NOT visibly slide (Time/quat.right wiring broken?)`,
+  );
 }
 if (errors.length > 0) failures.push(`(e) Renderer.onError fired ${errors.length}x: [${errors.map((e) => e.code).join(', ')}]`);
 
@@ -273,7 +300,9 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log(`[smoke] PASS - 5 criteria GREEN: backend=webgpu, frames=${framesObserved}, NDC-center distance to black=${dist.toFixed(4)}, motionMeanDelta=${motionMeanDelta.toFixed(5)}, RhiError count=0`);
+console.log(
+  `[smoke] PASS - 5 criteria GREEN: backend=webgpu, frames=${framesObserved}, cubeWindowPeak=${cubeWindowPeak.toFixed(4)}, cubeWindowMotionMean=${cubeWindowMotionMean.toFixed(5)}, RhiError count=0`,
+);
 device.destroy?.();
 delete globalThis.navigator.gpu;
 process.exit(0);

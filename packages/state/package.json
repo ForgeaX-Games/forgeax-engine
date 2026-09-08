@@ -30,6 +30,7 @@
   },
   "dependencies": {
     "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
     "@forgeax/engine-plugin": "workspace:*",
     "@forgeax/engine-types": "workspace:*"
   },

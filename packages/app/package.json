@@ -11,7 +11,6 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs"
     },
-    "./schema/simulation-inspection.schema.json": "./schema/simulation-inspection.schema.json",
     "./package.json": "./package.json"
   },
   "main": "./dist/index.mjs",
@@ -46,6 +45,7 @@
     "@forgeax/engine-scene": "workspace:*",
     "@forgeax/engine-state": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-tool-runtime": "workspace:*",
     "@forgeax/engine-animation": "workspace:*"
   },
   "devDependencies": {

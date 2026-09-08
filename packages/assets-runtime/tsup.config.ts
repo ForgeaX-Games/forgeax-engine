@@ -3,5 +3,5 @@ import { baseTsupConfig } from '../../tsup.base';
 
 export default defineConfig({
   ...baseTsupConfig,
-  entry: ['src/index.ts'],
+  entry: ['src/index.ts', 'src/internal.ts'],
 });

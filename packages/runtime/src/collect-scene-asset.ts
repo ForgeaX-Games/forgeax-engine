@@ -44,24 +44,29 @@
 //   proven to be a mount entity, components is left undefined (one-time
 //   normalization on first reload; fixed-point from second collect onward).
 
-import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import {
+  builtinMeshGuid,
   resolveAssetHandle,
   SceneCollectAssetGuidUnresolvedError,
   SceneCollectEntityRefOutOfClosureError,
 } from '@forgeax/engine-assets-runtime';
 import {
-  checkRelationshipMirrorsTransient,
+  componentDefinition,
   type Component as EcsComponent,
   type EntityHandle,
-  getRegisteredComponents,
-  RELATIONSHIP_COMPONENTS,
-  resolveComponent,
   type World,
 } from '@forgeax/engine-ecs';
 import { classifyEntityField } from '@forgeax/engine-ecs/externalization';
-import { collectSubtree, SceneInstance } from '@forgeax/engine-render/internal';
+import { componentSchema } from '@forgeax/engine-ecs/internal';
+import { SceneInstance } from '@forgeax/engine-render';
 import { err, ok, type Result } from '@forgeax/engine-rhi';
+import {
+  collectSubtree,
+  externalizeSceneAsset,
+  SCENE_COLLECT_PROFILE,
+  worldGetSceneAssetForInstance,
+  worldGetSceneInstanceState,
+} from '@forgeax/engine-scene';
 import type {
   Asset,
   Handle,
@@ -73,18 +78,18 @@ import type {
 } from '@forgeax/engine-types';
 import { foldMountOverrides } from './scene-utils/mount-override-fold';
 
+/** The collector needs identity lookup, not an authoring registry implementation. */
+export interface SceneAssetGuidLookup {
+  guidOf(asset: Asset): string | undefined;
+}
+
 // Shared helpers
 function _isArrayLike(value: unknown): value is ArrayLike<unknown> {
-  return (
-    Array.isArray(value) ||
-    value instanceof Uint32Array ||
-    value instanceof Float32Array ||
-    value instanceof Int32Array ||
-    value instanceof Float64Array ||
-    value instanceof Uint8Array ||
-    value instanceof Int16Array ||
-    value instanceof Uint16Array
-  );
+  // SceneAsset values are ordinary JSON arrays at the boundary. Use the
+  // platform view predicate so fixed-array component fields such as Fog.color
+  // remain generic when their storage element type grows, while DataView (a
+  // byte accessor without indexed array semantics) stays scalar.
+  return Array.isArray(value) || (ArrayBuffer.isView(value) && !(value instanceof DataView));
 }
 function _normalizeArray(value: ArrayLike<unknown>): unknown[] {
   return Array.from(value);
@@ -116,14 +121,16 @@ function classifyFieldSchema(fieldType: string | undefined): SchemaFieldClass | 
 // lives in exactly one place; `field` names the failing field in the error.
 function _handleToGuid(
   world: World,
-  registry: AssetRegistry,
+  registry: SceneAssetGuidLookup,
   handle: number,
   field: string,
 ): Result<string | undefined, SceneCollectAssetGuidUnresolvedError> {
   if (handle === 0) return ok(undefined); // NULL sentinel
+  const builtinGuid = builtinMeshGuid(handle as unknown as Handle<string, 'shared'>);
+  if (builtinGuid !== undefined) return ok(builtinGuid);
   const assetRes = resolveAssetHandle(world, handle as unknown as Handle<string, 'shared'>);
   if (!assetRes.ok) return err(new SceneCollectAssetGuidUnresolvedError(field, handle));
-  const guid = registry._guidForAsset(assetRes.value as Asset);
+  const guid = registry.guidOf(assetRes.value as Asset);
   if (guid === undefined) return err(new SceneCollectAssetGuidUnresolvedError(field, handle));
   return ok(guid);
 }
@@ -135,7 +142,7 @@ function _handleToGuid(
 // values pass through untouched.
 function _serializeSharedFieldValue(
   world: World,
-  registry: AssetRegistry,
+  registry: SceneAssetGuidLookup,
   classification: SchemaFieldClass,
   value: unknown,
   field: string,
@@ -166,11 +173,11 @@ function _serializeSharedFieldValue(
 // override IS that field so it cannot be omitted). Non-shared fields pass through.
 function _serializeOverrideValueHandles(
   world: World,
-  registry: AssetRegistry,
+  registry: SceneAssetGuidLookup,
   ov: MountOverride,
 ): Result<unknown, SceneCollectAssetGuidUnresolvedError> {
-  const comp = resolveComponent(ov.comp);
-  const schema = comp?.schema as Record<string, string> | undefined;
+  const comp = world.components.resolve(ov.comp);
+  const schema = comp === undefined ? undefined : (componentSchema(comp) as Record<string, string>);
   if (ov.field !== undefined) {
     const classification = schema ? classifyFieldSchema(schema[ov.field]) : undefined;
     if (!classification || classification.kind !== 'shared') return ok(ov.value);
@@ -206,178 +213,37 @@ function _serializeOverrideValueHandles(
   return ok(out);
 }
 
-// Collect the inline GUID strings from one override's shared fields into `set`
-// (M5 / w21 refs completeness). Field-patch form checks the single field;
-// component-add form checks each key of the value map. Non-shared / non-string
-// values are ignored.
-function _collectOverrideGuids(ov: MountOverride, set: Set<string>): void {
-  const comp = resolveComponent(ov.comp);
-  const schema = comp?.schema as Record<string, string> | undefined;
-  const addFromField = (fieldName: string, value: unknown): void => {
-    const classification = schema ? classifyFieldSchema(schema[fieldName]) : undefined;
-    if (!classification || classification.kind !== 'shared') return;
-    if (classification.scalar) {
-      if (typeof value === 'string') set.add(value);
-    } else if (Array.isArray(value)) {
-      for (const elem of value as ReadonlyArray<unknown>) {
-        if (typeof elem === 'string') set.add(elem);
-      }
-    }
-  };
-  if (ov.field !== undefined) {
-    addFromField(ov.field, ov.value);
-    return;
-  }
-  if (typeof ov.value === 'object' && ov.value !== null && !Array.isArray(ov.value)) {
-    const map = ov.value as Record<string, unknown>;
-    for (const fieldName of Object.keys(map)) addFromField(fieldName, map[fieldName]);
-  }
-}
-
 // serializeSceneAssetToPack — emits the current Pack v2/local-artifact envelope.
 export function serializeSceneAssetToPack(
   sceneAsset: SceneAsset,
+  components: ReadonlyMap<string, EcsComponent>,
   guid?: string,
 ): Result<Record<string, unknown>, SceneCollectAssetGuidUnresolvedError> {
-  const assetGuid = guid ?? crypto.randomUUID();
-  const guidSet = new Set<string>();
-  for (const ent of sceneAsset.entities) {
-    const comps = ent.components as Record<string, Record<string, unknown>>;
-    for (const compName of Object.keys(comps)) {
-      const comp = resolveComponent(compName);
-      if (!comp?.schema) continue;
-      const fields = comps[compName];
-      if (!fields) continue;
-      for (const fieldName of Object.keys(comp.schema)) {
-        const classification = classifyFieldSchema(comp.schema[fieldName]);
-        if (!classification || classification.kind !== 'shared') continue;
-        const value = fields[fieldName];
-        if (value === undefined) continue;
-        if (classification.scalar) {
-          if (typeof value === 'string') guidSet.add(value);
-        } else {
-          if (Array.isArray(value)) {
-            for (const elem of value as ReadonlyArray<unknown>) {
-              if (typeof elem === 'string') guidSet.add(elem);
-            }
-          }
-        }
-      }
-    }
+  const externalized = externalizeSceneAsset(sceneAsset, (componentName) => {
+    const component = components.get(componentName);
+    return component === undefined ? undefined : componentSchema(component);
+  });
+  if (!externalized.ok) {
+    const value = externalized.error.value;
+    return err(
+      new SceneCollectAssetGuidUnresolvedError(
+        externalized.error.field,
+        typeof value === 'string' || typeof value === 'number' ? value : String(value),
+      ),
+    );
   }
-  // Phase 1.5: collect mounts[].source GUID strings into guidSet (m3-i1) +
-  // mounts[].overrides[] shared-field GUID strings (M5 / w21) so the scene
-  // envelope's refs[] recursion source lists every asset a mount override
-  // references (loadByGuid preloads them before instantiate).
-  if (sceneAsset.mounts !== undefined) {
-    for (const m of sceneAsset.mounts) {
-      if (typeof m.source === 'string') guidSet.add(m.source);
-      for (const ov of m.overrides ?? []) {
-        _collectOverrideGuids(ov, guidSet);
-      }
-    }
-  }
-
-  const refs = [...guidSet];
-  const guidToIndex = new Map<string, number>();
-  for (const [i, g] of refs.entries()) guidToIndex.set(g, i);
-
-  const serializedEntities: Array<Record<string, unknown>> = [];
-  for (const ent of sceneAsset.entities) {
-    const serializedComps: Record<string, Record<string, unknown>> = {};
-    const comps = ent.components as Record<string, Record<string, unknown>>;
-    for (const compName of Object.keys(comps)) {
-      const comp = resolveComponent(compName);
-      const fields = comps[compName];
-      if (!fields) continue;
-      const serializedFields: Record<string, unknown> = {};
-      const schema = comp?.schema;
-      if (schema !== undefined && Object.keys(schema).length === 0) {
-        serializedComps[compName] = {};
-        continue;
-      }
-      for (const fieldName of Object.keys(fields)) {
-        const value = fields[fieldName];
-        if (value === undefined) continue;
-        const classification = schema ? classifyFieldSchema(schema[fieldName]) : undefined;
-        if (classification?.kind === 'shared') {
-          if (classification.scalar) {
-            if (typeof value !== 'string') {
-              serializedFields[fieldName] = value;
-              continue;
-            }
-            const idx = guidToIndex.get(value);
-            if (idx === undefined)
-              return err(new SceneCollectAssetGuidUnresolvedError(fieldName, value));
-            serializedFields[fieldName] = idx;
-          } else {
-            if (!Array.isArray(value)) {
-              serializedFields[fieldName] = value;
-              continue;
-            }
-            const mapped: number[] = [];
-            for (const elem of value as ReadonlyArray<unknown>) {
-              if (typeof elem !== 'string') {
-                mapped.push(elem as number);
-                continue;
-              }
-              const idx = guidToIndex.get(elem);
-              if (idx === undefined)
-                return err(new SceneCollectAssetGuidUnresolvedError(fieldName, elem));
-              mapped.push(idx);
-            }
-            serializedFields[fieldName] = mapped;
-          }
-        } else {
-          serializedFields[fieldName] = value;
-        }
-      }
-      if (Object.keys(serializedFields).length > 0) serializedComps[compName] = serializedFields;
-    }
-    serializedEntities.push({
-      localId: ent.localId as unknown as number,
-      components: serializedComps,
-    });
-  }
-  // Phase 2.5: serialize mounts (m3-i1, breakpoint A fix).
-  // source GUID string -> refs index; memberFirst/memberCount/localId/parent
-  // are numeric LocalEntityId values passed through directly.
-  let serializedMounts: Array<Record<string, unknown>> | undefined;
-  if (sceneAsset.mounts !== undefined && sceneAsset.mounts.length > 0) {
-    serializedMounts = [];
-    for (const m of sceneAsset.mounts) {
-      const sm: Record<string, unknown> = {
-        localId: m.localId as unknown as number,
-        memberFirst: m.memberFirst as unknown as number,
-        memberCount: m.memberCount,
-      };
-      if (typeof m.source === 'string') {
-        const idx = guidToIndex.get(m.source);
-        if (idx === undefined)
-          return err(new SceneCollectAssetGuidUnresolvedError('mount.source', m.source));
-        sm.source = idx;
-      } else {
-        sm.source = m.source as unknown as number;
-      }
-      if (m.parent !== undefined) sm.parent = m.parent as unknown as number;
-      // M5 / w21: pass mounts[].overrides[] through unchanged. Override shared
-      // fields already carry inline GUID strings (rootsToSceneAsset did the
-      // handle→GUID reverse-lookup); the deserialize + apply path reads those
-      // GUID strings directly (resolveMountOverrides / forEachHandleGuid), so
-      // unlike entity/source fields they are NOT rewritten to refs[] indices.
-      if (m.overrides !== undefined && m.overrides.length > 0) {
-        sm.overrides = m.overrides.map((ov) => ({ ...ov }));
-      }
-      serializedMounts.push(sm);
-    }
-  }
-
-  const payload: Record<string, unknown> = { entities: serializedEntities };
-  if (serializedMounts !== undefined) payload.mounts = serializedMounts;
   return ok({
     schemaVersion: '2.0.0',
     kind: 'internal-text-package',
-    assets: [{ guid: assetGuid, kind: 'scene', payload, refs, artifacts: {} }],
+    assets: [
+      {
+        guid: guid ?? crypto.randomUUID(),
+        kind: 'scene',
+        payload: externalized.value.payload,
+        refs: externalized.value.refs.map((reference) => reference.guid),
+        artifacts: {},
+      },
+    ],
   });
 }
 
@@ -394,42 +260,14 @@ export function serializeSceneAssetToPack(
  * filter (not subtree pruning): graft entities under members survive as owned.
  */
 export function rootsToSceneAsset(
-  registry: AssetRegistry,
+  registry: SceneAssetGuidLookup,
   world: World,
   roots: EntityHandle[],
 ): Result<
   SceneAsset,
   SceneCollectEntityRefOutOfClosureError | SceneCollectAssetGuidUnresolvedError
 > {
-  // ── D-2 dev-gate: check that every relationship mirror target declares
-  // transient: true.  Dev-only (production silently skips); the check is a
-  // programmer-bug invariant, not an expected user failure — throw, don't
-  // return Result.
-  const nodeEnv = (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process?.env
-    ?.NODE_ENV;
-  if (typeof nodeEnv === 'string' && nodeEnv !== 'production') {
-    const violations = checkRelationshipMirrorsTransient(
-      RELATIONSHIP_COMPONENTS,
-      resolveComponent as (name: string) => EcsComponent<string> | undefined,
-    );
-    if (violations.length > 0) {
-      const lines = violations.map((mirrorName) => {
-        // Best-effort holder lookup for the error message.
-        let holderName = '<unknown>';
-        for (const h of RELATIONSHIP_COMPONENTS) {
-          if (h.relationship?.mirror === mirrorName) {
-            holderName = h.name;
-            break;
-          }
-        }
-        return `  holder "${holderName}" -> mirror "${mirrorName}" (add { transient: true } to the mirror component's defineComponent call)`;
-      });
-      throw new Error(
-        `RELATIONSHIP_COMPONENTS mirror components missing transient: true:\n${lines.join('\n')}`,
-      );
-    }
-  }
-
+  const collectProfile = SCENE_COLLECT_PROFILE;
   // ── Step 1: BFS closure ──
   const visited = new Set<number>();
   for (const root of roots) collectSubtree(world, root, visited);
@@ -458,7 +296,7 @@ export function rootsToSceneAsset(
   const memberOrigin = new Map<number, { anchorRaw: number; memberLocalId: number }>();
   for (const er of anchorsSorted) {
     if (rootRawSet.has(er)) continue; // root anchor: don't classify members
-    const sr = world.getSceneInstanceState(er as EntityHandle);
+    const sr = worldGetSceneInstanceState(world, er as EntityHandle);
     if (!sr.ok) continue;
     for (const [me, lid] of sr.value.entityToLocalId) {
       const mr = me as number;
@@ -476,7 +314,7 @@ export function rootsToSceneAsset(
 
   // ── Step 1.75: Mount-carrier absorption ──
   //
-  // world.instantiateScene materialises each mounts[] entry as a plain "mount
+  // worldInstantiateScene materialises each mounts[] entry as a plain "mount
   // entity" (`_spawnMountEntity` output: mount.components + a default Transform,
   // but NO SceneInstance) whose child is the mounted scene's synthetic root (the
   // real anchor, which DOES carry SceneInstance). So a `mounts[{parent: W}]`
@@ -496,8 +334,8 @@ export function rootsToSceneAsset(
   // structural Transform/Children/ChildOf/Entity that _spawnMountEntity leaves),
   // and its sole visited child is A. The mount for A then takes P's slot:
   // mount.parent = P's ChildOf parent, and any ref to P resolves to the mount.
-  const childOfTk0 = resolveComponent('ChildOf');
-  const childrenTk0 = resolveComponent('Children');
+  const childOfTk0 = world.components.resolve('ChildOf');
+  const childrenTk0 = world.components.resolve('Children');
   const carrierAllowed = new Set(['Transform', 'Children', 'ChildOf', 'Entity']);
   const carrierForAnchor = new Map<number, number>(); // anchorRaw -> carrierRaw
   const carrierToAnchor = new Map<number, number>(); // carrierRaw -> anchorRaw
@@ -505,7 +343,7 @@ export function rootsToSceneAsset(
     if (rootRawSet.has(p)) return false;
     if (anchorEntities.has(p) || memberEntities.has(p)) return false;
     if (!visited.has(p)) return false;
-    for (const [compName, compToken] of getRegisteredComponents()) {
+    for (const [compName, compToken] of world.components.entries()) {
       if (carrierAllowed.has(compName)) continue;
       if (world.get(p as EntityHandle, compToken as EcsComponent<string>).ok) return false;
     }
@@ -565,7 +403,7 @@ export function rootsToSceneAsset(
   const nonRootAnchors: Array<{ entityRaw: number; sourceGuid: string; totalSlots: number }> = [];
   for (const er of anchorEntities) {
     if (rootRawSet.has(er)) continue;
-    const sh = world.getSceneAssetForInstance(er as EntityHandle);
+    const sh = worldGetSceneAssetForInstance(world, er as EntityHandle);
     if (!sh.ok)
       return err(
         new SceneCollectAssetGuidUnresolvedError(
@@ -584,7 +422,7 @@ export function rootsToSceneAsset(
           sh.value as unknown as number,
         ),
       );
-    const g = registry._guidForAsset(pr.value as Asset);
+    const g = registry.guidOf(pr.value as Asset);
     if (g === undefined)
       return err(
         new SceneCollectAssetGuidUnresolvedError(
@@ -592,7 +430,7 @@ export function rootsToSceneAsset(
           sh.value as unknown as number,
         ),
       );
-    const sr = world.getSceneInstanceState(er as EntityHandle);
+    const sr = worldGetSceneInstanceState(world, er as EntityHandle);
     if (!sr.ok)
       return err(new SceneCollectAssetGuidUnresolvedError('SceneInstance.source', 'state'));
     nonRootAnchors.push({ entityRaw: er, sourceGuid: g, totalSlots: sr.value.totalSlots });
@@ -609,9 +447,9 @@ export function rootsToSceneAsset(
   const ownedCount = ownedEntities.length;
   const outMounts: SceneInstanceMount[] = [];
   let nextMF = ownedCount + nonRootAnchors.length;
-  const childOfTk = resolveComponent('ChildOf');
+  const childOfTk = world.components.resolve('ChildOf');
 
-  const transformTk = resolveComponent('Transform');
+  const transformTk = world.components.resolve('Transform');
   for (const a of nonRootAnchors) {
     // When a mount carrier was absorbed (Step 1.75), the mount takes the
     // carrier's slot: resolve the ChildOf parent from the CARRIER (the anchor's
@@ -654,7 +492,7 @@ export function rootsToSceneAsset(
     // (D-2 fail-fast, no silent drop).
     const memberFirst0 = nextMF;
     let mountOverrides: MountOverride[] | undefined;
-    const foldStateRes = world.getSceneInstanceState(a.entityRaw as EntityHandle);
+    const foldStateRes = worldGetSceneInstanceState(world, a.entityRaw as EntityHandle);
     if (foldStateRes.ok) {
       const rawOverrides = foldMountOverrides(world, foldStateRes.value);
       if (rawOverrides.length > 0) {
@@ -716,7 +554,7 @@ export function rootsToSceneAsset(
   }
 
   // ── Step 4: Build SceneEntity rows ──
-  const registeredComps = getRegisteredComponents();
+  const registeredComps = world.components.entries();
   const entities: SceneEntity[] = [];
 
   for (let lid = 0; lid < ownedEntities.length; lid++) {
@@ -727,17 +565,24 @@ export function rootsToSceneAsset(
     const isRoot = rootRawSet.has(entityRaw);
 
     for (const [compName, compToken] of registeredComps) {
-      if (compToken.transient) continue;
+      if (
+        !collectProfile.includeComponent(
+          compName,
+          componentDefinition(compToken).policy.transient === true,
+        )
+      )
+        continue;
       if (isRoot && compName === 'ChildOf') continue;
 
       const valRes = world.get(entity, compToken as EcsComponent<string>);
       if (!valRes.ok) continue;
 
       const val = valRes.value as Record<string, unknown>;
-      const comp = resolveComponent(compName);
-      if (!comp?.schema) continue;
+      const comp = compToken;
+      if (comp === undefined) continue;
 
-      const schemaKeys = Object.keys(comp.schema);
+      const schema = componentSchema(comp);
+      const schemaKeys = Object.keys(schema);
       // Empty-schema components are authored marker components, not absent
       // state. Preserve their presence through scene-pack round-trips (for
       // example AudioListener); transient markers have already been excluded
@@ -757,9 +602,16 @@ export function rootsToSceneAsset(
         // is derived/reconstructable and excluded from serialization, just as a
         // transient component (L554) is. Generic — reads the reflection flag for
         // any component/field; no hardcoded component or field name.
-        if (comp.fields[fieldName]?.transient) continue;
+        if (
+          !collectProfile.includeField(
+            compName,
+            fieldName,
+            componentDefinition(comp).fields[fieldName]?.transient === true,
+          )
+        )
+          continue;
 
-        const schemaFieldType = comp.schema[fieldName];
+        const schemaFieldType = schema[fieldName];
         const entityKind = classifyEntityField(comp as EcsComponent, fieldName);
         const sharedClass =
           schemaFieldType !== undefined ? classifyFieldSchema(schemaFieldType) : undefined;

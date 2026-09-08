@@ -25,9 +25,9 @@ The gauntlet-only Mesh/Camera/Light witnesses are created when telemetry is requ
 | `m0` | Real response headers, Worker capability matrix, and raw SAB Kernel speedup | Shared p50 speedup >= 1.5x |
 | `smoke:browser` | Real production bundle, both Worker tiers, shared dispatch, poison freeze, falsification, and rebuild | All structural assertions pass |
 | `gauntlet` | Independent semantic/live/GPU/behavioral/recovery evidence, including capability truth and idempotent cleanup | Prints `M12_EXECUTION_POISON_REBUILD_PASS` |
-| `bench:production` | Same Engine Worker and workload with forced-inline versus shared raw Host-frame samples | 95% confidence interval lower bound for p95 improvement >= 15% |
+| `bench:production` | Same Engine Worker and workload with forced-inline versus shared raw Host-frame samples, measured in two alternating treatment-order rounds | A qualified runner and a 95% confidence interval lower bound for p95 improvement >= 15% |
 
-The benchmark uses 65,536 rows, 96 iterations per row, 20 warmup frames, and 240 retained samples per tier. It reads end-to-end `host-frame` durations from the App-owned bounded Profiler capture, retains presentation cadence as secondary evidence, and writes raw samples, distribution summaries, and a deterministic 95% bootstrap interval to the active closed-loop evidence directory.
+The benchmark uses 65,536 rows, 96 iterations per row, 20 warmup frames, and 240 retained samples per tier per round. It alternates the forced-inline and shared treatments in both orders to keep the p95 comparison inside the same scheduler/thermal epochs. It reads end-to-end `host-frame` durations from the App-owned bounded Profiler capture, retains presentation cadence as secondary evidence, and writes raw samples, distribution summaries, order metadata, pause evidence, and a deterministic 95% bootstrap interval to the active closed-loop evidence directory. Before accepting the verdict it compares the browser's `hardwareConcurrency` with the Node cgroup capacity; a material mismatch is recorded as `runner-unqualified` and fails closed. An isolated host pause (at least 250 ms and 10x the tier p95) is recorded as runner-instability evidence and gets one bounded fresh-process retry; sustained slow frames still fail the product verdict.
 
 ## Module boundaries
 

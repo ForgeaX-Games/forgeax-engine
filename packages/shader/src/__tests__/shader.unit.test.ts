@@ -470,6 +470,13 @@ import {
       expect(r.value.source).toBe(STUB_SOURCE_DEFAULT);
       expect(r.value.paramSchema).toHaveLength(3);
       expect(r.value.paramSchema[0]).toEqual({ name: 'baseColor', type: 'color' });
+      expect(r.value.paramSchemaProjection).toMatchObject({ ownerId: id, revision: 1 });
+      expect(r.value.paramSchemaProjection.schema).toBe(r.value.paramSchema);
+      expect(registry.paramSchemaProjectionStats()).toEqual({
+        admissions: 1,
+        derivations: 1,
+        projections: 1,
+      });
     });
   });
 
@@ -762,7 +769,7 @@ import {
       expect(src).toMatch(/#if\s+STORAGE_BUFFER_AVAILABLE\s*==\s*true[\s\S]*@group\(3\)/);
     });
 
-    it('(b) default-standard-pbr.wgsl declares STORAGE_BUFFER_AVAILABLE + CLUSTER_FORWARD_AVAILABLE variant axes', () => {
+    it('(b) default-standard-pbr.wgsl declares storage, cluster, and vertex-color variant axes', () => {
       // feat-20260609-hdrp-cluster-fragment-ggx M1: added CLUSTER_FORWARD_AVAILABLE as a
       // second variant axis so the standard-pbr fragment can switch between URP-style
       // (single dirlight + ambient) and HDRP-style (cluster forward 256 punctual lights).
@@ -771,14 +778,17 @@ import {
       expect(variantAxes).toEqual([
         '#pragma variant_axis STORAGE_BUFFER_AVAILABLE',
         '#pragma variant_axis CLUSTER_FORWARD_AVAILABLE',
+        '#pragma variant_axis VERTEX_COLOR_AVAILABLE',
       ]);
     });
 
-    it('(b) unlit.wgsl has exactly one #pragma variant_axis STORAGE_BUFFER_AVAILABLE', () => {
+    it('(b) unlit.wgsl declares storage and vertex-color variant axes', () => {
       const src = stripComments(readWgsl('unlit.wgsl'));
       const variantAxes = src.match(/#pragma\s+variant_axis\s+\w+/g) ?? [];
-      expect(variantAxes).toHaveLength(1);
-      expect(variantAxes[0]).toBe('#pragma variant_axis STORAGE_BUFFER_AVAILABLE');
+      expect(variantAxes).toEqual([
+        '#pragma variant_axis STORAGE_BUFFER_AVAILABLE',
+        '#pragma variant_axis VERTEX_COLOR_AVAILABLE',
+      ]);
     });
 
     it('(c) no shader introduces INSTANCE_STORAGE_AVAILABLE (OOS-6)', () => {
@@ -895,8 +905,8 @@ import {
   // Inline summary of the paramSchema fields for verification — mirrors
   // default-standard-pbr.material.json paramSchema[] field-for-field.
   // feat-20260613 fix-issue-1 (D-8): channelMap split into 4 f32 selectors;
-  // emissive / emissiveIntensity / occlusionStrength absorbed into the
-  // schema (used to live in the legacy 80-B UBO without sidecar visibility).
+  // emissive / emissiveIntensity / occlusionStrength are schema-owned values;
+  // normalScale and the engine-injection textures remain in the same contract.
   const EXPECTED_PARAM_NAMES = [
     'baseColor',
     'metallic',
@@ -912,10 +922,13 @@ import {
     'clearcoat',
     'clearcoatRoughness',
     'specularTint',
+    'normalScale',
     'baseColorTexture',
     'metallicRoughnessTexture',
     'normalTexture',
     'specularTintTexture',
+    'emissiveTexture',
+    'occlusionTexture',
   ] as const;
 
   const STUB_WGSL = '// stub composed pbr-skin wgsl\n';
@@ -974,7 +987,7 @@ import {
       const registry = makeMockRegistry();
       registerDefaultStandardPbrSkin(registry, STUB_WGSL, STORAGE_CAPS);
       const entry = lookup(registry);
-      expect(entry.paramSchema).toHaveLength(18);
+      expect(entry.paramSchema).toHaveLength(21);
     });
 
     it('paramSchema names match default-standard-pbr schema field-for-field', () => {
@@ -1009,6 +1022,9 @@ import {
         'f32',
         // specular tint and its texture map.
         'vec3',
+        'f32',
+        'texture2d',
+        'texture2d',
         'texture2d',
         'texture2d',
         'texture2d',
@@ -1143,6 +1159,46 @@ import {
     };
   }
 
+  interface OneShotRefusalDevice extends MockDevice {
+    readonly refusal: RhiError;
+    clearRefusal(): void;
+  }
+
+  function createOneShotRefusalDevice(targetCode: string): OneShotRefusalDevice {
+    const refusal: RhiError = {
+      name: 'RhiError',
+      message: 'mock: transient webgpu-runtime-error forced',
+      code: 'webgpu-runtime-error',
+      expected: 'shader module creation succeeds',
+      hint: 'retry the same shader hash after the transient refusal clears',
+      detail: {
+        error: {
+          code: 'webgpu-runtime-error',
+          message: 'mock one-shot refusal',
+        },
+      },
+    } as unknown as RhiError;
+    const created: { readonly code: string; readonly label?: string | undefined }[] = [];
+    let refusalArmed = true;
+    return {
+      get created() {
+        return created;
+      },
+      refusal,
+      clearRefusal() {
+        refusalArmed = false;
+      },
+      createShaderModule(desc) {
+        created.push(desc);
+        if (refusalArmed && desc.code === targetCode) {
+          return errResult(refusal);
+        }
+        const handle: MockShaderModule = { [SHADER_MODULE_BRAND]: 'mock' as const };
+        return okResult(handle as unknown as ShaderModule);
+      },
+    };
+  }
+
   // ─── Manifest fixture loader (data: URL inline) ────────────────────────────────
 
   const VALID_FIXTURE = {
@@ -1258,6 +1314,60 @@ import {
         // (which is not a member of the 4-variant ShaderErrorCode union).
         expect(result.error.code).toBe('shader-compile-failed');
       }
+    });
+
+    it('retries one transient refusal on the same registry and preserves the healthy sibling cache', async () => {
+      const healthyEntry = VALID_FIXTURE.entries[0];
+      const retryEntry = VALID_FIXTURE.entries[1];
+      if (healthyEntry === undefined || retryEntry === undefined) {
+        throw new Error('fixture missing sibling entries');
+      }
+      const device = createOneShotRefusalDevice(retryEntry.wgsl);
+      const registry = new ShaderRegistry({
+        device: device as never,
+        manifestUrl: VALID_MANIFEST_URL,
+      });
+
+      const loaded = await registry.loadManifest();
+      expect(loaded.ok).toBe(true);
+
+      const healthyFirst = registry.get(healthyEntry.hash);
+      expect(healthyFirst.ok).toBe(true);
+      if (!healthyFirst.ok) return;
+      const healthyModule = healthyFirst.value;
+
+      const firstRefusal = registry.get(retryEntry.hash);
+      expect(firstRefusal.ok).toBe(false);
+      if (firstRefusal.ok) return;
+      expect(firstRefusal.error.code).toBe('webgpu-runtime-error');
+      expect(firstRefusal.error).toBe(device.refusal);
+      expect(device.created.map(({ label }) => label)).toEqual([
+        healthyEntry.hash,
+        retryEntry.hash,
+      ]);
+
+      device.clearRefusal();
+      const recovered = registry.get(retryEntry.hash);
+      expect(recovered.ok).toBe(true);
+      if (!recovered.ok) return;
+      const recoveredModule = recovered.value;
+      expect(device.created.map(({ label }) => label)).toEqual([
+        healthyEntry.hash,
+        retryEntry.hash,
+        retryEntry.hash,
+      ]);
+
+      const cachedRecovered = registry.get(retryEntry.hash);
+      expect(cachedRecovered.ok).toBe(true);
+      if (!cachedRecovered.ok) return;
+      expect(cachedRecovered.value).toBe(recoveredModule);
+      expect(device.created).toHaveLength(3);
+
+      const healthyAgain = registry.get(healthyEntry.hash);
+      expect(healthyAgain.ok).toBe(true);
+      if (!healthyAgain.ok) return;
+      expect(healthyAgain.value).toBe(healthyModule);
+      expect(device.created).toHaveLength(3);
     });
   });
 }
@@ -1618,6 +1728,23 @@ import {
       expect(codeOnly).toMatch(
         /if\s*\(viewDepth\s*>\s*view\.splitPlanes\[count\s*-\s*1u\]\.x\)\s*\{\s*return\s+1\.0\s*;/,
       );
+    });
+
+    it('directional CSM treats cascadeCount=0 as the fully-lit castShadow opt-out', () => {
+      const codeOnly = stripComments(readSource('lighting-directional.wgsl'));
+      expect(codeOnly).toMatch(
+        /fn\s+evalDirectionalShadowFactor[\s\S]*?if\s*\(view\.cascadeCount\s*<\s*1\.0\s*\)\s*\{\s*return\s+1\.0\s*;/,
+      );
+    });
+
+    it('directional CSM samples the compact two-cascade 2x1 atlas without halving Y', () => {
+      const codeOnly = stripComments(readSource('lighting-directional.wgsl'));
+      expect(codeOnly).toMatch(
+        /let\s+rows\s*:\s*u32\s*=\s*\(count\s*\+\s*columns\s*-\s*1u\)\s*\/\s*columns/,
+      );
+      expect(codeOnly).toMatch(/let\s+tileScale\s*=\s*_atlasTileScale\(count\)/);
+      expect(codeOnly).toMatch(/let\s+uv\s*=\s*tileUv\s*\*\s*tileScale\s*\+\s*tileOrigin/);
+      expect(codeOnly).not.toMatch(/tileUv\s*\*\s*inv\s*\+\s*tileOrigin/);
     });
 
     it('directional PCF selects fixed 1x1, 3x3, or 5x5 paths without per-tap radius branches', () => {

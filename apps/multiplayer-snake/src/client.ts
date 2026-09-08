@@ -4,12 +4,15 @@ import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { type EntityHandle, Update, type World } from '@forgeax/engine-ecs';
 import {
   createReplicaCoordinator,
+  createSessionId,
   type NetEndpoint,
+  type NetEndpointConnector,
+  type NetRecoverySnapshot,
   type NetSession,
   netPlugin,
-  type PeerId,
+  type SessionId,
 } from '@forgeax/engine-net';
-import { connectWebSocketClientEndpoint } from '@forgeax/engine-net-websocket/browser';
+import { createWebSocketConnector } from '@forgeax/engine-net-websocket/browser';
 import { Camera, Materials, MeshFilter, MeshRenderer, orthographic } from '@forgeax/engine-render';
 import type { MaterialAsset } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
@@ -38,7 +41,7 @@ export interface ReplicatedSnake {
   readonly y: number;
   readonly score: number;
   readonly bodyLength: number;
-  readonly direction: 'up' | 'right' | 'down' | 'left';
+  readonly direction: Direction;
   readonly color: number;
 }
 
@@ -52,6 +55,59 @@ export interface DirectionCommandEvidence {
   directionCommandSendCount: number;
   lastAttemptedDirection?: Direction;
   lastSendResult?: 'sent' | 'rejected';
+}
+
+type SnakeCommandSession = Pick<NetSession, 'getRecoverySnapshot' | 'sendToAuthority'>;
+
+let nextSnakeSessionId = 1;
+
+function allocateSnakeSessionId(): SessionId {
+  const random = globalThis.crypto;
+  const candidate =
+    random === undefined
+      ? nextSnakeSessionId
+      : 1 + ((random.getRandomValues(new Uint32Array(1))[0] ?? 0) % 0x7fffffff);
+  nextSnakeSessionId = candidate >= Number.MAX_SAFE_INTEGER ? 1 : candidate + 1;
+  const created = createSessionId(candidate);
+  if (!created.ok) throw created.error;
+  return created.value;
+}
+
+function syncSessionSnapshot(target: HTMLElement, snapshot: NetRecoverySnapshot): void {
+  target.dataset.sessionId = String(snapshot.sessionId);
+  target.dataset.pendingPackets = String(snapshot.pendingPackets);
+  target.dataset.ownedResources = JSON.stringify(snapshot.ownedResources);
+  switch (snapshot.state.kind) {
+    case 'connecting':
+      target.dataset.lifecycle = 'connecting';
+      break;
+    case 'resyncing':
+      target.dataset.lifecycle = 'resyncing';
+      target.dataset.recoveryEpoch = String(snapshot.state.epoch);
+      break;
+    case 'active':
+      target.dataset.lifecycle = 'active';
+      target.dataset.recoveryEpoch = String(snapshot.state.epoch);
+      target.dataset.recoverySequence = String(snapshot.state.sequence);
+      break;
+    case 'recovering':
+      target.dataset.lifecycle = 'recovering';
+      target.dataset.recoveryAttempt = String(snapshot.state.attempt);
+      break;
+    case 'failed':
+      target.dataset.lifecycle = 'failed';
+      target.dataset.errorCode = snapshot.state.error.code;
+      target.dataset.errorHint = snapshot.state.error.hint;
+      break;
+    case 'retired':
+      target.dataset.lifecycle = 'retired';
+      target.dataset.retireReason = snapshot.state.reason;
+      break;
+  }
+  if (snapshot.lastError !== undefined) {
+    target.dataset.lastError = snapshot.lastError.code;
+    target.dataset.lastErrorHint = snapshot.lastError.hint;
+  }
 }
 
 /** The simulation grid grows downward; the orthographic world grows upward. */
@@ -143,7 +199,7 @@ export function registerReplicaDerivation(
   world: World,
   replica: ReturnType<typeof createReplicaCoordinator>,
   sinks: ReplicaRenderSinks = {},
-  endpoint?: NetEndpoint,
+  session?: SnakeCommandSession,
 ): Map<number, EntityHandle> {
   const hasBrowserVisuals = sinks.stateTarget !== undefined && globalThis.document !== undefined;
   const hideBodyForVisualFalsification =
@@ -179,7 +235,8 @@ export function registerReplicaDerivation(
     Materials.unlit([0.2, 0.27, 0.38, 1]),
   );
   let foodEntity: EntityHandle | undefined;
-  let readySent = false;
+  let joinedEpoch: number | undefined;
+  let readyEpoch: number | undefined;
   if (hasBrowserVisuals) {
     foodEntity = world
       .spawn(
@@ -217,14 +274,13 @@ export function registerReplicaDerivation(
   world.addSystem(Update, {
     name: 'snake-replica-derivation',
     queries: [],
-    resources: ['net-session'],
     fn: (world) => {
       const liveIds = new Set<number>();
       const snakes: ReplicatedSnake[] = [];
       let food: { x: number; y: number } | undefined;
       const rows = replica.snapshot();
       const playerColors = new Map<number, number>();
-      let session:
+      let gameSession:
         | {
             started: boolean;
             gameplayTick: number;
@@ -238,7 +294,7 @@ export function registerReplicaDerivation(
         const foodPosition = replica.readComponent(row.id, GridPosition);
         const sessionComponent = replica.readComponent(row.id, SnakeSession);
         if (sessionComponent !== undefined) {
-          session = {
+          gameSession = {
             started: Boolean(sessionComponent.started),
             gameplayTick: Number(sessionComponent.gameplayTick ?? 0),
             startedAtGameplayTick: Number(sessionComponent.startedAtGameplayTick ?? 0),
@@ -297,12 +353,32 @@ export function registerReplicaDerivation(
           pos: gridToWorldPosition(Number(position.x ?? 0), Number(position.y ?? 0)),
         });
       }
-      if (session?.started === false && !readySent && endpoint !== undefined) {
+      const recovery = session?.getRecoverySnapshot();
+      if (sinks.stateTarget !== undefined && recovery !== undefined)
+        syncSessionSnapshot(sinks.stateTarget, recovery);
+      if (session !== undefined && recovery?.state.kind === 'resyncing') {
+        if (joinedEpoch !== recovery.state.epoch) {
+          const join = encodeCommand({ kind: 'join' });
+          if (!join.ok) throw join.error;
+          const sent = session.sendToAuthority(recovery.sessionId, join.value);
+          if (sent.ok) {
+            joinedEpoch = recovery.state.epoch;
+            readyEpoch = undefined;
+          }
+        }
+      }
+      if (
+        session !== undefined &&
+        recovery?.state.kind === 'active' &&
+        gameSession?.started === false &&
+        readyEpoch !== recovery.state.epoch
+      ) {
         const ready = encodeCommand({ kind: 'ready' });
         if (!ready.ok) throw ready.error;
-        if (endpoint.send(1 as PeerId, ready.value)) readySent = true;
+        const sent = session.sendToAuthority(recovery.sessionId, ready.value);
+        if (sent.ok) readyEpoch = recovery.state.epoch;
       }
-      if (hasBrowserVisuals && session?.started === false) {
+      if (hasBrowserVisuals && gameSession?.started === false) {
         for (const [, entity] of renderEntities) world.despawn(entity).unwrap();
         renderEntities.clear();
         if (sinks.stateTarget !== undefined)
@@ -311,7 +387,7 @@ export function registerReplicaDerivation(
             replica.tick,
             [],
             food,
-            session,
+            gameSession,
             localPlayerNetworkId,
           );
         if (sinks.stateTarget !== undefined) sinks.stateTarget.dataset.renderEntityCount = '0';
@@ -347,9 +423,9 @@ export function registerReplicaDerivation(
       if (
         localPlayerNetworkId === undefined &&
         sinks.directionCommandEvidence?.lastSendResult === 'sent' &&
-        (session?.lastDirectionCommandPlayerNetworkId ?? 0) > 0
+        (gameSession?.lastDirectionCommandPlayerNetworkId ?? 0) > 0
       )
-        localPlayerNetworkId = session?.lastDirectionCommandPlayerNetworkId;
+        localPlayerNetworkId = gameSession?.lastDirectionCommandPlayerNetworkId;
       if (food !== undefined && foodEntity !== undefined)
         world
           .set(foodEntity, Transform, {
@@ -369,7 +445,7 @@ export function registerReplicaDerivation(
           replica.tick,
           snakes,
           food,
-          session,
+          gameSession,
           localPlayerNetworkId,
         );
       if (sinks.stateTarget !== undefined)
@@ -381,12 +457,17 @@ export function registerReplicaDerivation(
 
 /** Assemble the browser-side replica. Replicated components are read-only here. */
 export async function createClient(canvas: HTMLCanvasElement, url: string) {
-  const connected = await connectWebSocketClientEndpoint(url);
+  const connector = createWebSocketConnector(url);
+  const connected = await connector.connect(new AbortController().signal);
   if (!connected.ok) throw connected.error;
-  return createClientWithEndpoint(canvas, connected.value);
+  return createClientWithEndpoint(canvas, connected.value, connector);
 }
 
-export async function createClientWithEndpoint(canvas: HTMLCanvasElement, endpoint: NetEndpoint) {
+export async function createClientWithEndpoint(
+  canvas: HTMLCanvasElement,
+  endpoint: NetEndpoint,
+  connector?: NetEndpointConnector,
+) {
   const lifecycleTarget = globalThis.document?.querySelector<HTMLElement>(
     '[data-testid="snake-state"]',
   );
@@ -396,21 +477,26 @@ export async function createClientWithEndpoint(canvas: HTMLCanvasElement, endpoi
   if (!appResult.ok) throw appResult.error;
   const app = appResult.value;
   const { world, renderer } = app;
-  const built = netPlugin({ endpoint }).build(world);
-  if (built instanceof Promise) throw new Error('Snake net plugin must build synchronously');
-  if (!built.ok) throw built.error;
+  await app.pluginContext.plugin(
+    netPlugin({
+      endpoint,
+      ...(connector === undefined ? {} : { connector }),
+      sessionId: allocateSnakeSessionId(),
+    }),
+  );
   const session = world.getResource<NetSession>('net-session');
-  const replica = createReplicaCoordinator(world, snakeProfile, endpoint);
+  const replica = createReplicaCoordinator(world, snakeProfile);
   session.attachReplica(replica, snakeProfile.limits);
-  const ready = await renderer.ready;
-  if (!ready.ok) throw ready.error;
+  const receiveErrors = session.receiveEvents();
+  if (receiveErrors.length > 0) throw receiveErrors[0];
+  const sessionId = session.getRecoverySnapshot().sessionId;
   if (lifecycleTarget !== null && lifecycleTarget !== undefined) {
     lifecycleTarget.dataset.lifecycle = 'renderer-ready';
     lifecycleTarget.dataset.rendererReady = 'true';
   }
   const join = encodeCommand({ kind: 'join' });
   if (!join.ok) throw join.error;
-  const joined = endpoint.send(1 as PeerId, join.value);
+  const joined = session.sendToAuthority(sessionId, join.value);
   if (!joined.ok) throw joined.error;
   if (lifecycleTarget !== null && lifecycleTarget !== undefined) {
     lifecycleTarget.dataset.lifecycle = 'join-sent';
@@ -434,9 +520,27 @@ export async function createClientWithEndpoint(canvas: HTMLCanvasElement, endpoi
   if (stateTarget !== undefined) (sinks as { stateTarget: HTMLElement }).stateTarget = stateTarget;
   (sinks as { directionCommandEvidence: DirectionCommandEvidence }).directionCommandEvidence =
     directionCommandEvidence;
-  registerReplicaDerivation(world, replica, sinks, endpoint);
-  installKeyboardInput(endpoint, undefined, directionCommandEvidence);
-  return { app, world, renderer, endpoint, replica, directionCommandEvidence };
+  registerReplicaDerivation(world, replica, sinks, session);
+  const disposeKeyboard = installKeyboardInput(session, undefined, directionCommandEvidence);
+  let disposed = false;
+  const dispose = (): void => {
+    if (disposed) return;
+    disposed = true;
+    disposeKeyboard();
+    session.dispose();
+    void app.dispose();
+  };
+  return {
+    app,
+    world,
+    renderer,
+    replica,
+    session,
+    sessionId,
+    getRecoverySnapshot: () => session.getRecoverySnapshot(),
+    dispose,
+    directionCommandEvidence,
+  };
 }
 
 const KEY_DIRECTIONS: Readonly<Record<string, Direction>> = {
@@ -451,7 +555,7 @@ const KEY_DIRECTIONS: Readonly<Record<string, Direction>> = {
 };
 
 export function installKeyboardInput(
-  endpoint: NetEndpoint,
+  session: SnakeCommandSession,
   target?: Pick<Window, 'addEventListener' | 'removeEventListener'>,
   evidence: DirectionCommandEvidence = { directionCommandSendCount: 0 },
 ): () => void {
@@ -464,11 +568,18 @@ export function installKeyboardInput(
       return;
     }
     evidence.lastAttemptedDirection = direction;
+    const snapshot = session.getRecoverySnapshot();
+    if (snapshot.state.kind !== 'active') {
+      evidence.lastSendResult = 'rejected';
+      return;
+    }
     const encoded = encodeDirectionCommand({ direction });
     if (encoded.ok) {
-      endpoint.send(1 as PeerId, encoded.value);
-      evidence.directionCommandSendCount += 1;
-      evidence.lastSendResult = 'sent';
+      const sent = session.sendToAuthority(snapshot.sessionId, encoded.value);
+      if (sent.ok) {
+        evidence.directionCommandSendCount += 1;
+        evidence.lastSendResult = 'sent';
+      } else evidence.lastSendResult = 'rejected';
     } else evidence.lastSendResult = 'rejected';
   };
   eventTarget.addEventListener('keydown', listener);

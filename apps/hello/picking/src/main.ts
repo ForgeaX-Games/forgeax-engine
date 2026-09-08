@@ -8,7 +8,7 @@
 // material. Clicking empty space (a miss) leaves the cube unchanged.
 //
 // Four-step recipe (same as hello-cube / hello-culling):
-//   (1) await renderer.ready
+//   (1) await host initialization
 //   (2) register a custom box mesh (createBoxGeometry -> world.allocSharedRef(...)) so the
 //       AABB the ray-AABB test needs is present, plus two unlit materials
 //   (3) spawn the cube + a perspective camera entity
@@ -24,7 +24,8 @@ import { type MeshAsset } from '@forgeax/engine-assets-runtime';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 
 import { perspective } from '@forgeax/engine-render';
-import { acquireCanvasContext, createRenderer, EngineEnvironmentError, type MaterialAsset } from '@forgeax/engine-runtime';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
+import { EngineEnvironmentError, type MaterialAsset } from '@forgeax/engine-runtime';
 import { Materials } from '@forgeax/engine-render';
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 
@@ -51,28 +52,13 @@ bootstrap(canvas).catch((err: unknown) => {
 });
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
-  const renderer = await createRenderer(target, {}, forgeaxBundlerAdapter());
-  const worldAttachment1 = renderer.attachWorld(world);
+  const constructed = await constructRuntimeRendererHost(target, {}, forgeaxBundlerAdapter());
+  if (!constructed.ok) throw constructed.error;
+  const renderer = constructed.value.renderer;
+  const worldAttachment1 = renderer.attach(world);
   if (!worldAttachment1.ok) throw worldAttachment1.error;
-  const ctxResult = acquireCanvasContext(target);
-  if (ctxResult.ok) {
-    const cfgResult = ctxResult.value.configure({
-      device: renderer.device,
-      format: 'rgba8unorm',
-      usage: 0x10 | 0x01,
-    });
-    if (!cfgResult.ok)
-      console.error('[picking] canvasContext.configure failed:', cfgResult.error);
-  } else {
-    console.error('[picking] acquireCanvasContext failed:', ctxResult.error);
-  }
-  console.warn(`[picking] backend=${renderer.backend}`);
+  console.warn('[picking] Standard pipeline active');
 
-  const ready = await renderer.ready;
-  if (!ready.ok) {
-    console.error('[picking] renderer.ready failed:', ready.error);
-    return;
-  }
 
   // Custom cube mesh ensures AABB computation (the built-in HANDLE_CUBE uses
   // engine-internal handle values); the ray-AABB pick test reads MeshAsset.aabb.
@@ -227,7 +213,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   const frame = (): void => {
     world.update().unwrap();
-    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const r = renderer.draw({
+      leases: [worldAttachment1.value],
+      camera: { lease: worldAttachment1.value },
+      environment: { lease: worldAttachment1.value },
+    });
     if (!r.ok) console.error('[picking] draw error:', r.error);
     requestAnimationFrame(frame);
   };

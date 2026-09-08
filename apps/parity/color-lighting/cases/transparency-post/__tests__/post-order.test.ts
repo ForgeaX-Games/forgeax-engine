@@ -3,15 +3,15 @@ import { resolvePostColorDomainContract } from '../../../../../../packages/rende
 
 describe('transparency post order', () => {
   it('reports a machine-readable sequence for paired LDR and HDR cases', () => {
-    const urp = resolvePostColorDomainContract('urp');
-    const hdrp = resolvePostColorDomainContract('hdrp');
-    expect(urp.slice(1)).toEqual(hdrp.slice(1));
-    expect(urp[0]).toEqual(['transparent-blend', 'linear-ldr', 'linear-ldr']);
-    expect(hdrp[0]).toEqual(['transparent-blend', 'linear-hdr', 'linear-hdr']);
+    const ldr = resolvePostColorDomainContract('linear-ldr');
+    const hdr = resolvePostColorDomainContract('linear-hdr');
+    expect(ldr.slice(1)).toEqual(hdr.slice(1));
+    expect(ldr[0]).toEqual(['transparent-blend', 'linear-ldr', 'linear-ldr']);
+    expect(hdr[0]).toEqual(['transparent-blend', 'linear-hdr', 'linear-hdr']);
   });
 
   it('places output encoding after FXAA', () => {
-    const stages = resolvePostColorDomainContract('urp');
+    const stages = resolvePostColorDomainContract('linear-ldr');
     const fxaa = stages.findIndex(([name]) => name === 'fxaa');
     const output = stages.findIndex(([name]) => name === 'output');
     expect(fxaa).toBeGreaterThanOrEqual(0);

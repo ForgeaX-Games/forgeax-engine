@@ -20,9 +20,9 @@ import type {
   RhiCanvasContext,
 } from '@forgeax/engine-rhi';
 import { type Result, RhiError, type RhiErrorCode } from '@forgeax/engine-rhi';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { makeRhiDevice } from '../device';
-import { acquireCanvasContext, createShaderModule, requestDevice } from '../index';
+import { acquireCanvasContext, createShaderModule, requestAdapter, requestDevice } from '../index';
 import { createMockGpu, type MockCapture, makeShaderError } from './__mocks__/gpu-device';
 
 {
@@ -685,7 +685,7 @@ import { createMockGpu, type MockCapture, makeShaderError } from './__mocks__/gp
       const desc: RenderPipelineDescriptor = {
         label: 'rpp',
         layout: 'auto',
-        vertex: { module: shader.value as unknown as GPUShaderModule, entryPoint: 'v' },
+        vertex: { module: shader.value, entryPoint: 'v', buffers: [] },
         fragment: undefined,
       };
       const out = device.createRenderPipeline(desc);
@@ -703,12 +703,17 @@ import { createMockGpu, type MockCapture, makeShaderError } from './__mocks__/gp
       if (!r.ok) throw new Error('mock requestDevice failed');
       const device = r.value;
 
+      const shader = await createShaderModule(device, {
+        code: '@vertex fn v() -> @builtin(position) vec4f { return vec4f(0); }',
+      });
+      if (!shader.ok) throw new Error('mock shader creation failed');
       const out = device.createRenderPipeline({
         label: 'invalid-rpp',
         layout: 'auto',
         vertex: {
-          module: {} as unknown as GPUShaderModule,
+          module: shader.value,
           entryPoint: 'v',
+          buffers: [],
         },
         fragment: undefined,
       });
@@ -1379,6 +1384,8 @@ import { createMockGpu, type MockCapture, makeShaderError } from './__mocks__/gp
   }
 
   describe('AC-10 — 4 error paths .code / .expected / .hint three-field assertions', () => {
+    afterEach(() => vi.unstubAllGlobals());
+
     it('adapter null -> code=adapter-unavailable + three non-empty string fields', async () => {
       const gpu = createMockGpu({ adapterNull: true });
       const e = unwrapErr(await requestDevice({ gpu }));
@@ -1388,6 +1395,27 @@ import { createMockGpu, type MockCapture, makeShaderError } from './__mocks__/gp
       expect(e.expected.length).toBeGreaterThan(0);
       expect(typeof e.hint).toBe('string');
       expect(e.hint.length).toBeGreaterThan(0);
+    });
+
+    it('requestAdapter throw keeps the original failure instead of claiming adapter-unavailable', async () => {
+      vi.stubGlobal('navigator', {
+        gpu: {
+          requestAdapter: async () => {
+            throw new DOMException('WebGPU permission policy denied access', 'SecurityError');
+          },
+        },
+      });
+
+      const e = unwrapErr(await requestAdapter());
+      expect(e.code).toBe('webgpu-runtime-error');
+      expect(e.hint).toContain('wgpu/WebGL2 fallback');
+      expect(e.detail).toEqual({
+        error: {
+          code: 'request-adapter-threw',
+          name: 'SecurityError',
+          message: 'WebGPU permission policy denied access',
+        },
+      });
     });
 
     it('feature not enabled -> code=feature-not-enabled + three non-empty string fields', async () => {

@@ -9,8 +9,8 @@
 // Related: requirements §AC-06 / §AC-14; plan-strategy §M3 + D-P5;
 //          plan-tasks.json w8 acceptanceCheck.
 
-import { err, type Result } from '@forgeax/engine-ecs';
 import type { AssetError, MeshAsset } from '@forgeax/engine-types';
+import { err, type Result } from '@forgeax/engine-types';
 import { degenerate } from './box';
 import { createCylinderGeometry } from './cylinder';
 

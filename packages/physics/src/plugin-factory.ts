@@ -1,140 +1,116 @@
 // @forgeax/engine-physics -- physicsPlugin(backend) factory (M2 / w10, plan-strategy D-5 / D-7).
 //
 // physicsPlugin lives in @forgeax/engine-physics (the interface package, C-9)
-// and accepts an interface->backend dependency inversion (R1 / D-5): its async
-// build dynamic-imports the rapier 2D / 3D backend on demand. The backends are
+// and accepts an interface->backend dependency inversion: its async apply
+// dynamic-imports the rapier 2D / 3D backend on demand. The backends are
 // declared as devDependencies in this package's package.json (a regular
 // dependency would form a physics <-> rapier cycle since the backends depend on
 // the interface package); the consuming app declares the real runtime dep.
 //
-// On WASM load / world creation failure the build returns
-// err(new PluginError({ code: 'plugin-build-failed', ... })) carrying the
-// originating exception as detail.cause -- this replaces the old fire-and-forget
-// silent catch in create-app.ts (charter P3: physics failure is no longer
-// swallowed; AI users distinguish "no physics" from "physics WASM did not
-// load"). Constructing a PluginError here is the exact reason the protocol
-// types had to move to the L1.5 @forgeax/engine-plugin package (R8): a bare
-// structured object is not an Error instance and would not satisfy the
-// Plugin.build Result<void, PluginError> contract.
-//
-// Plugin / PluginError / PLUGIN_EXPECTED / PLUGIN_ERROR_HINTS come from
-// @forgeax/engine-plugin (L1.5); ok / err from @forgeax/engine-ecs.
-//
 // charter awareness:
-//   P3 explicit failure: WASM load failure surfaces as a structured
-//       PluginError with .code / .detail.cause, never a silent skip.
+//   P3 explicit failure: WASM load failure rejects plugin activation and the
+//       App boundary preserves the cause; it is never a silent skip.
 //   P4 consistent abstraction: physicsPlugin shares the same Plugin shape as
 //       transform / audio -- one mental model covers every wiring.
 
-import { err, ok, type SimulationParticipant } from '@forgeax/engine-ecs';
-import {
-  PLUGIN_ERROR_HINTS,
-  PLUGIN_EXPECTED,
-  type Plugin,
-  PluginError,
-} from '@forgeax/engine-plugin';
+import type { Plugin } from '@forgeax/engine-plugin';
+import { registerPhysicsComponents } from './components';
+import { PhysicsError } from './errors';
 import { loadRapier2DBackend, loadRapier3DBackend } from './load-rapier-backend.mjs';
 import type { PhysicsWorld, PhysicsWorld2D } from './physics-world';
 
 interface Rapier3DBackendModule {
   loadRapier3D(): Promise<unknown>;
   createRapier3DPhysicsWorld(rapier: unknown): PhysicsWorld;
-  createRapier3DSimulationParticipant(physics: PhysicsWorld): SimulationParticipant;
-  registerPhysicsSystems(world: Parameters<Plugin['build']>[0]): void;
+  registerPhysicsSystems(world: import('@forgeax/engine-ecs').World): () => void;
 }
 
 interface Rapier2DBackendModule {
   loadRapier2D(): Promise<unknown>;
   createRapier2DPhysicsWorld(rapier: unknown): PhysicsWorld2D;
-  createRapier2DSimulationParticipant(physics: PhysicsWorld2D): SimulationParticipant;
-  registerPhysicsSystems2D(world: Parameters<Plugin['build']>[0]): void;
+  registerPhysicsSystems2D(world: import('@forgeax/engine-ecs').World): () => void;
 }
 
-/** Rapier backend selector (mirrors the old CreateAppOptions.physics literal). */
+/** Rapier backend selector. */
 export type PhysicsBackend = 'rapier-2d' | 'rapier-3d';
 
-/**
- * Render a thrown value into a flat cause string for PluginError.detail.cause.
- *
- * The dynamic import + WASM init can throw any value (rapier WASM errors,
- * resolver failures); we surface the message when present and fall back to
- * String() so the cause is always a non-empty human-readable string.
- */
-function causeString(e: unknown): string {
-  if (e instanceof Error) {
-    return e.message.length > 0 ? `${e.name}: ${e.message}` : e.name;
-  }
-  return String(e);
-}
-
-function buildFailed(cause: string): PluginError {
-  return new PluginError({
-    code: 'plugin-build-failed',
-    expected: PLUGIN_EXPECTED['plugin-build-failed'],
-    hint: PLUGIN_ERROR_HINTS['plugin-build-failed'],
-    detail: {
-      pluginName: 'physics',
-      cause,
-      failures: [{ pluginName: 'physics', cause }],
-    },
+function normalizeWasmLoadFailure(backend: PhysicsBackend, cause: unknown): PhysicsError {
+  if (cause instanceof PhysicsError && cause.code === 'wasm-load-failed') return cause;
+  const reason = cause instanceof Error ? cause.message : String(cause);
+  return new PhysicsError({
+    code: 'wasm-load-failed',
+    expected: `successful import and WASM initialization for ${backend}`,
+    hint: `Rapier backend activation failed: ${reason}`,
+    detail: { code: 'wasm-load-failed', reason },
   });
 }
 
+declare module '@forgeax/engine-plugin' {
+  interface EngineContextServices {
+    physics?: PhysicsWorld | PhysicsWorld2D;
+  }
+}
+
 /**
- * physicsPlugin(backend) -- async build dynamic-imports the rapier backend,
+ * physicsPlugin(backend) dynamically imports the Rapier backend,
  * loads the WASM module, creates the PhysicsWorld, inserts it as the
  * 'PhysicsWorld' world resource, and registers the three-phase tick systems.
  *
- * Equivalent to the old create-app.ts fire-and-forget physics block
- * (:682-723) -- but the failure is now structured (PluginError) rather than a
- * silent catch (D-5 / D-7). The resource is inserted BEFORE registering the
- * systems so moveAndSlide's moveContext resolves the 'PhysicsWorld' resource on
- * the first tick (feat-20260617 G-2 ordering).
+ * The resource is inserted before registering systems so moveAndSlide resolves
+ * `PhysicsWorld` on the first tick. Cordis owns rollback if any later effect
+ * fails.
  *
  * @param backend 'rapier-2d' or 'rapier-3d'
  */
 export function physicsPlugin(backend: PhysicsBackend): Plugin {
   return {
     name: 'physics',
-    async build(world) {
-      try {
-        if (backend === 'rapier-3d') {
-          const {
-            loadRapier3D,
-            createRapier3DPhysicsWorld,
-            createRapier3DSimulationParticipant,
-            registerPhysicsSystems,
-          } = (await loadRapier3DBackend()) as Rapier3DBackendModule;
-          const rapier = await loadRapier3D();
-          const pw = createRapier3DPhysicsWorld(rapier);
-          world.insertResource('PhysicsWorld', pw);
-          world.registerSimulationTransientResource('PhysicsWorld');
-          const registered = world.registerSimulationParticipant(
-            createRapier3DSimulationParticipant(pw),
-          );
-          if (!registered.ok) return err(buildFailed(registered.error.code));
-          registerPhysicsSystems(world);
-        } else {
-          const {
-            loadRapier2D,
-            createRapier2DPhysicsWorld,
-            createRapier2DSimulationParticipant,
-            registerPhysicsSystems2D,
-          } = (await loadRapier2DBackend()) as Rapier2DBackendModule;
-          const rapier = await loadRapier2D();
-          const pw = createRapier2DPhysicsWorld(rapier);
-          world.insertResource('PhysicsWorld', pw);
-          world.registerSimulationTransientResource('PhysicsWorld');
-          const registered = world.registerSimulationParticipant(
-            createRapier2DSimulationParticipant(pw),
-          );
-          if (!registered.ok) return err(buildFailed(registered.error.code));
-          registerPhysicsSystems2D(world);
+    inject: ['world'],
+    provide: 'physics',
+    async apply(ctx) {
+      const world = ctx.world;
+      let physics: PhysicsWorld | PhysicsWorld2D;
+      let registerSystems: () => () => void;
+      if (backend === 'rapier-3d') {
+        let module: Rapier3DBackendModule;
+        let rapier: unknown;
+        try {
+          module = (await loadRapier3DBackend()) as Rapier3DBackendModule;
+          rapier = await module.loadRapier3D();
+        } catch (cause) {
+          throw normalizeWasmLoadFailure(backend, cause);
         }
-      } catch (e) {
-        return err(buildFailed(causeString(e)));
+        if (rapier instanceof PhysicsError) throw normalizeWasmLoadFailure(backend, rapier);
+        const { createRapier3DPhysicsWorld, registerPhysicsSystems } = module;
+        physics = createRapier3DPhysicsWorld(rapier);
+        registerSystems = () => registerPhysicsSystems(world);
+      } else {
+        let module: Rapier2DBackendModule;
+        let rapier: unknown;
+        try {
+          module = (await loadRapier2DBackend()) as Rapier2DBackendModule;
+          rapier = await module.loadRapier2D();
+        } catch (cause) {
+          throw normalizeWasmLoadFailure(backend, cause);
+        }
+        if (rapier instanceof PhysicsError) throw normalizeWasmLoadFailure(backend, rapier);
+        const { createRapier2DPhysicsWorld, registerPhysicsSystems2D } = module;
+        physics = createRapier2DPhysicsWorld(rapier);
+        registerSystems = () => registerPhysicsSystems2D(world);
       }
-      return ok(undefined);
+      ctx.effect(() => registerPhysicsComponents(world), 'physics/components');
+      ctx.effect(() => {
+        world.insertResource('PhysicsWorld', physics);
+        return () => {
+          world.removeResource('PhysicsWorld');
+          physics.dispose();
+        };
+      }, 'physics/resource');
+      ctx.effect(() => {
+        const unregister = registerSystems();
+        return () => unregister();
+      }, 'physics/systems');
+      ctx.provide('physics', physics);
     },
   };
 }

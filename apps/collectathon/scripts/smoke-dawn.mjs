@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../bevy/scripts/renderer-smoke.mjs";
 // apps/collectathon — dawn-node structural smoke.
 //
 // Grows per milestone (structural-only, no pixel readback, OOS-7; uses
@@ -134,7 +135,9 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const created = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!created.ok) throw created.error;
+  renderer = created.value;
 } catch (err) {
   console.error(
     `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
@@ -144,10 +147,10 @@ try {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
 
-console.log(`[collectathon] backend=${renderer.backend}`);
+console.log(`[collectathon] backend=${renderer.inspect().capabilities.backendKind}`);
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 // Spawn Camera + DirectionalLight for empty-scene structural smoke.
@@ -425,20 +428,21 @@ console.log(
 // --- 4. Error tracking ---------------------------------------------------------
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+const unsubscribe = renderer.subscribe((event) => {
+  if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint });
+});
 
 // --- 5. Render loop ------------------------------------------------------------
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 let framesObserved = 0;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = renderer.draw({
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  });
   // Track draw errors via onError — do not fail on individual frames.
   void r;
   framesObserved++;
@@ -479,8 +483,8 @@ console.log(
 );
 
 const failures = [];
-if (renderer.backend !== 'webgpu') {
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (renderer.inspect().capabilities.backendKind !== 'webgpu') {
+  failures.push(`(a) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
 }
 if (framesObserved < SMOKE_MIN_FRAMES) {
   failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
@@ -537,5 +541,7 @@ console.log(
 );
 
 if (sharedDevice) sharedDevice.destroy?.();
+unsubscribe();
+await renderer.dispose();
 delete globalThis.navigator.gpu;
 process.exit(0);

@@ -14,7 +14,6 @@
     { "path": "../assets-runtime" },
     { "path": "../import" },
     { "path": "../types" },
-    { "path": "../vfx" },
-    { "path": "../vite-plugin-pack" }
+    { "path": "../vfx" }
   ]
 }

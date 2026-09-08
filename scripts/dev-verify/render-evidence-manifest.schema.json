@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forgeax.dev/schema/render-evidence-manifest.schema.json",
+  "title": "ForgeaX Render evidence manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "manifestKind",
+    "sourceSha",
+    "build",
+    "testConfig",
+    "evidence",
+    "backends",
+    "requiredCells",
+    "visualRecords",
+    "recoveryHints"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "manifestKind": { "const": "render-evidence-manifest" },
+    "sourceSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "distHashes"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "distHashes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "sha256"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            }
+          }
+        }
+      }
+    },
+    "testConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "sha256"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceSha", "buildId", "layers", "frameChain"],
+      "properties": {
+        "sourceSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "buildId": { "type": "string", "minLength": 1 },
+        "layers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "budget",
+            "apiSnapshot",
+            "consumerInventory",
+            "legacySurface",
+            "distBuild",
+            "requiredCells",
+            "documentation"
+          ],
+          "properties": {
+            "budget": { "$ref": "#/$defs/evidenceStatus" },
+            "apiSnapshot": { "$ref": "#/$defs/evidenceStatus" },
+            "consumerInventory": { "$ref": "#/$defs/evidenceStatus" },
+            "legacySurface": { "$ref": "#/$defs/evidenceStatus" },
+            "distBuild": { "$ref": "#/$defs/evidenceStatus" },
+            "requiredCells": { "$ref": "#/$defs/evidenceStatus" },
+            "documentation": { "$ref": "#/$defs/evidenceStatus" }
+          }
+        },
+        "frameChain": {
+          "type": "array",
+          "minItems": 4,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "backends": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/backend" }
+    },
+    "requiredCells": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/requiredCell" }
+    },
+    "visualRecords": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/visualRecord" }
+    },
+    "recoveryHints": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "evidenceStatus": {
+      "type": "string",
+      "enum": ["pass", "blocked", "missing"]
+    },
+    "backendKind": {
+      "type": "string",
+      "enum": ["rhi-null", "dawn", "chromium"]
+    },
+    "backend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "identity"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/backendKind" },
+        "identity": { "type": "string", "minLength": 1 }
+      }
+    },
+    "requiredCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "required",
+        "sourceSha",
+        "buildId",
+        "backendKind",
+        "backendIdentity",
+        "status",
+        "verdict"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "required": { "const": true },
+        "sourceSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "buildId": { "type": "string", "minLength": 1 },
+        "backendKind": { "$ref": "#/$defs/backendKind" },
+        "backendIdentity": { "type": "string", "minLength": 1 },
+        "status": {
+          "type": "string",
+          "enum": ["pass", "blocked", "unsupported", "error", "missing"]
+        },
+        "verdict": {
+          "type": "string",
+          "enum": ["structural", "pixel", "blocked"]
+        }
+      }
+    },
+    "visualRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "sourceSha",
+        "buildId",
+        "backend",
+        "frameId",
+        "deviceGeneration",
+        "oracle",
+        "falsifier",
+        "observed",
+        "verdict",
+        "confidence"
+      ],
+      "properties": {
+        "target": { "type": "string", "minLength": 1 },
+        "sourceSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "buildId": { "type": "string", "minLength": 1 },
+        "backend": { "$ref": "#/$defs/backend" },
+        "frameId": { "type": "integer", "minimum": 0 },
+        "deviceGeneration": { "type": "integer", "minimum": 0 },
+        "oracle": { "type": "string", "minLength": 1 },
+        "falsifier": { "type": "string", "minLength": 1 },
+        "observed": { "type": "string", "minLength": 1 },
+        "verdict": {
+          "type": "string",
+          "enum": ["structural", "pixel", "blocked"]
+        },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    }
+  }
+}

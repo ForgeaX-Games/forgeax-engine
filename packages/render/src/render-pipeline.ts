@@ -1,12 +1,9 @@
-// @forgeax/engine-runtime - RenderPipeline interface (the forgeax engine concept,
-// equivalent to Unity SRP's RenderPipeline) + RenderPipelineData per-frame snapshot
-// placeholder (feat-20260601-customizable-render-pipeline-seam-and-dogfood-rend M1 / w3).
+// @forgeax/engine-render - typed render-pipeline topology contract.
 //
-// `RenderPipeline` is the registrable / installable / hot-swappable unit that owns
-// the per-frame render-graph topology. The engine's own standard forward pipeline
-// (`forgeax::urp`) implements this same interface and is driven through
-// the same public registerPipeline / installPipeline channel a user would use
-// (dogfood hard constraint, requirements M1 item 6).
+// `RenderPipeline` is the typed topology contribution used by the Standard host.
+// The host owns the single active pipeline identity and its lifecycle; producers
+// contribute graph declarations through this interface instead of publishing a
+// second renderer authority.
 //
 // Naming note (requirements line 155): `RenderPipeline` here is the forgeax engine
 // concept name. The RHI GPU `RenderPipeline` handle (`@forgeax/engine-rhi`) is a
@@ -14,21 +11,34 @@
 // form rules - "opaque handles distinguished by module path"); it is not exposed to
 // AI users. Files importing both alias the RHI one locally.
 //
-// Method set is intentionally MINIMAL (requirements M1 item 1): buildGraph(ctx, data)
-// + execute(ctx). It does NOT include consumes() / extract() - those are deferred to
-// Feat 2 (requirements OOS-3).
-//
-// M2 stage (w10): `Ctx` defaults to the clean `RenderPipelineContext` dependency face
-// (the former `RecordPassContext` full field set is deleted in w12) and `Data` defaults
-// to the per-frame snapshot `RenderPipelineData` (plan-strategy D-A / D-B). `internals` is
-// no longer reachable through the public pipeline ctx (AC-08 oracle).
+// Pipelines declare topology once through a typed builder. The renderer compiles,
+// executes, retires, finishes, and submits the resulting graph.
 
-import type { ColorValueDomain, RenderGraph } from '@forgeax/engine-render-graph';
+import type {
+  ColorValueDomain,
+  GraphAccess,
+  GraphResourceResolver,
+  GraphTexture,
+  GraphTextureDescriptor,
+  GraphTextureView,
+  GraphTextureViewDescriptor,
+  RenderGraphBuilder,
+  RenderGraphError,
+  RenderGraphFrame,
+} from '@forgeax/engine-render-graph';
+import type { BindGroup, RhiError, RhiRenderPassEncoder, TextureFormat } from '@forgeax/engine-rhi';
+import { ok, type Result } from '@forgeax/engine-types';
 import type { Tonemap } from './components/camera';
-import type { RenderFeatureTargetHandle } from './features/targets';
-import type { RenderPipelineContext, RenderPipelineData } from './render-pipeline-context';
+import type { RenderError } from './errors/render';
+import type { RenderFeatureTargetKind } from './features/targets';
+import {
+  GPU_TEXTURE_USAGE_COPY_SRC,
+  GPU_TEXTURE_USAGE_RENDER_ATTACHMENT,
+} from './gpu-texture-usage';
+import type { StandardProfile } from './pipeline/standard-profile';
+import type { RenderPipelineContext } from './render-contract';
 
-export type { RenderPipelineContext, RenderPipelineData } from './render-pipeline-context';
+export type { RenderPipelineContext } from './render-contract';
 
 export type RenderColorDomain = 'linearHdr' | 'linearLdr' | 'displayEncoded';
 
@@ -48,16 +58,16 @@ export type RenderPostDomainStage = readonly [
 ];
 
 /**
- * Single post-stage domain contract shared by URP and HDRP.
- * The pipeline selects the scene domain for transparent geometry; every later
+ * Single post-stage domain contract shared by the Standard lighting lanes.
+ * The selected scene domain for transparent geometry is explicit; every later
  * stage follows the same linear blend, tone, anti-alias, and output sequence.
  */
 export function resolvePostColorDomainContract(
-  pipeline: 'urp' | 'hdrp',
+  sceneDomain: 'linear-ldr' | 'linear-hdr',
 ): readonly RenderPostDomainStage[] {
-  const sceneDomain: ColorValueDomain = pipeline === 'hdrp' ? 'linear-hdr' : 'linear-ldr';
+  const scene: ColorValueDomain = sceneDomain;
   return [
-    ['transparent-blend', sceneDomain, sceneDomain],
+    ['transparent-blend', scene, scene],
     ['bloom', 'linear-hdr', 'linear-hdr'],
     ['tone', 'linear-hdr', 'linear-ldr'],
     ['fxaa', 'linear-ldr', 'linear-ldr'],
@@ -89,37 +99,161 @@ export function resolveToneOutputContract(tonemap: Tonemap): ToneOutputContract 
   };
 }
 
-/** Narrow input used by a pipeline to publish logical feature attachments. */
-export interface RenderFeatureTargetContext {
-  readonly camera: Pick<RenderPipelineData['camera'], 'tonemap' | 'antialias'>;
-  readonly colorAttachmentFormat: string;
-  readonly backendKind: string;
-  readonly storageBuffer: boolean;
+/** Stable facts that may change graph topology and therefore its compiled identity. */
+export interface RenderPipelineTopology {
+  readonly pipelineId: string;
+  readonly standardProfile?: StandardProfile | undefined;
+  readonly config: import('@forgeax/engine-types').RenderPipelineAsset['config'];
+  readonly surface: {
+    readonly width: number;
+    readonly height: number;
+    readonly storageFormat: import('@forgeax/engine-rhi').TextureFormat;
+    readonly viewFormat: import('@forgeax/engine-rhi').TextureFormat;
+  };
+  readonly camera: Pick<RenderPipelineContext['camera'], 'tonemap' | 'antialias' | 'bloom'>;
+  readonly shadow: {
+    readonly mapSize: number;
+    readonly cascadeCount: 1 | 2 | 3 | 4;
+    readonly pointCount: number;
+    readonly pointFaceSize: number;
+    readonly spotCount: number;
+  };
+  readonly lane: {
+    readonly compute: boolean;
+    readonly storageBuffer: boolean;
+    readonly multisample: boolean;
+    readonly maxColorAttachments: number;
+  };
+  readonly featureTopologySignature: string;
+  readonly gpuDrivenTopologySignature: string;
 }
 
+export interface RenderPipelineFrame extends RenderPipelineContext, RenderGraphFrame {}
+
+export interface RenderPipelineTarget {
+  readonly texture: GraphTexture;
+  readonly view: GraphTextureView;
+  readonly format: TextureFormat;
+  readonly sampleCount: 1 | 4;
+  readonly resolveTarget?: GraphTextureView | undefined;
+}
+
+export function createRenderPipelineTarget(
+  graph: RenderGraphBuilder<RenderPipelineFrame>,
+  label: string,
+  descriptor: GraphTextureDescriptor,
+  viewDescriptor: GraphTextureViewDescriptor = {},
+): Result<RenderPipelineTarget, RenderGraphError> {
+  const texture = graph.createTexture(label, descriptor);
+  if (!texture.ok) return texture;
+  const view = graph.view(texture.value, { label: `${label}.view`, ...viewDescriptor });
+  if (!view.ok) return view;
+  return ok({
+    texture: texture.value,
+    view: view.value,
+    format: viewDescriptor.format ?? descriptor.format,
+    sampleCount: descriptor.sampleCount === 4 ? 4 : 1,
+  });
+}
+
+export function importRenderPipelineSurface(
+  graph: RenderGraphBuilder<RenderPipelineFrame>,
+  topology: RenderPipelineTopology,
+): Result<
+  { readonly display: RenderPipelineTarget; readonly storage: RenderPipelineTarget },
+  RenderGraphError
+> {
+  const texture = graph.importTexture(
+    'surface',
+    {
+      format: topology.surface.storageFormat,
+      size: 'surface',
+      usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT | GPU_TEXTURE_USAGE_COPY_SRC,
+      viewFormats:
+        topology.surface.storageFormat === topology.surface.viewFormat
+          ? []
+          : [topology.surface.viewFormat],
+    },
+    (frame) => frame.currentTexture,
+  );
+  if (!texture.ok) return texture;
+  const display = graph.importView(
+    texture.value,
+    { label: 'surface.display', format: topology.surface.viewFormat },
+    (frame) => frame.view,
+  );
+  if (!display.ok) return display;
+  const storage = graph.importView(
+    texture.value,
+    { label: 'surface.storage', format: topology.surface.storageFormat },
+    (frame) => {
+      if (topology.surface.storageFormat === topology.surface.viewFormat) return frame.view;
+      const resolved = frame.runtime.device.createTextureView(frame.currentTexture, {
+        format: topology.surface.storageFormat,
+      });
+      if (!resolved.ok) throw resolved.error;
+      return resolved.value;
+    },
+  );
+  if (!storage.ok) return storage;
+  return ok({
+    display: {
+      texture: texture.value,
+      view: display.value,
+      format: topology.surface.viewFormat,
+      sampleCount: 1,
+    },
+    storage: {
+      texture: texture.value,
+      view: storage.value,
+      format: topology.surface.storageFormat,
+      sampleCount: 1,
+    },
+  });
+}
+
+export interface RenderPipelineFeatureTarget {
+  readonly kind: RenderFeatureTargetKind;
+  readonly texture: GraphTexture;
+  readonly view: GraphTextureView;
+  readonly resolveTarget?: GraphTextureView | undefined;
+  readonly format: TextureFormat;
+  readonly sampleCount: 1 | 4;
+}
+
+export interface RenderPipelineGpuDrivenProjection {
+  readonly accesses: readonly GraphAccess[];
+  encode(
+    viewBindGroup: BindGroup,
+    pass: RhiRenderPassEncoder,
+    resources: GraphResourceResolver,
+  ): void;
+}
+
+export interface RenderPipelineBuildContext<FrameCtx extends RenderPipelineFrame> {
+  readonly graph: RenderGraphBuilder<FrameCtx>;
+  projectGpuDriven(target: {
+    readonly format: TextureFormat;
+    readonly sampleCount: 1 | 4;
+  }): Result<RenderPipelineGpuDrivenProjection | undefined, RenderPipelineBuildError>;
+  contributeFeatures(
+    targets: readonly RenderPipelineFeatureTarget[],
+  ): Result<void, RenderPipelineBuildError>;
+}
+
+export type RenderPipelineBuildError = RenderGraphError | RenderError | RhiError;
+
 /**
- * The forgeax render pipeline contract: a registrable, installable, hot-swappable unit
- * that builds and executes the per-frame render-graph.
+ * Registrable, installable, hot-swappable render topology.
  *
- * @typeParam Ctx - the pass-execution context handed to each render-graph closure.
- *   Defaults to the clean `RenderPipelineContext` dependency face (AC-08): `internals`
- *   is unreachable; only the named `assets` / `store` / `pipelineState` / `runtime` +
- *   per-view inputs are exposed.
- * @typeParam Data - the per-frame projected snapshot `RenderPipelineData` (camera /
- *   validated draw lists / target size / per-frame flags) handed to `buildGraph`.
- *
- * - `buildGraph(ctx, data)` constructs + compiles the per-frame `RenderGraph<Ctx>`
- *   (resource declarations + addPass + compile). Returns `null` when compile fails (the
- *   implementation fires a structured RhiError before returning null, matching the prior
- *   buildPerFrameGraph contract). The RenderSystem memoizes the returned graph and only
- *   rebuilds on a pipeline swap (brand-number change).
- * - `execute(ctx)` runs the compiled graph for one frame (`graph.execute(ctx)`).
+ * `build` declares resources and passes only. The renderer owns compilation,
+ * last-known-good replacement, execution, retirement, and the single frame submit.
+ * Feature contributions enter through `contributeFeatures`, so compute-produced
+ * buffers and later raster reads remain inside the same typed dependency graph.
  */
-export interface RenderPipeline<Ctx = RenderPipelineContext, Data = RenderPipelineData> {
-  /** Publish the scene color/depth contract for producer-owned graphics features. */
-  readonly getRenderFeatureTargets?: (
-    context: RenderFeatureTargetContext,
-  ) => readonly RenderFeatureTargetHandle[];
-  buildGraph(ctx: Ctx, data: Data): RenderGraph<Ctx> | null;
-  execute(ctx: Ctx): void;
+export interface RenderPipeline<FrameCtx extends RenderPipelineFrame = RenderPipelineFrame> {
+  build(
+    context: RenderPipelineBuildContext<FrameCtx>,
+    topology: RenderPipelineTopology,
+  ): Result<void, RenderPipelineBuildError>;
 }

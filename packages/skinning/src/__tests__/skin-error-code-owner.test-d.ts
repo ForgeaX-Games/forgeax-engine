@@ -1,3 +1,4 @@
+import type { resolveSkinJoints } from '@forgeax/engine-skinning';
 import type { SkinError, SkinErrorCode, SkinExtractErrorCode } from '../errors.js';
 
 type Equal<Left, Right> =
@@ -23,6 +24,9 @@ type _SkinErrorCodeHasExactMembership = Assert<Equal<SkinErrorCode, ExpectedSkin
 type _SkinExtractErrorCodeIsASkinErrorCode = Assert<
   SkinExtractErrorCode extends SkinErrorCode ? true : false
 >;
+
+type ResolveSkinJointsError = Extract<ReturnType<typeof resolveSkinJoints>, { ok: false }>['error'];
+type _ResolveSkinJointsUsesSkinErrorAuthority = Assert<Equal<ResolveSkinJointsError, SkinError>>;
 
 declare const extractCode: SkinExtractErrorCode;
 const acceptsSkinErrorCode = (code: SkinErrorCode): SkinErrorCode => code;
@@ -80,6 +84,8 @@ export type _SkinErrorCodeOwnerChecks = {
   _membership: _SkinErrorCodeHasExactMembership;
   /** @internal */
   _extractSubset: _SkinExtractErrorCodeIsASkinErrorCode;
+  /** @internal */
+  _resolveAuthority: _ResolveSkinJointsUsesSkinErrorAuthority;
   /** @internal */
   _narrowDetail: typeof narrowSkinErrorDetail;
 };

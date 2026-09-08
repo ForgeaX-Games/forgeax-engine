@@ -34,6 +34,7 @@
 // is done by the dawn smoke (w40) which covers the node-side equivalent path.
 
 import { chromium } from 'playwright';
+import { PNG } from 'pngjs';
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +45,186 @@ const REPO_ROOT = resolve(HERE, '..', '..', '..', '..');
 
 let portUrl = null;
 let exitCode = 0;
+const M27_RECOVERY = process.argv.includes('--m27-recovery');
+
+function canvasStats(buffer) {
+  const image = PNG.sync.read(buffer);
+  let redDominant = 0;
+  let luminance = 0;
+  for (let offset = 0; offset < image.data.length; offset += 4) {
+    const red = image.data[offset];
+    const green = image.data[offset + 1];
+    const blue = image.data[offset + 2];
+    if (red > green + 20 && red > blue + 20) redDominant += 1;
+    luminance += red + green + blue;
+  }
+  return {
+    width: image.width,
+    height: image.height,
+    redDominant,
+    meanLuma: luminance / (image.width * image.height * 3),
+  };
+}
+
+function assertRecoveryState(state, expectedPhase) {
+  if (state.phase !== expectedPhase) {
+    throw new Error(`expected phase=${expectedPhase}, got ${JSON.stringify(state)}`);
+  }
+}
+
+async function runRuntimeRecoveryScene() {
+  const label = 'm27-runtime-recovery';
+  console.log(`[smoke-browser] ${label} starting...`);
+  const viteProc = spawn('pnpm', ['-F', '@forgeax/hello-compressed-texture', 'dev'], {
+    cwd: REPO_ROOT,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  let browser;
+  try {
+    const pageUrl = await new Promise((resolveVite, rejectVite) => {
+      const deadline = Date.now() + 30000;
+      let interval;
+      const resolveReady = (url) => {
+        clearInterval(interval);
+        resolveVite(url);
+      };
+      viteProc.stdout.on('data', (chunk) => {
+        const match = chunk.toString().match(/Local:\s+(http:\/\/[^\s]+)/);
+        if (match) resolveReady(`${match[1]}?mode=runtime-recovery`);
+      });
+      viteProc.stderr.on('data', (chunk) => process.stderr.write(`[vite-err] ${chunk}`));
+      interval = setInterval(() => {
+        if (Date.now() >= deadline) {
+          clearInterval(interval);
+          rejectVite(new Error('vite did not become ready in 30s'));
+        }
+      }, 200);
+    });
+
+    browser = await chromium.launch({
+      headless: true,
+      channel: 'chrome',
+      args: [
+        '--enable-unsafe-webgpu',
+        '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
+        '--ignore-gpu-blocklist',
+      ],
+    });
+    const page = await browser.newPage();
+    const errors = [];
+    page.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    page.on('pageerror', (error) => errors.push(`[pageerror] ${error.message}`));
+
+    await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    await page.waitForFunction(
+      () => window.__forgeaxRuntimeImageRecovery?.readState().phase === 'baseline',
+      { timeout: 15000 },
+    );
+    await sleep(1000);
+
+    const baselineState = await page.evaluate(() =>
+      window.__forgeaxRuntimeImageRecovery.readState(),
+    );
+    assertRecoveryState(baselineState, 'baseline');
+    if (
+      baselineState.textureAllocations !== 0 ||
+      baselineState.samplerAllocations !== 0 ||
+      baselineState.materialHasTexture
+    ) {
+      throw new Error(`baseline allocated a resource: ${JSON.stringify(baselineState)}`);
+    }
+    const baselineImage = canvasStats(await page.locator('canvas').screenshot());
+
+    const invalidState = await page.evaluate(async () =>
+      window.__forgeaxRuntimeImageRecovery.injectInvalid(),
+    );
+    assertRecoveryState(invalidState, 'invalid');
+    if (
+      invalidState.invalidCode !== 'image-decode-failed' ||
+      invalidState.textureAllocations !== 0 ||
+      invalidState.materialHasTexture
+    ) {
+      throw new Error(`invalid bytes mutated the scene: ${JSON.stringify(invalidState)}`);
+    }
+    await sleep(500);
+    const invalidImage = canvasStats(await page.locator('canvas').screenshot());
+    if (invalidImage.redDominant !== baselineImage.redDominant) {
+      throw new Error(
+        `invalid bytes changed the canvas: baseline=${JSON.stringify(baselineImage)} invalid=${JSON.stringify(invalidImage)}`,
+      );
+    }
+
+    const repairedState = await page.evaluate(async () =>
+      window.__forgeaxRuntimeImageRecovery.repair(),
+    );
+    assertRecoveryState(repairedState, 'repaired');
+    if (
+      repairedState.invalidCode !== 'image-decode-failed' ||
+      repairedState.textureAllocations !== 1 ||
+      repairedState.samplerAllocations !== 1 ||
+      repairedState.textureHandle === null ||
+      repairedState.samplerHandle === null ||
+      repairedState.textureDimensions?.[0] !== 2 ||
+      repairedState.textureDimensions?.[1] !== 2 ||
+      !repairedState.materialHasTexture
+    ) {
+      throw new Error(`repair state is incomplete: ${JSON.stringify(repairedState)}`);
+    }
+    await sleep(1200);
+    const repairedImage = canvasStats(await page.locator('canvas').screenshot());
+    if (repairedImage.meanLuma <= baselineImage.meanLuma + 0.2) {
+      throw new Error(
+        `repaired texture was not visible: baseline=${JSON.stringify(baselineImage)} repaired=${JSON.stringify(repairedImage)}`,
+      );
+    }
+
+    const cleanedState = await page.evaluate(() =>
+      window.__forgeaxRuntimeImageRecovery.cleanup(),
+    );
+    const cleanedAgainState = await page.evaluate(() =>
+      window.__forgeaxRuntimeImageRecovery.cleanup(),
+    );
+    assertRecoveryState(cleanedAgainState, 'cleaned');
+    if (
+      cleanedState.releasedResources !== 2 ||
+      cleanedAgainState.releasedResources !== 2 ||
+      cleanedAgainState.cleanupCalls !== 2 ||
+      cleanedAgainState.textureHandle !== null ||
+      cleanedAgainState.samplerHandle !== null ||
+      cleanedAgainState.materialHasTexture ||
+      cleanedAgainState.liveSharedRefs !== baselineState.liveSharedRefs
+    ) {
+      throw new Error(`cleanup was not idempotent: ${JSON.stringify(cleanedAgainState)}`);
+    }
+    await sleep(1500);
+    const cleanedImage = canvasStats(await page.locator('canvas').screenshot());
+    if (cleanedImage.redDominant !== baselineImage.redDominant) {
+      throw new Error(
+        `cleanup did not restore baseline: baseline=${JSON.stringify(baselineImage)} cleaned=${JSON.stringify(cleanedImage)}`,
+      );
+    }
+
+    const gpuErrors = errors.filter((error) =>
+      error.includes('validation') || error.includes('GPU') || error.includes('WebGPU') || error.includes('RhiError'),
+    );
+    if (gpuErrors.length > 0 || errors.length > 0) {
+      throw new Error(`browser errors: ${JSON.stringify(errors)}`);
+    }
+    console.log(
+      `[m27] Browser PASS baseline=${JSON.stringify(baselineImage)} repaired=${JSON.stringify(repairedImage)} cleanup=${JSON.stringify(cleanedImage)}`,
+    );
+    return 0;
+  } catch (error) {
+    console.error(`[smoke-browser] ${label} FAIL - ${error.message}`);
+    return 1;
+  } finally {
+    await browser?.close();
+    viteProc.kill();
+  }
+}
 
 // --- Scene 1: compressed path -------------------------------------------------
 
@@ -58,13 +239,18 @@ async function runScene(mode) {
 
   const pageUrl = await new Promise((resolveVite, rejectVite) => {
     const deadline = Date.now() + 30000;
+    let interval;
+    const resolveReady = (url) => {
+      clearInterval(interval);
+      resolveVite(url);
+    };
     viteProc.stdout.on('data', (chunk) => {
       const s = chunk.toString();
       const m = s.match(/Local:\s+(http:\/\/[^\s]+)/);
-      if (m) resolveVite(`${m[1]}?mode=${mode}`);
+      if (m) resolveReady(`${m[1]}?mode=${mode}`);
     });
     viteProc.stderr.on('data', (chunk) => process.stderr.write(`[vite-err] ${chunk}`));
-    const interval = setInterval(() => {
+    interval = setInterval(() => {
       if (Date.now() >= deadline) {
         clearInterval(interval);
         rejectVite(new Error('vite did not become ready in 30s'));
@@ -188,6 +374,11 @@ async function runScene(mode) {
 }
 
 // --- Main: run both scenes sequentially ---------------------------------------
+
+if (M27_RECOVERY) {
+  exitCode = await runRuntimeRecoveryScene();
+  process.exit(exitCode);
+}
 
 const result1 = await runScene('compressed');
 if (result1 !== 0) {

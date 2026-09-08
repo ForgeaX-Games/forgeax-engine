@@ -1,12 +1,31 @@
 import { World } from '@forgeax/engine-ecs';
-import {
-  extractFrames,
-  resolveVisibility,
-  Visibility,
-  VisibilityStateValue,
-} from '@forgeax/engine-render/internal';
 import { ChildOf } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
+import { Visibility, VisibilityStateValue } from '../components/visibility';
+import { resolveVisibility } from '../extract/visibility';
+import type { MaterialSnapshot, RenderableSnapshot } from '../render-system-extract';
+import { extractFrames } from '../render-system-extract';
+import { RenderScene } from '../scene/render-scene';
+
+const sceneMaterial = {} as MaterialSnapshot;
+
+function sceneSnapshot(worldId: number, entityKey: number, x: number): RenderableSnapshot {
+  const world = new Float32Array(16);
+  world[0] = 1;
+  world[5] = 1;
+  world[10] = 1;
+  world[15] = 1;
+  world[12] = x;
+  return {
+    assetHandle: 1,
+    transform: { world },
+    material: sceneMaterial,
+    materials: [sceneMaterial],
+    materialBindingSources: ['engine-default'],
+    worldId,
+    entityKey,
+  };
+}
 
 describe('visibility World isolation', () => {
   it('does not share intent or effective results for equal entity handles', () => {
@@ -50,5 +69,18 @@ describe('visibility World isolation', () => {
     expect(frame.visibilitySnapshots).toHaveLength(2);
     expect(frame.visibilitySnapshots[0]?.get(firstChild)?.effective).toBe('hidden');
     expect(frame.visibilitySnapshots[1]?.get(secondChild)?.effective).toBe('visible');
+  });
+
+  it('keeps equal entity keys isolated when multi-world scene order changes', () => {
+    const scene = new RenderScene();
+    scene.reset([sceneSnapshot(0, 3, 1), sceneSnapshot(1, 3, 2)]);
+    const first = scene.slot(0, 3);
+    const second = scene.slot(1, 3);
+
+    scene.reset([sceneSnapshot(1, 3, 2), sceneSnapshot(0, 3, 1)]);
+
+    expect(scene.slot(0, 3)).toMatchObject({ slot: first?.slot, generation: first?.generation });
+    expect(scene.slot(1, 3)).toMatchObject({ slot: second?.slot, generation: second?.generation });
+    expect(scene.materialize().map((entry) => entry.worldId)).toEqual([1, 0]);
   });
 });

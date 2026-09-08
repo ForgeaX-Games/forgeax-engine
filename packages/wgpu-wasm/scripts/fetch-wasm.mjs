@@ -32,6 +32,7 @@ import { fileURLToPath } from 'node:url';
 
 import { FetchError, getGitOrigin, getReleaseAsset, downloadAsset, extractTarball } from '../../../scripts/lib/fetch-wasm-lib.mjs';
 import { PKG_ROOT, RELEASE_TAG, resolveAsset } from './content-key.mjs';
+import { verifyProvenance } from './provenance.mjs';
 
 const PKG_DIR = join(PKG_ROOT, 'pkg');
 const TMP_TARBALL = join(PKG_ROOT, '.pkg-fetch.tar.gz');
@@ -79,6 +80,7 @@ async function main() {
   console.log(`Extracting into ${PKG_DIR} ...`);
   await extractTarball(TMP_TARBALL, PKG_DIR);
   await rm(TMP_TARBALL, { force: true });
+  await verifyProvenance();
 
   const members = await readdir(PKG_DIR);
   console.log(`  pkg/ now holds: ${members.join(', ')}`);

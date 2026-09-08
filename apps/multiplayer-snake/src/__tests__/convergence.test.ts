@@ -1,8 +1,11 @@
-import { World } from '@forgeax/engine-ecs';
+import { createWorldContext, World } from '@forgeax/engine-ecs';
 import {
   createReplicaCoordinator,
-  decodeAndApplyReplicaBatch,
+  decodeAndApplyReplicationPacket,
+  type EndpointEvent,
   type NetEndpoint,
+  type NetSession,
+  netPlugin,
   type PeerId,
 } from '@forgeax/engine-net';
 import { ok } from '@forgeax/engine-types';
@@ -12,7 +15,7 @@ import { encodeCommand } from '../shared/commands';
 import { GridPosition, Snake, SnakeBody, SnakeSegment, snakeProfile } from '../shared/components';
 
 describe('Snake deterministic convergence', () => {
-  it('remaps SnakeBody.segments and cleans disconnected replica entities', () => {
+  it('remaps SnakeBody.segments and cleans disconnected replica entities', async () => {
     const encodedJoin = encodeCommand({ kind: 'join' });
     if (!encodedJoin.ok) throw encodedJoin.error;
     const join = encodedJoin.value;
@@ -39,9 +42,9 @@ describe('Snake deterministic convergence', () => {
       },
       close: () => ok(undefined),
     };
-    const authority = createServerWorld(authorityEndpoint);
+    const authority = await createServerWorld(authorityEndpoint);
     authority.game.snakes.set(2, {
-      peerId: 2,
+      sessionId: 2,
       direction: 'right',
       score: 2,
       cells: [
@@ -59,7 +62,7 @@ describe('Snake deterministic convergence', () => {
     replicaWorld.spawn().unwrap();
     replicaWorld.spawn().unwrap();
     const replica = createReplicaCoordinator(replicaWorld, snakeProfile);
-    const fixture = JSON.parse(new TextDecoder().decode(firstBatch)) as {
+    const fixture = decodePacket(firstBatch) as {
       entities: Array<{
         id: number;
         components: Array<{ name: string; data: Record<string, unknown> }>;
@@ -71,11 +74,7 @@ describe('Snake deterministic convergence', () => {
     expect(bodyRecord).toBeDefined();
     if (bodyRecord === undefined) return;
     expect(bodyRecord.component.data.segments).toHaveLength(2);
-    const applied = decodeAndApplyReplicaBatch(
-      replica,
-      new TextEncoder().encode(JSON.stringify(fixture)),
-      snakeProfile.limits,
-    );
+    const applied = decodeAndApplyReplicationPacket(replica, firstBatch, snakeProfile.limits);
     if (!applied.ok) throw new Error(applied.error.message);
     const snakeRow = replica.snapshot().find((row) => row.components.includes(Snake.name));
     expect(snakeRow).toBeDefined();
@@ -92,13 +91,7 @@ describe('Snake deterministic convergence', () => {
     const lateWorld = new World();
     for (let index = 0; index < 5; index += 1) lateWorld.spawn().unwrap();
     const late = createReplicaCoordinator(lateWorld, snakeProfile);
-    expect(
-      decodeAndApplyReplicaBatch(
-        late,
-        new TextEncoder().encode(JSON.stringify(fixture)),
-        snakeProfile.limits,
-      ).ok,
-    ).toBe(true);
+    expect(decodeAndApplyReplicationPacket(late, firstBatch, snakeProfile.limits).ok).toBe(true);
     const lateSnake = late.snapshot().find((row) => row.components.includes(Snake.name));
     expect(lateSnake).toBeDefined();
     if (lateSnake !== undefined) expect(resolveBodySemantic(late, lateSnake.id)).toEqual(semantic);
@@ -127,7 +120,7 @@ describe('Snake deterministic convergence', () => {
     ).toHaveLength(0);
   });
 
-  it('publishes a late peer full baseline with the admitted roster', () => {
+  it('publishes a late peer full baseline with the admitted roster', async () => {
     const encodedJoin = encodeCommand({ kind: 'join' });
     if (!encodedJoin.ok) throw encodedJoin.error;
     const join = encodedJoin.value;
@@ -157,13 +150,31 @@ describe('Snake deterministic convergence', () => {
       },
       close: () => ok(undefined),
     };
-    const authority = createServerWorld(endpoint);
-    const early = makeReplica();
+    const authority = await createServerWorld(endpoint);
+    const earlyClient = await makeReplicaClient();
+    const early = earlyClient.replica;
     expect(authority.world.update(1).ok).toBe(true);
-    const first = sent.find((message) => message.peerId === (2 as PeerId))?.data;
+    const firstPeerMessages = sent.filter((message) => message.peerId === (2 as PeerId));
+    const first = firstPeerMessages.find(
+      (message) => packetKind(message.data) === 'baseline',
+    )?.data;
     expect(first).toBeDefined();
-    if (first === undefined) return;
-    expect(decodeAndApplyReplicaBatch(early, first, snakeProfile.limits).ok).toBe(true);
+    if (first === undefined) {
+      earlyClient.session.dispose();
+      return;
+    }
+    earlyClient.deliver(first);
+    const deltaStart = sent.length;
+    expect(authority.world.update(1).ok).toBe(true);
+    const firstDelta = sent
+      .slice(deltaStart)
+      .find((message) => packetKind(message.data) === 'delta')?.data;
+    expect(firstDelta).toBeDefined();
+    if (firstDelta === undefined) {
+      earlyClient.session.dispose();
+      return;
+    }
+    earlyClient.deliver(firstDelta);
 
     pending = [
       { kind: 'message', peerId: 2 as PeerId, data: ready },
@@ -172,8 +183,11 @@ describe('Snake deterministic convergence', () => {
     expect(authority.world.update(1).ok).toBe(true);
     const second = sent.filter((message) => message.peerId === (2 as PeerId)).at(-1)?.data;
     expect(second).toBeDefined();
-    if (second === undefined) return;
-    expect(decodeAndApplyReplicaBatch(early, second, snakeProfile.limits).ok).toBe(true);
+    if (second === undefined) {
+      earlyClient.session.dispose();
+      return;
+    }
+    earlyClient.deliver(second);
     expect(early.tick).toBeGreaterThan(0);
 
     // The late peer joins after the early peer has already advanced.
@@ -184,13 +198,17 @@ describe('Snake deterministic convergence', () => {
     expect(authority.world.update(1).ok).toBe(true);
     const lateBaseline = sent.filter((message) => message.peerId === 4)[0]?.data;
     expect(lateBaseline).toBeDefined();
-    if (lateBaseline === undefined) return;
+    if (lateBaseline === undefined) {
+      earlyClient.session.dispose();
+      return;
+    }
     expect(playerIdsInBatch(lateBaseline)).toEqual([2, 3, 4]);
+    earlyClient.session.dispose();
   });
 });
 
 function playerIdsInBatch(bytes: Uint8Array): number[] {
-  const batch = JSON.parse(new TextDecoder().decode(bytes)) as {
+  const batch = decodePacket(bytes) as {
     entities: Array<{ components: Array<{ name: string; data: { playerNetworkId?: number } }> }>;
   };
   return batch.entities
@@ -200,10 +218,47 @@ function playerIdsInBatch(bytes: Uint8Array): number[] {
     .sort((left, right) => left - right);
 }
 
-function makeReplica() {
+function packetKind(bytes: Uint8Array): string {
+  const text = new TextDecoder().decode(bytes);
+  const body = JSON.parse(text.slice(text.indexOf('\n') + 1)) as { kind?: unknown };
+  return typeof body.kind === 'string' ? body.kind : '';
+}
+
+function decodePacket(bytes: Uint8Array): unknown {
+  const text = new TextDecoder().decode(bytes);
+  return JSON.parse(text.slice(text.indexOf('\n') + 1));
+}
+
+async function makeReplicaClient(): Promise<{
+  readonly replica: ReturnType<typeof createReplicaCoordinator>;
+  readonly session: NetSession;
+  readonly deliver: (data: Uint8Array) => void;
+}> {
+  let pending: EndpointEvent[] = [{ kind: 'peer-connected', peerId: 1 as PeerId }];
+  const endpoint: NetEndpoint = {
+    poll: () => {
+      const events = pending;
+      pending = [];
+      return events;
+    },
+    send: () => ok(undefined),
+    close: () => ok(undefined),
+  };
   const world = new World();
+  await createWorldContext(world, [netPlugin({ endpoint })]);
+  const session = world.getResource<NetSession>('net-session');
   const replica = createReplicaCoordinator(world, snakeProfile);
-  return replica;
+  session.attachReplica(replica, snakeProfile.limits);
+  session.receiveEvents();
+  return {
+    replica,
+    session,
+    deliver: (data) => {
+      pending.push({ kind: 'message', peerId: 1 as PeerId, data });
+      const errors = session.receiveEvents();
+      if (errors.length > 0) throw errors[0];
+    },
+  };
 }
 
 function resolveBodySemantic(

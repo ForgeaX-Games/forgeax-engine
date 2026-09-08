@@ -37,7 +37,7 @@ import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { orthographic, TONEMAP_NONE } from '@forgeax/engine-render';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
 import { PointLight, SpotLight } from '@forgeax/engine-render';
 
@@ -97,20 +97,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter() },
   );
   if (!appRes.ok) {
     reportAppError(appRes.error);
     return;
   }
   const app: App = appRes.value;
-  console.warn(`[sprite-lit] backend=${app.renderer.backend}`);
+  console.warn(`[sprite-lit] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
-  const ready = await app.renderer.ready;
-  if (!ready.ok) {
-    console.error('[sprite-lit] renderer.ready failed:', ready.error.code, ready.error.hint);
-    return;
-  }
 
   const world = app.world;
   const mode = readModeFromUrl();
@@ -129,26 +124,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     colorSpace: 'srgb',
     mipmap: false,
   });
-  const uploadRes = await app.renderer.store.uploadTexture(textureHandle, {
-    kind: 'texture',
-    width: checkerboard.width,
-    height: checkerboard.height,
-    format: 'rgba8unorm-srgb',
-    data: checkerboard.data,
-    colorSpace: 'srgb',
-    mipmap: false,
-  }, {
-    bytes: checkerboard.data,
-    width: checkerboard.width,
-    height: checkerboard.height,
-    mime: 'image/png',
-    colorSpace: 'srgb',
-    mipmap: false,
-  });
-  if (!uploadRes.ok) {
-    console.error('[sprite-lit] texture upload failed:', uploadRes.error.code, uploadRes.error.hint);
-    return;
-  }
 
 
   // Step 3: lights. mode=directional-only spawns only the DirectionalLight;

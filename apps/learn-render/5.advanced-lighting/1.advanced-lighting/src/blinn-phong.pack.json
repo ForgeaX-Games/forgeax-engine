@@ -6,6 +6,7 @@
       "guid": "cc1beeb0-5b8e-5720-96e6-d7e6064f2c20",
       "kind": "material",
       "sourceKey": "blinn-phong.wgsl",
+      "execution": "cooked",
       "payload": {
         "kind": "material",
         "passes": [

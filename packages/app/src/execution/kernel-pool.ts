@@ -1,14 +1,12 @@
-import {
-  bindSharedSpan,
-  isSharedSpan,
-  type KernelDispatchFailure,
-  type KernelDispatchResult,
-  type KernelDispatchSpan,
-  type SharedKernelDispatch,
-  type SharedKernelExecutor,
-  type SharedSpanBinding,
-  splitSharedSpan,
-} from '@forgeax/engine-ecs';
+import type {
+  KernelDispatchFailure,
+  KernelDispatchResult,
+  KernelDispatchSpan,
+  SharedKernelDispatch,
+  SharedKernelExecutor,
+  SharedSpanBinding,
+} from '@forgeax/engine-ecs/shared';
+import { bindSharedSpan, isSharedSpan, splitSharedSpan } from '@forgeax/engine-ecs/shared';
 
 export interface KernelPool extends SharedKernelExecutor {
   readonly laneCount: number;

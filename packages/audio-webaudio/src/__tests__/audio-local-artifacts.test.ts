@@ -20,6 +20,8 @@ describe('audio asset-local artifacts', () => {
     if (!('ok' in (result as object)) || !(result as { ok: boolean }).ok) return;
     const asset = (result as { value: { assets: readonly Record<string, unknown>[] } }).value
       .assets[0];
+    expect(asset?.payload).toMatchObject({ kind: 'audio', mediaType: 'audio/ogg' });
+    expect(asset?.payload).toHaveProperty('bytes');
     const body = (asset?.artifacts as Record<string, Record<string, unknown>>).source;
     expect(body).toBeDefined();
     if (body === undefined) return;

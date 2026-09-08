@@ -79,14 +79,14 @@ bootstrap(canvas).catch((err: unknown) => {
 });
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
-  const renderer = await createRenderer(target, {}, forgeaxBundlerAdapter());
-  console.warn(`[tonemap] backend=${renderer.backend}`);
-
-  const ready = await renderer.ready;
-  if (!ready.ok) {
-    console.error('[tonemap] renderer.ready failed:', ready.error);
+  const rendererResult = await createRenderer(target, {}, forgeaxBundlerAdapter());
+  if (!rendererResult.ok) {
+    console.error('[tonemap] renderer construction failed:', rendererResult.error);
     return;
   }
+  const renderer = rendererResult.value;
+  console.warn(`[tonemap] backend=${renderer.inspect().capabilities.backendKind}`);
+
 
   const sphereRes = createSphereGeometry(0.6, 32, 24);
   if (!sphereRes.ok) {
@@ -95,7 +95,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   const world = new World();
-  const worldAttachment1 = renderer.attachWorld(world);
+  const worldAttachment1 = renderer.attach(world);
   if (!worldAttachment1.ok) throw worldAttachment1.error;
 
   const sphereHandle = world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', sphereRes.value);
@@ -151,7 +151,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   const frame = (): void => {
     world.update().unwrap();
-    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const r = renderer.draw({
+      leases: [worldAttachment1.value],
+      camera: { lease: worldAttachment1.value },
+      environment: { lease: worldAttachment1.value },
+    });
     if (!r.ok) console.error('[tonemap] draw error:', r.error);
     requestAnimationFrame(frame);
   };

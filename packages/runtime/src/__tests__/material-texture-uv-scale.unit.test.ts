@@ -1,13 +1,13 @@
 import { World } from '@forgeax/engine-ecs';
 import { vec3 } from '@forgeax/engine-math';
+import { describe, expect, it } from 'vitest';
 import {
   applyMaterialTextureUvScales,
   BUILTIN_USER_REGION_TEXTURE_FIELDS,
   buildPbrMaterialUboPayload,
   materialTextureUvScale,
   userRegionTextureFieldOrder,
-} from '@forgeax/engine-render/internal';
-import { describe, expect, it } from 'vitest';
+} from '../../../render/src/record/main-pass-material';
 
 describe('material texture UV scale [w37]', () => {
   it('maps a non-aligned BC7 logical edge below padded physical storage', () => {
@@ -65,7 +65,7 @@ describe('material texture UV scale [w37]', () => {
     expect(Array.from(f32.slice(40, 48))).toEqual([0.75, 0.25, 4, 5, 0, 0, 1, 1]);
   });
 
-  it('keeps identity UV records for metadata-free standard and legacy materials', () => {
+  it('keeps identity UV records for metadata-free standard and builtin schema materials', () => {
     const standard = buildPbrMaterialUboPayload({
       baseColor: vec3.create(1, 1, 1),
       metallic: 0,
@@ -94,14 +94,14 @@ describe('material texture UV scale [w37]', () => {
       1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1,
     ]);
 
-    const legacy = buildPbrMaterialUboPayload({
+    const unlit = buildPbrMaterialUboPayload({
       baseColor: vec3.create(1, 1, 1),
       metallic: 0,
       roughness: 0.5,
       materialShaderId: 'forgeax::default-unlit',
     });
     applyMaterialTextureUvScales(
-      legacy,
+      unlit,
       {
         baseColor: vec3.create(1, 1, 1),
         metallic: 0,
@@ -112,8 +112,8 @@ describe('material texture UV scale [w37]', () => {
     );
     expect(
       Array.from(
-        new Float32Array(legacy.buffer, legacy.byteOffset, legacy.byteLength / 4).slice(20, 30),
+        new Float32Array(unlit.buffer, unlit.byteOffset, unlit.byteLength / 4).slice(8, 16),
       ),
-    ).toEqual([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+    ).toEqual([0, 0, 1, 1, 0, 0, 1, 1]);
   });
 });

@@ -16,6 +16,7 @@ function parseArgs(argv) {
     outputDir: null,
     sharedInputManifest: null,
     attempt: null,
+    omitTransferApps: [],
   };
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
@@ -25,6 +26,7 @@ function parseArgs(argv) {
     else if (arg === '--output-dir') result.outputDir = argv[++index];
     else if (arg === '--shared-input-manifest') result.sharedInputManifest = argv[++index];
     else if (arg === '--attempt') result.attempt = Number(argv[++index]);
+    else if (arg === '--omit-transfer-app') result.omitTransferApps.push(argv[++index]);
     else if (arg === '--merge-ddc') result.mergeDdc = true;
     else if (arg === '--cache-hit') result.cacheHit = true;
     else if (arg === '--snapshots-dir') result.snapshotsDir = argv[++index];
@@ -167,6 +169,17 @@ const attempt = options.attempt ?? Number(process.env.GITHUB_RUN_ATTEMPT ?? 1);
 if (!Number.isInteger(attempt) || attempt < 1) fail('ci-app-shard-attempt-invalid', { attempt });
 const roster = discoverApps(root);
 const apps = roster.filter((_, index) => index % options.shardCount === options.shardIndex);
+const omittedTransferApps = [...new Set(options.omitTransferApps)];
+const unknownOmittedTransferApp = omittedTransferApps.find((app) => !apps.includes(app));
+if (unknownOmittedTransferApp !== undefined) {
+  fail('ci-app-shard-transfer-app-not-in-shard', {
+    app: unknownOmittedTransferApp,
+    shardIndex: options.shardIndex,
+    expected: apps,
+    hint: 'Only omit transfer payloads for apps assigned to this shard.',
+  });
+}
+const transferApps = apps.filter((app) => !omittedTransferApps.includes(app));
 const shardSizes = Array.from(
   { length: options.shardCount },
   (_, shardIndex) => roster.filter((_, index) => index % options.shardCount === shardIndex).length,
@@ -176,6 +189,8 @@ const report = {
   shardCount: options.shardCount,
   attempt,
   apps,
+  transferApps,
+  omittedTransferApps,
   appCount: apps.length,
   loadImbalance: Math.max(...shardSizes) - Math.min(...shardSizes),
   artifactInventory: options.dryRun ? artifactInventory(root, apps) : [],

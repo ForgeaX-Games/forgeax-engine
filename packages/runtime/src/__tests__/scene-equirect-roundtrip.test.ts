@@ -21,13 +21,20 @@
 // is `cubemap` and this file fails to compile / resolve — that is the red.
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import type { EntityHandle, Handle } from '@forgeax/engine-ecs';
+import type { EntityHandle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
-import { Skylight } from '@forgeax/engine-render/internal';
-import type { EquirectAsset, LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
+import { Skylight } from '@forgeax/engine-render';
+import type {
+  EquirectAsset,
+  Handle,
+  LocalEntityId,
+  SceneAsset,
+  SceneEntity,
+} from '@forgeax/engine-types';
 import { BUILTIN_BASE } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+import { registerSceneComponents } from './helpers/register-scene-components';
 
 function localId(n: number): LocalEntityId {
   return n as LocalEntityId;
@@ -53,6 +60,7 @@ describe('scene equirect roundtrip + instantiate handle resolution (M3 / w15)', 
   it('(1) Skylight{equirect: GUID} round-trips: instantiate resolves the GUID to a live user-tier shared handle (AC-07)', async () => {
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();
+    registerSceneComponents(world, [Skylight]);
 
     // Catalogue the equirect payload exactly as loadByGuid would on the prod
     // path, so the GUID string in the scene resolves to a real handle.
@@ -82,7 +90,7 @@ describe('scene equirect roundtrip + instantiate handle resolution (M3 / w15)', 
     // The spawned Skylight's equirect field must be a resolved user-tier slot
     // (>= BUILTIN_BASE), not the sentinel 0 a coerced GUID string would leave.
     const root = res.value as EntityHandle;
-    const { SceneInstance } = await import('@forgeax/engine-render/internal');
+    const { SceneInstance } = await import('@forgeax/engine-render');
     const inst = world.get(root, SceneInstance);
     expect(inst.ok).toBe(true);
     if (!inst.ok) return;
@@ -97,6 +105,7 @@ describe('scene equirect roundtrip + instantiate handle resolution (M3 / w15)', 
 
   it('(2) world.spawn(Skylight{equirect}).data.equirect is typed Handle<EquirectAsset,shared> on the consumer path (AC-04)', () => {
     const world = new World();
+    registerSceneComponents(world, [Skylight]);
     // Branded EquirectAsset handle — assigning it into the spawn `equirect`
     // field is the consumer-path type assertion: a wrong field type (e.g. the
     // retired CubeTextureAsset, or a non-handle column) would fail typecheck

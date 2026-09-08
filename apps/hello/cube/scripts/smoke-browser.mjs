@@ -10,6 +10,6 @@ await verifyDemoCapture({
   pkg: '@forgeax/hello-cube',
   label: 'hello-cube',
   mode: 'structural',
-  drawIdx: 4,
+  workIndex: 4,
   appDir: dirname(scriptsDir),
 });

@@ -10,18 +10,7 @@
 // M2 of tweak-20260714-tilemap-layer-childed-render-entities.
 
 import { Entity, type EntityHandle, World } from '@forgeax/engine-ecs';
-import {
-  encodeSortScope,
-  markTileLayerDirty,
-  TileLayer,
-  Tilemap,
-  tilemapChunkExtractSystem,
-} from '@forgeax/engine-render/authoring';
-import {
-  _peekPerCellStreamingLayerKeys,
-  resetTilemapChunkExtractCache,
-  resetTilemapDerivedEntityTracker,
-} from '@forgeax/engine-render/internal';
+import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
 import { ChildOf, Children, Transform } from '@forgeax/engine-scene';
 import {
   defineState,
@@ -29,8 +18,16 @@ import {
   registerStatesPlugin,
   setNextState,
 } from '@forgeax/engine-state';
-import { type TilesetAsset, toShared } from '@forgeax/engine-types';
+import type { TilesetAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { encodeSortScope, markTileLayerDirty } from '../../../render/src/components/tile-layer';
+import {
+  _peekPerCellStreamingLayerKeys,
+  resetTilemapChunkExtractCache,
+  resetTilemapDerivedEntityTracker,
+  tilemapChunkExtractSystem,
+} from '../../../render/src/tilemap-chunk-extract-system';
+import { makeTilemapAssetLookup } from './helpers/tilemap-assets';
 
 // One state token per file — defineState is module-level, redefining under
 // the same name throws. `GameState` is shared between AC-04 setup and
@@ -48,8 +45,7 @@ interface SetupOpts {
 function makeTileset(cols: number, rows: number): TilesetAsset {
   return {
     kind: 'tileset',
-    guid: 'test/tileset',
-    atlases: [toShared<'TextureAsset'>(101)],
+    atlases: ['test/atlas'],
     tileWidth: 16,
     tileHeight: 16,
     columns: cols,
@@ -59,18 +55,24 @@ function makeTileset(cols: number, rows: number): TilesetAsset {
   };
 }
 
-function spawnTilemap(world: World, cols: number, rows: number, chunkSize = 16): EntityHandle {
+function spawnTilemap(
+  world: World,
+  cols: number,
+  rows: number,
+  chunkSize = 16,
+): { tilemap: EntityHandle; lookup: ReturnType<typeof makeTilemapAssetLookup> } {
   const tileset = makeTileset(cols, rows);
-  const tilesetHandle = world.allocSharedRef<'TilesetAsset', TilesetAsset>('TilesetAsset', tileset);
-  return world
+  const lookup = makeTilemapAssetLookup(tileset);
+  const tilemap = world
     .spawn(
       {
         component: Tilemap,
-        data: { cols, rows, tileSize: [1, 1], chunkSize, tileset: tilesetHandle },
+        data: { cols, rows, tileSize: [1, 1], chunkSize, tileset: 'test/tileset' },
       },
       { component: Transform, data: {} },
     )
     .unwrap();
+  return { tilemap, lookup };
 }
 
 function spawnLayer(
@@ -98,11 +100,11 @@ function spawnLayer(
 
 function setup(opts: SetupOpts) {
   const world = new World();
-  const tilemap = spawnTilemap(world, opts.cols, opts.rows, opts.chunkSize);
+  const { tilemap, lookup } = spawnTilemap(world, opts.cols, opts.rows, opts.chunkSize);
   const layer = spawnLayer(world, tilemap, opts.tiles, opts.sortScope);
   resetTilemapChunkExtractCache();
   resetTilemapDerivedEntityTracker();
-  return { world, tilemap, layer };
+  return { world, tilemap, layer, lookup };
 }
 
 function isAlive(world: World, entity: EntityHandle): boolean {
@@ -131,9 +133,9 @@ describe('tilemap derived entities are ChildOf their TileLayer (AC-02)', () => {
     const cols = 8;
     const rows = 8;
     const tiles = new Uint32Array(cols * rows).fill(1);
-    const { world, layer } = setup({ cols, rows, chunkSize: 4, tiles, sortScope: 'layer' });
+    const { world, layer, lookup } = setup({ cols, rows, chunkSize: 4, tiles, sortScope: 'layer' });
 
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
 
     const derived = readChildren(world, layer);
     expect(derived.length).toBe(4);
@@ -149,9 +151,9 @@ describe('tilemap derived entities are ChildOf their TileLayer (AC-02)', () => {
     const cols = 2;
     const rows = 2;
     const tiles = new Uint32Array(cols * rows).fill(1);
-    const { world, layer } = setup({ cols, rows, tiles, sortScope: 'per-cell' });
+    const { world, layer, lookup } = setup({ cols, rows, tiles, sortScope: 'per-cell' });
 
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
 
     const derived = readChildren(world, layer);
     expect(derived.length).toBe(4);
@@ -165,9 +167,9 @@ describe('tilemap derived entities are ChildOf their TileLayer (AC-02)', () => {
     const cols = 2;
     const rows = 2;
     const tiles = new Uint32Array(cols * rows).fill(1);
-    const { world, tilemap, layer } = setup({ cols, rows, tiles, sortScope: 'per-cell' });
+    const { world, tilemap, layer, lookup } = setup({ cols, rows, tiles, sortScope: 'per-cell' });
 
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
 
     const derived = readChildren(world, layer);
     expect(derived.length).toBeGreaterThan(0);
@@ -186,7 +188,7 @@ describe('world.despawn(tilemap) cascade-collects the whole subtree (AC-03)', ()
     const cols = 4;
     const rows = 4;
     const tiles = new Uint32Array(cols * rows).fill(1);
-    const { world, tilemap, layer } = setup({
+    const { world, tilemap, layer, lookup } = setup({
       cols,
       rows,
       chunkSize: 4,
@@ -194,7 +196,7 @@ describe('world.despawn(tilemap) cascade-collects the whole subtree (AC-03)', ()
       sortScope: 'layer',
     });
 
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
 
     const derived = readChildren(world, layer);
     expect(derived.length).toBeGreaterThan(0);
@@ -213,9 +215,9 @@ describe('world.despawn(tilemap) cascade-collects the whole subtree (AC-03)', ()
     const cols = 3;
     const rows = 3;
     const tiles = new Uint32Array(cols * rows).fill(1);
-    const { world, tilemap, layer } = setup({ cols, rows, tiles, sortScope: 'per-cell' });
+    const { world, tilemap, layer, lookup } = setup({ cols, rows, tiles, sortScope: 'per-cell' });
 
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
 
     const derived = readChildren(world, layer);
     expect(derived.length).toBe(9);
@@ -236,7 +238,7 @@ describe('world.despawn(tilemap) cascade-collects the whole subtree (AC-03)', ()
     const cols = 8;
     const rows = 8;
     const tiles = new Uint32Array(cols * rows).fill(1);
-    const { world, tilemap, layer } = setup({
+    const { world, tilemap, layer, lookup } = setup({
       cols,
       rows,
       chunkSize: 4,
@@ -244,14 +246,14 @@ describe('world.despawn(tilemap) cascade-collects the whole subtree (AC-03)', ()
       sortScope: 'layer',
     });
 
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
     const firstGen = readChildren(world, layer);
     expect(firstGen.length).toBe(4);
 
     // Dirty-rebuild: prior generation purged, fresh generation spawned and
     // re-attached via Children.entities (the SSOT the cascade reads).
     markTileLayerDirty(world, layer).unwrap();
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
 
     const secondGen = readChildren(world, layer);
     expect(secondGen.length).toBe(4);
@@ -268,7 +270,7 @@ describe('world.despawn(tilemap) cascade-collects the whole subtree (AC-03)', ()
 
   it('R-6 depth-3 despawn: 3 TileLayers under one Tilemap, world.despawn(tilemap) leaves zero survivors', () => {
     const world = new World();
-    const tilemap = spawnTilemap(world, 4, 4, 4);
+    const { tilemap, lookup } = spawnTilemap(world, 4, 4, 4);
     const tiles = new Uint32Array(16).fill(1);
     const layers: EntityHandle[] = [
       spawnLayer(world, tilemap, tiles, 'layer', 0),
@@ -278,7 +280,7 @@ describe('world.despawn(tilemap) cascade-collects the whole subtree (AC-03)', ()
     resetTilemapChunkExtractCache();
     resetTilemapDerivedEntityTracker();
 
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
 
     const allDerived: EntityHandle[] = [];
     for (const l of layers) {
@@ -315,9 +317,9 @@ describe('per-cell streaming despawn detection clears stale caches (AC-11)', () 
     const cols = 2;
     const rows = 2;
     const tiles = new Uint32Array(cols * rows).fill(1);
-    const { world, layer } = setup({ cols, rows, tiles, sortScope: 'per-cell' });
+    const { world, layer, lookup } = setup({ cols, rows, tiles, sortScope: 'per-cell' });
 
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
 
     const oldLayerKey = layer as unknown as number;
     expect(_peekPerCellStreamingLayerKeys(world)).toContain(oldLayerKey);
@@ -326,7 +328,7 @@ describe('per-cell streaming despawn detection clears stale caches (AC-11)', () 
 
     // Next extract call fires the diff-cleanup preamble; the query no
     // longer includes the dead layer, so its cache entries evict.
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
 
     expect(_peekPerCellStreamingLayerKeys(world)).not.toContain(oldLayerKey);
   });
@@ -336,8 +338,8 @@ describe('per-cell streaming despawn detection clears stale caches (AC-11)', () 
     const cols = 2;
     const rows = 2;
     const tiles = new Uint32Array(cols * rows).fill(1);
-    const { world, tilemap, layer } = setup({ cols, rows, tiles, sortScope: 'per-cell' });
-    tilemapChunkExtractSystem(world);
+    const { world, tilemap, layer, lookup } = setup({ cols, rows, tiles, sortScope: 'per-cell' });
+    tilemapChunkExtractSystem(world, lookup);
     const layer1Key = layer as unknown as number;
     expect(_peekPerCellStreamingLayerKeys(world)).toContain(layer1Key);
 
@@ -345,7 +347,7 @@ describe('per-cell streaming despawn detection clears stale caches (AC-11)', () 
     world.despawn(layer).unwrap();
 
     // Step 3: extract fires diff-cleanup; layer1Key evicts.
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
     expect(_peekPerCellStreamingLayerKeys(world)).not.toContain(layer1Key);
 
     // Step 4: spawn a new per-cell layer (may or may not reuse the slot —
@@ -354,7 +356,7 @@ describe('per-cell streaming despawn detection clears stale caches (AC-11)', () 
     const tiles2 = new Uint32Array(cols * rows).fill(1);
     const layer2 = spawnLayer(world, tilemap, tiles2, 'per-cell');
 
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
 
     // Step 5: new layer's Children.entities lists the 4 fresh per-cell
     // derived entities (2x2 filled tiles, chunkSize default 16 → 1 chunk).
@@ -379,14 +381,14 @@ describe('per-cell streaming despawn detection clears stale caches (AC-11)', () 
 
   it('multi-layer eviction: 3 per-cell layers → despawn 2 → only survivor remains in caches', () => {
     const world = new World();
-    const tilemap = spawnTilemap(world, 2, 2, 4);
+    const { tilemap, lookup } = spawnTilemap(world, 2, 2, 4);
     const tiles = new Uint32Array(4).fill(1);
     const l0 = spawnLayer(world, tilemap, tiles, 'per-cell', 0);
     const l1 = spawnLayer(world, tilemap, tiles, 'per-cell', 1);
     const l2 = spawnLayer(world, tilemap, tiles, 'per-cell', 2);
     resetTilemapChunkExtractCache();
     resetTilemapDerivedEntityTracker();
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
 
     const keysBefore = _peekPerCellStreamingLayerKeys(world);
     expect(keysBefore).toContain(l0 as unknown as number);
@@ -397,7 +399,7 @@ describe('per-cell streaming despawn detection clears stale caches (AC-11)', () 
     world.despawn(l0).unwrap();
     world.despawn(l2).unwrap();
 
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
 
     const keysAfter = _peekPerCellStreamingLayerKeys(world);
     expect(keysAfter).not.toContain(l0 as unknown as number);
@@ -411,13 +413,13 @@ describe('per-cell streaming despawn detection clears stale caches (AC-11)', () 
     const cols = 2;
     const rows = 2;
     const tiles = new Uint32Array(cols * rows).fill(1);
-    const { world, layer } = setup({ cols, rows, tiles, sortScope: 'per-cell' });
+    const { world, layer, lookup } = setup({ cols, rows, tiles, sortScope: 'per-cell' });
 
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
     const keysFrame1 = new Set(_peekPerCellStreamingLayerKeys(world));
     expect(keysFrame1.has(layer as unknown as number)).toBe(true);
 
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
     const keysFrame2 = new Set(_peekPerCellStreamingLayerKeys(world));
     expect(keysFrame2.has(layer as unknown as number)).toBe(true);
 
@@ -436,12 +438,12 @@ describe('despawnOnExit triggers the same cascade via state transition (AC-04)',
     setNextState(world, GameState, 'playing');
     world.update(1 / 60).unwrap();
 
-    const tilemap = spawnTilemap(world, 2, 2);
+    const { tilemap, lookup } = spawnTilemap(world, 2, 2);
     const tiles = new Uint32Array(4).fill(1);
     const layer = spawnLayer(world, tilemap, tiles, 'per-cell');
     resetTilemapChunkExtractCache();
     resetTilemapDerivedEntityTracker();
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
 
     const derived = readChildren(world, layer);
     expect(derived.length).toBe(4);

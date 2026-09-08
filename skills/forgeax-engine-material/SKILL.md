@@ -1,9 +1,19 @@
 ---
 name: forgeax-engine-material
-description: Build and debug visible ForgeaX materials through the single MaterialAsset route.
+description: ForgeaX MaterialAsset authoring and visibility route. Use when creating, loading, or debugging materials, textures, lighting response, or material readiness.
 ---
 
 # forgeax-engine-material
+
+## Contract index
+
+Keep one MaterialAsset subject and one Pack publication. Runtime bool/value
+data, composed module slots, and a closed compiler context are inputs; macros,
+feature defines, runtime cooking, and app-local fallbacks are not. Trace
+`materialContractDigest`, `sourceClosureDigest`, `layoutIdentity`,
+`programIdentity`, `cookIdentity`, and `materialPublicationIdentity` from
+`current` to `generation`, repair the first producer divergence, cold-cook the
+same GUID, and verify receipt, artifact, and provenance.
 
 > [!IMPORTANT]
 > The visible-object recipe is `MeshFilter` + `MeshRenderer` + `MaterialAsset`. Author one material payload, cook its effective contract, load it by GUID, and allocate the World handle. The recovery route is structured error inspection. Do not create an app-local shader artifact or bypass an engine resource defect in a demo.
@@ -91,6 +101,31 @@ For a custom module, put `passes[].program.module` in the root contract. The
 shader build publishes the module; the material cook publishes the record and
 artifact. The application only performs the catalog load and readiness check.
 
+## Points and Lines route
+
+For first-class point or line authoring, route the request through the existing
+asset and material owners:
+
+1. Confirm the `MeshAsset` has `point-list` or paired `line-list` topology.
+2. Admit exactly one `Points` or `Lines` component with finite positive
+   `sizePx` or `widthPx`.
+3. Select `Materials.unlit`; do not author a replacement shader or mesh.
+4. Let Standard extract, prepare, and record the retained expansion.
+5. Use `renderer.inspect` and the RHI debug capture when source, derived,
+   binding, or draw evidence is needed.
+
+Admission is atomic. Unsupported topology, invalid style, lane conflicts, or a
+missing unlit forward material return a structured refusal. Read `.code`,
+`.expected`, `.hint`, and narrowed `.detail`; never infer support from a
+message or silently substitute a generic mesh draw.
+
+The direct WebGPU probe is runtime evidence. Clustered unlit, WebGL2 capability
+restrictions, and RhiNull structural-only records are separate evidence rows;
+RhiNull does not prove pixels or hardware timing. Recovery is inspect, repair
+the named source or producer, rebuild or cold-cook, then retry the same
+retained/prepared renderer owner. There is no new CLI, RPC, registry, cache, or
+recovery ledger for this route.
+
 ## Built-in PBR slots
 
 Built-in PBR names its coordinate records by texture slot: base color,
@@ -130,7 +165,7 @@ Quick start: author `Visibility` through ECS, inspect its effective state from
 the render package, and leave `MaterialAsset` unchanged:
 
 ```ts
-import { Visibility, VisibilityStateValue, resolveVisibility } from '@forgeax/engine-render';
+import { Visibility, VisibilityStateValue, resolveVisibility } from '@forgeax/engine-scene';
 
 world.spawn({ component: Visibility, data: { state: VisibilityStateValue.hidden } }).unwrap();
 const snapshot = resolveVisibility(world);
@@ -140,7 +175,7 @@ const snapshot = resolveVisibility(world);
 |:--|:--|:--|
 | Why is an entity hidden? | `Visibility` intent plus `resolveVisibility` | Inspect `source` and hierarchy diagnostics |
 | Why did a material fail? | Material/shader structured errors | Repair the cooked contract and retry |
-| Why is the count unexpected? | `renderer.visibilityStats` | Inspect the renderer candidate path |
+| Why is the count unexpected? | `renderer.inspect().visibilityStats` | Inspect the renderer candidate path |
 
 Do not replace a missing material, mesh, camera, or visibility path with a
 demo-side stand-in. Visibility does not own camera, picking, lifecycle, assets,

@@ -22,7 +22,7 @@
 //   - Concept compression (charter F1 / AGENTS.md design axiom): a
 //     single union `type GpuResource = GpuBuffer | GpuTexture` covers
 //     both buffer and texture lifecycles so AI-user-facing code that
-//     just wants "any GPU resource I need to dispose" reaches one
+//     just wants "a GPU resource I need to dispose" reaches one
 //     symbol. Parallel classes (not a runtime-tagged generic
 //     `GpuResource<'buffer' | 'texture'>`) so the shape mirrors the
 //     RHI opaque-handle taxonomy verbatim and TS narrowing on
@@ -63,7 +63,7 @@ import type { Buffer, Result, RhiDevice, RhiError, Texture } from '@forgeax/engi
  * `'destroy-after-destroy'` forwarded from `device.destroyBuffer(...)`.
  *
  * @example
- *   import { GpuBuffer } from '@forgeax/engine-render/internal';
+ *   import { GpuBuffer } from './gpu-resource';
  *   const created = device.createBuffer({ size: 64, usage: GPUBufferUsage.STORAGE });
  *   if (!created.ok) return;
  *   const gpuBuf = new GpuBuffer(device, created.value);
@@ -115,7 +115,7 @@ export class GpuBuffer {
  * on the RHI shim's TEXTURE_META_MAP; the local flag is a derived view.
  *
  * @example
- *   import { GpuTexture } from '@forgeax/engine-render/internal';
+ *   import { GpuTexture } from './gpu-resource';
  *   const r = device.createTexture({ size: [w, h, 1], format: 'rgba8unorm', usage: ... });
  *   if (!r.ok) return;
  *   const gpuTex = new GpuTexture(device, r.value);
@@ -151,7 +151,7 @@ export class GpuTexture {
 
 /**
  * Union of runtime-managed GPU resources requiring explicit
- * `.destroy()`. AI-user-facing code that needs to dispose "any GPU
+ * `.destroy()`. AI-user-facing code that needs to dispose "a GPU
  * resource" types its parameter as `GpuResource` and lets TS narrow
  * via `instanceof GpuBuffer / GpuTexture` if branch-specific access
  * is required. Charter F1 single-entry indexability.

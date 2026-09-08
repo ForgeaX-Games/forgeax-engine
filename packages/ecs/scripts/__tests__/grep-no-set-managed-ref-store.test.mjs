@@ -1,4 +1,5 @@
 // w16 — colocated test for packages/ecs/scripts/grep-no-set-managed-ref-store.mjs.
+// @perf-budget-skip: intentional repository-wide freeze-gate subprocess scan.
 //
 // feat-20260515-string-managed-collapse M4 / w16 — verifies the two-mode
 // contract of the setManagedRefStore freeze gate:

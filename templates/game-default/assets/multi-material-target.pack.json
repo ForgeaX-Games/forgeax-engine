@@ -22,17 +22,28 @@
     ],
     "indices": [
      0, 1, 2, 0, 2, 3,
-     4, 5, 5, 6, 6, 7, 7, 4,
-     8, 9, 9, 10, 10, 11, 11, 8
+     8, 9, 10, 8, 10, 11
     ],
-    "attributes": {},
+    "attributes": {
+     "position": [-0.6, -0.6, 0, 0.6, -0.6, 0, 0.6, 0.6, 0, -0.6, 0.6, 0, -0.7, -0.7, 0.02, 0.7, -0.7, 0.02, 0.7, 0.7, 0.02, -0.7, 0.7, 0.02, -0.35, -0.35, 0.025, 0.35, -0.35, 0.025, 0.35, 0.35, 0.025, -0.35, 0.35, 0.025],
+     "normal": [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
+     "uv": [0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1],
+     "tangent": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    },
     "aabb": [-0.7, -0.7, 0, 0.7, 0.7, 0.025],
     "submeshes": [
-     { "indexOffset": 0, "indexCount": 6, "vertexCount": 4, "topology": "triangle-list" },
-     { "indexOffset": 6, "indexCount": 16, "vertexCount": 8, "topology": "line-list" }
+     { "indexOffset": 0, "indexCount": 6, "vertexCount": 4, "topology": "triangle-list", "materialSlot": 0 },
+     { "indexOffset": 6, "indexCount": 6, "vertexCount": 4, "topology": "triangle-list", "materialSlot": 1 }
+    ],
+    "materialSlots": [
+     { "slotName": "Body", "sourceKey": "game-default:target:body", "defaultMaterial": "d9f2a000-0002-5000-8000-000000000002" },
+     { "slotName": "Accent", "sourceKey": "game-default:target:accent", "defaultMaterial": "d9f2a000-0003-5000-8000-000000000003" }
     ]
    },
-   "refs": [],
+   "refs": [
+    "d9f2a000-0002-5000-8000-000000000002",
+    "d9f2a000-0003-5000-8000-000000000003"
+   ],
    "artifacts": {}
   },
   {

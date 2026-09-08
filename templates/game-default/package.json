@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Default GameEntry template -- a lowpoly vignette authored in assets/scene.pack.json (engine-native scene asset, GUID-discoverable via forge.json.defaultScene) + a movable Player. Loaded by apps/preview via loadGame dynamic import.",
+  "description": "Default native Cordis gameplay plugin template with an authored scene, movable player, and asset-resident feature modules.",
   "scripts": {
     "smoke:geometry": "node scripts/smoke-geometry.mjs",
     "smoke:rotation": "node scripts/smoke-rotation.mjs"
@@ -13,7 +13,11 @@
     "assets": {
       "roots": [
         "assets"
-      ]
+      ],
+      "importers": [
+        "./assets/plugins/target-profile-importer.ts#targetProfileImporter"
+      ],
+      "publicDir": "assets/sdk-resources/demo-assets/hello-video-cutscene"
     },
     "metrics": {
       "bundle-size": {
@@ -51,6 +55,7 @@
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-physics": "workspace:*",
     "@forgeax/engine-picking": "workspace:*",
+    "@forgeax/engine-plugin": "workspace:*",
     "@forgeax/engine-render": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
     "@forgeax/engine-scene": "workspace:*",

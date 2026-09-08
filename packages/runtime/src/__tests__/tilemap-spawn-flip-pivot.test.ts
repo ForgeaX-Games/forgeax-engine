@@ -35,21 +35,18 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { encodeTileBits } from '@forgeax/engine-graphics-extras';
+import { Layer, MeshFilter } from '@forgeax/engine-render';
+import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
+import type { TilesetAsset } from '@forgeax/engine-types';
+import { describe, expect, it } from 'vitest';
+import { encodeSortScope } from '../../../render/src/components/tile-layer';
 import {
-  encodeSortScope,
-  TileLayer,
-  Tilemap,
-  tilemapChunkExtractSystem,
-} from '@forgeax/engine-render/authoring';
-import {
-  Layer,
-  MeshFilter,
   resetTilemapChunkExtractCache,
   resetTilemapDerivedEntityTracker,
-} from '@forgeax/engine-render/internal';
-import { ChildOf, Transform } from '@forgeax/engine-scene';
-import { type TilesetAsset, toShared } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
+  tilemapChunkExtractSystem,
+} from '../../../render/src/tilemap-chunk-extract-system';
+import { makeTilemapAssetLookup } from './helpers/tilemap-assets';
 
 const SQRT1_2 = Math.SQRT1_2;
 
@@ -122,8 +119,7 @@ function runOneCase(s: Setup): {
   const world = new World();
   const tileset: TilesetAsset = {
     kind: 'tileset',
-    guid: `test/spawn-flip-pivot/${s.flipH ? 'H' : '-'}${s.flipV ? 'V' : '-'}${s.flipDiagonal ? 'D' : '-'}/px${s.pivotX}py${s.pivotY}`,
-    atlases: [toShared<'TextureAsset'>(101)],
+    atlases: ['test/atlas'],
     tileWidth: 16,
     tileHeight: 16,
     columns: 1,
@@ -139,7 +135,7 @@ function runOneCase(s: Setup): {
       },
     ],
   };
-  const tilesetHandle = world.allocSharedRef<'TilesetAsset', TilesetAsset>('TilesetAsset', tileset);
+  const lookup = makeTilemapAssetLookup(tileset);
   const cols = Math.max(s.cellX + s.widthCells + 1, 16);
   const rows = Math.max(s.cellY + s.heightCells + 1, 16);
   const tilemap = world
@@ -151,7 +147,7 @@ function runOneCase(s: Setup): {
           rows,
           tileSize: s.tileSize,
           chunkSize: 16,
-          tileset: tilesetHandle,
+          tileset: 'test/tileset',
         },
       },
       { component: Transform, data: {} },
@@ -168,7 +164,7 @@ function runOneCase(s: Setup): {
   );
   resetTilemapChunkExtractCache();
   resetTilemapDerivedEntityTracker();
-  tilemapChunkExtractSystem(world);
+  tilemapChunkExtractSystem(world, lookup);
   return readDerivedTransform(world);
 }
 

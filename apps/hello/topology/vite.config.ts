@@ -9,6 +9,7 @@ const monorepoRoot = resolve(here, '..', '..', '..');
 export default defineConfig({
   plugins: [forgeaxShader() as never],
   server: {
+    host: '127.0.0.1',
     fs: {
       allow: [monorepoRoot],
     },

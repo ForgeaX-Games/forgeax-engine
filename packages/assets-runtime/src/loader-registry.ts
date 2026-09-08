@@ -13,10 +13,8 @@
 // natural shape (plan-strategy D-1 alt-B rejection).
 //
 // Fail-fast semantics (charter P3): `register` throws on a malformed loader
-// (empty kind or non-function `load`) at wire time, so a misconfigured host
-// surfaces immediately rather than at the first `loadByGuid`. `register` is
-// idempotent on a repeated kind (last write wins, no throw) so re-wiring a
-// registry across hot reloads is safe.
+// or duplicate kind at wire time, so one canonical owner cannot be silently
+// replaced by a later seed table.
 
 import type { ArtifactDescriptor, LoadContext, Loader } from '@forgeax/engine-types';
 
@@ -62,13 +60,13 @@ export class LoaderRegistry {
 
   /**
    * Register a loader for its `loader.kind`. Fail-fast on a malformed loader
-   * (charter P3); idempotent on a repeated kind (last write wins).
+   * (charter P3); rejects a repeated kind so the canonical owner cannot be replaced.
    *
    * @param loader the `{ kind, load }` object to register.
    * @throws TypeError when `loader.kind` is empty or `loader.load` is not a
    *   function — a wire-time misconfiguration the host must fix.
    */
-  register(loader: Loader<unknown>): void {
+  register(loader: Loader<unknown>): () => void {
     if (typeof loader.kind !== 'string' || loader.kind.length === 0) {
       throw new TypeError(
         `LoaderRegistry.register: loader.kind must be a non-empty string (got ${JSON.stringify(loader.kind)})`,
@@ -79,10 +77,16 @@ export class LoaderRegistry {
         `LoaderRegistry.register: loader.load must be a function for kind "${loader.kind}"`,
       );
     }
+    if (this.loaders.has(loader.kind)) {
+      throw new TypeError(`LoaderRegistry.register: duplicate loader kind "${loader.kind}"`);
+    }
     this.loaders.set(loader.kind, loader);
+    return () => {
+      if (this.loaders.get(loader.kind) === loader) this.loaders.delete(loader.kind);
+    };
   }
 
-  registerPackLoader(loader: PackLoader): void {
+  registerPackLoader(loader: PackLoader): () => void {
     if (typeof loader.kind !== 'string' || loader.kind.length === 0) {
       throw new TypeError('LoaderRegistry.registerPackLoader: kind must be non-empty');
     }
@@ -91,7 +95,15 @@ export class LoaderRegistry {
         `LoaderRegistry.registerPackLoader: load must be a function for ${loader.kind}`,
       );
     }
+    if (this.packLoaders.has(loader.kind)) {
+      throw new TypeError(
+        `LoaderRegistry.registerPackLoader: duplicate loader kind "${loader.kind}"`,
+      );
+    }
     this.packLoaders.set(loader.kind, loader);
+    return () => {
+      if (this.packLoaders.get(loader.kind) === loader) this.packLoaders.delete(loader.kind);
+    };
   }
 
   async loadPack(input: PackLoaderInput, ctx: LoadContext): Promise<PackLoadResult> {

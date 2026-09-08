@@ -1,3 +1,4 @@
+import type { TextureFormat } from '@forgeax/engine-rhi';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import { type RenderError, RenderFeaturePreparationFailedError } from '../errors/render';
 import type {
@@ -69,7 +70,7 @@ export interface PreparedGraphicsTransaction {
     capabilityAvailable: boolean,
     attachments: readonly {
       readonly resource: string | RenderFeatureTargetHandle;
-      readonly format: string;
+      readonly format: TextureFormat;
     }[],
   ): RenderFeaturePreparedGraphicsState;
   commit(): Result<PreparedGraphicsStoreSnapshot, RenderError>;
@@ -109,10 +110,25 @@ function preparationFailure(
   );
 }
 
+function numericViewValues(value: ArrayBufferView): readonly number[] {
+  if (value instanceof Float32Array) return Array.from(value);
+  if (value instanceof Float64Array) return Array.from(value);
+  if (value instanceof Int8Array) return Array.from(value);
+  if (value instanceof Uint8Array) return Array.from(value);
+  if (value instanceof Uint8ClampedArray) return Array.from(value);
+  if (value instanceof Int16Array) return Array.from(value);
+  if (value instanceof Uint16Array) return Array.from(value);
+  if (value instanceof Int32Array) return Array.from(value);
+  if (value instanceof Uint32Array) return Array.from(value);
+  if (value instanceof BigInt64Array) return Array.from(value, Number);
+  if (value instanceof BigUint64Array) return Array.from(value, Number);
+  return Array.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+}
+
 function immutableValue(value: unknown): unknown {
   if (Array.isArray(value)) return Object.freeze(value.map(immutableValue));
   if (ArrayBuffer.isView(value)) {
-    return Object.freeze(Array.from(value as unknown as ArrayLike<number>));
+    return Object.freeze(numericViewValues(value));
   }
   if (value !== null && typeof value === 'object') {
     const source = value as Record<string, unknown>;
@@ -126,9 +142,7 @@ function immutableValue(value: unknown): unknown {
 }
 
 function valuesOf(data: ArrayBufferView | readonly number[]): readonly number[] {
-  return Object.freeze(
-    ArrayBuffer.isView(data) ? Array.from(data as unknown as ArrayLike<number>) : [...data],
-  );
+  return Object.freeze(ArrayBuffer.isView(data) ? numericViewValues(data) : [...data]);
 }
 
 function uploadBytes(
@@ -338,7 +352,7 @@ class PreparedGraphicsTransactionImpl implements PreparedGraphicsTransaction {
     capabilityAvailable: boolean,
     attachments: readonly {
       readonly resource: string | RenderFeatureTargetHandle;
-      readonly format: string;
+      readonly format: TextureFormat;
     }[],
   ): RenderFeaturePreparedGraphicsState {
     const items = [...this.committedItems(), ...this.overlay.values()];

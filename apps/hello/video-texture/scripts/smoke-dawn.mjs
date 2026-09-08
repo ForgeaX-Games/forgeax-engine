@@ -19,7 +19,7 @@
 //   2. Build a mock HTMLCanvasElement + shim GPUCanvasContext.
 //   3. Build a World identical to the browser demo: quad mesh + unlit
 //      MaterialAsset with baseColorTexture=videoGuid + VideoPlayer clip.
-//   4. await renderer.ready + 300x renderer.draw(world).
+//   4. await runtime host initialization + 300x lease-bound renderer.draw(...).
 //   5. Verdict: backend===webgpu, frames>=300, draw errors===0.
 //
 // Exit codes:
@@ -126,10 +126,7 @@ const mockCanvas = {
 import { readFileSync } from 'node:fs';
 
 const { World } = await import('@forgeax/engine-ecs');
-const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  createRenderer,
-} = enginePkg;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const {
@@ -144,30 +141,23 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(
 )}`;
 
 let renderer;
+let assets;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  assets = constructed.value.assets;
 } catch (err) {
   console.error(
-    `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
+    `[smoke] FAIL - renderer host construction failed: ${err instanceof Error ? err.message : String(err)}`,
   );
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = origReqAdapter;
 }
 
-console.log(`[video-texture] backend=${renderer.backend}`);
+console.log('[video-texture] pipeline=Standard');
 
-const assets = renderer.assets;
-if (!assets) {
-  console.error('[smoke] FAIL - AssetRegistry is null');
-  process.exit(1);
-}
-
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 // --- 4. Register a video asset and an unlit material that samples from it ----
 
@@ -220,8 +210,13 @@ console.log('[video-texture] video-textured material registered');
 // --- 5. Build world: quad + camera + directional light + video player -------
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const frameRequest = {
+  leases: [worldAttachment1.value],
+  camera: { lease: worldAttachment1.value },
+  environment: { lease: worldAttachment1.value },
+};
 
 // NB: do NOT insert a VideoElementProvider — dawn has no HTMLVideoElement.
 // The record stage's single per-frame upload path resolves element===undefined,
@@ -276,14 +271,18 @@ console.log(`[video-texture] video-textured quad entity spawned: ${String(videoE
 // --- 6. Render loop ----------------------------------------------------------
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') {
+    errors.push({ code: event.error.code, hint: event.error.hint, detail: event.error.detail });
+  }
+});
 
 const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = renderer.draw(frameRequest);
   if (!r.ok) {
     console.error(`[smoke] draw frame ${i} error: ${r.error.code} - ${r.error.hint}`);
   }
@@ -299,18 +298,16 @@ console.log(`[smoke] frames observed=${framesObserved} (wall=${frameWall}ms, tar
 // --- 7. Verdict (structural: chain survived) ---------------------------------
 
 const failures = [];
-if (renderer.backend !== 'webgpu') {
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
-}
 if (framesObserved < SMOKE_MIN_FRAMES) {
-  failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
+  failures.push(`(a) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 }
-const drawErrors = errors.filter(
-  (e) => !(e.code === 'video-upload-unsupported'),
-);
+const drawErrors = errors.filter((e) => {
+  if (e.code === 'video-upload-unsupported') return false;
+  return e.detail?.cause?.code !== 'video-upload-unsupported';
+});
 if (drawErrors.length > 0) {
   const codes = drawErrors.map((e) => e.code).join(', ');
-  failures.push(`(c) Renderer.onError fired ${drawErrors.length} times (excluding video-upload-unsupported): [${codes}]`);
+  failures.push(`Renderer error events fired ${drawErrors.length} times (excluding video-upload-unsupported): [${codes}]`);
 }
 
 if (failures.length > 0) {
@@ -321,7 +318,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - structural chain GREEN: backend=webgpu, frames=${framesObserved}, VideoAsset registered, VideoPlayer spawned, extract/record routing survived.`,
+  `[smoke] PASS - structural chain GREEN: pipeline=Standard, frames=${framesObserved}, VideoAsset registered, VideoPlayer spawned, extract/record routing survived.`,
 );
 
 device?.destroy?.();

@@ -6,8 +6,7 @@
 // `{ hash, wgsl }` JS module (vite-plugin-shader/src/index.ts ~line 875).
 // The 6 post-process effects in ./shaders/*.wgsl are imported directly here
 // (mirroring apps/hello/custom-shader/src/vite-env.d.ts) so the demo can
-// feed `entry.wgsl` to `renderer.postProcess.register('learn-render-5::<id>',
-// { source: <wgsl> })`.
+// feed `entry.wgsl` to the feature host as a fullscreen render feature.
 
 declare module '*.wgsl' {
   const value: { readonly hash: string; readonly wgsl: string };

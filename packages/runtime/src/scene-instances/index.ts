@@ -1,1 +1,4 @@
-export { postSpawnResolveJoints, type SkinJointResolver } from '@forgeax/engine-render/internal';
+export {
+  postSpawnResolveJoints,
+  type SkinJointResolver,
+} from '../../../render/src/scene-instances/post-spawn-resolve-joints';

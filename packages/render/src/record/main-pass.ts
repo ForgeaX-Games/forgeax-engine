@@ -1,3 +1,4 @@
+import type { World } from '@forgeax/engine-ecs';
 import { probeVideoHighPerfUpload } from '@forgeax/engine-graphics-extras';
 import {
   type BindGroup,
@@ -9,10 +10,9 @@ import type { Handle, PassKind, PassSelector } from '@forgeax/engine-types';
 import { createHdrpUnifiedBindGroup, getOrCreateHdrpBuffers } from '../hdrp-buffers';
 import { getOrCreateIblCache } from '../ibl/IblPipelineCache';
 import { buildBeginRenderPassDescriptor } from '../pipeline-spec';
-import type { _InternalRenderPipelineContext } from '../render-pipeline-context';
-import { MATERIAL_PER_ENTITY_STRIDE, STANDARD_PBR_UBO_SIZE } from '../render-system';
+import { POINTS_LINES_MATERIAL_SHADER_ID } from '../points-lines/record';
+import type { RenderRecordPhase } from '../render-contract';
 import type { MaterialSnapshot } from '../render-system-extract';
-import type { RenderRecordPhase } from '../renderer';
 import { recordGeometryDraws } from './main-pass-geometry';
 import {
   applyMaterialTextureUvScales,
@@ -24,11 +24,16 @@ import {
   writePbrMaterialUboPayload,
 } from './main-pass-material';
 import { recordSpritePass } from './main-pass-sprite-draws';
-import { buildMatchedRenderableIndices } from './shadow-pass';
+import type { _InternalRenderPipelineContext } from './render-context';
+import { MATERIAL_PER_ENTITY_STRIDE, STANDARD_PBR_UBO_SIZE } from './render-context';
+import {
+  buildMatchedMaterialHandlesByRenderable,
+  buildMatchedRenderableIndices,
+} from './shadow-pass';
 
 const ZERO_SKYLIGHT_PAYLOAD = new Float32Array([0, 0, 0, 0, 0, 0, 0, 1]);
 
-type MainPassOptions = {
+export type MainPassOptions = {
   readonly colorViews?: readonly (TextureView | null)[];
   readonly colorFormats?: readonly GPUTextureFormat[];
   readonly depthView?: TextureView | null;
@@ -47,6 +52,7 @@ export function recordMainPass(
   c: _InternalRenderPipelineContext,
   selector?: PassSelector,
   options?: MainPassOptions,
+  graphPass?: RhiRenderPassEncoder,
 ): void {
   const {
     runtime,
@@ -82,14 +88,8 @@ export function recordMainPass(
   const sampleCount = msaaActive ? 4 : 1;
   const passKind = options?.passKind ?? 'forward';
   const colorViews = options?.colorViews ?? [geometryColorView];
-  const graphColorFormat =
-    !c.tonemapActive && runtime.device.caps.storageBuffer
-      ? frameState.perFrameGraph?.getColorTargetDescriptor('ldrColor')?.format
-      : undefined;
   const colorFormats = options?.colorFormats ?? [
-    (c.tonemapActive
-      ? 'rgba16float'
-      : (graphColorFormat ?? pipelineState.colorAttachmentFormat)) as GPUTextureFormat,
+    (c.tonemapActive ? 'rgba16float' : pipelineState.colorAttachmentFormat) as GPUTextureFormat,
   ];
   const targetDepthView = options?.depthView ?? geometryDepthView;
   const clearColor = options?.clearColor ?? clear;
@@ -165,30 +165,32 @@ export function recordMainPass(
   // forward main pass: depth24plus-stencil8 auto-emits stencil ops via the
   // helper's stencil-op gate (plan-strategy M4 R3/R5 stencil-op SSOT).
   // mainColorLoadOp toggles between 'clear' and 'load' (skyboxActive case).
-  const pass: RhiRenderPassEncoder = encoder.beginRenderPass(
-    buildBeginRenderPassDescriptor(
-      {
-        colorFormats,
-        depthFormat: 'depth24plus-stencil8',
-        sampleCount: msaaActive ? 4 : 1,
-      },
-      {
-        colorViews,
-        depthView: targetDepthView,
-        ...(mainPassResolves ? { resolveTargets: [geometryColorResolveView] } : {}),
-      },
-      passKind,
-      {
-        colorLoadOp: mainColorLoadOp,
-        clearColor: {
-          r: clearColor[0] ?? 0,
-          g: clearColor[1] ?? 0,
-          b: clearColor[2] ?? 0,
-          a: clearColor[3] ?? 1,
+  const pass: RhiRenderPassEncoder =
+    graphPass ??
+    encoder.beginRenderPass(
+      buildBeginRenderPassDescriptor(
+        {
+          colorFormats,
+          depthFormat: 'depth24plus-stencil8',
+          sampleCount: msaaActive ? 4 : 1,
         },
-      },
-    ) as never,
-  );
+        {
+          colorViews,
+          depthView: targetDepthView,
+          ...(mainPassResolves ? { resolveTargets: [geometryColorResolveView] } : {}),
+        },
+        passKind,
+        {
+          colorLoadOp: mainColorLoadOp,
+          clearColor: {
+            r: clearColor[0] ?? 0,
+            g: clearColor[1] ?? 0,
+            b: clearColor[2] ?? 0,
+            a: clearColor[3] ?? 1,
+          },
+        },
+      ) as never,
+    );
 
   // Geometry submission block: setPipeline + 4 bind groups + per-entity
   // material uploads + drawIndexed.
@@ -196,6 +198,8 @@ export function recordMainPass(
   // feat-20260609 M2: filter entities by pass selector.
   const matchedIndices =
     selector !== undefined ? buildMatchedRenderableIndices(dispatch, selector) : null;
+  const matchedMaterials =
+    selector !== undefined ? buildMatchedMaterialHandlesByRenderable(dispatch, selector) : null;
 
   if (validatedOrdered.length > 0) {
     // feat-20260518-pbr-direct-lighting-mvp M5 / w22.10 (D-4 + D-9 +
@@ -230,7 +234,7 @@ export function recordMainPass(
     // translation; record consumes the snapshot POD only (charter
     // proposition 5 consistent abstraction; AC-07 reverse-grep gate
     // `scripts/forgeax/check-render-record-no-material-asset-get.mjs`
-    // forbids both the cast pattern and any direct material asset
+    // forbids both the cast pattern and a direct material asset
     // typed-lookup regrowth in this file).
     // bug-20260522-per-entity-material-texture-binding D-1/D-2:
     // the pre-loop `firstMaterial` / `materialTextureView` / `
@@ -266,17 +270,12 @@ export function recordMainPass(
     // when active so `sampleIblSpecular * intensity` carries the user's
     // Skylight.intensity value; fallback keeps intensity=0 (createSkylightFallback
     // seed) so ambient = 0 even when the same buffer is shared.
-    let activeViews: { irr: unknown; pref: unknown; brdf: unknown } | undefined;
+    let activeViews: { irr: TextureView; pref: TextureView; brdf: TextureView } | undefined;
     // Per-frame Skylight uniform: std140 32 B = [intensity, colorR, colorG,
     // colorB, rotation quaternion]. Default to all-zero so a transition from "has Skylight" ->
     // "no Skylight" does not leak the prior frame's ambient (intensity 0
     // muzzles everything, including the white fallback irradiance cube).
-    runtime.device.queue.writeBuffer(
-      // biome-ignore lint/suspicious/noExplicitAny: opaque Buffer handle
-      skylightFallback.intensityBuffer as any,
-      0,
-      ZERO_SKYLIGHT_PAYLOAD,
-    );
+    runtime.device.queue.writeBuffer(skylightFallback.intensityBuffer, 0, ZERO_SKYLIGHT_PAYLOAD);
     if (skylight !== undefined && skylightCount >= 1) {
       // A Skylight exists. Write its intensity + color regardless of whether
       // a cubemap is bound: with a cubemap the IBL views below light the
@@ -288,14 +287,8 @@ export function recordMainPass(
       const [cr, cg, cb] = skylight.color;
       const [qx, qy, qz, qw] = skylight.rotation;
       const uniformPayload = new Float32Array([skylight.intensity, cr, cg, cb, qx, qy, qz, qw]);
-      runtime.device.queue.writeBuffer(
-        // biome-ignore lint/suspicious/noExplicitAny: opaque Buffer handle
-        skylightFallback.intensityBuffer as any,
-        0,
-        uniformPayload,
-      );
-      // biome-ignore lint/suspicious/noExplicitAny: device is the opaque RhiDevice
-      const cache = getOrCreateIblCache(runtime.device as any);
+      runtime.device.queue.writeBuffer(skylightFallback.intensityBuffer, 0, uniformPayload);
+      const cache = getOrCreateIblCache(runtime.deviceScope);
       if (
         cache.irradianceView !== undefined &&
         cache.prefilterView !== undefined &&
@@ -311,11 +304,11 @@ export function recordMainPass(
     const skylightResources =
       activeViews !== undefined
         ? {
-            irradianceView: activeViews.irr as never,
+            irradianceView: activeViews.irr,
             irradianceSampler: skylightFallback.sampler,
-            prefilterView: activeViews.pref as never,
+            prefilterView: activeViews.pref,
             prefilterSampler: skylightFallback.sampler,
-            brdfLutView: activeViews.brdf as never,
+            brdfLutView: activeViews.brdf,
             brdfLutSampler: skylightFallback.sampler,
             intensityBuffer: skylightFallback.intensityBuffer,
           }
@@ -374,8 +367,14 @@ export function recordMainPass(
     const buildPerSubmeshMaterialBg = (
       submeshMaterial: MaterialSnapshot,
       entityKey: number,
+      materialWorld: World = world,
     ): BindGroup =>
-      buildPerSubmeshMaterialBgImpl(perSubmeshMaterialBgDeps, submeshMaterial, entityKey);
+      buildPerSubmeshMaterialBgImpl(
+        perSubmeshMaterialBgDeps,
+        submeshMaterial,
+        entityKey,
+        materialWorld,
+      );
 
     const cachedMaterialUboPayload = c.materialUboPayloadCache;
     let materialUboPayload: Uint8Array;
@@ -443,9 +442,9 @@ export function recordMainPass(
         {
           const matHandleRaw = mat.baseColorTexture as Handle<'TextureAsset', 'shared'> | undefined;
           if (matHandleRaw !== undefined) {
-            const view = residentTextureView(world, store, runtime, matHandleRaw);
+            const view = residentTextureView(entry.world ?? world, store, runtime, matHandleRaw);
             if (view === undefined) {
-              const rawId = matHandleRaw as unknown as number;
+              const rawId: number = matHandleRaw;
               if (!frameState.warnedMissingBaseColorTextureHandles.has(rawId)) {
                 frameState.warnedMissingBaseColorTextureHandles.add(rawId);
                 console.warn(
@@ -514,7 +513,6 @@ export function recordMainPass(
       materialUboPayload,
     );
     if (!materialUboUpload.ok) throw materialUboUpload.error;
-
     // Static material resources are a property of the frame-local material
     // slot, not of each submesh draw. Resolve them once here so the geometry
     // loop only selects a prepared binding. Video fields remain entity-bound:
@@ -529,16 +527,21 @@ export function recordMainPass(
       preparedMaterialBindGroups[materialSlot] = buildPerSubmeshMaterialBg(
         material,
         owner.source.entityKey,
+        owner.world ?? world,
       );
     }
     const resolveMaterialBindGroup = (
       materialSlot: number,
       material: MaterialSnapshot,
       entityKey: number,
+      materialWorld: World = world,
     ): BindGroup =>
-      preparedMaterialBindGroups[materialSlot] ?? buildPerSubmeshMaterialBg(material, entityKey);
+      material.materialShaderId !== POINTS_LINES_MATERIAL_SHADER_ID
+        ? (preparedMaterialBindGroups[materialSlot] ??
+          buildPerSubmeshMaterialBg(material, entityKey, materialWorld))
+        : buildPerSubmeshMaterialBg(material, entityKey, materialWorld);
 
-    pass.setBindGroup(0, viewBindGroup as BindGroup);
+    pass.setBindGroup(0, viewBindGroup as BindGroup, [0]);
 
     // Track which (mesh-vertex-buffer, mesh-index-buffer, pipeline) combo
     // was last bound so consecutive entities sharing the same combo skip
@@ -550,10 +553,11 @@ export function recordMainPass(
       recordGeometryDraws(
         c,
         pass,
-        matchedIndices,
+        matchedMaterials,
         materialSlotIndices,
         sampleCount,
         meshGroup2,
+        meshBindGroup,
         resolveMaterialBindGroup,
         passKind,
       );
@@ -586,11 +590,21 @@ export function recordMainPass(
         sampleCount,
         resolveMaterialBindGroup,
         skylightResources,
+        graphPass,
       );
     }
   } // end if (validatedOrdered.length > 0) -- Case E falls through to pass.end()
 
-  if (!geometryPassEnded) {
+  if (!geometryPassEnded && graphPass === undefined) {
     pass.end();
   }
+}
+
+export function encodeMainPass(
+  c: _InternalRenderPipelineContext,
+  pass: RhiRenderPassEncoder,
+  selector?: PassSelector,
+  options?: MainPassOptions,
+): void {
+  recordMainPass(c, selector, options, pass);
 }

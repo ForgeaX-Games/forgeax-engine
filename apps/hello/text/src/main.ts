@@ -4,8 +4,8 @@
 // What this demo exercises end-to-end (charter F1 progressive disclosure):
 //   - createApp(canvas, opts) -- one-screen takeoff with rAF + auto
 //     input-attach + Time resource.
-//   - assets.configurePackIndex(PACK_INDEX_URL) so loadByGuid resolves
-//     against the dist/dev pack catalog, which includes the pre-baked
+//   - configureRuntimeAssetCatalog(assets, runtimeBinding) so loadByGuid
+//     resolves against the scoped dev or static production catalog, which includes the pre-baked
 //     forgeax-engine-assets/dejavu-fonts/ artifacts (atlas .png + font
 //     .pack.json) wired through pluginPack roots in vite.config.ts.
 //   - registerSharedSampler(assets) registers the SamplerAsset whose GUID
@@ -29,6 +29,7 @@
 // The runtime msdf-text shader uses the multi-channel signed-distance median to
 // reconstruct sharp glyph outlines at any size.
 
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
 import type { CanvasAppError } from '@forgeax/engine-app';
 
@@ -36,19 +37,19 @@ import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
 import { BLOOM_ENABLED, perspective, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 
-import type { FontAsset, Handle, MaterialAsset } from '@forgeax/engine-types';
+import { type FontAsset, type Handle, type MaterialAsset } from '@forgeax/engine-types';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 import {
   FONT_GUID,
-  PACK_INDEX_URL,
   registerSharedSampler,
   spawnTextScenes,
 } from './text-scenes.js';
+
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) {
@@ -69,27 +70,22 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     reportAppError(appRes.error);
     return;
   }
   const app = appRes.value;
-  console.warn(`[text] backend=${app.renderer.backend}`);
+  console.warn(`[text] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
-  const ready = await app.renderer.ready;
-  if (!ready.ok) {
-    console.error('[text] renderer.ready failed:', ready.error.code, ready.error.hint);
+
+  const assets = app.assets;
+  if (assets === undefined || assets === null) {
+    console.error('[text] AssetRegistry is unavailable');
     return;
   }
-
-  const assets = app.renderer.assets;
-  if (assets === null) {
-    console.error('[text] AssetRegistry is null');
-    return;
-  }
-  assets.configurePackIndex(PACK_INDEX_URL);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
   const world = app.world;
 
   registerSharedSampler(assets);

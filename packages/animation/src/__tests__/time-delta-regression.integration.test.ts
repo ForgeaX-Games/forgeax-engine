@@ -13,7 +13,7 @@
 // driven `dt`, not with a fixed `1 / 60`.
 
 import type { EntityHandle } from '@forgeax/engine-ecs';
-import { World } from '@forgeax/engine-ecs';
+import { createWorldContext, World } from '@forgeax/engine-ecs';
 import type { AnimationClip } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { AnimationPlayer } from '../animation-player';
@@ -33,7 +33,7 @@ describe('animation systems honor real Time.delta (regression: hardcoded 1/60)',
   )('advanceAnimationPlayer advances times[0] by the real dt at %iHz, not a fixed 1/60', async (hz) => {
     const dt = 1 / hz;
     const world = new World();
-    expect((await animationPlugin().build(world)).ok).toBe(true);
+    await createWorldContext(world, [animationPlugin()]);
 
     const clip = registerClip(world, 10);
     const e = world
@@ -54,10 +54,13 @@ describe('animation systems honor real Time.delta (regression: hardcoded 1/60)',
   )('evaluateAnimationGraph advances nodeTimes[0] by the real dt at %iHz, not a fixed 1/60', async (hz) => {
     const dt = 1 / hz;
     const world = new World();
-    expect((await animationPlugin().build(world)).ok).toBe(true);
+    const clipPayload: AnimationClip = { kind: 'animation-clip', duration: 10, channels: [] };
+    await createWorldContext(world, [
+      animationPlugin((guid) => (guid === 'test/animation-clip-delta' ? clipPayload : undefined)),
+    ]);
 
-    const clip = registerClip(world, 10);
-    const built = defineAnimationGraph((b) => b.clip(clip));
+    registerClip(world, 10);
+    const built = defineAnimationGraph((b) => b.clip('test/animation-clip-delta'));
     expect(built.ok).toBe(true);
     if (!built.ok) return;
     const graphH = world.allocSharedRef('AnimationGraph', built.value);

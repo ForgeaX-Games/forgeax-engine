@@ -96,6 +96,22 @@ export interface Ktx2Parsed {
   readonly rawBytes: Uint8Array;
 }
 
+/**
+ * Project the KTX2 DFD transfer function into the engine texture color
+ * contract. The DFD is the container's single color authority: callers must
+ * not maintain a second descriptor-side color field.
+ */
+export function ktx2ColorSpace(parsed: Ktx2Parsed): 'srgb' | 'linear' | undefined {
+  switch (parsed.dfd?.transferFunction) {
+    case 1:
+      return 'linear';
+    case 2:
+      return 'srgb';
+    default:
+      return undefined;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers — little-endian reads
 // ---------------------------------------------------------------------------

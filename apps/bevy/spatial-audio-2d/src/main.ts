@@ -1,13 +1,15 @@
 // Reproduce Bevy's `spatial_audio_2d` example.
 
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
 import { AudioSource, audioPlugin } from '@forgeax/engine-audio';
-import { WebAudioEngine } from '@forgeax/engine-audio-webaudio';
+import { WebAudioEngine, webAudioPlugin } from '@forgeax/engine-audio-webaudio';
 import { Time, Update } from '@forgeax/engine-ecs';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { AudioClipAsset, Handle } from '@forgeax/engine-types';
+import { type AudioClipAsset, type Handle } from '@forgeax/engine-types';
 import { Transform } from '@forgeax/engine-scene';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { buildSpatialAudio2dWorld, HANDLE_NONE } from './spatial-audio-2d';
 
@@ -19,9 +21,9 @@ const audioStatus = document.querySelector<HTMLSpanElement>('#audio-status');
 const spatialStatus = document.querySelector<HTMLSpanElement>('#spatial-status');
 if (!canvas || !audioStatus || !spatialStatus) throw new Error('bevy-spatial-audio-2d: missing canvas or overlay elements');
 
-const appResult = await createApp(canvas, { plugins: [audioPlugin()] }, {
+const appResult = await createApp(canvas, { plugins: [webAudioPlugin(), audioPlugin()] }, {
   ...forgeaxBundlerAdapter(),
-  importTransport: createDevImportTransport(),
+  importTransport: createRuntimeAssetImportTransport(runtimeBinding),
 });
 if (!appResult.ok) {
   if (appResult.error instanceof EngineEnvironmentError) console.error('[bevy-spatial-audio-2d] EngineEnvironmentError creating renderer');
@@ -30,13 +32,12 @@ if (!appResult.ok) {
 }
 
 const app = appResult.value;
-const ready = await app.renderer.ready;
-if (!ready.ok) throw new Error(`bevy-spatial-audio-2d: renderer.ready failed: ${ready.error.code}`);
 
 const world = app.world;
 const scene = buildSpatialAudio2dWorld(world, canvas.width / Math.max(canvas.height, 1));
-const assets = app.renderer.assets;
-assets.configurePackIndex('/pack-index.json');
+const assets = app.assets;
+if (assets === undefined) throw new Error('bevy-spatial-audio-2d: assets unavailable');
+configureRuntimeAssetCatalog(assets, runtimeBinding);
 const audioEngine = world.getResource<WebAudioEngine>('AudioEngine');
 
 let clipHandle: Handle<'AudioClipAsset', 'shared'> = HANDLE_NONE;
@@ -64,7 +65,7 @@ world.addSystem(Update, {
   queries: [],
   fn: () => {
     const dt = world.getResource(Time).delta;
-    const snapshot = app.renderer.input.snapshot(world);
+    const snapshot = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
     const listenerTransform = world.get(scene.listener, Transform);
     const emitterTransform = world.get(scene.emitter, Transform);
     if (!listenerTransform.ok || !emitterTransform.ok) return;

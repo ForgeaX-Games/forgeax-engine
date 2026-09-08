@@ -11,20 +11,19 @@
 // fails to compile. After w15 the introspection matches the declaration.
 
 import { defineAnimationGraph, describeAnimationGraph } from '@forgeax/engine-animation';
-import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
-function clipHandle(id: number) {
-  return toShared<'AnimationClip'>(id);
+function clipGuid(id: number) {
+  return `test/animation-clip-${id}`;
 }
 
 describe('describeAnimationGraph — introspection (M2 / w11)', () => {
   it('enumerates nodes, root, and static weights matching the declaration', () => {
     const result = defineAnimationGraph((b) => {
-      const walk = b.clip(clipHandle(1), 1);
-      const run = b.clip(clipHandle(2), 1);
+      const walk = b.clip(clipGuid(1), 1);
+      const run = b.clip(clipGuid(2), 1);
       const loco = b.blend([walk, run], 0.4);
-      const overlay = b.clip(clipHandle(3), 0.3);
+      const overlay = b.clip(clipGuid(3), 0.3);
       return b.add(loco, [overlay], 1);
     });
     expect(result.ok).toBe(true);
@@ -58,7 +57,7 @@ describe('describeAnimationGraph — introspection (M2 / w11)', () => {
   });
 
   it('exposes node index on each description entry', () => {
-    const result = defineAnimationGraph((b) => b.clip(clipHandle(1)));
+    const result = defineAnimationGraph((b) => b.clip(clipGuid(1)));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 

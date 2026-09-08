@@ -4,7 +4,7 @@ import {
   defineSharedKernel,
   SHARED_KERNEL_EXECUTOR_RESOURCE_KEY,
   type SharedKernelExecutor,
-} from '../execution';
+} from '../execution/shared-kernel';
 import type { QuerySpan } from '../query/query';
 import { Update } from '../schedule-token';
 import { World } from '../world';

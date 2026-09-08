@@ -236,6 +236,18 @@ const appArtifactIds = artifacts
 const consumerArtifactIds = artifacts
   .filter((artifact) => !shardInputClasses.has(artifact.class))
   .map((artifact) => artifact.artifactId);
+const consumerOutputLines = Object.entries(contract.consumers ?? {}).map(
+  ([consumer, definition]) => {
+    const classes = definition.requiredArtifactClasses ?? [];
+    const ids = classes.map((className) => {
+      const artifact = mapped.get(className);
+      if (!artifact) fail('ci-provenance-consumer-class-unmapped', { consumer, className });
+      return artifact.artifactId;
+    });
+    const outputName = `artifact_ids_${consumer.replaceAll('-', '_')}`;
+    return `${outputName}=${[...new Set(ids)].join(',')}`;
+  },
+);
 const merged = {
   schemaVersion,
   runId,
@@ -256,6 +268,7 @@ if (githubOutput) {
       `artifact_ids=${[...new Set(consumerArtifactIds)].join(',')}`,
       `core_artifact_ids=${[...new Set(coreArtifactIds)].join(',')}`,
       `app_artifact_ids=${[...new Set(appArtifactIds)].join(',')}`,
+      ...consumerOutputLines,
     ].join('\n')}\n`,
     { flag: 'a' },
   );

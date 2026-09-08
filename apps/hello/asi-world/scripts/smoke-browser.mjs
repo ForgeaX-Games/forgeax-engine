@@ -1,7 +1,8 @@
 // smoke-browser.mjs -- bug-20260709-builtin-quad-withoutaabb-disables-sprite-frustum-cu (M3 / m3-1)
 //
 // Playwright e2e for AC-04 (requirements IN-5): assert
-// `renderer.frustumStats.total > 0` AND `renderer.frustumStats.culled > 0`
+// LOW-LEVEL HARNESS EXCEPTION: `renderer.frustumStats.total > 0` AND
+// `renderer.frustumStats.culled > 0` is a renderer-internal browser diagnostic.
 // on the asi-world scene (605x56 tilemap + 12387 objects, all sprite
 // entities riding HANDLE_QUAD). This probe is the entity-level frustum-
 // cull activation signal: pre-M1 fix, `withoutAabb(BUILTIN_QUAD)` in
@@ -131,6 +132,10 @@ if (stats === null) {
   process.exit(1);
 }
 
+// This browser probe intentionally remains on the low-level diagnostic field:
+// the public Renderer.inspect() contract is POD-only and does not expose
+// frustum counts, while this script must prove entity-level culling through
+// the Vite/WebGPU path without changing the app source surface.
 // AC-04 primary gate. The default orthographic camera centers on the
 // spawn cell (camHalfW x camHalfH cells visible), so 12387 - visible
 // objects sit outside the frustum and must be culled every frame.

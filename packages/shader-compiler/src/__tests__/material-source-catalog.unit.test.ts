@@ -107,4 +107,38 @@ describe('material WGSL source catalog', () => {
       if (module.ok) expect(module.value.moduleId).toBe('my-game::pulse-material');
     }
   });
+
+  it('preserves the source roots used for engine and project provenance', () => {
+    const roots = ['/engine/shaders', '/game/assets'];
+    const result = buildMaterialSourceCatalog({
+      roots,
+      engine: [{ source: engineSource('forgeax::standard'), path: 'engine/standard.wgsl' }],
+      project: [{ source: projectSource('game::paint'), path: 'materials/paint.wgsl' }],
+    });
+
+    expect(result).toMatchObject({ ok: true, value: { roots } });
+  });
+
+  it('records source-owned slots and resolves their selected modules', () => {
+    const result = buildMaterialSourceCatalog({
+      engine: [],
+      project: [
+        {
+          path: 'entry.wgsl',
+          source:
+            '#define_import_path game::entry\n#pragma material_slot lighting\n#import forgeax_material::slot::lighting::{lighting_color}\nfn main() {}',
+        },
+        { path: 'toon.wgsl', source: projectSource('game::toon') },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const entry = result.value.get('game::entry');
+    expect(entry.ok).toBe(true);
+    if (!entry.ok) return;
+    expect(entry.value.slots).toEqual(['lighting']);
+    expect(result.value.resolveSlot('game::entry', 'lighting', 'game::toon').ok).toBe(true);
+    expect(result.value.resolveSlot('game::entry', 'fog', 'game::toon').ok).toBe(false);
+  });
 });

@@ -3,7 +3,10 @@
 
 import type { World } from '@forgeax/engine-ecs';
 import { vec3 } from '@forgeax/engine-math';
+import type { ResolvedColorTargetDescriptor } from '@forgeax/engine-render-graph';
+import type { Texture } from '@forgeax/engine-rhi';
 import type { ClusterBinScratch } from '../cluster-binner';
+import type { GpuBuffer } from '../gpu-resource';
 
 /**
  * feat-20260708-composited-multi-world-rendering M1 / D-1 / D-9:
@@ -36,7 +39,7 @@ export function worldEntityKey(worldId: number, entityKey: number): number {
  */
 export interface MaterialBgAssemblyCacheEntry {
   readonly material: MaterialSnapshot;
-  /** Invalidates when any texture/sampler residency identity changes. */
+  /** Invalidates when a texture/sampler residency identity changes. */
   readonly materialResourceEpoch: number;
   readonly materialBgl: BindGroupLayout;
   /** Buffer identity changes when the shared material capacity grows. */
@@ -45,16 +48,15 @@ export interface MaterialBgAssemblyCacheEntry {
   readonly bindGroup: BindGroup;
 }
 
-import type { RenderGraph } from '@forgeax/engine-render-graph';
-import type { BindGroup, BindGroupLayout, Buffer, Texture } from '@forgeax/engine-rhi';
+import type { CompiledRenderGraph } from '@forgeax/engine-render-graph';
+import type { BindGroup, BindGroupLayout, Buffer, TextureView } from '@forgeax/engine-rhi';
 import type { MaterialRenderState, RenderPipelineAsset } from '@forgeax/engine-types';
+import type { MeshGpuHandles } from '../device/gpu-residency';
 import type { SkylightBindGroupResources } from '../ibl/skylight-bind-group';
 import type { InstanceBufferCacheEntry } from '../instance-buffer-cache';
-import type { RenderPipeline as RenderPipelineDef } from '../render-pipeline';
-import type { RenderPipelineContext } from '../render-pipeline-context';
-import type { MeshGpuHandles } from '../render-system';
+import type { CameraSnapshot } from '../render-contract';
+import type { RenderPipeline as RenderPipelineDef, RenderPipelineFrame } from '../render-pipeline';
 import type {
-  CameraSnapshot,
   DispatchEntry,
   MaterialSnapshot,
   PointShadowSnapshot,
@@ -73,6 +75,14 @@ import type { ShadowAtlas } from '../shadow-atlas';
  * (`zero-camera-clear-fallback.test.ts`). AC-05.
  */
 export const ZERO_CAMERA_CLEAR_FALLBACK: readonly [number, number, number, number] = [0, 0, 0, 1];
+
+export interface FrameObservationSource {
+  readonly texture: Texture;
+  readonly descriptor: ResolvedColorTargetDescriptor;
+  readonly frameId: number;
+  readonly pipelineId: 'forgeax::standard';
+  readonly backendId: string;
+}
 
 /**
  * Build a synthetic CameraSnapshot the record stage uses when the world
@@ -150,27 +160,27 @@ export function clampPcfKernelSize(value: number | undefined): number {
  */
 export interface RenderFrameState {
   frameNumber: number;
+  /** Optional graph resource lookup used by low-level record helpers and tests. */
+  readonly perFrameGraph?: {
+    readonly getColorTargetDescriptor: (key: string) => ResolvedColorTargetDescriptor | undefined;
+    readonly getColorTargetView: (key: string) => TextureView | undefined;
+    readonly getColorTargetTexture: (key: string) => Texture | undefined;
+  } | null;
   /** Last successfully rendered static directional shadow atlas token. */
   directionalShadowCache: DirectionalShadowCache | null;
   /** Set by a directional shadow pass when this frame refreshed the atlas. */
   directionalShadowCacheRecorded: boolean;
-  /**
-   * feat-20260529-rendergraph-pass-abstraction M4 / w13c fix: the per-frame
-   * render graph is structurally static (the 4 pass execute fns are module-
-   * level, the resource declarations never change, and caps.backendKind is
-   * stable per device). Build + compile it ONCE and reuse the compiled graph
-   * across frames -- re-constructing `new RenderGraph()` + compile() every
-   * frame added allocation/GC jitter that intermittently perturbed the async
-   * IBL-warmup timing (ibl-irradiance smoke meanAbsDelta flake). `execute`
-   * still receives a fresh per-frame RenderPipelineContext, so behaviour is
-   * unchanged; only the topology build is hoisted out of the hot path.
-   */
-  perFrameGraph: RenderGraph<RenderPipelineContext> | null;
-  /** Topology inputs that shape the memoized graph's color route. */
-  perFrameGraphTopologyKey: string | null;
-  /** Graphs detached from the active pipeline while GPU work may still use them. */
-  readonly retiredPerFrameGraphs: Set<RenderGraph<RenderPipelineContext>>;
+  /** The sole compiled owner for compute, copy, feature, and raster work. */
+  compiledFrameGraph: CompiledRenderGraph<RenderPipelineFrame> | null;
+  compiledFrameGraphTopologyKey: string | null;
+  readonly retiredCompiledFrameGraphs: Set<CompiledRenderGraph<RenderPipelineFrame>>;
+  /** Physical outputs projected by typed graph passes for downstream observers. */
+  currentFrameObservationSource: FrameObservationSource | undefined;
+  currentDirectionalShadowView: TextureView | null;
+  currentSpotShadowView: TextureView | null;
   readonly instanceBuffers: Map<number, InstanceBufferCacheEntry>;
+  /** Per-entity vertex buffers for the Standard CPU morph lane. */
+  readonly morphBuffers?: Map<number, MorphBufferCacheEntry>;
   readonly hdrpClusterBinScratch: ClusterBinScratch;
   /** Reusable HDRP cluster output buffers; sized once and grown only if the grid/cap changes. */
   hdrpClusterGridScratch: Uint32Array | null;
@@ -292,7 +302,7 @@ export interface RenderFrameState {
    */
   readonly materialBgShared: Map<string, WeakMap<object, unknown>>;
   /** Cross-frame fast path for fully-resident, immutable material snapshots. */
-  readonly materialBgAssemblyCache: Map<number, MaterialBgAssemblyCacheEntry>;
+  readonly materialBgAssemblyCache: Map<string, MaterialBgAssemblyCacheEntry>;
   /**
    * feat-20260622-handle-to-id-allocator-elimination M1 / w2: singleton
    * material bind group cache (D-6). Single flat Map<variant, BindGroup>
@@ -318,30 +328,17 @@ export interface RenderFrameState {
    */
   postProcessBgCache: WeakMap<object, unknown>;
   /**
-   * feat-20260601-customizable-render-pipeline-seam M1 / w7: the raw u32 handle of the
-   * currently installed RenderPipelineAsset (0 = none installed). `installPipeline` sets
-   * it; `draw` compares it against the handle the memoized `perFrameGraph` was last built
-   * for and, on change (pipeline swap), nulls `perFrameGraph` to force a rebuild. Effect
-   * toggles (camera.bloom early-return inside a pass closure) do NOT change this handle,
-   * so they never trigger a rebuild (requirements edge case: only a SWAP rebuilds).
+   * Raw handle of the currently installed RenderPipelineAsset (0 = builtin).
+   * Installation brands the next candidate topology; the prior compiled graph
+   * remains last-known-good until the candidate compiles successfully.
    */
   installedPipelineHandle: number;
   /**
-   * feat-20260601-customizable-render-pipeline-seam M1 / w7: the active RenderPipeline
-   * impl resolved from the registry by `installPipeline`. recordFrame calls
-   * `activePipeline.buildGraph(ctx, data)` when the memoized graph needs (re)building.
-   * Defaults to the built-in forgeax::urp pipeline.
+   * Active topology declaration resolved from the pipeline registry.
    */
   activePipeline: RenderPipelineDef;
   /**
-   * feat-20260601-customizable-render-pipeline-seam verify round 2: the
-   * `RenderPipelineAsset.config` of the currently installed pipeline asset.
-   * `installPipeline` stores it alongside `activePipeline` / `installedPipelineHandle`;
-   * `recordFrame` projects it onto `RenderPipelineData.config` so a pipeline's `buildGraph`
-   * reads its install-time config at topology-build time. `undefined` when the installed
-   * asset declared no `config` (the standard forward pipeline always installs with config
-   * undefined). Without this field `config.passCount` was a silent no-op (config was dropped
-   * at the seam); threading it makes one-logic-N-configs observably distinct (AC-03).
+   * Install-time config projected into `RenderPipelineTopology.config`.
    */
   installedPipelineConfig: RenderPipelineAsset['config'];
   /**
@@ -371,11 +368,8 @@ export interface RenderFrameState {
   /**
    * feat-20260612-point-light-shadows-urp-hdrp M3 / T-M3-2 (plan-strategy §D-3):
    * per-frame projection of `lights.pointShadow` from the extract stage. The
-   * graph closure for the point shadow caster pass reads this list to drive
-   * the 6 x N face iteration; `recordFrame` writes it before `graph.execute`.
-   * Empty array on frames with no shadow-casting point lights — the URP
-   * `addPointShadowPass` is gated at `buildGraph` time on the snapshot count
-   * being non-zero (AC-09 zero-shadow zero-pass).
+   * typed point-shadow pass reads this list to drive the 6 x N face iteration.
+   * Empty array means the topology declares no point-shadow passes.
    */
   pointShadowSnapshots: readonly PointShadowSnapshot[];
   /**
@@ -393,46 +387,27 @@ export interface RenderFrameState {
   lastFoldBucketCount: number;
   /**
    * feat-20260625-spot-light-shadow-mapping M2 / w9 (D-2): per-frame projection
-   * of `lights.spot` from the extract stage. The URP `addSpotShadowPass` graph
-   * closure (`recordSpotShadowPass`) reads this list to render each
+   * of `lights.spot` from the extract stage. The typed spot-shadow graph
+   * pass reads this list to render each
    * castShadow spot's perspective depth into its `spotShadowDepth` atlas tile
    * (viewport keyed on `shadowAtlasTile`). `recordFrame` writes it before
-   * `graph.execute`. Spots with `shadowAtlasTile < 0` (castShadow:false,
+   * graph execution. Spots with `shadowAtlasTile < 0` (castShadow:false,
    * degenerate direction, or clipped beyond cap 4) are skipped — zero
    * shadow-casting spots means zero spot shadow passes (AC-03).
    */
   spotShadowSnapshots: readonly SpotLightSnapshot[];
 }
 
-/**
- * Detach the active graph without losing ownership of textures referenced by
- * submitted work. The graph retires its pools, then this state keeps it alive
- * until its post-submit reclamation finishes. Teardown and device recovery
- * retain explicit control over the set so they can respectively drain or drop
- * the still-owned graphs.
- *
- * @internal
- */
-export function retirePerFrameGraph(frameState: RenderFrameState): void {
-  const graph = frameState.perFrameGraph;
-  if (graph === null) return;
-  graph.retire();
-  frameState.perFrameGraph = null;
-  frameState.perFrameGraphTopologyKey = null;
-  frameState.retiredPerFrameGraphs.add(graph);
-  graph
-    .reclaimRetiredTransients()
-    .catch(() => {})
-    .finally(() => {
-      frameState.retiredPerFrameGraphs.delete(graph);
-    });
+export interface MorphBufferCacheEntry {
+  readonly buffer: GpuBuffer;
+  readonly byteLength: number;
 }
 
 /**
  * feat-20260518-pbr-direct-lighting-mvp M5 / w22.11 (D-2 + D-10 + AC-06):
  * mutable per-frame dispatch counter object owned by `createRenderSystem`
  * and bumped here at the actual `pass.setPipeline(...)` call site (the
- * only point with both `mat.materialShaderId` and `mesh.layout` in scope).
+ * only point with both `mat.materialShaderId` and `mesh.layoutProjection` in scope).
  * Unlit / custom shader pipeline dispatch tracked here.
  */
 export interface DispatchCounts {
@@ -463,10 +438,12 @@ export interface BindGroupCounts {
  * transparent-sort output back to this entry, and an optional per-material
  * renderState override (bug-20260527-renderstate-pipeline-dispatch-gap D-4).
  * Module-scoped so RenderPipelineContext can type `validated` / `validatedOrdered`
- * without `any` (was a recordFrame-local interface before F-4).
+ * without a dynamic type escape (was a recordFrame-local interface before F-4).
  */
 export interface ValidatedRenderable {
   readonly source: RenderableSnapshot;
+  /** World that owns the renderable's asset handles and material snapshots. */
+  readonly world?: World;
   readonly mesh: MeshGpuHandles;
   readonly renderableIndex: number;
   readonly renderState: MaterialRenderState | undefined;
@@ -503,7 +480,6 @@ export interface DirectionalShadowCache {
   readonly assetCatalogEpoch: number;
   readonly pipelineHandle: number;
   readonly graphTopologyKey: string | null;
-  readonly target: Texture;
   readonly shadowMapSize: number;
   readonly cascadeCount: number;
   readonly lightViewProj: readonly Float32Array[];
@@ -513,11 +489,12 @@ export interface DirectionalShadowCache {
 /**
  * ECS state that can change the contents of a directional shadow map.
  *
- * The World mutation epoch also advances for runtime resource/time writes.
- * Those writes do not change shadow casters, so the shadow cache deliberately
- * tracks the narrower structure/component clocks instead of the broad clock.
+ * The ECS-owned RenderReadLease is the only render-facing mutation boundary.
+ * Its cursor is intentionally conservative: any published World change
+ * invalidates the cached atlas, while render never reaches through World for
+ * component-clock storage.
  */
 export interface DirectionalShadowWorldState {
-  readonly structureEpoch: number;
-  readonly componentMutationEpochs: readonly (number | undefined)[];
+  readonly worldIdentity: string;
+  readonly changeCursor: number;
 }

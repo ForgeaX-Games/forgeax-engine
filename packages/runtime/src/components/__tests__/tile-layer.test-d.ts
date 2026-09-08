@@ -4,14 +4,20 @@
 // Anchors: plan-tasks m0-t3; plan-strategy §M0 targetFiles (tile-layer.ts);
 // AGENTS.md §Component naming.
 
-import type { EcsError, EntityHandle, World } from '@forgeax/engine-ecs';
-import { markTileLayerDirty, TileLayer } from '@forgeax/engine-render/authoring';
+import type { EcsError, EntityHandle, SchemaOf, World } from '@forgeax/engine-ecs';
 import type { Result } from '@forgeax/engine-types';
 import { describe, expectTypeOf, it } from 'vitest';
+import { markTileLayerDirty, type TileLayer } from '../../../../render/src/components/tile-layer';
 
 describe('TileLayer component schema (M0 baseline)', () => {
-  it('type-level: 3 schema fields (tiles / layerOrder / dirty)', () => {
-    const schema = TileLayer.schema;
+  it('type-level: schema fields remain owner-defined and typed', () => {
+    type Schema = SchemaOf<typeof TileLayer>;
+    const schema: Schema = {
+      tiles: 'array<u32>',
+      layerOrder: 'i32',
+      dirty: 'u8',
+      sortScope: 'u8',
+    };
     expectTypeOf(schema.tiles).toEqualTypeOf<'array<u32>'>();
     expectTypeOf(schema.layerOrder).toEqualTypeOf<'i32'>();
     expectTypeOf(schema.dirty).toEqualTypeOf<'u8'>();

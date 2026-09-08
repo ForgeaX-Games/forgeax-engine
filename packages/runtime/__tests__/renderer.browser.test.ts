@@ -8,8 +8,9 @@
 // Scope (M2.4 / w11 acceptanceCheck):
 //   (a) `createRenderer({ canvas })` constructs the WebGPU pipeline
 //   (b) `draw(world)` records 1 frame
-//   (c) assert `renderer.backend === 'webgpu'` (the WebGPU path is active;
-//       charter proposition 5 consistent abstraction)
+//   (c) assert `renderer.inspect().capabilities.backendKind === 'webgpu'`
+//       (the WebGPU path is active; charter proposition 5 consistent
+//       abstraction)
 //
 // Note: v4 imports go through `vitest/browser` (not the v3
 // `@vitest/browser/context`). Inside the browser, chromium must launch
@@ -18,13 +19,14 @@
 // this case PASSES, AC-05 is delivered).
 
 import { World } from '@forgeax/engine-ecs';
+import type { Renderer } from '@forgeax/engine-render';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createRenderer } from '../src/createRenderer';
 
 describe('renderer.browser - WebGPU path RHI contract (AC-05)', () => {
   let canvas: HTMLCanvasElement | undefined;
-  let renderer: Awaited<ReturnType<typeof createRenderer>> | undefined;
+  let renderer: Renderer | undefined;
 
   afterEach(() => {
     renderer = undefined;
@@ -56,18 +58,28 @@ describe('renderer.browser - WebGPU path RHI contract (AC-05)', () => {
     // fetch an empty body and ShaderRegistry rejects with
     // `manifest-malformed`. `fetch()` accepts data URLs (WHATWG) and an
     // empty `entries: []` is a valid manifest schema.
-    renderer = await createRenderer(canvas, {}, { shaderManifestUrl: 'data:application/json,{"entries":[]}' });
+    const created = await createRenderer(canvas, {}, { shaderManifestUrl: 'data:application/json,{"entries":[]}' });
+    if (!created.ok) throw created.error;
+    renderer = created.value;
 
-    // (c) assert backend === 'webgpu' (WebGPU path active).
-    expect(renderer.backend).toBe('webgpu');
+    // (c) inspect the bounded capability POD; backend is not a second public
+    // Renderer field.
+    expect(renderer.inspect().capabilities.backendKind).toBe('webgpu');
 
     // (b) draw 1 frame: pass an empty World. D-S2 RenderSystem reports
     // 'render-system-no-camera' through onError but draw itself returns
     // void.
-    await renderer.ready;
     const world = new World();
-    expect(renderer.attachWorld(world).ok).toBe(true);
+    const attached = renderer.attach(world);
+    expect(attached.ok).toBe(true);
+    if (!attached.ok) return;
     world.update(1 / 60).unwrap();
-    expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
+    expect(
+      renderer.draw({
+        leases: [attached.value],
+        camera: { lease: attached.value },
+        environment: { lease: attached.value },
+      }).ok,
+    ).toBe(true);
   });
 });

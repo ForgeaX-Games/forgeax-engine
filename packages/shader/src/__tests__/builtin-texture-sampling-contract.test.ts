@@ -15,7 +15,17 @@ function source(file: string): string {
   return readFileSync(fileURLToPath(new URL(`../${file}`, import.meta.url)), 'utf8');
 }
 
-describe('built-in material texture sampling contract [w37]', () => {
+describe('built-in texture coordinate records', () => {
+  it('does not declare hand-written texture coordinate members', () => {
+    for (const file of shaderFiles) {
+      const text = source(file);
+      expect(text, `${file} has fixed UV scale members`).not.toMatch(/UvScale\b/);
+      expect(text, `${file} has fixed coordinate offsets`).not.toMatch(
+        /TEXTURE_COORDINATE_OFFSET|textureScaleOffset/,
+      );
+    }
+  });
+
   it('routes every built-in material texture sample through the shared scale-aware helper', () => {
     for (const file of shaderFiles) {
       const text = source(file);
@@ -34,5 +44,13 @@ describe('built-in material texture sampling contract [w37]', () => {
     const sabotagedEdge: readonly [number, number] = [1, 1];
     expect(logicalX).toBeLessThan(sabotagedEdge[0]);
     expect(logicalY).toBeLessThan(sabotagedEdge[1]);
+  });
+
+  it('keeps custom coordinate metadata distinct from texture resources', () => {
+    for (const file of shaderFiles) {
+      const text = source(file);
+      expect(text, `${file} must name coordinate metadata`).toMatch(/CoordinatesMetadata/);
+      expect(text, `${file} must preserve texture resources`).toMatch(/texture_2d|texture_cube/);
+    }
   });
 });

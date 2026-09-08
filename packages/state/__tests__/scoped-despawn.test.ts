@@ -12,7 +12,8 @@
 // - requirements AC-12: schema fields use 'enum' type
 
 import { describe, expect, it } from 'vitest';
-import { World, resolveComponent } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
+import { componentSchema } from '@forgeax/engine-ecs/internal';
 import { defineState } from '../src/define-state';
 import { registerStatesPlugin } from '../src/register-plugin';
 
@@ -30,13 +31,19 @@ function makeWorld(): World {
   return world;
 }
 
+function resolveWorldComponent(world: World, name: string) {
+  const component = world.components.resolve(name);
+  if (component === undefined) throw new Error(`Component ${name} is not registered`);
+  return component;
+}
+
 describe('ScopedTo component registration', () => {
   it('registers a component named __scopedTo__<token.name> for each registered StateToken', () => {
     // registerStatesPlugin triggers registerScopedComponents
     const world = makeWorld();
 
-    const LevelScoped = resolveComponent('__scopedTo__LevelId');
-    const ModeScoped = resolveComponent('__scopedTo__GameMode');
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
+    const ModeScoped = resolveWorldComponent(world, '__scopedTo__GameMode');
 
     expect(LevelScoped).toBeDefined();
     expect(LevelScoped!.name).toBe('__scopedTo__LevelId');
@@ -45,20 +52,20 @@ describe('ScopedTo component registration', () => {
   });
 
   it('AC-12: schema fields use enum type for value and mode', () => {
-    makeWorld(); // triggers registerScopedComponents
+    const world = makeWorld(); // triggers registerScopedComponents
 
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
 
-    expect(LevelScoped.schema.value).toBe('enum');
-    expect(LevelScoped.schema.mode).toBe('enum');
+    expect(componentSchema(LevelScoped).value).toBe('enum');
+    expect(componentSchema(LevelScoped).mode).toBe('enum');
   });
 
   it('component has exactly two fields: value and mode', () => {
-    makeWorld(); // triggers registerScopedComponents
+    const world = makeWorld(); // triggers registerScopedComponents
 
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
 
-    const keys = Object.keys(LevelScoped.schema);
+    const keys = Object.keys(componentSchema(LevelScoped));
     expect(keys).toHaveLength(2);
     expect(keys).toContain('value');
     expect(keys).toContain('mode');
@@ -72,7 +79,7 @@ describe('despawnOnExit', () => {
 
     despawnOnExit(world, entity, LevelId, 'tutorial');
 
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
     const scoped = world.get(entity, LevelScoped).unwrap();
     // mode = 0 (exit enum value), value = 1 (tutorial index in LevelId.variants)
     expect(scoped.mode).toBe(0);
@@ -85,7 +92,7 @@ describe('despawnOnExit', () => {
 
     despawnOnExit(world, entity, LevelId, 'main-menu');
 
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
     const scoped = world.get(entity, LevelScoped).unwrap();
     expect(scoped.mode).toBe(0);
     expect(scoped.value).toBe(0);
@@ -97,7 +104,7 @@ describe('despawnOnExit', () => {
 
     despawnOnExit(world, entity, LevelId, 'street-a');
 
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
     const scoped = world.get(entity, LevelScoped).unwrap();
     expect(scoped.mode).toBe(0);
     expect(scoped.value).toBe(2);
@@ -110,7 +117,7 @@ describe('despawnOnExit', () => {
 
     despawnOnExit(world, entity, SingleState, 'on');
 
-    const SingleScoped = resolveComponent('__scopedTo__SingleState')!;
+    const SingleScoped = resolveWorldComponent(world, '__scopedTo__SingleState');
     const scoped = world.get(entity, SingleScoped).unwrap();
     expect(scoped.mode).toBe(0);
     expect(scoped.value).toBe(0);
@@ -124,7 +131,7 @@ describe('despawnOnEnter', () => {
 
     despawnOnEnter(world, entity, LevelId, 'tutorial');
 
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
     const scoped = world.get(entity, LevelScoped).unwrap();
     // mode = 1 (enter enum value), value = 1 (tutorial index)
     expect(scoped.mode).toBe(1);
@@ -137,7 +144,7 @@ describe('despawnOnEnter', () => {
 
     despawnOnEnter(world, entity, LevelId, 'main-menu');
 
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
     const scoped = world.get(entity, LevelScoped).unwrap();
     expect(scoped.mode).toBe(1);
     expect(scoped.value).toBe(0);
@@ -192,7 +199,7 @@ describe('AC-11: duplicate add fail-fast', () => {
     despawnOnExit(world, e1, LevelId, 'tutorial');
     despawnOnExit(world, e2, LevelId, 'street-a');
 
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
     const s1 = world.get(e1, LevelScoped).unwrap();
     const s2 = world.get(e2, LevelScoped).unwrap();
     expect(s1.value).toBe(1); // 'tutorial'
@@ -208,8 +215,8 @@ describe('per-token component independence', () => {
     despawnOnExit(world, entity, LevelId, 'tutorial');
     despawnOnExit(world, entity, GameMode, 'playing');
 
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
-    const ModeScoped = resolveComponent('__scopedTo__GameMode')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
+    const ModeScoped = resolveWorldComponent(world, '__scopedTo__GameMode');
 
     const levelData = world.get(entity, LevelScoped).unwrap();
     expect(levelData.value).toBe(1); // tutorial

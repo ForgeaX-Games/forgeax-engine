@@ -1,4 +1,4 @@
-type NetErrorDetailByCode = {
+export type NetErrorDetailByCode = {
   'handshake-profile-mismatch': {
     readonly localFingerprint: string;
     readonly remoteFingerprint: string;
@@ -14,10 +14,28 @@ type NetErrorDetailByCode = {
   'schema-invalid': { readonly component: string; readonly reason: string };
   'remap-unresolved-reference': { readonly id: number; readonly referencedId: number };
   'apply-invariant-failed': { readonly reason: string };
+  'protocol-unsupported-version': {
+    readonly receivedVersion: number;
+    readonly supportedVersion: number;
+  };
+  'session-illegal-transition': {
+    readonly from: string;
+    readonly to: string;
+  };
+  'recovery-policy-invalid': {
+    readonly field: string;
+    readonly reason: string;
+  };
+  'recovery-rejected': { readonly reason: string };
+  'recovery-exhausted': {
+    readonly attempts: number;
+    readonly maxAttempts: number;
+  };
 };
 
 export type NetErrorCode = keyof NetErrorDetailByCode;
-export type NetErrorDetail = NetErrorDetailByCode[NetErrorCode];
+export type NetErrorDetailFor<C extends NetErrorCode> = NetErrorDetailByCode[C];
+export type NetErrorDetail = NetErrorDetailFor<NetErrorCode>;
 
 class NetErrorClass extends Error {
   readonly code: NetErrorCode;
@@ -41,7 +59,7 @@ class NetErrorClass extends Error {
 
 type Variant<C extends NetErrorCode> = NetErrorClass & {
   readonly code: C;
-  readonly detail: NetErrorDetailByCode[C];
+  readonly detail: NetErrorDetailFor<C>;
 };
 
 export type NetError = {
@@ -53,7 +71,7 @@ interface NetErrorConstructor {
     code: C;
     expected: string;
     hint: string;
-    detail: NetErrorDetailByCode[C];
+    detail: NetErrorDetailFor<C>;
   }): Variant<C>;
   readonly prototype: NetErrorClass;
 }

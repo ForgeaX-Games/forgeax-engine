@@ -23,7 +23,7 @@
 // producing a clear-color-only view), proving the culling semantics.
 //
 // Textures are loaded through the scoped GUID asset pipeline:
-//   configureRuntimeBinding(runtimeBinding) + loadByGuid<TextureAsset>.
+//   configureRuntimeAssetCatalog(assets, runtimeBinding) + loadByGuid<TextureAsset>.
 //
 // GREP anchors for AI users:
 //   - "// 1. engine usage"    public engine API consumed
@@ -31,6 +31,7 @@
 //   - "// 3. bootstrap"       entry point wiring (1)+(2)
 
 // 1. engine usage
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
 import type { App } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
@@ -38,9 +39,10 @@ import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import { createDevImportTransport } from '@forgeax/engine-runtime';
+
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
-import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
+import { unwrapHandle } from '@forgeax/engine-types';
+import { captureCanvasPixels } from '@forgeax/apps-shared/canvas-capture';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
@@ -48,9 +50,6 @@ import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-
 
 // Marble GUID from forgeax-engine-assets/learn-opengl/textures/marble.jpg.meta.json
 const MARBLE_GUID_STR = '019e3969-1d46-7933-b14d-4faee5635ad6';
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-4-4-face-culling',
-);
 
 // Camera inside the cube (origin). The cube spans [-0.5, 0.5]^3;
 // position (0,0,0) places the camera exactly at the center, looking
@@ -75,24 +74,27 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 4.4 face-culling] createApp failed:', appRes.error);
     return;
   }
   const app = appRes.value;
-  const renderer = app.renderer;
   const world = app.world;
   app.onError((error) => {
     console.error('[learn-render 4.4 face-culling] app.onError:', error.code, error.hint);
     const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;
     if (bus !== undefined) bus.push({ code: error.code, hint: error.hint });
   });
-  const assets = renderer.assets;
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[learn-render 4.4 face-culling] asset owner is unavailable');
+    return;
+  }
 
   // Wire the scoped dev catalog for GUID-based texture loading.
-  assets.configureRuntimeBinding(runtimeBinding);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   // Parse marble GUID.
   const marbleGuidRes = AssetGuid.parse(MARBLE_GUID_STR);
@@ -183,7 +185,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
   ).unwrap();
 
-  addFirstPersonSystem(app.world, app.renderer, {
+  addFirstPersonSystem(app.world, {
     name: 'learn-render-4.4-first-person',
     overrideBackend: undefined,
   });
@@ -194,7 +196,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  installCaptureHook(app, world);
+  installCaptureHook(target, world);
 
   window.addEventListener('resize', () => {
     const dpr = devicePixelRatio;
@@ -203,24 +205,20 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     world.set(cameraEntity, Camera, { aspect: window.innerWidth / window.innerHeight });
   });
 
-  console.warn(`[learn-render 4.4 face-culling] backend=${renderer.backend}`);
+  console.warn('[learn-render 4.4 face-culling] Standard pipeline active');
 }
 
-// RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives
-// one update + draw + readPixels so the live canvas read is anchored to the same
-// frame the capture records. Only meaningful when the page is served with
-// FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
-function installCaptureHook(app: App, world: App['world']): void {
+// Canvas capture hook for the capture smoke harness (pixel mode). Advances the
+// World before reading the Host-owned presentation surface.
+function installCaptureHook(target: HTMLCanvasElement, world: App['world']): void {
   type CaptureHook = () => Promise<Uint8Array>;
   const win = window as unknown as { __captureFaceCulling?: CaptureHook };
-  const renderer = app.renderer;
   win.__captureFaceCulling = async (): Promise<Uint8Array> => {
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    const r = await renderer.readPixels();
+    const r = await captureCanvasPixels(target);
     if (!r.ok) {
       throw new Error(
-        `[learn-render 4.4 face-culling] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
+        `[learn-render 4.4 face-culling] canvas capture failed: ${r.error.code} -- ${r.error.hint}`,
       );
     }
     return r.value;

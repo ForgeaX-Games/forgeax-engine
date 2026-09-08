@@ -6,8 +6,7 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
-import { ChildOf, Transform } from '@forgeax/engine-scene';
-import { type TilesetAsset, toShared } from '@forgeax/engine-types';
+import { ChildOf, propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 import { pickTile } from '../pick-tile';
 
@@ -17,21 +16,9 @@ function makeFixture(opts: {
   layers: ReadonlyArray<{ layerOrder: number; tiles: readonly number[] }>;
 }) {
   const world = new World();
-  const tileset: TilesetAsset = {
-    kind: 'tileset',
-    guid: 'test/tileset',
-    atlases: [toShared<'TextureAsset'>(101)],
-    tileWidth: 1,
-    tileHeight: 1,
-    columns: opts.cols,
-    rows: opts.rows,
-    regions: [{ x: 0, y: 0, width: 1, height: 1 }],
-    tiles: [{ regionIndex: 0 }],
-  };
-  const tilesetHandle = world.allocSharedRef<'TilesetAsset', TilesetAsset>('TilesetAsset', tileset);
   const tilemap = world
     .spawn(
-      { component: Tilemap, data: { cols: opts.cols, rows: opts.rows, tileset: tilesetHandle } },
+      { component: Tilemap, data: { cols: opts.cols, rows: opts.rows, tileset: 'test/tileset' } },
       { component: Transform, data: {} },
     )
     .unwrap();
@@ -109,6 +96,54 @@ describe('pickTile (M0 baseline)', () => {
     }
   });
 
+  it('uses the propagated inverse affine transform for translated rotated scaled maps', () => {
+    const world = new World();
+    const tilemap = world
+      .spawn(
+        {
+          component: Tilemap,
+          data: { cols: 3, rows: 2, tileSize: [1, 1], tileset: 'test/tileset' },
+        },
+        {
+          component: Transform,
+          data: {
+            pos: [10, 20, 0],
+            // +90 degrees around Z: local cell (1.5, 0.5) maps to world (8.5, 23).
+            quat: [0, 0, Math.SQRT1_2, Math.SQRT1_2],
+            scale: [2, 3, 1],
+          },
+        },
+      )
+      .unwrap();
+    const lowerLayer = world
+      .spawn(
+        {
+          component: TileLayer,
+          data: { tiles: new Uint32Array([0, 3, 0, 0, 0, 0]), layerOrder: 0 },
+        },
+        { component: ChildOf, data: { parent: tilemap } },
+      )
+      .unwrap();
+    const upperLayer = world
+      .spawn(
+        {
+          component: TileLayer,
+          data: { tiles: new Uint32Array([0, 9, 0, 0, 0, 0]), layerOrder: 7 },
+        },
+        { component: ChildOf, data: { parent: tilemap } },
+      )
+      .unwrap();
+
+    propagateTransforms(world).unwrap();
+    const r = pickTile(world, tilemap, 8.5, 23);
+
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value).toEqual({ layerEntity: upperLayer, cellX: 1, cellY: 0, tileId: 9 });
+    }
+    expect(lowerLayer).not.toBe(upperLayer);
+  });
+
   it('falls through to lower layer when higher layer has 0 at the cell', () => {
     const { world, tilemap } = makeFixture({
       cols: 2,
@@ -127,19 +162,17 @@ describe('pickTile (M0 baseline)', () => {
     }
   });
 
-  it('returns Result.err when the Tilemap entity does not exist', () => {
+  it('returns tilemap-not-found for a dead handle', () => {
     const { world } = makeFixture({
       cols: 1,
       rows: 1,
       layers: [{ layerOrder: 0, tiles: [1] }],
     });
-    const r = pickTile(world, 999 as number as never, 1, 1);
+    const dead = world.spawn({ component: Transform, data: {} }).unwrap();
+    world.despawn(dead).unwrap();
+    const r = pickTile(world, dead, 1, 1);
     expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(
-        r.error.code === 'tilemap-not-found' || r.error.code === 'tilemap-component-missing',
-      ).toBe(true);
-    }
+    if (!r.ok) expect(r.error.code).toBe('tilemap-not-found');
   });
 
   it('returns Result.err when the entity does not carry Tilemap', () => {
@@ -153,6 +186,54 @@ describe('pickTile (M0 baseline)', () => {
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.error.code).toBe('tilemap-component-missing');
+    }
+  });
+
+  it('repairs a missing Tilemap on the same World and retries successfully', () => {
+    const world = new World();
+    const entity = world.spawn({ component: Transform, data: {} }).unwrap();
+
+    const missing = pickTile(world, entity, 0.5, 0.5);
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) expect(missing.error.code).toBe('tilemap-component-missing');
+
+    world
+      .addComponent(entity, {
+        component: Tilemap,
+        data: { cols: 1, rows: 1, tileSize: [1, 1], tileset: 'test/tileset' },
+      })
+      .unwrap();
+    const layer = world
+      .spawn(
+        { component: TileLayer, data: { tiles: new Uint32Array([11]), layerOrder: 0 } },
+        { component: ChildOf, data: { parent: entity } },
+      )
+      .unwrap();
+
+    const repaired = pickTile(world, entity, 0.5, 0.5);
+    expect(repaired.ok).toBe(true);
+    if (repaired.ok) {
+      expect(repaired.value).toEqual({ layerEntity: layer, cellX: 0, cellY: 0, tileId: 11 });
+    }
+  });
+
+  it('keeps the documented mat4 singular fallback deterministic', () => {
+    const { world, tilemap } = makeFixture({
+      cols: 1,
+      rows: 1,
+      layers: [{ layerOrder: 0, tiles: [5] }],
+    });
+    world.set(tilemap, Transform, { pos: [7, 9, 0], scale: [0, 2, 1] }).unwrap();
+    propagateTransforms(world).unwrap();
+
+    // mat4.invert defines singular input as identity; pickTile keeps that
+    // central math fallback instead of inventing another error arm.
+    const first = pickTile(world, tilemap, 0.5, 0.5);
+    const second = pickTile(world, tilemap, 0.5, 0.5);
+    expect(first).toEqual(second);
+    expect(first.ok).toBe(true);
+    if (first.ok) {
+      expect(first.value).toMatchObject({ cellX: 0, cellY: 0, tileId: 5 });
     }
   });
 });

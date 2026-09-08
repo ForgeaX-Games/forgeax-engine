@@ -18,8 +18,13 @@
 //   error-model contract").
 
 import type { Result, RhiError, ShaderModule } from '@forgeax/engine-rhi';
-import type { ManifestEntry, ParamSchemaEntry } from '@forgeax/engine-types';
-import { findUndeclaredSampledTextures } from '@forgeax/engine-types';
+import type {
+  ImmutableParamSchemaProjection,
+  ManifestEntry,
+  ParamSchemaEntry,
+  ParamSchemaProjectionOwnerStats,
+} from '@forgeax/engine-types';
+import { findUndeclaredSampledTextures, ParamSchemaProjectionOwner } from '@forgeax/engine-types';
 import {
   err,
   manifestMalformed,
@@ -69,9 +74,10 @@ export interface ShaderRegistryDevice {
 export const FORGEAX_RESERVED_PATH_PREFIX = 'forgeax::' as const;
 
 /**
- * Registered material shader entry — 2-field record stored in the registry
- * by `installMaterialArtifact(identifier, entry)` and returned by
- * `findMaterialArtifact(identifier)`.
+ * Material shader admission input accepted by
+ * `installMaterialArtifact(identifier, entry)`. `findMaterialArtifact`
+ * returns a {@link RegisteredMaterialShaderEntry} with the immutable schema
+ * projection attached.
  *
  * - `source`: composed WGSL source (post-naga_oil); the final form fed to
  *   `device.createShaderModule({ code })` at pipeline-build time.
@@ -92,6 +98,11 @@ export const FORGEAX_RESERVED_PATH_PREFIX = 'forgeax::' as const;
 export interface MaterialShaderEntry {
   readonly source: string;
   readonly paramSchema: readonly ParamSchemaEntry[];
+}
+
+/** Registry-owned runtime shape published after immutable schema admission. */
+export interface RegisteredMaterialShaderEntry extends MaterialShaderEntry {
+  readonly paramSchemaProjection: ImmutableParamSchemaProjection;
 }
 
 // ─── Public registry types ──────────────────────────────────────────────────────
@@ -138,12 +149,10 @@ export class ShaderRegistry {
   readonly #entries = new Map<string, ManifestEntry>();
   // hash → ShaderModule cache (populated lazily on first get()).
   readonly #moduleCache = new Map<string, ShaderModule>();
-  // hash → RhiError previously seen (avoids re-triggering the underlying
-  // createShaderModule on cache miss).
-  readonly #errorCache = new Map<string, RhiError>();
   // identifier → MaterialShaderEntry index (populated by
   // installMaterialArtifact; feat-20260523-shader-template-instance-split M5 / T05).
-  readonly #materialShaders = new Map<string, MaterialShaderEntry>();
+  readonly #materialShaders = new Map<string, RegisteredMaterialShaderEntry>();
+  readonly #paramSchemaProjectionOwner = new ParamSchemaProjectionOwner();
   readonly #materialShaderManifestEntries: MaterialShaderManifestEntry[] = [];
   #manifestLoaded = false;
 
@@ -160,6 +169,10 @@ export class ShaderRegistry {
    * - JSON.parse failed → ditto
    * - schema missing the `entries` field / an entries element missing
    *   hash/wgsl/bindings → ditto
+   * - a material shader row is incomplete → ditto
+   *
+   * Validation is atomic: the registry does not publish any entry or
+   * material shader row until the complete document has been validated.
    *
    * Idempotent: subsequent calls reuse the first result (never re-fetch;
    * charter proposition 6: idempotency).
@@ -226,6 +239,7 @@ export class ShaderRegistry {
       );
     }
 
+    const validatedEntries: ManifestEntry[] = [];
     for (const entry of entries) {
       if (!isValidManifestEntry(entry)) {
         return err(
@@ -236,7 +250,7 @@ export class ShaderRegistry {
           }),
         );
       }
-      this.#entries.set(entry.hash, entry);
+      validatedEntries.push(entry);
     }
 
     // feat-20260526-pbr-uniform-fallback-no-storage-buffer M3 / w12:
@@ -245,18 +259,28 @@ export class ShaderRegistry {
     // materialShaders is treated as empty (backward-compatible with
     // manifests from pre-M2 build runs).
     const parsedSlim = parsed as { materialShaders?: unknown };
+    const validatedMaterialShaderEntries: MaterialShaderManifestEntry[] = [];
     if (Array.isArray(parsedSlim.materialShaders)) {
       for (const ms of parsedSlim.materialShaders) {
-        if (
-          typeof ms === 'object' &&
-          ms !== null &&
-          typeof (ms as Record<string, unknown>).identifier === 'string'
-        ) {
-          this.#materialShaderManifestEntries.push(ms as MaterialShaderManifestEntry);
+        if (!isValidMaterialShaderManifestEntry(ms)) {
+          return err(
+            manifestMalformed({
+              message: 'ShaderRegistry: manifest material shader entry missing required fields',
+              hint: 'every material shader entry needs {identifier, sourcePath, composedWgsl, paramSchema, variants}',
+              reason: `bad material shader entry: ${JSON.stringify(ms)}`,
+            }),
+          );
         }
+        validatedMaterialShaderEntries.push(ms);
       }
     }
 
+    this.#entries.clear();
+    for (const entry of validatedEntries) {
+      this.#entries.set(entry.hash, entry);
+    }
+    this.#materialShaderManifestEntries.length = 0;
+    this.#materialShaderManifestEntries.push(...validatedMaterialShaderEntries);
     this.#manifestLoaded = true;
     return ok(undefined);
   }
@@ -291,13 +315,6 @@ export class ShaderRegistry {
    * during `loadManifest`).
    */
   get(hash: string): Result<ShaderModule, RhiError | ShaderError> {
-    // Error cache: avoids re-triggering the underlying createShaderModule for
-    // the same hash (idempotency).
-    const cachedError = this.#errorCache.get(hash);
-    if (cachedError !== undefined) {
-      return err(cachedError);
-    }
-
     const cachedModule = this.#moduleCache.get(hash);
     if (cachedModule !== undefined) {
       return ok(cachedModule);
@@ -315,7 +332,6 @@ export class ShaderRegistry {
 
     const result = this.#device.createShaderModule({ code: entry.wgsl, label: hash });
     if (!result.ok) {
-      this.#errorCache.set(hash, result.error);
       return result;
     }
     this.#moduleCache.set(hash, result.value);
@@ -381,15 +397,27 @@ export class ShaderRegistry {
     // Scoped to user shaders: engine `forgeax::*` shaders go through the
     // build-time gate and may sample engine-injected textures (emissive /
     // occlusion) absent from their schema by design.
+    const paramSchemaProjection = this.#paramSchemaProjectionOwner.admit({
+      ownerId: identifier,
+      revision: 1,
+      schema: entry.paramSchema,
+    });
     if (!identifier.startsWith(FORGEAX_RESERVED_PATH_PREFIX)) {
-      const undeclared = findUndeclaredSampledTextures(entry.source, entry.paramSchema);
+      const undeclared = findUndeclaredSampledTextures(entry.source, paramSchemaProjection.schema);
       if (undeclared.length > 0) {
         throw new Error(
           `ShaderRegistry: material shader '${identifier}' samples texture(s) [${undeclared.join(', ')}] in its WGSL but its paramSchema does not declare them as texture entries. Add { name: '${undeclared[0]}', type: 'texture2d' } (and any others listed) to the paramSchema, or the engine would silently bind the default white texture (charter P3 explicit failure; see docs/handover/2026-06-19-blending-transparency-regression-bisect.md).`,
         );
       }
     }
-    this.#materialShaders.set(identifier, entry);
+    this.#materialShaders.set(
+      identifier,
+      Object.freeze({
+        source: entry.source,
+        paramSchema: paramSchemaProjection.schema,
+        paramSchemaProjection,
+      }),
+    );
   }
 
   /**
@@ -406,7 +434,9 @@ export class ShaderRegistry {
    * const { source, paramSchema } = r.value;
    * ```
    */
-  findMaterialArtifact(identifier: string): ShaderResult<MaterialShaderEntry, ShaderError> {
+  findMaterialArtifact(
+    identifier: string,
+  ): ShaderResult<RegisteredMaterialShaderEntry, ShaderError> {
     const entry = this.#materialShaders.get(identifier);
     if (entry === undefined) {
       return err(
@@ -427,6 +457,11 @@ export class ShaderRegistry {
    */
   materialShaderIdentifiers(): IterableIterator<string> {
     return this.#materialShaders.keys();
+  }
+
+  /** Runtime diagnostic counters for the immutable ParamSchema owner. */
+  paramSchemaProjectionStats(): ParamSchemaProjectionOwnerStats {
+    return this.#paramSchemaProjectionOwner.stats();
   }
 
   /**
@@ -458,4 +493,27 @@ function isValidManifestEntry(value: unknown): value is ManifestEntry {
   if (v.glsl !== undefined && v.glsl !== null && typeof v.glsl !== 'string') return false;
   if (typeof v.bindings !== 'string') return false;
   return true;
+}
+
+function isValidMaterialShaderManifestEntry(value: unknown): value is MaterialShaderManifestEntry {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  if (typeof v.identifier !== 'string') return false;
+  if (typeof v.sourcePath !== 'string') return false;
+  if (typeof v.composedWgsl !== 'string') return false;
+  if (typeof v.paramSchema !== 'string') return false;
+  if (!Array.isArray(v.variants)) return false;
+  if (!v.variants.every(isValidMaterialShaderManifestVariant)) return false;
+  return v.uvSetCount === undefined || typeof v.uvSetCount === 'number';
+}
+
+function isValidMaterialShaderManifestVariant(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  if (typeof v.definesKey !== 'string') return false;
+  if (typeof v.composedWgsl !== 'string') return false;
+  if (typeof v.defines !== 'object' || v.defines === null || Array.isArray(v.defines)) {
+    return false;
+  }
+  return Object.values(v.defines).every((define) => typeof define === 'boolean');
 }

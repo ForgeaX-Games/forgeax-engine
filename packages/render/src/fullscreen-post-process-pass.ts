@@ -9,7 +9,7 @@
 //   and swap-chain non-srgb storage view write (R-COLORSPACE)
 // - Reads input texture, writes to declared color target with fullscreen 3-vertex draw
 //
-// Registered via renderer.postProcess.register(id, {source, params, reads?}) — a parallel
+// Registered through the feature host ({source, params, reads?}) — a parallel
 // channel to installMaterialArtifact (D-4: material shader = 4-BGL / 12-float vertex / depth /
 // triangle-list; fullscreen post-process = 0 vertex buffer / no depth / input-texture BGL).
 
@@ -56,12 +56,12 @@ const FULLSCREEN_DEFAULT_SPEC: PipelineSpec = Object.freeze({
  */
 export type PostProcessReadSampleType = 'depth';
 
-// ─── Post-process shader entry (registered via postProcess.register) ──────
+// ─── Post-process shader entry (owned by the fullscreen feature host) ──────
 
 /**
- * A registered fullscreen post-process shader entry.
+ * A fullscreen post-process shader entry owned by the feature host.
  *
- * Analogous to MaterialShaderEntry in the ShaderRegistry but with post-process-specific
+ * Analogous to MaterialShaderEntry in the ShaderCatalog but with post-process-specific
  * fields: the input-texture + sampler BGL is auto-built by the primitive,
  * no paramSchema (params are passed inline via a {type, value} struct — plan-strategy D-4).
  *
@@ -130,31 +130,7 @@ export interface PostProcessParamsSchema {
   readonly defaultValue: Uint8Array;
 }
 
-// ─── Fullscreen pass descriptor (passed to addFullscreenPass) ────────────
-
-/**
- * Descriptor for a fullscreen post-process pass. Declares which registered shader
- * to use, which color target to write, and which graph resource(s) to read.
- */
-export interface FullscreenPassDescriptor {
-  /** Registered post-process shader id (must be registered via postProcess.register). */
-  readonly shader: string;
-  /**
-   * Color target: the graph resource key to write into. The pipeline must have
-   * already declared this target via `graph.addColorTarget` (the dispatcher
-   * resolves it, it does not auto-create one); a pass that names an undeclared
-   * key falls back to the swap-chain `ctx.view`.
-   */
-  readonly color: string;
-  /**
-   * Graph resource keys to read. The primitive binds the first read entry as its
-   * input texture (@group(1) @binding(0); sampler @binding(1)). Passes with
-   * reads==[] sample the swap-chain directly (copyTextureToTexture path — plan-strategy D-1).
-   */
-  readonly reads?: readonly string[] | undefined;
-}
-
-// ─── Context passed to addFullscreenPass injectors ───────────────────────
+// ─── Context passed to typed fullscreen feature injectors ─────────────────
 
 /**
  * The minimal surface a `registerFullscreenPostProcess` injector receives.
@@ -178,7 +154,7 @@ export interface FullscreenPostProcessDeviceContext {
 // Historical context: this BGL was duplicated across recordFxaaPass +
 // register-default-post-process before convergence (feat-20260609 framebuffers
 // demo M5R2 / T-12-a). R3 historical bug: the descriptor wrote sampleType:
-// 'float' for any input including depth32float views, tripping wgpu's
+// 'float' for every input including depth32float views, tripping wgpu's
 // Filtering sampler vs UnfilterableFloat / Depth texture static-sample-pair
 // validation. The dispatcher derives sampleType from spec.attachments
 // (depth32float -> 'depth' + 'comparison' sampler; r32float ->
@@ -242,7 +218,7 @@ export const DEPTH_MIN_PARAMS_BYTE_SIZE = 16;
 /**
  * State of a registered fullscreen post-process pass.
  *
- * Created by `addFullscreenPass` and stored per-pass in the render system.
+ * Created by the typed fullscreen feature graph and stored per-pass in the render system.
  * The `draw` method is called by the per-frame execute closure.
  */
 export interface FullscreenPostProcessPassHandle {

@@ -9,8 +9,5 @@
     "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
   "include": ["src/**/*"],
-  "references": [
-    { "path": "../ecs" },
-    { "path": "../types" }
-  ]
+  "references": [{ "path": "../tool-runtime" }]
 }

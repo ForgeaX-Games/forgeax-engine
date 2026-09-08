@@ -10,4 +10,5 @@ export const GPU_BUFFER_USAGE_COPY_DST = 0x08;
 export const GPU_BUFFER_USAGE_COPY_SRC = 0x04;
 export const GPU_BUFFER_USAGE_UNIFORM = 0x40;
 export const GPU_BUFFER_USAGE_STORAGE = 0x80;
+export const GPU_BUFFER_USAGE_INDIRECT = 0x100;
 export const GPU_BUFFER_USAGE_MAP_READ = 0x01;

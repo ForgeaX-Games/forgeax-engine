@@ -1,5 +1,7 @@
 import type { AudioIntent } from '@forgeax/engine-audio';
 import type { InputBackendSample } from '@forgeax/engine-input';
+import type { CanvasDrawingBufferSize } from '../types';
+import type { ExecutionAssetCatalog } from './types';
 
 export interface ExecutionFrameMessage {
   readonly kind: 'frame';
@@ -7,6 +9,8 @@ export interface ExecutionFrameMessage {
   readonly frameId: number;
   readonly deltaSeconds: number;
   readonly inputSample: InputBackendSample;
+  readonly canvasWidth: number;
+  readonly canvasHeight: number;
 }
 
 export interface ExecutionFrameCompletion {
@@ -37,6 +41,7 @@ export class FrameCreditLedger {
   issue(
     deltaSeconds: number,
     sampleInput: () => InputBackendSample,
+    canvasSize: CanvasDrawingBufferSize = { width: 0, height: 0 },
   ): ExecutionFrameMessage | undefined {
     if (this.inFlight !== null) return undefined;
     const frameId = this.nextFrameId;
@@ -48,6 +53,8 @@ export class FrameCreditLedger {
       frameId,
       deltaSeconds,
       inputSample: sampleInput(),
+      canvasWidth: canvasSize.width,
+      canvasHeight: canvasSize.height,
     };
   }
 
@@ -71,6 +78,8 @@ export interface ExecutionInitMessage {
   readonly bootstrapUrl: string;
   readonly bootstrapData?: import('./types').ExecutionBootstrapValue;
   readonly bootstrapPort?: MessagePort;
+  /** Realm-serializable asset catalog configuration. */
+  readonly assetCatalog?: ExecutionAssetCatalog;
   readonly shaderManifestUrl?: string;
   readonly time?: import('@forgeax/engine-ecs').TimePolicy;
   readonly tier: import('./types').ExecutionTier;

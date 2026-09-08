@@ -15,7 +15,8 @@
 //   - plan-strategy D-6 (4 PBR-unused slots default sampler + white tex)
 //   - plan-strategy D-10 (application registration path)
 
-import type { ParamSchemaEntry, ShaderRegistry } from './index.js';
+import type { ShaderRegistry } from './index.js';
+import { DEFAULT_SPRITE_PARAM_SCHEMA } from './material-schemas.js';
 
 /**
  * paramSchema for forgeax::sprite-lit -- mirrors sprite.material.json
@@ -29,14 +30,6 @@ import type { ParamSchemaEntry, ShaderRegistry } from './index.js';
  * byte-identical to sprite so AC-13 "1 string-change between sprite
  * and sprite-lit materials" is provably the only delta required.
  */
-const defaultSpriteLitParamSchema: readonly ParamSchemaEntry[] = [
-  { name: 'colorTint', type: 'vec4', colorSpace: 'srgb', default: [1.0, 1.0, 1.0, 1.0] },
-  { name: 'region', type: 'vec4', default: [0.0, 0.0, 1.0, 1.0] },
-  { name: 'pivotAndSize', type: 'vec4', default: [0.5, 0.5, 1.0, 1.0] },
-  { name: 'slicesAndMode', type: 'vec4', default: [0.0, 0.0, 0.0, 0.0] },
-  { name: 'baseColorTexture', type: 'texture2d' },
-];
-
 const RESERVED_ID = 'forgeax::sprite-lit' as const;
 
 /**
@@ -89,6 +82,6 @@ export function registerDefaultSpriteLit(
   void caps;
   registry.installMaterialArtifact(RESERVED_ID, {
     source: composedWgsl,
-    paramSchema: defaultSpriteLitParamSchema,
+    paramSchema: DEFAULT_SPRITE_PARAM_SCHEMA,
   });
 }

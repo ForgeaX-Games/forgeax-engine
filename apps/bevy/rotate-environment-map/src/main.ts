@@ -1,8 +1,9 @@
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { Time, Update } from '@forgeax/engine-ecs';
-import type { EquirectAsset } from '@forgeax/engine-types';
-import { EngineEnvironmentError, createDevImportTransport } from '@forgeax/engine-runtime';
+import { type EquirectAsset } from '@forgeax/engine-types';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { buildEnvironmentWorld, stepEnvironmentRotation } from './rotate-environment-map';
 
@@ -16,14 +17,16 @@ bootstrap(canvas).catch((error: unknown) => {
 });
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
-  const bundler = { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() };
+  const bundler = { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) };
   const result = await createApp(target, {}, bundler);
   if (!result.ok) { console.error('[bevy-rotate-environment-map] createApp failed:', result.error); return; }
   const app = result.value;
+  const assets = app.assets;
+  if (assets === undefined) { console.error('[bevy-rotate-environment-map] assets unavailable'); return; }
   const guid = AssetGuid.parse(NEWPORT_LOFT_GUID);
   if (!guid.ok) { console.error('[bevy-rotate-environment-map] HDR GUID failed:', guid.error.code); return; }
-  app.renderer.assets.configurePackIndex('/pack-index.json');
-  const hdr = await app.renderer.assets.loadByGuid<EquirectAsset>(guid.value);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
+  const hdr = await assets.loadByGuid<EquirectAsset>(guid.value);
   if (!hdr.ok) { console.error('[bevy-rotate-environment-map] HDR load failed:', hdr.error.code); return; }
   const equirect = app.world.allocSharedRef('EquirectAsset', hdr.value);
   const scene = buildEnvironmentWorld(app.world, equirect, target.width / Math.max(target.height, 1));

@@ -6,9 +6,8 @@ import { Update } from '../schedule-token';
 // identically before and after the refactor.
 //
 // Coverage: spawn, despawn, get, set, addComponent, removeComponent, update,
-// resources, inspection, addSystem, scene instantiation.
+// resources, inspection, addSystem, and addSystems.
 
-import type { LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { defineComponent } from '../component';
 import { Entity } from '../entity';
@@ -20,21 +19,6 @@ import { World } from '../world';
 
 const Position = defineComponent('W1Position', { x: 'f32', y: 'f32' });
 const Velocity = defineComponent('W1Velocity', { vx: 'f32', vy: 'f32' });
-
-// Register SceneInstance so instantiateScene can resolve it by name.
-defineComponent('SceneInstance', {
-  source: { type: 'shared<SceneAsset>' },
-  mapping: { type: 'array<entity>' },
-  state: { type: 'unique<SceneInstanceState>' },
-});
-
-function localId(n: number): LocalEntityId {
-  return n as LocalEntityId;
-}
-
-function buildScene(nodes: readonly SceneEntity[]): SceneAsset {
-  return { kind: 'scene', entities: nodes };
-}
 
 // ──────────────────────────────────────────────────────────────────────
 // spawn
@@ -385,10 +369,10 @@ describe('M1 w1: addSystem / removeSystem / replaceSystem characterization', () 
 });
 
 // ──────────────────────────────────────────────────────────────────────
-// addSystems / configureSets
+// addSystems
 // ──────────────────────────────────────────────────────────────────────
 
-describe('M1 w1: addSystems / configureSets characterization', () => {
+describe('M1 w1: addSystems characterization', () => {
   it('addSystems registers systems into a set', () => {
     const w = new World();
     const TestSet = defineSystemSet({ name: 'test-set' });
@@ -398,71 +382,6 @@ describe('M1 w1: addSystems / configureSets characterization', () => {
     ]);
     expect(r.ok).toBe(true);
     expect(w.inspect().systemCount).toBe(2);
-  });
-
-  it('configureSets records set-level ordering', () => {
-    const w = new World();
-    const SetA = defineSystemSet({ name: 'set-a' });
-    const SetB = defineSystemSet({ name: 'set-b' });
-    const r = w.configureSets(Update, { set: SetA, before: [SetB] });
-    expect(r.ok).toBe(true);
-  });
-});
-
-// ──────────────────────────────────────────────────────────────────────
-// scene instantiation
-// ──────────────────────────────────────────────────────────────────────
-
-describe('M1 w1: scene instantiation characterization', () => {
-  it('instantiateScene with a minimal scene asset creates scene root entity', () => {
-    const w = new World();
-    const ScenePos = defineComponent('W1ScenePos', { x: 'f32', y: 'f32' });
-    const nodes: SceneEntity[] = [
-      {
-        localId: localId(0),
-        components: {
-          [ScenePos.name]: { x: 10, y: 20 },
-        } as Record<string, Record<string, unknown>>,
-      } as SceneEntity,
-    ];
-    const sceneAsset = buildScene(nodes);
-    const handle = w.allocSharedRef('SceneAsset', sceneAsset);
-    const r = w.instantiateScene(handle);
-    expect(r.ok).toBe(true);
-    const result = r.unwrap();
-    expect(result.root).toBeDefined();
-    const insp = w.inspect();
-    expect(insp.entityCount).toBeGreaterThanOrEqual(1);
-  });
-
-  it('instantiateSceneFlat with a minimal scene creates entities without synthesized root', () => {
-    const w = new World();
-    const ScenePos = defineComponent('W1ScenePosFlat', { x: 'f32', y: 'f32' });
-    const nodes: SceneEntity[] = [
-      {
-        localId: localId(0),
-        components: {
-          [ScenePos.name]: { x: 5, y: 5 },
-        } as Record<string, Record<string, unknown>>,
-      } as SceneEntity,
-    ];
-    const sceneAsset = buildScene(nodes);
-    const handle = w.allocSharedRef('SceneAsset', sceneAsset);
-    const r = w.instantiateSceneFlat(handle);
-    expect(r.ok).toBe(true);
-    const result = r.unwrap();
-    expect(result.roots.length).toBeGreaterThanOrEqual(1);
-  });
-});
-
-// ──────────────────────────────────────────────────────────────────────
-// setErrorHandler
-// ──────────────────────────────────────────────────────────────────────
-
-describe('M1 w1: setErrorHandler characterization', () => {
-  it('setErrorHandler does not throw', () => {
-    const w = new World();
-    expect(() => w.setErrorHandler((_err, _ctx) => {})).not.toThrow();
   });
 });
 
@@ -485,54 +404,5 @@ describe('M1 w1: allocUniqueRef / allocSharedRef characterization', () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────
-// push / pop / capacity (managed array operations)
+// Managed arrays use atomic world.set writes.
 // ──────────────────────────────────────────────────────────────────────
-
-describe('M1 w1: push / pop / capacity characterization', () => {
-  it('push appends to a managed array field', () => {
-    const Holder = defineComponent('W1Holder', { items: 'array<f32>' });
-    const w = new World();
-    const e = w.spawn({ component: Holder, data: {} }).unwrap();
-    const pushed = w.push(e, Holder, 'items' as never, 1.5 as never);
-    expect(pushed.ok).toBe(true);
-    expect(w.capacity(e, Holder, 'items' as never).unwrap()).toBeGreaterThanOrEqual(1);
-    expect(w.get(e, Holder).unwrap().items).toEqual(new Float32Array([1.5]));
-  });
-
-  it('pop removes from a managed array field', () => {
-    const Holder = defineComponent('W1Holder2', { items: 'array<f32>' });
-    const w = new World();
-    const e = w.spawn({ component: Holder, data: {} }).unwrap();
-    w.push(e, Holder, 'items' as never, 1.5 as never);
-    const r = w.pop(e, Holder, 'items' as never);
-    expect(r.ok).toBe(true);
-  });
-});
-
-// ──────────────────────────────────────────────────────────────────────
-// scene lifecycle
-// ──────────────────────────────────────────────────────────────────────
-
-describe('M1 w1: scene lifecycle characterization', () => {
-  it('despawnScene despawns a scene root and its hierarchy', () => {
-    const w = new World();
-    const ScenePos = defineComponent('W1SceneLifecyclePos', { x: 'f32', y: 'f32' });
-    const nodes: SceneEntity[] = [
-      {
-        localId: localId(0),
-        components: {
-          [ScenePos.name]: { x: 0, y: 0 },
-        } as Record<string, Record<string, unknown>>,
-      } as SceneEntity,
-    ];
-    const sceneAsset = buildScene(nodes);
-    const handle = w.allocSharedRef('SceneAsset', sceneAsset);
-    const r = w.instantiateScene(handle);
-    expect(r.ok).toBe(true);
-    const root = r.unwrap().root;
-    const countBefore = w.inspect().entityCount;
-    const dr = w.despawnScene(root);
-    expect(dr.ok).toBe(true);
-    expect(w.inspect().entityCount).toBeLessThan(countBefore);
-  });
-});

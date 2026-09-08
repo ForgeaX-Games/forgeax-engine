@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // Headless Dawn smoke for the component_hooks reproduction.
 
 import { readFileSync } from 'node:fs';
@@ -60,28 +61,26 @@ const { createRenderer } = await import('@forgeax/engine-runtime');
 const { buildComponentHooksWorld, readComponentHooksState } = await import(resolve(here, '..', 'src', 'component-hooks.ts'));
 let renderer;
 try {
-  renderer = await createRenderer(canvas, {}, { shaderManifestUrl: manifestUrl });
+  renderer = await createSmokeRenderer(createRenderer, canvas, {}, { shaderManifestUrl: manifestUrl });
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
 const errors = [];
-renderer.onError((error) => errors.push(error.code));
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`renderer.ready: ${ready.error.code}`);
+subscribeSmokeErrors(renderer, (error) => errors.push(error.code));
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const state = buildComponentHooksWorld(world);
 for (let frame = 0; frame < FRAMES; frame++) {
   world.update(0.016).unwrap();
-  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const draw = drawSmokeFrame(renderer, world);
   if (!draw.ok) throw new Error(`draw ${frame}: ${draw.error.code}`);
 }
 await device.queue.onSubmittedWorkDone();
 const snapshot = readComponentHooksState(world, state);
 console.log(`[smoke] state=${JSON.stringify(snapshot)}`);
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`backend=${renderer.backend}`);
+if (rendererBackend(renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(renderer)}`);
 if (snapshot.add !== 2 || snapshot.insert !== 3) failures.push(`insertions=${snapshot.add}/${snapshot.insert}`);
 if (snapshot.discard !== 2 || snapshot.remove !== 1) failures.push(`removals=${snapshot.discard}/${snapshot.remove}`);
 if (snapshot.indexSize !== 1 || snapshot.rekey !== 3 || snapshot.remaining !== 0) failures.push(`index=${JSON.stringify(snapshot)}`);

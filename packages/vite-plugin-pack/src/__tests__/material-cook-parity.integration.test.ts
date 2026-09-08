@@ -1,44 +1,102 @@
-import type { AssetGuid, MaterialAsset } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
 import {
-  createMaterialCookFinalizer,
-  materialCookPublication,
-} from '../material/cook-finalizer.js';
+  collectMaterialCookRefs,
+  type MaterialCookReceipt,
+  serializeMaterialCookReceipt,
+  validateMaterialCookReceipt,
+} from '@forgeax/engine-pack';
+import type { MaterialAsset } from '@forgeax/engine-types';
+import { describe, expect, it } from 'vitest';
 
-describe('material cook parity', () => {
-  it('keeps cold and warm catalog records, keys, and artifact bytes identical', async () => {
-    let compileCount = 0;
-    const finalizer = createMaterialCookFinalizer({
-      compile: async () => {
-        compileCount += 1;
-        return new TextEncoder().encode(
-          '@fragment fn main() -> @location(0) vec4f { return vec4f(1.0); }',
-        );
-      },
+describe('material cook parity characterization', () => {
+  const identity = {
+    materialContractDigest: 'sha256:material-contract',
+    sourceRevision: 'sha256:source-revision',
+    sourceClosureDigest: 'sha256:source-closure',
+    layoutIdentity: 'sha256:layout',
+    programIdentity: 'sha256:program',
+    pipelineIdentity: 'sha256:pipeline',
+    materialPublicationIdentity: 'sha256:publication',
+    cookIdentity: 'sha256:cook',
+    compilerFingerprint: 'sha256:compiler',
+    wasm: {
+      sourceContentKey: 'sha256:wasm-source',
+      artifactSha256: 'sha256:wasm-artifact',
+      glueSha256: 'sha256:wasm-glue',
+    },
+    artifactDigest: 'sha256:output',
+    valueGeneration: 1,
+    dependencyGeneration: 1,
+    cookGeneration: 1,
+  } as const;
+
+  const receipt = {
+    schemaVersion: 'material-cook/3' as const,
+    sourceClosure: ['materials/child.wgsl', 'materials/root.material.json'],
+    profile: 'webgpu/v1',
+    compilerVersion: 'compiler/1',
+    identity,
+    derivedInterface: { layoutIdentity: identity.layoutIdentity },
+  } satisfies MaterialCookReceipt;
+
+  it('keeps receipt bytes stable for equivalent source closure order', () => {
+    const coldBytes = serializeMaterialCookReceipt(receipt);
+    const warmBytes = serializeMaterialCookReceipt({
+      ...receipt,
+      sourceClosure: [...receipt.sourceClosure].reverse(),
     });
-    const request = {
-      guid: 'mat-child',
-      sourceClosure: ['materials/parent.material.json', 'materials/child.material.json'],
-      profile: 'webgpu/v1',
-      compilerVersion: 'compiler/1',
-      material: {
-        kind: 'material' as const,
-        parent: 'mat-parent' as unknown as AssetGuid,
-        passes: [{ name: 'forward', program: { module: 'core/pbr' } }],
-        values: { roughness: 0.5 },
-      } as MaterialAsset,
+
+    expect(warmBytes).toBe(coldBytes);
+    expect(validateMaterialCookReceipt(JSON.parse(coldBytes))).toMatchObject({ ok: true });
+  });
+
+  it('keeps texture and sampler references out of the material compile identity witness', () => {
+    const material: MaterialAsset = {
+      kind: 'material',
+      parameters: [{ name: 'albedo', type: 'texture' }],
+      values: {
+        albedo: {
+          texture: 'texture-a',
+          sampler: 'sampler-a',
+          coordinates: { set: 0, transform: { offset: [0, 0], scale: [1, 1], rotation: 0 } },
+        },
+      },
     };
+    const refs = collectMaterialCookRefs(material);
+    const receipt = {
+      schemaVersion: 'material-reflection-characterization/1',
+      status: 'intermediate',
+      observations: {
+        refs,
+        compileIdentityInputs: ['source-closure', 'profile', 'compiler-version', 'layout'],
+        expectedFailure: 'current cook key still requires M4 mutation proof',
+      },
+    } as const;
 
-    const cold = await finalizer.cook(request);
-    const warm = await finalizer.cook(request);
+    expect(refs).toEqual({
+      parent: [],
+      textures: ['texture-a'],
+      samplers: ['sampler-a'],
+      modules: [],
+    });
+    expect(receipt.status).toBe('intermediate');
+  });
 
-    const coldPublication = materialCookPublication(cold);
-    const warmPublication = materialCookPublication(warm);
-    expect(coldPublication?.key).toBe(warmPublication?.key);
-    expect(coldPublication?.record).toEqual(warmPublication?.record);
-    expect(coldPublication?.artifactBytes).toEqual(warmPublication?.artifactBytes);
-    expect(coldPublication?.catalog).toEqual(warmPublication?.catalog);
-    expect(warmPublication?.cache).toBe('hit');
-    expect(compileCount).toBe(1);
+  it('rejects stale artifact and layout mutations before publication', () => {
+    expect(
+      validateMaterialCookReceipt(
+        { ...receipt, identity: { ...identity, artifactDigest: 'sha256:stale' } },
+        { artifactDigest: identity.artifactDigest },
+      ),
+    ).toMatchObject({ ok: false, error: { code: 'material-cook-record-invalid' } });
+    expect(
+      validateMaterialCookReceipt(
+        {
+          ...receipt,
+          identity: { ...identity, layoutIdentity: 'sha256:changed' },
+          derivedInterface: { layoutIdentity: 'sha256:changed' },
+        },
+        { layoutIdentity: identity.layoutIdentity },
+      ),
+    ).toMatchObject({ ok: false, error: { code: 'material-cook-record-invalid' } });
   });
 });

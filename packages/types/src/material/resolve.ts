@@ -20,6 +20,7 @@ export function materialGuidText(value: string | Uint8Array): string {
 function valueType(value: MaterialValue): string {
   if (typeof value === 'boolean') return 'bool';
   if (typeof value === 'number') return 'number';
+  if (typeof value === 'string') return 'string';
   if (Array.isArray(value)) return `vec${value.length}`;
   return 'texture';
 }
@@ -45,6 +46,7 @@ function parameterTypeMatches(parameter: MaterialParameter, value: MaterialValue
       // handles must remain valid texture values alongside structured
       // texture descriptors.
       return (
+        typeof value === 'string' ||
         (typeof value === 'number' && Number.isInteger(value) && value >= 0) ||
         (typeof value === 'object' && !Array.isArray(value))
       );

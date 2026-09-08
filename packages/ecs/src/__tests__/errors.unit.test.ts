@@ -22,15 +22,13 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import { describe, expect, expectTypeOf, it, test } from 'vitest';
-import { defineComponent, RELATIONSHIP_COMPONENTS, resolveComponent } from '../component';
-import type { EcsErrorCode, EcsErrorDetail } from '../errors';
+import { componentSchema, defineComponent } from '../component';
+import type { EcsErrorCode } from '../errors';
 import {
-  ArrayPopEmptyError,
   ComponentAlreadyPresentError,
   ComponentNotPresentError,
   CyclicDependencyError,
   EntityIndexOverflowError,
-  FixedArrayOverflowError,
   FixedSizeMismatchError,
   ManagedBufferOutOfBoundsError,
   ManagedBufferShrinkNotSupportedError,
@@ -115,41 +113,27 @@ import { World } from '../world';
         expect(err.detail).toEqual({ expected: 8, actual: 7 });
       });
 
-      it('FixedArrayOverflowError carries .code = "fixed-array-overflow" + detail.capacity / detail.attemptedCount', () => {
-        const err = new FixedArrayOverflowError('slots', 4, 4);
-        expect(err.code).toBe('fixed-array-overflow');
-        expect(err.detail).toEqual({ capacity: 4, attemptedCount: 4 });
-      });
-
-      it('ArrayPopEmptyError carries .code = "array-pop-empty" + detail.count = 0', () => {
-        const err = new ArrayPopEmptyError('transforms');
-        expect(err.code).toBe('array-pop-empty');
-        expect(err.detail).toEqual({ count: 0 });
-      });
-
-      it('EcsErrorCode union is exhaustive (no default branch) over the M2 delta', () => {
-        const codes: EcsErrorCode[] = [
-          'fixed-size-mismatch',
-          'fixed-array-overflow',
-          'array-pop-empty',
-          'instance-transforms-stride-mismatch',
-          'managed-array-element-type-not-allowed',
-        ];
+      it('EcsErrorCode keeps only the core fixed-size write failure', () => {
+        const codes: EcsErrorCode[] = ['fixed-size-mismatch'];
         let hits = 0;
         for (const code of codes) {
           switch (code) {
             case 'fixed-size-mismatch':
-            case 'fixed-array-overflow':
-            case 'array-pop-empty':
-            case 'instance-transforms-stride-mismatch':
-            case 'managed-array-element-type-not-allowed':
               hits += 1;
               break;
             default:
               void code;
           }
         }
-        expect(hits).toBe(5);
+        expect(hits).toBe(1);
+      });
+
+      it('owner-specific validation codes stay outside EcsErrorCode', () => {
+        // @ts-expect-error render owns this validation code.
+        const renderCode: EcsErrorCode = 'instance-transforms-stride-mismatch';
+        // @ts-expect-error schema parsing owns this validation code.
+        const schemaCode: EcsErrorCode = 'managed-array-element-type-not-allowed';
+        expect([renderCode, schemaCode]).toHaveLength(2);
       });
 
       it('deleted managed-array-* codes are no longer assignable to EcsErrorCode', () => {
@@ -171,74 +155,14 @@ import { World } from '../world';
 }
 
 {
-  // ─── from component-global-index.test.ts ───
-  describe('component-global-index.test.ts', () => {
-    describe('resolveComponent', () => {
-      it('returns the token for a defined component name', () => {
-        const Pos = defineComponent('ResolveTest_Position', { x: 'f32', y: 'f32' });
-        const resolved = resolveComponent('ResolveTest_Position');
-        expect(resolved).toBeDefined();
-        if (resolved) {
-          expect(resolved.name).toBe('ResolveTest_Position');
-          expect(resolved.id).toBe(Pos.id);
-        }
-      });
-
-      it('returns undefined for an unknown component name', () => {
-        const resolved = resolveComponent('NeverDefinedComponentName');
-        expect(resolved).toBeUndefined();
-      });
-
-      it('resolves a component immediately after defineComponent', () => {
-        const token = defineComponent('ImmediateResolve', { v: 'f32' });
-        const resolved = resolveComponent('ImmediateResolve');
-        expect(resolved).toBeDefined();
-        if (resolved) {
-          expect(resolved.id).toBe(token.id);
-        }
-      });
-
-      it('returns the same token across two World instances', () => {
-        const C = defineComponent('CrossWorldComp', { v: 'f32' });
-        const resolved = resolveComponent('CrossWorldComp');
-        expect(resolved).toBeDefined();
-        if (resolved) {
-          expect(resolved.id).toBe(C.id);
-        }
-        expect(resolved).toBe(C);
-      });
-    });
-
-    describe('RELATIONSHIP_COMPONENTS', () => {
-      it('contains a component that declares a relationship', () => {
-        const Mirror = defineComponent('TestRelMirror1', { entities: 'array<entity>' });
-        const Holder = defineComponent(
-          'TestRelHolder1',
-          { parent: 'entity' },
-          { relationship: { mirror: 'TestRelMirror1', field: 'entities', exclusive: true } },
-        );
-
-        expect(RELATIONSHIP_COMPONENTS.has(Holder)).toBe(true);
-        expect(RELATIONSHIP_COMPONENTS.has(Mirror)).toBe(false);
-      });
-
-      it('does not contain a component without a relationship', () => {
-        const Plain = defineComponent('NoRelComp1', { v: 'f32' });
-        expect(RELATIONSHIP_COMPONENTS.has(Plain)).toBe(false);
-      });
-    });
-  });
-}
-
-{
   // ─── from component-schema-json.test.ts ───
   // NOTE: two source files both defined defineComponent('C', ...) with different schemas.
   // The second defineComponent('C', diff-schema) is renamed to 'C2' to avoid schema-mismatch
   // at merge time (global component registry, same-name diff-schema -> throw).
 
   describe('component-schema-json.test.ts', () => {
-    describe('Component.toSchemaJSON() — offline manifest discoverability (w29)', () => {
-      test('JSON.stringify(C.schema) includes array<entity> / array<f32, 16> / buffer<16> / buffer literal substrings', () => {
+    describe('owner schema projection — offline manifest discoverability (w29)', () => {
+      test('JSON.stringify(componentSchema(C)) includes array<entity> / array<f32, 16> / buffer<16> / buffer literal substrings', () => {
         const Hierarchy = defineComponent('Hierarchy', {
           children: 'array<entity>',
           instanceTransforms: 'array<f32, 16>',
@@ -249,8 +173,8 @@ import { World } from '../world';
           blob: 'buffer',
         });
 
-        const json1 = JSON.stringify(Hierarchy.schema);
-        const json2 = JSON.stringify(BufferBag.schema);
+        const json1 = JSON.stringify(componentSchema(Hierarchy));
+        const json2 = JSON.stringify(componentSchema(BufferBag));
 
         expect(json1).toContain('array<entity>');
         expect(json1).toContain('array<f32, 16>');
@@ -273,28 +197,26 @@ import { World } from '../world';
           slot: 'buffer<32>',
         });
 
-        const tagKeyword: 'array<u32>' = C2.schema.tag;
-        const slotKeyword: 'buffer<32>' = C2.schema.slot;
+        const tagKeyword: 'array<u32>' = componentSchema(C2).tag;
+        const slotKeyword: 'buffer<32>' = componentSchema(C2).slot;
         expect(tagKeyword).toBe('array<u32>');
         expect(slotKeyword).toBe('buffer<32>');
 
-        expect(JSON.stringify(C2.schema)).toContain('array<u32>');
-        expect(JSON.stringify(C2.schema)).toContain('buffer<32>');
+        expect(JSON.stringify(componentSchema(C2))).toContain('array<u32>');
+        expect(JSON.stringify(componentSchema(C2))).toContain('buffer<32>');
       });
 
-      test('toSchemaJSON() method matches JSON.stringify(C.schema) byte-for-byte', () => {
+      test('component tokens do not carry a second serialization method', () => {
         const C = defineComponent('C', {
           children: 'array<entity>',
           meta: 'buffer<16>',
           blob: 'buffer',
         });
-        const viaMethod = C.toSchemaJSON();
-        const viaIdiom = JSON.stringify(C.schema);
-        expect(typeof C.toSchemaJSON).toBe('function');
-        expect(viaMethod).toBe(viaIdiom);
-        expect(viaMethod).toContain('array<entity>');
-        expect(viaMethod).toContain('buffer<16>');
-        expect(viaMethod).toContain('"buffer"');
+        const serialized = JSON.stringify(componentSchema(C));
+        expect(serialized).toContain('array<entity>');
+        expect(serialized).toContain('buffer<16>');
+        expect(serialized).toContain('"buffer"');
+        expect('toSchemaJSON' in C).toBe(false);
       });
     });
   });
@@ -556,6 +478,8 @@ import { World } from '../world';
           'spawn-data-unknown-field',
           'shared-ref-released',
           'shared-ref-double-release',
+          'shared-ref-payload-invalid',
+          'builtin-slot-not-owned',
           // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch
           // M1 / w2 — 3 declared, fired at render-system-extract entry in
           // M3 w13 (plan-strategy D-6). Minor evolution +3 per AGENTS.md
@@ -591,9 +515,17 @@ import { World } from '../world';
           // feat-20260803-entity-visibility M1 — closed enum writes fail
           // before storage mutation. Minor evolution +1 per the same contract.
           'component-field-invalid-value',
+          // feat-20260822 ECS core reduction — managed array writes reject
+          // arbitrary object payloads before row/buffer mutation.
+          'managed-array-invalid-value',
+          // feat-20260825-engine-feedback-verifiable-remediation M1 / w4 —
+          // object-write numeric preflight rejects NaN before mutation.
+          'component-numeric-value-invalid',
           'shared-kernel-ineligible',
           'shared-kernel-failed',
           'world-poisoned',
+          'command-failed',
+          'system-failed',
         ]);
 
         const added: string[] = [];
@@ -601,6 +533,34 @@ import { World } from '../world';
         const INTENTIONAL_DELETES = new Set<string>([
           'query-descriptor-with-optional-conflict',
           'query-combinations-entity-required',
+          // Domain errors now close in render/runtime/scene owner unions;
+          // ECS retains their structured detail classes only for migration
+          // evidence and no longer counts these codes in EcsErrorCode.
+          'component-not-defined',
+          'resource-invalid-value',
+          'scene-override-type-mismatch',
+          'spawn-light-invalid-bounds',
+          'sprite-animation-invalid',
+          'sprite-instances-count-mismatch',
+          'sprite-instances-mutually-exclusive-with-instances',
+          'sprite-instances-requires-sprite-shader',
+          'entity-index-overflow',
+          'schema-unsupported-field',
+          'sparse-storage-requires-tag',
+          'change-epoch-exhausted',
+          'instance-transforms-stride-mismatch',
+          'managed-array-element-type-not-allowed',
+          'query-data-requires-fields',
+          'query-descriptor-conflict',
+          'query-iteration-active',
+          'query-iteration-invalidated',
+          'query-span-unavailable',
+          'relationship-mirror-component-not-registered',
+          'relationship-mirror-field-type-mismatch',
+          'resource-protected',
+          'fixed-array-overflow',
+          'array-pop-empty',
+          'cardinality-exceeded',
         ]);
         for (const c of currentSet) {
           if (!headSet.has(c) && !INTENTIONAL_ADDS.has(c)) added.push(c);
@@ -673,50 +633,27 @@ import { World } from '../world';
         }
         function check(code: EcsErrorCode): string {
           switch (code) {
-            case 'entity-index-overflow':
-            case 'schema-unsupported-field':
-            case 'sparse-storage-requires-tag':
             case 'stale-entity':
             case 'component-already-present':
             case 'component-not-present':
             case 'cyclic-dependency':
             case 'resource-not-found':
             case 'system-before-unknown':
-            case 'system-name-conflict':
-            case 'cyclic-injection':
             case 'unique-ref-released':
             case 'unique-ref-double-release':
             case 'managed-buffer-out-of-bounds':
             case 'managed-buffer-shrink-not-supported':
             case 'fixed-size-mismatch':
-            case 'fixed-array-overflow':
-            case 'array-pop-empty':
-            case 'instance-transforms-stride-mismatch':
-            case 'managed-array-element-type-not-allowed':
-            case 'spawn-light-invalid-bounds':
-            case 'cardinality-exceeded':
-            case 'resource-invalid-value':
-            case 'sprite-animation-invalid':
             case 'relationship-self-cycle':
-            case 'relationship-mirror-component-not-registered':
-            case 'relationship-mirror-field-type-mismatch':
             case 'relationship-detach-mismatch':
-            case 'component-not-defined':
             case 'remove-essential-component':
-            case 'scene-override-type-mismatch':
             case 'spawn-data-unknown-field':
             case 'shared-ref-released':
             case 'shared-ref-double-release':
+            case 'shared-ref-payload-invalid':
             case 'builtin-slot-not-owned':
             case 'shared-ref-stale':
             case 'unique-ref-stale':
-            // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch
-            // M1 / w2 — 3 new cases for the SpriteInstances primitive (codes
-            // declared in M1, fired in M3 w13). Required to keep this
-            // exhaustive switch over EcsErrorCode visually closed.
-            case 'sprite-instances-count-mismatch':
-            case 'sprite-instances-requires-sprite-shader':
-            case 'sprite-instances-mutually-exclusive-with-instances':
             // feat-20260713-mount-override-component-add-and-shared-ref-round
             // M2 / w9 — shared-field value gate code. Required to keep this
             // exhaustive switch over EcsErrorCode visually closed.
@@ -727,19 +664,16 @@ import { World } from '../world';
             // visually closed.
             case 'system-set-not-registered':
             case 'component-field-invalid-value':
+            case 'component-numeric-value-invalid':
+            case 'managed-array-invalid-value':
             case 'time-delta-invalid':
             case 'time-config-invalid':
             case 'schedule-scope-mismatch':
-            case 'resource-protected':
-            case 'change-epoch-exhausted':
-            case 'query-descriptor-conflict':
-            case 'query-data-requires-fields':
-            case 'query-span-unavailable':
-            case 'query-iteration-invalidated':
-            case 'query-iteration-active':
             case 'shared-kernel-ineligible':
             case 'shared-kernel-failed':
             case 'world-poisoned':
+            case 'command-failed':
+            case 'system-failed':
               return code;
             default:
               return assertNever(code);
@@ -811,28 +745,19 @@ import { World } from '../world';
         });
       });
 
-      it('all 4 codes are members of the EcsErrorCode union (exhaustive narrow)', () => {
-        const codes: EcsErrorCode[] = [
-          'relationship-self-cycle',
-          'relationship-mirror-component-not-registered',
-          'relationship-mirror-field-type-mismatch',
-          'relationship-detach-mismatch',
-        ];
+      it('only relationship mutation codes are members of EcsErrorCode', () => {
+        const codes: EcsErrorCode[] = ['relationship-self-cycle', 'relationship-detach-mismatch'];
         function classify(code: EcsErrorCode): string {
           switch (code) {
             case 'relationship-self-cycle':
               return 'cycle';
-            case 'relationship-mirror-component-not-registered':
-              return 'mirror-missing';
-            case 'relationship-mirror-field-type-mismatch':
-              return 'mirror-type';
             case 'relationship-detach-mismatch':
               return 'detach';
             default:
               return 'other';
           }
         }
-        expect(codes.map(classify)).toEqual(['cycle', 'mirror-missing', 'mirror-type', 'detach']);
+        expect(codes.map(classify)).toEqual(['cycle', 'detach']);
       });
     });
   });
@@ -1048,23 +973,22 @@ import { World } from '../world';
   describe('spawn-light-invalid-bounds-error-code.test.ts', () => {
     describe("EcsErrorCode +1 'spawn-light-invalid-bounds' union member [AC-06 (e)]", () => {
       it("type-level: 'spawn-light-invalid-bounds' is assignable to EcsErrorCode", () => {
-        const code: EcsErrorCode = 'spawn-light-invalid-bounds';
+        const code = 'spawn-light-invalid-bounds';
         expect(code).toBe('spawn-light-invalid-bounds');
-        expectTypeOf<'spawn-light-invalid-bounds'>().toMatchTypeOf<EcsErrorCode>();
       });
 
       it("EcsErrorDetail discriminated variant for 'spawn-light-invalid-bounds' carries field three-branch", () => {
-        const range: EcsErrorDetail = {
+        const range = {
           code: 'spawn-light-invalid-bounds',
           field: 'range',
           got: -1,
         };
-        const innerOuter: EcsErrorDetail = {
+        const innerOuter = {
           code: 'spawn-light-invalid-bounds',
           field: 'innerOuter',
           got: 25,
         };
-        const outerNinety: EcsErrorDetail = {
+        const outerNinety = {
           code: 'spawn-light-invalid-bounds',
           field: 'outerNinety',
           got: 91,
@@ -1074,36 +998,8 @@ import { World } from '../world';
         expect(outerNinety.code).toBe('spawn-light-invalid-bounds');
       });
 
-      it('exhaustive switch on detail.field narrows three branches (compile-time)', () => {
-        const detail: EcsErrorDetail = {
-          code: 'spawn-light-invalid-bounds',
-          field: 'range',
-          got: -1,
-        };
-        if (detail.code === 'spawn-light-invalid-bounds') {
-          switch (detail.field) {
-            case 'range': {
-              expectTypeOf(detail.got).toEqualTypeOf<number>();
-              break;
-            }
-            case 'innerOuter': {
-              expectTypeOf(detail.got).toEqualTypeOf<number>();
-              break;
-            }
-            case 'outerNinety': {
-              expectTypeOf(detail.got).toEqualTypeOf<number>();
-              break;
-            }
-            default: {
-              const _exhaustive: never = detail;
-              throw new Error(`unreachable: ${String(_exhaustive)}`);
-            }
-          }
-        }
-      });
-
       it("type-level: switch over EcsErrorCode includes 'spawn-light-invalid-bounds' branch", () => {
-        function describeCode(code: EcsErrorCode): string {
+        function describeCode(code: string): string {
           switch (code) {
             case 'spawn-light-invalid-bounds':
               return 'spawn-light-invalid-bounds';
@@ -1165,60 +1061,24 @@ import { World } from '../world';
   describe('sprite-animation-invalid-error.test.ts', () => {
     describe("EcsErrorCode +1 'sprite-animation-invalid' union member [M1 T-04]", () => {
       it("type-level: 'sprite-animation-invalid' is assignable to EcsErrorCode", () => {
-        const code: EcsErrorCode = 'sprite-animation-invalid';
+        const code = 'sprite-animation-invalid';
         expect(code).toBe('sprite-animation-invalid');
-        expectTypeOf<'sprite-animation-invalid'>().toMatchTypeOf<EcsErrorCode>();
       });
 
       it("EcsErrorDetail discriminated variant 'sprite-animation-invalid' carries field two-branch", () => {
-        const regionsLength: EcsErrorDetail = {
+        const regionsLength = {
           code: 'sprite-animation-invalid',
           field: 'regions-length',
           regionsLength: 12,
           frameCount: 4,
         };
-        const frameDuration: EcsErrorDetail = {
+        const frameDuration = {
           code: 'sprite-animation-invalid',
           field: 'frame-duration',
           frameDuration: 0,
         };
         expect(regionsLength.code).toBe('sprite-animation-invalid');
         expect(frameDuration.code).toBe('sprite-animation-invalid');
-      });
-
-      it('exhaustive switch on detail.field narrows two branches (compile-time)', () => {
-        const branches: ReadonlyArray<EcsErrorDetail> = [
-          {
-            code: 'sprite-animation-invalid',
-            field: 'regions-length',
-            regionsLength: 12,
-            frameCount: 4,
-          },
-          {
-            code: 'sprite-animation-invalid',
-            field: 'frame-duration',
-            frameDuration: 0,
-          },
-        ];
-        for (const detail of branches) {
-          if (detail.code === 'sprite-animation-invalid') {
-            switch (detail.field) {
-              case 'regions-length': {
-                expectTypeOf(detail.regionsLength).toEqualTypeOf<number>();
-                expectTypeOf(detail.frameCount).toEqualTypeOf<number>();
-                break;
-              }
-              case 'frame-duration': {
-                expectTypeOf(detail.frameDuration).toEqualTypeOf<number>();
-                break;
-              }
-              default: {
-                const _exhaustive: never = detail;
-                throw new Error(`unreachable: ${String(_exhaustive)}`);
-              }
-            }
-          }
-        }
       });
     });
 
@@ -1290,7 +1150,7 @@ import { World } from '../world';
 
     describe("type-level: switch over EcsErrorCode includes 'sprite-animation-invalid' branch", () => {
       it('describeCode reaches the sprite-animation-invalid arm without default fall-through', () => {
-        function describeCode(code: EcsErrorCode): string {
+        function describeCode(code: string): string {
           switch (code) {
             case 'sprite-animation-invalid':
               return 'sprite-animation-invalid';
@@ -1319,30 +1179,27 @@ import { World } from '../world';
   describe('sprite-instances-error-codes.test.ts', () => {
     describe('EcsErrorCode +3 — sprite-instances-* family (M1 w1)', () => {
       it('type-level: 3 new literals are assignable to EcsErrorCode', () => {
-        const a: EcsErrorCode = 'sprite-instances-count-mismatch';
-        const b: EcsErrorCode = 'sprite-instances-requires-sprite-shader';
-        const c: EcsErrorCode = 'sprite-instances-mutually-exclusive-with-instances';
+        const a = 'sprite-instances-count-mismatch';
+        const b = 'sprite-instances-requires-sprite-shader';
+        const c = 'sprite-instances-mutually-exclusive-with-instances';
         expect(a).toBe('sprite-instances-count-mismatch');
         expect(b).toBe('sprite-instances-requires-sprite-shader');
         expect(c).toBe('sprite-instances-mutually-exclusive-with-instances');
-        expectTypeOf<'sprite-instances-count-mismatch'>().toMatchTypeOf<EcsErrorCode>();
-        expectTypeOf<'sprite-instances-requires-sprite-shader'>().toMatchTypeOf<EcsErrorCode>();
-        expectTypeOf<'sprite-instances-mutually-exclusive-with-instances'>().toMatchTypeOf<EcsErrorCode>();
       });
 
       it('EcsErrorDetail discriminated variants narrow per `.code`', () => {
-        const countDetail: EcsErrorDetail = {
+        const countDetail = {
           code: 'sprite-instances-count-mismatch',
           transformsLength: 320,
           regionsLength: 40,
           expectedStride: { transforms: 16, regions: 4 },
         };
-        const shadingDetail: EcsErrorDetail = {
+        const shadingDetail = {
           code: 'sprite-instances-requires-sprite-shader',
           entityId: 42,
           observedMaterialShaderId: 'forgeax::default-standard-pbr',
         };
-        const mutexDetail: EcsErrorDetail = {
+        const mutexDetail = {
           code: 'sprite-instances-mutually-exclusive-with-instances',
           entityId: 17,
         };
@@ -1420,7 +1277,7 @@ import { World } from '../world';
 
     describe('exhaustive switch over the 3 new codes (no default)', () => {
       it('compile-time narrows all 3 branches; runtime hits each arm exactly once', () => {
-        const codes: EcsErrorCode[] = [
+        const codes: string[] = [
           'sprite-instances-count-mismatch',
           'sprite-instances-requires-sprite-shader',
           'sprite-instances-mutually-exclusive-with-instances',
@@ -1459,7 +1316,7 @@ import { World } from '../world';
   // `array<shared<T>>` elements must all be numbers) with a structured EcsError
   // (.code / .expected / .hint) instead of silently zeroing the column to
   // `[0,0,0,0]`. AI users bind a shared reference by first resolving the GUID to
-  // a handle (loadByGuid + allocSharedRef); passing a raw GUID string / {guid}
+  // a handle (AssetRegistry.load + allocSharedRef); passing a raw GUID string / {guid}
   // object / {kind} object bypasses that resolution and used to be swallowed.
   //
   // The three GUID forms feedback verified being zeroed:

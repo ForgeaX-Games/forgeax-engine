@@ -22,7 +22,10 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_STANDARD_PBR_PARAM_SCHEMA } from '@forgeax/engine-shader';
+import {
+  DEFAULT_STANDARD_PBR_PARAM_SCHEMA,
+  DEFAULT_UNLIT_PARAM_SCHEMA,
+} from '@forgeax/engine-shader';
 import { compileFailed, compileShader } from '@forgeax/engine-shader-compiler';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { loadEngineImportsMap } from '../engine-imports-map.js';
@@ -988,7 +991,7 @@ import { toRollupLog } from '../wrap.js';
   }
 
   describe('materialShaders[] manifest (w9)', () => {
-    it('(a) buildStart + generateBundle produces manifest with 6 materialShaders and correct paramSchema', async () => {
+    it('(a) buildStart + generateBundle produces manifest with 13 materialShaders and correct paramSchema', async () => {
       const plugin = forgeaxShader({ engineEntries: true });
       const ctx = createMockContext();
       await plugin.buildStart?.call(ctx as never);
@@ -1015,31 +1018,40 @@ import { toRollupLog } from '../wrap.js';
       // engine identifier needed now that shadow_caster is a material shader).
       expect(
         manifest.materialShaders.length,
-        'materialShaders[] must contain exactly 12 engine material-shader entries',
-      ).toBe(12);
+        'materialShaders[] must contain exactly 13 engine material-shader entries',
+      ).toBe(13);
 
       const standardPbr = manifest.materialShaders.find(
         (entry) => entry.identifier === 'forgeax::default-standard-pbr',
       );
       expect(standardPbr).toBeDefined();
+      const pointsLines = manifest.materialShaders.find(
+        (entry) => entry.identifier === 'forgeax::points-lines',
+      );
+      expect(pointsLines).toBeDefined();
+      expect(pointsLines?.sourcePath).toMatch(/points-lines\.wgsl$/);
+      expect(JSON.parse(pointsLines?.paramSchema ?? 'null')).toEqual(DEFAULT_UNLIT_PARAM_SCHEMA);
       expect(
         standardPbr?.variants?.find(
           (variant) =>
-            variant.definesKey === 'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true',
+            variant.definesKey ===
+            'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true+VERTEX_COLOR_AVAILABLE=true',
         ),
         'the URP standard-PBR variant must be present',
       ).toBeDefined();
       expect(
         standardPbr?.variants?.find(
           (variant) =>
-            variant.definesKey === 'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true',
+            variant.definesKey ===
+            'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true+VERTEX_COLOR_AVAILABLE=true',
         )?.composedWgsl,
         'the default manifest must stay valid on software WebGPU profiles without cube-array shader support',
       ).not.toContain('evalPointShadowed');
       expect(
         standardPbr?.variants?.find(
           (variant) =>
-            variant.definesKey === 'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true',
+            variant.definesKey ===
+            'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true+VERTEX_COLOR_AVAILABLE=true',
         )?.composedWgsl,
         'the default manifest must omit the cube-array binding on software WebGPU profiles',
       ).not.toContain('texture_depth_cube_array');
@@ -1062,7 +1074,7 @@ import { toRollupLog } from '../wrap.js';
           ?.variants?.find(
             (variant) =>
               variant.definesKey ===
-              'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true',
+              'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true+VERTEX_COLOR_AVAILABLE=true',
           )?.composedWgsl,
         'the point-shadow demo must opt into point-shadow evaluation explicitly',
       ).toContain('evalPointShadowed');
@@ -1072,7 +1084,7 @@ import { toRollupLog } from '../wrap.js';
           ?.variants?.find(
             (variant) =>
               variant.definesKey ===
-              'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true',
+              'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true+VERTEX_COLOR_AVAILABLE=true',
           )?.composedWgsl,
         'the point-shadow demo must opt into the cube-array binding explicitly',
       ).toContain('texture_depth_cube_array');
@@ -1084,6 +1096,7 @@ import { toRollupLog } from '../wrap.js';
         'forgeax::default-unlit',
         'forgeax::msdf-text',
         'forgeax::pbr-skin',
+        'forgeax::points-lines',
         'forgeax::sprite',
         'forgeax::sprite-lit',
         'forgeax::vfx-render.particles.beam',
@@ -1118,6 +1131,8 @@ import { toRollupLog } from '../wrap.js';
             { name: 'metallicRoughnessTexture', type: 'texture2d' },
             { name: 'normalTexture', type: 'texture2d' },
           ]);
+        } else if (ms.identifier === 'forgeax::points-lines') {
+          expect(parsed).toEqual(DEFAULT_UNLIT_PARAM_SCHEMA);
         } else {
           expect(parsed.length, `paramSchema must stay empty for '${ms.identifier}'`).toBe(0);
         }
@@ -1188,7 +1203,7 @@ import { toRollupLog } from '../wrap.js';
       // The entries[] array should still contain all compiled shaders (utility + material)
       expect(manifest.entries.length).toBeGreaterThanOrEqual(4);
 
-      // Verify the exact identifiers in materialShaders[] (7 engine entries + 5 particle entries)
+      // Verify the exact identifiers in materialShaders[] (8 engine entries + 5 particle entries)
       const ids = manifest.materialShaders.map((ms) => ms.identifier).sort();
       expect(ids).toEqual([
         'forgeax::default-shadow-caster',
@@ -1196,6 +1211,7 @@ import { toRollupLog } from '../wrap.js';
         'forgeax::default-unlit',
         'forgeax::msdf-text',
         'forgeax::pbr-skin',
+        'forgeax::points-lines',
         'forgeax::sprite',
         'forgeax::sprite-lit',
         'forgeax::vfx-render.particles.beam',
@@ -1295,7 +1311,7 @@ import { toRollupLog } from '../wrap.js';
         (entry) => entry.wgsl.includes('fs_ssao_calc') && entry.wgsl.includes('fs_ssao_blur'),
       );
       expect(ssao, 'Vite manifest must carry both SSAO fragment entry points').toHaveLength(1);
-    });
+    }, 15_000);
 
     it('buildEngineShaderManifest() preserves sprite instance-region variants', async () => {
       const manifest = await buildEngineShaderManifest();
@@ -1781,6 +1797,7 @@ ${MINIMAL_WGSL.trim()}
 
     const COMMON = readSrc('common.wgsl');
     const BRDF = readSrc('brdf.wgsl');
+    const PBR_TEMPORAL = readSrc('pbr-temporal.wgsl');
     const TBN = readSrc('tbn.wgsl');
     const LIGHTING_DIRECTIONAL = readSrc('lighting-directional.wgsl');
     const LIGHTING_PUNCTUAL = readSrc('lighting-punctual.wgsl');
@@ -1791,7 +1808,9 @@ ${MINIMAL_WGSL.trim()}
 
     IMPORTS = {
       'forgeax_view::common': COMMON,
+      'forgeax_view::fog': readSrc('fog.wgsl'),
       'forgeax_pbr::brdf': BRDF,
+      'forgeax_pbr::temporal': PBR_TEMPORAL,
       'forgeax_pbr::ibl_shared': IBL_SHARED,
       'forgeax_pbr::ibl_sampling': IBL_SAMPLING,
       'forgeax_pbr::tbn': TBN,

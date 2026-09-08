@@ -15,7 +15,7 @@
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ImporterRegistry } from '@forgeax/engine-import';
@@ -91,6 +91,95 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
           expect(r.error.detail.expectedSidecarPath).toBe(join(dir, 'wood.png.meta.json'));
           expect(r.error.hint).toContain('forgeax-engine-remote-asset');
         } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      });
+
+      it('distinguishes a missing source from a missing sidecar and recovers on the same path', async () => {
+        const dir = mkTmpDir('staged-recovery');
+        const sourcePath = join(dir, 'staged.png');
+        const sidecarPath = `${sourcePath}.meta.json`;
+        const png = readBinDF('wood-1x1.png');
+        const meta = {
+          schemaVersion: '1.0.0',
+          kind: 'external-asset-package',
+          importer: 'image',
+          source: 'staged.png',
+          importSettings: {
+            colorSpace: 'linear',
+            mipmap: 'none',
+            addressMode: 'mirror-repeat',
+            filterMode: 'nearest',
+          },
+          subAssets: [
+            {
+              guid: '01928000-7c00-7000-8000-000000000004',
+              sourceIndex: 0,
+              kind: 'texture',
+            },
+          ],
+        };
+        const sidecar = new TextEncoder().encode(JSON.stringify(meta));
+        try {
+          const bothMissing = await decodeImageFromFile(sourcePath);
+          expect(bothMissing.ok).toBe(false);
+          if (bothMissing.ok) return;
+          expect(bothMissing.error.code).toBe('image-decode-failed');
+          if (bothMissing.error.detail.code !== 'image-decode-failed') return;
+          expect(bothMissing.error.detail.path).toBe(sourcePath);
+          expect(bothMissing.error.detail.reason).toContain('failed to read source');
+
+          writeFileSync(sourcePath, png);
+          const sidecarMissing = await decodeImageFromFile(sourcePath);
+          expect(sidecarMissing.ok).toBe(false);
+          if (sidecarMissing.ok) return;
+          expect(sidecarMissing.error.code).toBe('image-meta-missing');
+          if (sidecarMissing.error.detail.code !== 'image-meta-missing') return;
+          expect(sidecarMissing.error.detail.sourcePath).toBe(sourcePath);
+          expect(sidecarMissing.error.detail.expectedSidecarPath).toBe(sidecarPath);
+
+          writeFileSync(sidecarPath, sidecar);
+          const recovered = await decodeImageFromFile(sourcePath);
+          expect(recovered.ok).toBe(true);
+          if (!recovered.ok) return;
+          expect(recovered.value.decoded.width).toBe(1);
+          expect(recovered.value.decoded.height).toBe(1);
+          expect(recovered.value.decoded.mime).toBe('image/png');
+          expect(recovered.value.decoded.colorSpace).toBe('linear');
+          expect(recovered.value.decoded.mipmap).toBe(false);
+          expect(recovered.value.meta).toEqual({
+            guid: '01928000-7c00-7000-8000-000000000004',
+            colorSpace: 'linear',
+            mipmap: 'none',
+            addressMode: 'mirror-repeat',
+            filterMode: 'nearest',
+          });
+          expect(toAssetPack(recovered.value.decoded, recovered.value.meta)).toEqual({
+            schemaVersion: '1.0.0',
+            kind: 'external-asset-package',
+            importer: 'image',
+            source: '',
+            importSettings: {
+              colorSpace: 'linear',
+              mipmap: 'none',
+              addressMode: 'mirror-repeat',
+              filterMode: 'nearest',
+            },
+            subAssets: [
+              {
+                guid: '01928000-7c00-7000-8000-000000000004',
+                sourceIndex: 0,
+                kind: 'texture',
+              },
+            ],
+          });
+
+          const repeat = await decodeImageFromFile(sourcePath);
+          expect(repeat).toEqual(recovered);
+          expect(readFileSync(sourcePath)).toEqual(Buffer.from(png));
+          expect(readFileSync(sidecarPath)).toEqual(Buffer.from(sidecar));
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
           rmSync(dir, { recursive: true, force: true });
         }
       });
@@ -661,13 +750,19 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
         expect(produced.length).toBe(0);
       });
 
-      it('throws for a corrupt .hdr source (invalid RGBE header)', async () => {
+      it('returns a structured validation error for a corrupt .hdr source (invalid RGBE header)', async () => {
         const corrupt = new Uint8Array([0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
         const ctx = makeHdrCtx('bad.hdr', corrupt, [
           { guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' },
         ]);
 
-        await expect(imageImporter.import(ctx)).rejects.toThrow();
+        const result = await imageImporter.import(ctx);
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.error.code).toBe('source-validation-failed');
+        expect(result.error.detail).toMatchObject({
+          diagnostics: [expect.objectContaining({ code: 'image-conversion-decode-hdr' })],
+        });
       });
     });
 

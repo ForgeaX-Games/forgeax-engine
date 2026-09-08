@@ -5,7 +5,15 @@ export default defineProject({
     environment: 'node',
     name: '@forgeax/engine-render',
     passWithNoTests: true,
-    exclude: [...configDefaults.exclude, '**/*.perf.test.ts'],
+    // Real Dawn coverage belongs to the root `dawn` project, which installs
+    // the native WebGPU binding in its setup file. Keep the package-local
+    // Node project from collecting the file without that environment.
+    exclude: [
+      ...configDefaults.exclude,
+      '**/*.browser.test.ts',
+      '**/*.dawn.test.ts',
+      '**/*.perf.test.ts',
+    ],
     typecheck: {
       enabled: true,
       tsconfig: './tsconfig.json',

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -68,28 +69,33 @@ const { World } = await import('@forgeax/engine-ecs');
 const { animationPlugin } = await import('@forgeax/engine-animation');
 const { scenePlugin } = await import('@forgeax/engine-scene');
 const { createRenderer } = await import('@forgeax/engine-runtime');
-const { buildEasedMotionWorld, readEasedMotionState } = await import(resolve(here, '..', 'src', 'eased-motion.ts'));
+const {
+  buildEasedMotionWorld,
+  createEasedMotionClip,
+  EASED_MOTION_CLIP_GUID,
+  readEasedMotionState,
+} = await import(resolve(here, '..', 'src', 'eased-motion.ts'));
 const manifestUrl = `data:application/json,${encodeURIComponent(readFileSync(resolve(here, '..', 'dist', 'shaders', 'manifest.json'), 'utf8'))}`;
-const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: manifestUrl });
+const renderer = await createSmokeRenderer(createRenderer, canvas, {}, { shaderManifestUrl: manifestUrl });
 const errors = [];
-renderer.onError((error) => errors.push({ code: error.code, hint: error.hint }));
-const ready = await renderer.ready;
-if (!ready.ok) { console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code}`); process.exit(1); }
+subscribeSmokeErrors(renderer, (error) => errors.push({ code: error.code, hint: error.hint }));
 
+const { createWorldContext } = await import('@forgeax/engine-ecs');
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
-if (!(await scenePlugin().build(world)).ok) process.exit(1);
-if (!(await animationPlugin().build(world)).ok) process.exit(1);
-const state = buildEasedMotionWorld(world);
+const clip = createEasedMotionClip();
+const clips = new Map([[EASED_MOTION_CLIP_GUID, clip]]);
+await createWorldContext(world, [scenePlugin(), animationPlugin((guid) => clips.get(guid))]);
+const state = buildEasedMotionWorld(world, clip);
 world.update(0);
-renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+drawSmokeFrame(renderer, world);
 await delay(30);
 const earlyFrame = await capture();
 const earlyState = readEasedMotionState(world, state);
 for (let frame = 1; frame < frames; frame++) {
   world.update(1 / 60);
-  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  drawSmokeFrame(renderer, world);
 }
 await delay(30);
 const lateFrame = await capture();
@@ -111,7 +117,7 @@ writeFileSync(resolve(here, '..', 'artifacts', 'frame-early.png'), writeReferenc
 writeFileSync(resolve(here, '..', 'artifacts', 'frame-late.png'), writeReferencePng(lateFrame, width, height));
 const motion = diff(earlyFrame, lateFrame);
 const checks = [
-  ['backend=webgpu', renderer.backend === 'webgpu'],
+  ['backend=webgpu', rendererBackend(renderer) === 'webgpu'],
   ['eased-translation-animated', Math.abs((lateState.pos[0] ?? 0) - (earlyState.pos[0] ?? 0)) > 0.01],
   ['eased-rotation-animated', Math.abs((lateState.quat[1] ?? 0) - (earlyState.quat[1] ?? 0)) > 0.01],
   ['render-motion-pixels', motion.pixels > 100],

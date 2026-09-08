@@ -1,13 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { RecoverError, type RecoverErrorCode } from '../errors/recover';
-import {
-  RecoverError as PublicRecoverError,
-  type RecoverErrorCode as PublicRecoverErrorCode,
-} from '../index';
-import {
-  RecoverError as InternalRecoverError,
-  type RecoverErrorCode as InternalRecoverErrorCode,
-} from '../internal';
 
 const expectedCodes = [
   'recover-not-needed',
@@ -45,29 +39,29 @@ const evidence = [
 ] as const;
 
 describe('RecoverError policy ownership', () => {
-  it('preserves the exact four-code vocabulary, order, and public projections', () => {
+  it('derives the code union from the policy owner', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('../errors/recover.ts', import.meta.url)),
+      'utf8',
+    );
+
+    expect(source).toContain('export type RecoverErrorCode = keyof typeof RECOVER_ERROR_POLICY;');
+    expect(source).not.toMatch(/export type RecoverErrorCode = 'recover-/);
+  });
+
+  it('preserves the exact four-code vocabulary and order', () => {
     expect(expectedCodes).toHaveLength(4);
     expect(new Set(expectedCodes).size).toBe(4);
     expectTypeOf<RecoverErrorCode>().toEqualTypeOf<(typeof expectedCodes)[number]>();
-    expectTypeOf<InternalRecoverErrorCode>().toEqualTypeOf<RecoverErrorCode>();
-    expectTypeOf<PublicRecoverErrorCode>().toEqualTypeOf<RecoverErrorCode>();
-    expect(InternalRecoverError).toBe(RecoverError);
-    expect(PublicRecoverError).toBe(RecoverError);
   });
 
   it('preserves all twelve diagnostics byte-for-byte', () => {
     for (const { code, expected, hint, message } of evidence) {
       const error = new RecoverError(code);
-      const projected = new PublicRecoverError(code);
-
       expect(error.code).toBe(code);
       expect(error.expected).toBe(expected);
       expect(error.hint).toBe(hint);
       expect(error.message).toBe(message);
-      expect(projected.code).toBe(code);
-      expect(projected.expected).toBe(expected);
-      expect(projected.hint).toBe(hint);
-      expect(projected.message).toBe(message);
     }
   });
 
@@ -76,9 +70,8 @@ describe('RecoverError policy ownership', () => {
 
     expect(error).toBeInstanceOf(Error);
     expect(error).toBeInstanceOf(RecoverError);
-    expect(error).toBeInstanceOf(InternalRecoverError);
-    expect(error).toBeInstanceOf(PublicRecoverError);
     expect(error.name).toBe('RecoverError');
+    expect(Object.hasOwn(error, 'detail')).toBe(false);
     expect(typeof error.stack).toBe('string');
     expect(error.stack).toContain(`RecoverError: ${error.message}`);
     expect(Object.keys(error)).toEqual(['code', 'expected', 'hint', 'name']);

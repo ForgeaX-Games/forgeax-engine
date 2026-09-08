@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { AssetGuid } from '../index.js';
-import type { MaterialAsset } from '../material/asset.js';
+import { assertMaterialAsset, type MaterialAsset } from '../material/asset.js';
 import { resolveMaterialAsset } from '../material/resolve.js';
 
 const guid = new Uint8Array(16) as AssetGuid;
@@ -23,6 +23,34 @@ describe('MaterialAsset contract', () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it('accepts string texture GUID shorthands only for texture parameters', () => {
+    const texture = resolveMaterialAsset('demo', {
+      demo: {
+        kind: 'material',
+        passes: [{ name: 'forward', program: standardProgram }],
+        parameters: [
+          { name: 'baseColorTexture', type: 'texture' },
+          { name: 'baseColor', type: 'color' },
+        ],
+        values: { baseColorTexture: 'texture-guid' },
+      },
+    });
+    expect(texture.ok).toBe(true);
+
+    const scalar = resolveMaterialAsset('demo', {
+      demo: {
+        kind: 'material',
+        passes: [{ name: 'forward', program: standardProgram }],
+        parameters: [{ name: 'baseColor', type: 'color' }],
+        values: { baseColor: 'texture-guid' },
+      },
+    });
+    expect(scalar).toMatchObject({
+      ok: false,
+      error: { code: 'material-value-type-mismatch', detail: { parameter: 'baseColor' } },
+    });
   });
 
   it('accepts a complete root contract and structured texture value', () => {
@@ -88,7 +116,7 @@ describe('MaterialAsset contract', () => {
     expectTypeOf(derived.passes?.[0]?.program.module).toEqualTypeOf<string>();
   });
 
-  it('rejects legacy fields, unknown values, and mismatched structured values', () => {
+  it('rejects legacy fields and unknown values', () => {
     const retiredField = ['param', 'Values'].join('') as `param${'Values'}`;
     // @ts-expect-error - the new contract has no retired parameter field.
     const legacyValues: MaterialAsset = { kind: 'material', [retiredField]: {} };
@@ -100,17 +128,56 @@ describe('MaterialAsset contract', () => {
     };
     void legacyPass;
 
-    const mismatchedValue: MaterialAsset = {
-      kind: 'material',
-      values: {
-        // @ts-expect-error - a texture value is not an arbitrary string.
-        normalTexture: 'not-a-texture-value',
-      },
-    };
-    void mismatchedValue;
-
     // @ts-expect-error - unknown top-level authoring fields are not accepted.
     const unknownField: MaterialAsset = { kind: 'material', shader: 'legacy' };
     void unknownField;
+  });
+
+  it('characterizes the current static and module-slot owner overlap', () => {
+    const material: MaterialAsset = {
+      kind: 'material',
+      parameters: [{ name: 'roughness', type: 'f32' }],
+      passes: [
+        {
+          name: 'forward',
+          program: {
+            module: 'project::surface',
+            moduleSlots: { lighting: 'project::lighting' },
+          },
+        },
+      ],
+      values: { roughness: 0.5 },
+    };
+
+    const result = resolveMaterialAsset('owner-overlap', { 'owner-overlap': material });
+    expect(result.ok).toBe(true);
+    expect(material.parameters?.[0]).not.toHaveProperty('static');
+    expect(material.passes?.[0]?.program.moduleSlots).toEqual({
+      lighting: 'project::lighting',
+    });
+  });
+
+  it('rejects every material-owned macro surface at the loading boundary', () => {
+    expect(() =>
+      assertMaterialAsset({
+        kind: 'material',
+        features: { QUALITY: true },
+        defines: { QUALITY: 2 },
+        parameters: [{ name: 'roughness', type: 'f32', static: true }],
+      }),
+    ).toThrow(/material compiler macro fields are not supported/);
+  });
+
+  it('keeps pure material booleans as runtime values', () => {
+    const result = resolveMaterialAsset('runtime-bool', {
+      'runtime-bool': {
+        kind: 'material',
+        passes: [{ name: 'forward', program: standardProgram }],
+        parameters: [{ name: 'clearcoat', type: 'bool' }],
+        values: { clearcoat: false },
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, value: { asset: { values: { clearcoat: false } } } });
   });
 });

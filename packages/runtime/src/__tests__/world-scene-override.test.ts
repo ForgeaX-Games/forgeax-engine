@@ -1,3 +1,4 @@
+import * as SceneOwner from '@forgeax/engine-scene';
 // feat-20260608-scene-nesting-ecs-fication M2 / w20 (red phase) —
 // setSceneOverride / removeSceneOverride / detachSceneMember /
 // reattachSceneMember + AC-19 mount-time override apply invariants.
@@ -14,13 +15,16 @@
 //   - setSceneOverride type mismatch -> Err 'scene-override-type-mismatch'
 //     with detail.{ comp, field, expectedType, actualType }.
 
-import { defineComponent, ok, World } from '@forgeax/engine-ecs';
-import { SceneInstance } from '@forgeax/engine-render/internal';
+import { defineComponent, World } from '@forgeax/engine-ecs';
+import { SceneInstance } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
+import { ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { registerSceneComponents } from './helpers/register-scene-components';
 
 function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
+  registerSceneComponents(world);
   return world.allocSharedRef('SceneAsset', asset);
 }
 
@@ -46,8 +50,8 @@ describe('AC-19 mount-time override apply (w20)', () => {
       ],
     };
     const parentHandle = registerSceneAsset(world, parent);
-    world._setSceneAssetResolver?.(() => ok(childHandle));
-    const r = world.instantiateScene(parentHandle);
+    SceneOwner.worldSetSceneAssetResolver(world, () => ok(childHandle));
+    const r = SceneOwner.worldInstantiateScene(world, parentHandle);
     if (!r.ok) throw new Error('instantiate failed');
     const inst = world.get(r.value.root, SceneInstance);
     if (!inst.ok) throw new Error('get failed');
@@ -60,7 +64,7 @@ describe('AC-19 mount-time override apply (w20)', () => {
     if (!t.ok) return;
     expect(Array.from(t.value.pos)).toEqual([42, 0, 0]);
     // State-map invariant
-    const stateRes = world.getSceneInstanceState(r.value.root);
+    const stateRes = SceneOwner.worldGetSceneInstanceState(world, r.value.root);
     if (!stateRes.ok) throw new Error('getSceneInstanceState failed');
     expect(stateRes.value.overrides.has(1 as never)).toBe(true);
     const fields = stateRes.value.overrides.get(1 as never);
@@ -78,14 +82,21 @@ describe('world.setSceneOverride (w20)', () => {
       entities: [{ localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } }],
     };
     const handle = registerSceneAsset(world, asset);
-    const r = world.instantiateScene(handle);
+    const r = SceneOwner.worldInstantiateScene(world, handle);
     if (!r.ok) throw new Error('instantiate failed');
     const inst = world.get(r.value.root, SceneInstance);
     if (!inst.ok) throw new Error('get failed');
     expect(inst.value.mapping).toBeInstanceOf(Uint32Array);
     if (!(inst.value.mapping instanceof Uint32Array)) return;
     const member = inst.value.mapping[0] as unknown as number;
-    const sr = world.setSceneOverride(r.value.root, member as never, Transform, 'pos', [99, 0, 0]);
+    const sr = SceneOwner.worldSetSceneOverride(
+      world,
+      r.value.root,
+      member as never,
+      Transform,
+      'pos',
+      [99, 0, 0],
+    );
     expect(sr.ok).toBe(true);
     const t = world.get(member as never, Transform);
     if (!t.ok) throw new Error('get t failed');
@@ -98,18 +109,20 @@ describe('world.setSceneOverride (w20)', () => {
     // component instead.
     const Hp = defineComponent('SceneOverrideHp', { hp: 'f32' });
     const world = new World();
+    registerSceneComponents(world, [Hp]);
     const asset: SceneAsset = {
       kind: 'scene',
       entities: [{ localId: 0 as never, components: { SceneOverrideHp: {} } }],
     };
     const handle = registerSceneAsset(world, asset);
-    const r = world.instantiateScene(handle);
+    const r = SceneOwner.worldInstantiateScene(world, handle);
     if (!r.ok) throw new Error('instantiate failed');
     const inst = world.get(r.value.root, SceneInstance);
     if (!inst.ok) throw new Error('get failed');
     const member = inst.value.mapping[0] as unknown as number;
     // Pass a string for an f32 field
-    const sr = world.setSceneOverride(
+    const sr = SceneOwner.worldSetSceneOverride(
+      world,
       r.value.root,
       member as never,
       Hp,
@@ -131,13 +144,26 @@ describe('world.removeSceneOverride (w20)', () => {
       entities: [{ localId: 0 as never, components: { Transform: { pos: [5, 0, 0] } } }],
     };
     const handle = registerSceneAsset(world, asset);
-    const r = world.instantiateScene(handle);
+    const r = SceneOwner.worldInstantiateScene(world, handle);
     if (!r.ok) throw new Error('instantiate failed');
     const inst = world.get(r.value.root, SceneInstance);
     if (!inst.ok) throw new Error('get failed');
     const member = inst.value.mapping[0] as unknown as number;
-    world.setSceneOverride(r.value.root, member as never, Transform, 'pos', [100, 0, 0]);
-    const rr = world.removeSceneOverride(r.value.root, member as never, Transform, 'pos');
+    SceneOwner.worldSetSceneOverride(
+      world,
+      r.value.root,
+      member as never,
+      Transform,
+      'pos',
+      [100, 0, 0],
+    );
+    const rr = SceneOwner.worldRemoveSceneOverride(
+      world,
+      r.value.root,
+      member as never,
+      Transform,
+      'pos',
+    );
     expect(rr.ok).toBe(true);
     const t = world.get(member as never, Transform);
     if (!t.ok) throw new Error('get failed');
@@ -153,20 +179,20 @@ describe('world.detachSceneMember + reattachSceneMember (w20)', () => {
       entities: [{ localId: 0 as never, components: { Transform: {} } }],
     };
     const handle = registerSceneAsset(world, asset);
-    const r = world.instantiateScene(handle);
+    const r = SceneOwner.worldInstantiateScene(world, handle);
     if (!r.ok) throw new Error('instantiate failed');
     const inst = world.get(r.value.root, SceneInstance);
     if (!inst.ok) throw new Error('get failed');
     const member = inst.value.mapping[0] as unknown as number;
-    const dr = world.detachSceneMember(r.value.root, member as never);
+    const dr = SceneOwner.worldDetachSceneMember(world, r.value.root, member as never);
     expect(dr.ok).toBe(true);
-    const stateRes = world.getSceneInstanceState(r.value.root);
+    const stateRes = SceneOwner.worldGetSceneInstanceState(world, r.value.root);
     if (!stateRes.ok) throw new Error('getSceneInstanceState failed');
     expect(stateRes.value.detachedLocalIds.has(0 as never)).toBe(true);
     // Member still alive
     expect(world.get(member as never, Transform).ok).toBe(true);
     // Reattach
-    const rr = world.reattachSceneMember(r.value.root, member as never);
+    const rr = SceneOwner.worldReattachSceneMember(world, r.value.root, member as never);
     expect(rr.ok).toBe(true);
     expect(stateRes.value.detachedLocalIds.has(0 as never)).toBe(false);
   });

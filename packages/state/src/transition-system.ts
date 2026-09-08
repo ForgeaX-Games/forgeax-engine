@@ -21,7 +21,7 @@
 // - requirements sec 7: despawn tolerance (entity already dead = no error)
 
 import type { Component, EntityHandle, World } from '@forgeax/engine-ecs';
-import { resolveComponent } from '@forgeax/engine-ecs';
+import { worldDespawnScene } from '@forgeax/engine-scene';
 import { getRegisteredTokens } from './define-state';
 import { getCallbacks, OnEnter, OnExit } from './on-enter-on-exit';
 import { nextStateResourceKey, previousStateResourceKey, stateResourceKey } from './resources';
@@ -56,7 +56,7 @@ function scopeDespawn(world: World, scopedComponent: Component, mode: number, va
   }
   // SceneInstance is resolved by name through the global registry so the state
   // package stays free of a runtime dependency (layering: state -> ecs only).
-  const sceneInstance = resolveComponent('SceneInstance');
+  const sceneInstance = world.components.resolve('SceneInstance');
   // Tear down SceneInstance roots FIRST, via despawnScene (cascade over their
   // instantiated members). This must precede the plain despawns: a scoped scene
   // root is often ChildOf a scoped non-scene entity (e.g. a character rig parented
@@ -66,7 +66,7 @@ function scopeDespawn(world: World, scopedComponent: Component, mode: number, va
   // SceneInstance subtree is fully removed while its root is still live.
   if (sceneInstance !== undefined) {
     for (const e of despawns) {
-      if (world.get(e, sceneInstance).ok) world.despawnScene(e);
+      if (world.get(e, sceneInstance).ok) worldDespawnScene(world, e);
     }
   }
   for (const e of despawns) {
@@ -108,7 +108,7 @@ export function transitionStatesSystem(world: World): void {
     world.insertResource(sKey, nextIdx);
 
     // Resolve the per-token ScopedTo component from the global ECS registry
-    const scopedComponent = resolveComponent(`__scopedTo__${token.name}`);
+    const scopedComponent = world.components.resolve(`__scopedTo__${token.name}`);
     if (scopedComponent) {
       // (4) Despawn exit-scoped entities (value=prev)
       scopeDespawn(world, scopedComponent, SCOPED_MODE_VALUE.exit, prevIdx);

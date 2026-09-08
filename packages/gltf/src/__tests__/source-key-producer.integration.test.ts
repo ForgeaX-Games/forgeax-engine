@@ -5,6 +5,7 @@ import { validateProducerOutputs } from '@forgeax/engine-pack';
 import { scan } from '@forgeax/engine-pack/scanner';
 import { describe, expect, it } from 'vitest';
 import { runCliGltf } from '../cli-gltf.js';
+import { createGltfImporter } from '../gltf-importer.js';
 import type { GltfDoc } from '../parse-gltf.js';
 import { toAssetPack } from '../parse-gltf.js';
 import { serializeMetaJson } from '../serialize-meta.js';
@@ -72,13 +73,20 @@ function duplicateNamedMeshGltfJson(): Record<string, unknown> {
 }
 
 describe('glTF producer source-key boundary', () => {
+  it('keeps procedural runtime stubs out of the Catalog projection', () => {
+    const publish = createGltfImporter().capabilities?.catalog?.publish;
+    expect(publish).toBeTypeOf('function');
+    expect(publish?.({ importSettings: { geometry: 'procedural' }, subAssets: [] })).toBe(false);
+    expect(publish?.({ importSettings: {}, subAssets: [] })).toBe(true);
+  });
+
   it('returns a structured conflict before publishing duplicate semantic names', () => {
     const result = toAssetPack(duplicateNamedMeshDoc(), undefined, 'duplicate.gltf');
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.code).toBe('duplicate-source-key');
-    expect(result.error.sourceIndices).toEqual([0, 1]);
+    expect(result.error.detail.sourceIndices).toEqual([0, 1]);
   });
 
   it('applies the same preflight to duplicate material names', () => {
@@ -87,7 +95,7 @@ describe('glTF producer source-key boundary', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.code).toBe('duplicate-source-key');
-    expect(result.error.sourceIndices).toEqual([0, 1]);
+    expect(result.error.detail.sourceIndices).toEqual([0, 1]);
   });
 
   it('publishes producer-valid output when semantic identity is unique', () => {

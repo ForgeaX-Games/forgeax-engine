@@ -1,6 +1,6 @@
-import type { EntityHandle, Table, World } from '@forgeax/engine-ecs';
-import { Entity } from '@forgeax/engine-ecs';
-import { ChildOf } from '../components';
+import { Entity, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { createWorldProjection } from '@forgeax/engine-ecs/projection';
+import { ChildOf } from '../components/child-of';
 import type { SceneErrorCode, SceneErrorDetail } from '../errors';
 
 export interface SceneHierarchyDiagnostic {
@@ -16,22 +16,8 @@ export interface SceneHierarchySnapshot {
   getParent(entity: EntityHandle): EntityHandle | undefined;
 }
 
-interface HierarchyGraph {
-  readonly tables: ReadonlyArray<Table | undefined>;
-}
-
-interface InternalWorldSurface {
-  /** @internal */
-  _getGraph(): HierarchyGraph;
-  /** @internal Archetype/layout token used to invalidate derived projections. */
-  _getStructureEpoch(): number;
-  /** @internal Component mutation token used to invalidate derived projections. */
-  _getComponentMutationEpoch(componentId: number): number;
-}
-
 interface HierarchyProjectionCacheEntry {
-  readonly childOfMutationEpoch: number;
-  readonly structureEpoch: number;
+  readonly changes: ReturnType<typeof createWorldProjection>;
   readonly snapshot: SceneHierarchySnapshot;
 }
 
@@ -43,10 +29,6 @@ interface HierarchyProjectionCacheEntry {
 // runtime-only component writes may advance it every frame. Direct table
 // writes are internal-only and must not mutate authored hierarchy state.
 const HIERARCHY_PROJECTION_CACHE = new WeakMap<World, HierarchyProjectionCacheEntry>();
-
-function readColumn(table: Table, componentId: number, fieldName: string): Uint32Array | undefined {
-  return table.storage.get(componentId)?.fields.get(fieldName)?.view as Uint32Array | undefined;
-}
 
 function diagnostic(
   code: SceneErrorCode,
@@ -71,33 +53,21 @@ function diagnostic(
 
 /** Build the only World-local projection of ChildOf parent facts. */
 export function projectHierarchy(world: World): SceneHierarchySnapshot {
-  const internal = world as unknown as InternalWorldSurface;
-  const childOfMutationEpoch = internal._getComponentMutationEpoch(ChildOf.id);
-  const structureEpoch = internal._getStructureEpoch();
   const cached = HIERARCHY_PROJECTION_CACHE.get(world);
-  if (
-    cached !== undefined &&
-    cached.childOfMutationEpoch === childOfMutationEpoch &&
-    cached.structureEpoch === structureEpoch
-  ) {
-    return cached.snapshot;
+  const changes = cached?.changes ?? createWorldProjection(world, { components: [ChildOf] });
+  if (cached !== undefined) {
+    const evidence = changes.poll();
+    if (evidence.status === 'delta' && evidence.changes.length === 0) return cached.snapshot;
   }
-
-  const graph = internal._getGraph();
   const liveEntities = new Set<EntityHandle>();
   const authoredParents = new Map<EntityHandle, EntityHandle>();
 
-  for (const table of graph.tables) {
-    if (table === undefined) continue;
-    const entities = readColumn(table, Entity.id, 'self');
-    if (entities === undefined) continue;
-    const parents = readColumn(table, ChildOf.id, 'parent');
-    for (let row = 0; row < table.size; row++) {
-      const entity = (entities[row] ?? 0) as EntityHandle;
-      liveEntities.add(entity);
-      if (parents !== undefined) {
-        authoredParents.set(entity, (parents[row] ?? 0) as EntityHandle);
-      }
+  const query = world.query({ read: [Entity], optional: [ChildOf] });
+  if (query.ok) {
+    for (const row of query.value) {
+      liveEntities.add(row.entity);
+      const parent = row.get(ChildOf)?.parent;
+      if (parent !== undefined && parent !== null) authoredParents.set(row.entity, parent);
     }
   }
 
@@ -156,6 +126,9 @@ export function projectHierarchy(world: World): SceneHierarchySnapshot {
       return stableParentOf.get(entity);
     },
   };
-  HIERARCHY_PROJECTION_CACHE.set(world, { childOfMutationEpoch, structureEpoch, snapshot });
+  HIERARCHY_PROJECTION_CACHE.set(world, {
+    changes,
+    snapshot,
+  });
   return snapshot;
 }

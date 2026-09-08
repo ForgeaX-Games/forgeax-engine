@@ -28,6 +28,12 @@ function registerClip(world: World, duration: number) {
   return world.allocSharedRef('AnimationClip', clip);
 }
 
+const lookupClip = (_guid: string): AnimationClip => ({
+  kind: 'animation-clip',
+  duration: 10,
+  channels: [],
+});
+
 interface Slots {
   clips: Uint32Array;
   times: Float32Array;
@@ -42,9 +48,9 @@ function readSlots(world: World, e: EntityHandle): Slots {
 describe('evaluateAnimationGraph — Clip node sampling (M3 / w16)', () => {
   it('fills one slot at full effective weight for a single-Clip graph', () => {
     const world = new World();
-    const clipH = registerClip(world, 10);
+    registerClip(world, 10);
 
-    const built = defineAnimationGraph((b) => b.clip(clipH));
+    const built = defineAnimationGraph((b) => b.clip('test/animation-clip-single'));
     expect(built.ok).toBe(true);
     if (!built.ok) return;
     const graphH = world.allocSharedRef('AnimationGraph', built.value);
@@ -53,7 +59,7 @@ describe('evaluateAnimationGraph — Clip node sampling (M3 / w16)', () => {
       .spawn({ component: AnimationPlayer, data: { graph: graphH } })
       .unwrap() as EntityHandle;
 
-    evaluateAnimationGraph(world, 0);
+    evaluateAnimationGraph(world, 0, lookupClip);
 
     const ap = readSlots(world, e);
     // Exactly one clip node -> one derived slot.
@@ -62,7 +68,7 @@ describe('evaluateAnimationGraph — Clip node sampling (M3 / w16)', () => {
     expect(ap.times.length).toBe(1);
     expect(ap.speeds.length).toBe(1);
     // The slot carries the clip handle at full effective weight (1 x 1 = 1).
-    expect(ap.clips[0]).toBe(clipH);
+    expect(ap.clips[0]).toBeGreaterThan(0);
     expect(ap.weights[0]).toBeCloseTo(1, 5);
     // Derived path writes speeds[]=0 so advance does not re-advance the time
     // (D-7: eval owns the seek-time, advance must not double-drive it).

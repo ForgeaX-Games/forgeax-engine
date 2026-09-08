@@ -26,7 +26,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = appResult.value;
-  console.warn(`[bevy-scale] backend=${app.renderer.backend}`);
+  console.warn(`[bevy-scale] state=${app.renderer.inspect().state}`);
   buildScaleWorld(app.world);
   app.world.addSystem(Update, {
     name: 'scale-cube',

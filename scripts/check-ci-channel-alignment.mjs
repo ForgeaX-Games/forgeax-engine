@@ -33,12 +33,10 @@ const PORTABILITY_JOB = 'portability-bun';
 // step's `run:` literal for the gate to count as "present in this job".
 //
 // feat-small-20260518-ci-cost-and-parallel-trims D-5: `typecheck` (tsc -b) and
-// `tsup-build` (pnpm -r build / `bun run --filter './packages/*' build`)
-// were removed from this set when build-artifacts started owning both phases.
-// Two channels can no longer drift on a step they neither run; re-adding
-// these gates would yield a false positive on the very topology that fixed
-// the redundancy (channel-alignment invariant: aligned ⇒ shared between the
-// two downstream channels).
+// the required package build were removed from this set when build-artifacts
+// started owning both phases. The Bun job's topological package build is a
+// portability-only execution probe, not a second required-build authority;
+// re-adding it here would incorrectly require the pnpm channel to duplicate it.
 const ALIGNED_GATES = [
   { id: 'install', runMatchers: ['install --frozen-lockfile --ignore-scripts'] },
   { id: 'sync-check', runMatchers: ['sync:check'] },
@@ -271,9 +269,10 @@ function runAlignmentCheck(ciYamlText, rootDir) {
 
 const W5_PATH = 'packages/ecs/src/__tests__/query-trs-flat-column-ratio.perf.test.ts';
 const W6_PATH = 'packages/ecs/src/__tests__/query-light-extract-flat-column-ratio.perf.test.ts';
-const W7_PATH = 'packages/ecs/src/__tests__/frame-end.perf.test.ts';
-const W8_PATH = 'packages/ecs/src/__tests__/query-storage-trends.perf.test.ts';
-const EXPECTED_PERF_PATHS = [W5_PATH, W6_PATH, W7_PATH, W8_PATH].sort();
+const W7_PATH = 'packages/ecs/src/__tests__/query-storage-trends.perf.test.ts';
+const W8_PATH = 'packages/ecs/src/__tests__/ecs-core-reduction.perf.test.ts';
+const W9_PATH = 'packages/ecs/src/__tests__/relationship-index.perf.test.ts';
+const EXPECTED_PERF_PATHS = [W5_PATH, W6_PATH, W7_PATH, W8_PATH, W9_PATH].sort();
 
 function extractRootEcsPerfInclude(rootConfigText) {
   const idx = rootConfigText.indexOf("name: 'ecs-perf'");
@@ -396,6 +395,7 @@ function runOwnershipCheck({
         `  W6: ${W6_PATH}\n` +
         `  W7: ${W7_PATH}\n` +
         `  W8: ${W8_PATH}\n` +
+        `  W9: ${W9_PATH}\n` +
         `  Includes: ${incGlobs?.join(', ') || '(missing project)'}\n` +
         `  ${parts.join('; ')}\n` +
         `  Expected exactly: ${EXPECTED_PERF_PATHS.join(', ')}`,

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   canonicalMeshVertices,
   particleMaterialPass,
+  particleMaterialSceneDepthBinding,
   particleMaterialUsesBindings,
 } from '../feature/particle-resources.js';
 
@@ -51,6 +52,14 @@ describe('particle material pass', () => {
       shader: 'game::hex-sigil',
       renderState: { depthWriteEnabled: false, cullMode: 'none' },
     });
+  });
+
+  it('maps renderer shader contracts to their scene-depth binding slots', () => {
+    expect(particleMaterialSceneDepthBinding('group-0-resource')).toBe(0);
+    expect(particleMaterialSceneDepthBinding('view-and-scene-depth')).toBe(1);
+    expect(particleMaterialSceneDepthBinding('group-0')).toBeUndefined();
+    expect(particleMaterialSceneDepthBinding('view-only')).toBeUndefined();
+    expect(particleMaterialSceneDepthBinding('render-material')).toBeUndefined();
   });
 
   it('does not mistake an ordinary Forward pass for a particle shader', () => {

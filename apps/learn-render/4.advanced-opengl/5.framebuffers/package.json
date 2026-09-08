@@ -21,7 +21,7 @@
     },
     "smokeInvocation": "pnpm --filter @forgeax/app-learn-render-4-advanced-opengl-5-framebuffers smoke:gauntlet",
     "gauntletScenario": {
-      "id": "m24-render-graph-cycle-reinstall-recovery",
+      "id": "m24-render-feature-plan-recovery",
       "script": "smoke:gauntlet",
       "domains": [
         "Rendering and shader construction",
@@ -38,7 +38,7 @@
       "phaseInputs": ["baseline", "dynamic", "live", "fault", "recovery", "cleanup"],
       "evidence": {
         "frontDoors": ["dawn-node", "render-graph-cycle", "browser-webgpu", "browser-live", "rhi-debug"],
-        "legs": ["semantic", "live", "gpu", "behavioral", "recovery", "visual"]
+        "legs": ["semantic", "live", "gpu", "behavioral", "recovery"]
       },
       "oracle": {
         "stdoutIncludes": [

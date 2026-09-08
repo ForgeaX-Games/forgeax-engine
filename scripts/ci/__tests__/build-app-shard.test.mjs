@@ -32,6 +32,25 @@ test('browser probe preserves the verified shared-input contract gates', () => {
   assert.match(contract, /shared-engine-shaders/);
 });
 
+test('CI publishes one catalog projection and leaves app publication to each app owner', () => {
+  const workflow = readFileSync(workflowPath, 'utf8');
+  const producer = workflow.slice(
+    workflow.indexOf('  shared-app-inputs:'),
+    workflow.indexOf('\n  app-shard-0:', workflow.indexOf('  shared-app-inputs:')),
+  );
+  assert.match(producer, /--catalog-only/);
+  assert.doesNotMatch(producer, /--projection-out|shared-app-inputs-full/);
+  assert.match(
+    producer,
+    /name: shared-app-inputs-a\$\{\{ github\.run_attempt \}\}[\s\S]*?shared-app-inputs\/manifest\.json/,
+  );
+  const planner = readFileSync(plannerPath, 'utf8');
+  assert.match(
+    planner,
+    /\['--shared-input-manifest', resolve\(root, options\.sharedInputManifest\)\]/,
+  );
+});
+
 test('shared producer builds both plugin dependency closures before invoking Vite', () => {
   const workflow = readFileSync(workflowPath, 'utf8');
   const producer = workflow.slice(
@@ -351,14 +370,14 @@ test('repair: bounds each shard build with the shared machine-adaptive runner', 
   );
   assert.match(runner, /running\.size < maxConcurrent/);
   assert.match(runner, /createViteBuildInvocation/);
+  assert.match(runner, /FORGEAX_SHARED_APP_INPUTS_MANIFEST: sharedInputManifest/);
+  assert.match(runner, /runApp\([\s\S]*appBuildEnv/);
   const workflow = readFileSync(workflowPath, 'utf8');
   for (const shardIndex of [0, 1, 2]) {
-    assert.match(
-      workflow,
-      new RegExp(
-        `Build shard apps\\n        run: node scripts/ci/build-app-shard\\.mjs --shard-count 3 --shard-index ${shardIndex}`,
-      ),
-    );
+    const start = workflow.indexOf(`  app-shard-${shardIndex}:`);
+    const end = workflow.indexOf(`\n  app-shard-${shardIndex + 1}:`, start);
+    const shard = workflow.slice(start, end === -1 ? undefined : end);
+    assert.match(shard, new RegExp(`Build shard apps[\\s\\S]*?--shard-index ${shardIndex}`));
   }
   assert.doesNotMatch(workflow, /FORGEAX_BUILD_CONCURRENCY/);
 });
@@ -377,6 +396,15 @@ test('repair: scrubs persistent runner auth before every shard checkout', () => 
       `${job} must scrub stale auth before checkout`,
     );
   }
+});
+
+test('repair: asset-backed app shard checks out the private engine asset submodule', () => {
+  const workflow = readFileSync(workflowPath, 'utf8');
+  const start = workflow.indexOf('  app-shard-1:');
+  const end = workflow.indexOf('\n  app-shard-2:', start);
+  const shard = workflow.slice(start, end === -1 ? undefined : end);
+  assert.match(shard, /actions\/checkout@v5[\s\S]*?submodules: recursive/);
+  assert.match(shard, /token: \$\{\{ secrets\.GHA \}\}/);
 });
 
 test('repair: shards hydrate successful core artifact IDs with deterministic transport staggering', () => {
@@ -431,6 +459,7 @@ test('repair: shards verify shared inputs against the producer output and build-
     (workflow.match(/name: shared-app-inputs-a\$\{\{ github\.run_attempt \}\}/g) ?? []).length,
     1,
   );
+  assert.doesNotMatch(workflow, /shared-app-inputs-full/);
   assert.match(workflow, /name: provenance-shared-app-inputs-a\$\{\{ github\.run_attempt \}\}/);
   assert.match(
     workflow,
@@ -464,14 +493,16 @@ test('repair: shards verify shared inputs against the producer output and build-
 test('repair: every build-artifact consumer uses the verified retry transport', () => {
   const workflow = readFileSync(workflowPath, 'utf8');
   for (const [job, output] of [
-    ['primary-pnpm', 'artifact_ids'],
-    ['coverage-pnpm', 'artifact_ids'],
-    ['vitest-browser', 'artifact_ids'],
-    ['smoke-fleet', 'artifact_ids'],
-    ['bevy-smoke-fleet', 'artifact_ids'],
-    ['portability-bun', 'artifact_ids'],
-    ['metrics-validate', 'artifact_ids'],
-    ['collectathon-boot-e2e', 'artifact_ids'],
+    ['primary-pnpm', 'artifact_ids_primary_pnpm'],
+    ['coverage-pnpm', 'artifact_ids_coverage_pnpm'],
+    ['coverage-perf', 'artifact_ids_coverage_perf'],
+    ['vitest-browser-shard', 'artifact_ids_vitest_browser'],
+    ['shared-inputs-browser', 'artifact_ids_shared_inputs_browser'],
+    ['multithread-browser-benchmark', 'artifact_ids_multithread_browser_benchmark'],
+    ['smoke-fleet', 'artifact_ids_smoke_fleet'],
+    ['bevy-smoke-fleet', 'artifact_ids_bevy_smoke_fleet'],
+    ['portability-bun', 'artifact_ids_portability_bun'],
+    ['collectathon-boot-e2e', 'artifact_ids_collectathon_boot_e2e'],
   ]) {
     const start = workflow.indexOf(`  ${job}:`);
     const remaining = workflow.slice(start);
@@ -489,17 +520,94 @@ test('repair: every build-artifact consumer uses the verified retry transport', 
   }
 });
 
+test('repair: split metrics producers consume only core output without the app aggregate barrier', () => {
+  const contract = JSON.parse(
+    readFileSync(join(repoRoot, 'scripts', 'ci', 'build-artifact-contract.json'), 'utf8'),
+  );
+  for (const consumer of [
+    'metrics-validate-browser',
+    'metrics-validate-runtime',
+    'metrics-validate',
+  ]) {
+    assert.deepEqual(contract.consumers[consumer].requiredArtifactClasses, [
+      'engine-dist',
+      'wasm-runtime',
+    ]);
+  }
+
+  const workflow = readFileSync(workflowPath, 'utf8');
+  const sectionFor = (job, nextJob) => {
+    const start = workflow.indexOf(`  ${job}:`);
+    const end = workflow.indexOf(`\n  ${nextJob}:`, start);
+    assert.ok(start >= 0, `${job} job must exist`);
+    assert.ok(end > start, `${job} job must precede ${nextJob}`);
+    return workflow.slice(start, end);
+  };
+  const browser = sectionFor('metrics-validate-browser', 'metrics-validate-runtime');
+  const runtime = sectionFor('metrics-validate-runtime', 'metrics-validate');
+  const stableJoin = sectionFor('metrics-validate', 'collectathon-boot-e2e');
+  assert.match(browser, /needs: \[core-build, post-merge-gate, webkit-fallback, smoke-fleet\]/);
+  assert.match(runtime, /needs: \[core-build, post-merge-gate, smoke-fleet\]/);
+  assert.match(
+    stableJoin,
+    /needs: \[core-build, post-merge-gate, smoke-fleet, metrics-validate-browser, metrics-validate-runtime\]/,
+  );
+  for (const section of [browser, runtime, stableJoin]) {
+    assert.match(
+      section,
+      /--artifact-ids "\$\{\{ needs\.core-build\.outputs\.core_artifact_id \}\}" --path \./,
+    );
+    assert.doesNotMatch(section, /needs\.build-artifacts\.outputs\./);
+    assert.doesNotMatch(section, /needs: \[build-artifacts/);
+  }
+  assert.match(browser, /--stage --producer browser/);
+  assert.match(runtime, /--stage --producer runtime/);
+  assert.match(
+    stableJoin,
+    /--merge[\s\S]*--browser metrics-validate-browser-evidence[\s\S]*--runtime metrics-validate-runtime-evidence/,
+  );
+  assert.match(
+    stableJoin,
+    /name: Build VFX metric fixture\n\s+run: pnpm --filter @forgeax\/hello-boss-lightning build/,
+  );
+  assert.match(
+    stableJoin,
+    /name: Detect lavapipe ICD \(for generic Dawn metrics\)[\s\S]*?VK_ICD_FILENAMES=\$ICD_PATH[\s\S]*?VK_DRIVER_FILES=\$ICD_PATH[\s\S]*?name: Run metrics generic runner/,
+  );
+  assert.match(stableJoin, /name: metrics-report/);
+});
+
+test('repair: portability-bun owns only core artifact classes', () => {
+  const contract = JSON.parse(
+    readFileSync(join(repoRoot, 'scripts', 'ci', 'build-artifact-contract.json'), 'utf8'),
+  );
+  assert.deepEqual(contract.consumers['portability-bun'].requiredArtifactClasses, [
+    'engine-dist',
+    'wasm-runtime',
+  ]);
+
+  const workflow = readFileSync(workflowPath, 'utf8');
+  const start = workflow.indexOf('  portability-bun:');
+  const end = workflow.indexOf('\n  metrics-validate:', start);
+  const section = workflow.slice(start, end);
+  assert.match(
+    section,
+    /--artifact-ids "\$\{\{ needs\.build-artifacts\.outputs\.artifact_ids_portability_bun \}\}" --path \./,
+  );
+  assert.doesNotMatch(section, /needs\.build-artifacts\.outputs\.artifact_ids"/);
+});
+
 test('repair: aggregate producers use exact artifact IDs with bounded retry transport', () => {
   const workflow = readFileSync(workflowPath, 'utf8');
   const sections = [
     {
       job: 'build-artifacts',
-      ids: 'needs\\.app-shard-0\\.outputs\\.app_dist_artifact_id.*needs\\.app-shard-1\\.outputs\\.app_dist_artifact_id.*needs\\.app-shard-2\\.outputs\\.app_dist_artifact_id',
+      ids: 'needs\\.app-shard-0\\.outputs\\.app_report_artifact_id.*needs\\.app-shard-1\\.outputs\\.app_report_artifact_id.*needs\\.app-shard-2\\.outputs\\.app_report_artifact_id',
       path: 'shard-reports',
     },
     {
       job: 'cache-warm',
-      ids: 'needs\\.app-shard-0\\.outputs\\.app_dist_artifact_id.*needs\\.app-shard-1\\.outputs\\.app_dist_artifact_id.*needs\\.app-shard-2\\.outputs\\.app_dist_artifact_id',
+      ids: 'needs\\.app-shard-0\\.outputs\\.app_ddc_artifact_id.*needs\\.app-shard-1\\.outputs\\.app_ddc_artifact_id.*needs\\.app-shard-2\\.outputs\\.app_ddc_artifact_id',
       path: 'ddc-snapshots',
     },
   ];
@@ -533,6 +641,7 @@ test('repair: trusted coverage owns the perf ratio gate outside instrumentation'
   assert.doesNotMatch(coverage, /github\.event\.pull_request\.head\.repo/);
   assert.match(coverage, /node scripts\/ci\/run-split-vitest-coverage\.mjs/);
   assert.match(coverage, /--group-size=4/);
+  assert.match(coverage, /--group-concurrency=auto/);
   assert.match(coverage, /--max-workers=1/);
   assert.doesNotMatch(coverage, /--project=ecs-perf/);
   assert.match(perf, /name: ECS performance ratio gates \(uninstrumented\)/);
@@ -647,10 +756,15 @@ test('repair: packages each shard at the extraction root with pairwise-disjoint 
     );
     assert.equal(
       workflow.match(
-        /cp -a node_modules\/\.cache\/forgeax-ddc shard-transfer\/ddc[\s\S]*?rm -f shard-transfer\/ddc\/ddc-warm-status\.json/g,
+        /cp -a node_modules\/\.cache\/forgeax-ddc shard-ddc-transfer\/ddc[\s\S]*?rm -f shard-ddc-transfer\/ddc\/ddc-warm-status\.json/g,
       )?.length,
       3,
-      'shard transfers must exclude merged DDC status from each payload',
+      'shard DDC transfers must exclude merged DDC status from each payload',
+    );
+    assert.equal(
+      workflow.match(/path: shard-report-transfer/g)?.length,
+      3,
+      'shard reports must have a dedicated lightweight transfer artifact',
     );
     assert.equal(
       workflow.includes('shard-output/artifacts/apps/*/dist/shaders/manifest.json'),

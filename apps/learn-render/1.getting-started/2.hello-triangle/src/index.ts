@@ -31,7 +31,7 @@
 //     this file; AI users read the 3 sections + the apps/hello/triangle
 //     README cross-reference and have the full LO 1.2 -> forgeax picture.
 //   - P3 (explicit failure):  `EngineEnvironmentError` surfaces the
-//     "no usable backend" path; `await renderer.ready` returns a
+//     "no usable backend" path; `await host initialization` returns a
 //     `Result` whose `.ok === false` branch is logged via console.error
 //     - we do not silently fall back to a console-only mode.
 //   - P4 (consistent abstraction):  the same `Engine.create({ canvas,
@@ -47,10 +47,11 @@
 // handle constant) needed to drive a single visible triangle frame. No
 // DirectionalLight: LO 1.2 renders flat orange.
 import { World } from '@forgeax/engine-ecs';
+import { captureCanvasPixels } from '@forgeax/apps-shared/canvas-capture';
 import { HANDLE_TRIANGLE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { Engine, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 type LearnRenderError = { code: string; hint?: string };
@@ -58,11 +59,11 @@ type CaptureHook = () => Promise<Uint8Array>;
 
 function reportBootstrapError(
   label: string,
-  error: { readonly code: string; readonly hint?: string },
+  error: EngineEnvironmentError | { readonly code: string; readonly hint?: string },
 ): void {
   console.error(label, error);
   const bus = window.__learnRenderErrors;
-  if (bus !== undefined) {
+  if (bus !== undefined && 'code' in error) {
     bus.push({
       code: error.code,
       ...(error.hint !== undefined ? { hint: error.hint } : {}),
@@ -114,7 +115,7 @@ function spawnTriangleScene(world: World, clearOnly: boolean): void {
 }
 
 // 3. bootstrap - locate the canvas the index.html document declares,
-// hand it to Engine.create, await renderer.ready (the engine internal
+// hand it to Engine.create, await host initialization (the engine internal
 // pipeline + RHI handshake), spawn the triangle scene, drive an rAF
 // loop with `renderer.draw(world)`, expose a capture hook on globalThis
 // for downstream readback paths, then log the resolved backend so the
@@ -131,18 +132,16 @@ void bootstrap(canvas);
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   try {
-    const renderer = await Engine.create(target, {}, forgeaxBundlerAdapter());
-    renderer.onError((e) => {
-      reportBootstrapError('[learn-render 1.2 hello-triangle] renderer.onError:', e);
-    });
-    const ready = await renderer.ready;
-    if (!ready.ok) {
-      reportBootstrapError(
-        '[learn-render 1.2 hello-triangle] renderer.ready failed:',
-        ready.error,
-      );
+    const created = await createRenderer(target, {}, forgeaxBundlerAdapter());
+    if (!created.ok) {
+      reportBootstrapError('[learn-render 1.2 hello-triangle] renderer construction failed:', created.error);
       return;
     }
+    const renderer = created.value;
+    renderer.subscribe((event) => {
+      if (event.kind !== 'error') return;
+      reportBootstrapError('[learn-render 1.2 hello-triangle] renderer error:', event.error);
+    });
     const params = new URLSearchParams(globalThis.location?.search ?? '');
     const clearOnly = params.get('clearOnly') === '1';
     let drawCalls = 0;
@@ -152,7 +151,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     });
     const world = new World();
     spawnTriangleScene(world, clearOnly);
-    const attached = renderer.attachWorld(world);
+    const attached = renderer.attach(world);
     if (!attached.ok) {
       reportBootstrapError('[learn-render 1.2 hello-triangle] attach failed:', attached.error);
       return;
@@ -169,14 +168,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         reportBootstrapError('[learn-render 1.2 hello-triangle] update failed:', updated.error);
         return;
       }
-      const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      const drawn = renderer.draw({
+        leases: [attached.value],
+        camera: { lease: attached.value },
+        environment: { lease: attached.value },
+      });
       if (!drawn.ok) {
         reportBootstrapError('[learn-render 1.2 hello-triangle] draw failed:', drawn.error);
         return;
       }
       drawCalls += 1;
       requestAnimationFrame(tick);
-      // The positive marker is deliberately later than renderer.ready: the
+      // The positive marker is deliberately later than host initialization: the
       // scene, probes, render loop, and one successful draw must all exist.
       window.__learnRenderBootstrapComplete = true;
     };
@@ -184,13 +187,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // Capture hook for downstream readback paths (bench-screenshot
     // recorder, vitest browser smoke). Re-draws the world before
     // sampling so the canvas presents a fresh frame on every snapshot.
-    // Body delegates to renderer.readPixels() (engine API since
-    // 2026-05-17; AGENTS.md §Breaking changes) -- the recipe lives in
-    // packages/runtime/src/createRenderer.ts now (architecture
-    // principle 1 SSOT).
+    // Body delegates to the host-owned canvas capture helper.
     window.__captureHelloTriangle = async (): Promise<Uint8Array> => {
       world.update(1 / 60).unwrap();
-      const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      const drawn = renderer.draw({
+        leases: [attached.value],
+        camera: { lease: attached.value },
+        environment: { lease: attached.value },
+      });
       if (!drawn.ok) {
         reportBootstrapError(
           '[learn-render 1.2 hello-triangle] capture draw failed:',
@@ -200,11 +204,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           `[learn-render 1.2 hello-triangle] capture draw failed: ${drawn.error.code}`,
         );
       }
-      const r = await renderer.readPixels();
-      if (!r.ok) throw new Error(`[learn-render 1.2 hello-triangle] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`);
+      const r = await captureCanvasPixels(target);
+      if (!r.ok) throw new Error(`[learn-render 1.2 hello-triangle] canvas capture failed: ${r.error.hint}`);
       return r.value;
     };
-    console.warn(`[learn-render 1.2 hello-triangle] backend=${renderer.backend}`);
+    console.warn(
+      `[learn-render 1.2 hello-triangle] backend=${renderer.inspect().capabilities.backendKind}`,
+    );
   } catch (err: unknown) {
     if (err instanceof EngineEnvironmentError) {
       console.error('[learn-render 1.2 hello-triangle] no usable backend:', err);

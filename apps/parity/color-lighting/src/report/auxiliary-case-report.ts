@@ -6,7 +6,7 @@ import type {
 
 export interface DawnAuxiliaryObservation {
   readonly caseId: string;
-  readonly pipelineId: 'forgeax::urp' | 'forgeax::hdrp';
+  readonly pipelineId: 'forgeax::standard' | 'forgeax::urp' | 'forgeax::hdrp';
   readonly backendId: string;
   readonly frameId: number;
   readonly bytes: readonly number[];
@@ -72,7 +72,7 @@ export interface SerializedIblCapability {
 }
 
 export interface SerializedIblFinalDisplay {
-  readonly status: 'ready' | 'failed';
+  readonly status: SerializedIblEvidence['status'];
   readonly bytes: readonly number[] | null;
   readonly format: 'rgba8unorm' | null;
   readonly rawHash: string | null;

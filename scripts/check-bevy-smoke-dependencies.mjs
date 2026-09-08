@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const bevyRoot = 'apps/bevy';
@@ -8,6 +8,7 @@ const missing = [];
 for (const entry of readdirSync(bevyRoot, { withFileTypes: true })) {
   if (!entry.isDirectory()) continue;
   const appDir = join(bevyRoot, entry.name);
+  if (!existsSync(join(appDir, 'package.json'))) continue;
   const packageJson = JSON.parse(readFileSync(join(appDir, 'package.json'), 'utf8'));
   const smokePath = join(appDir, 'scripts', 'smoke-dawn.mjs');
   let source;

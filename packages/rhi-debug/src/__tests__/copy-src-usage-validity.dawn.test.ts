@@ -109,7 +109,7 @@ describe.skipIf(SKIP_DAWN)('COPY_SRC usage-validity (w17, dawn)', () => {
     const res = device.createBuffer({ size: 128, usage: VERTEX });
     expect(res.ok).toBe(true);
 
-    const table = debugInst._getDescriptorTable();
+    const table = debugInst.descriptorTable();
     const entry = [...table.values()][0];
     if (entry === undefined) throw new Error('descriptor entry missing');
     expect((entry.usage & BUFFER_COPY_SRC) !== 0).toBe(true);

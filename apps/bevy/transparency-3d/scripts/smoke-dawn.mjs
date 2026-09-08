@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // Dawn smoke for Bevy's 3d/transparency_3d example.
 // The smoke renders the same shared World as the browser app, captures early and late
 // frames, and proves that elapsed-time alpha changes the pixels rather than only the ECS.
@@ -84,22 +85,17 @@ const manifestUrl = `data:application/json,${encodeURIComponent(manifest)}`;
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: manifestUrl });
+  renderer = await createSmokeRenderer(createRenderer, mockCanvas, {}, { shaderManifestUrl: manifestUrl });
 } catch (error) {
   console.error(`[smoke] FAIL - createRenderer: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
-renderer.onError((error) => errors.push(error));
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
+subscribeSmokeErrors(renderer, (error) => errors.push(error));
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const scene = buildTransparencyWorld(world, WIDTH / HEIGHT);
 const captures = [];
@@ -133,7 +129,7 @@ for (let frame = 0; frame < FRAME_COUNT; frame += 1) {
   const elapsed = process.env.FALSIFY === 'freeze-alpha' ? 0 : frame * FIXED_DT;
   stepTransparencyAlpha(world, scene, elapsed);
   world.update().unwrap();
-  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const draw = drawSmokeFrame(renderer, world);
   if (!draw.ok) errors.push(draw.error);
   if (frame === EARLY_FRAME) await capture('early');
   if (frame === FRAME_COUNT - 1) await capture('late');
@@ -165,13 +161,13 @@ const lateElapsed = process.env.FALSIFY === 'freeze-alpha' ? 0 : (FRAME_COUNT - 
 const alphaStateDelta = Math.abs(
   (Math.sin(lateElapsed) / 2 + 0.5) - (Math.sin(earlyElapsed) / 2 + 0.5),
 );
-console.log(`[bevy-transparency-3d] backend=${renderer.backend}`);
+console.log(`[bevy-transparency-3d] backend=${rendererBackend(renderer)}`);
 console.log(`[smoke] frames observed=${FRAME_COUNT}`);
 console.log(`[smoke] alphaMeanDelta=${delta.toFixed(5)} alphaStateDelta=${alphaStateDelta.toFixed(5)} lateMaxLuma=${lateLuma.toFixed(4)}`);
 for (const capture of captures) console.log(`[smoke] wrote PNG=${capture.pngPath}`);
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`backend=${renderer.backend} (expected webgpu)`);
+if (rendererBackend(renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(renderer)} (expected webgpu)`);
 if (FRAME_COUNT < MIN_FRAMES) failures.push(`frames=${FRAME_COUNT} < ${MIN_FRAMES}`);
 if (lateLuma <= 0.15) failures.push(`lateMaxLuma=${lateLuma.toFixed(4)} <= 0.15`);
 if (delta <= 0.0005) failures.push(`alphaMeanDelta=${delta.toFixed(5)} <= 0.0005 (alpha animation is not visible)`);

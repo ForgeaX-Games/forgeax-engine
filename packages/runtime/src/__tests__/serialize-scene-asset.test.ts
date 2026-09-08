@@ -1,3 +1,5 @@
+import * as SceneOwner from '@forgeax/engine-scene';
+
 // M3 test -- serializeSceneAssetToPack schema-derived field dispatch + fail-fast
 // (plan-strategy D-1/D-2: collect + serialize share same classifier;
 //  AC-14: serialize schema-derived refs index + fail-fast on unresolved GUID;
@@ -8,23 +10,17 @@
 //          + GUID unresolved fail-fast (AC-14)
 //   m3-t2: unregistered component silently skipped, other components intact (AC-15)
 
+import { AnimationPlayer } from '@forgeax/engine-animation';
 import type { Asset } from '@forgeax/engine-assets-runtime';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import {
-  type Component,
-  defineComponent,
-  type EntityHandle,
-  resolveComponent,
-  World,
-} from '@forgeax/engine-ecs';
+import { type Component, defineComponent, type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { SceneInstance } from '@forgeax/engine-render';
 import type { LocalEntityId, MountOverride, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '../collect-scene-asset';
-import '@forgeax/engine-render/internal';
-import { AnimationPlayer } from '@forgeax/engine-animation';
-import { SceneInstance } from '@forgeax/engine-render/internal';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+import { registerSceneComponents } from './helpers/register-scene-components';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Helpers
@@ -46,13 +42,18 @@ function catScene(reg: AssetRegistry, g: string, p: SceneAsset): void {
   reg.catalog(pg(g), p as Asset);
 }
 function rs(w: World, a: SceneAsset) {
+  registerSceneComponents(w, [AnimationPlayer, W18_ScalarShared]);
   return w.allocSharedRef('SceneAsset', a);
+}
+
+function componentMap(...components: readonly Component[]): ReadonlyMap<string, Component> {
+  return new Map(components.map((component) => [component.name, component]));
 }
 function findMountedMember(w: World, rootA: EntityHandle): EntityHandle {
   for (const c of w.iterDescendants(rootA)) {
     if (c === rootA) continue;
     if (!w.get(c, SceneInstance).ok) continue;
-    const st = w.getSceneInstanceState(c);
+    const st = SceneOwner.worldGetSceneInstanceState(w, c);
     if (!st.ok) continue;
     for (const [member] of st.value.entityToLocalId) return member;
   }
@@ -73,7 +74,7 @@ function firstMountOverride(scene: SceneAsset, comp: string): MountOverride | un
 
 describe('m3-t1: serialize refs index with schema derivation', () => {
   it('(a) shared<> scalar field GUID goes to refs[] and entity value is replaced with refs index', () => {
-    defineComponent('Test_SPackSharedScalar', {
+    const component = defineComponent('Test_SPackSharedScalar', {
       assetRef: { type: 'shared<TestAsset>' },
       // biome-ignore lint/suspicious/noExplicitAny: defineComponent constraint too strict for complex schema types
     } as any);
@@ -90,7 +91,11 @@ describe('m3-t1: serialize refs index with schema derivation', () => {
       ],
     };
 
-    const packResult = serializeSceneAssetToPack(sceneAsset, 'scene-0000-0000-0000-000000000001');
+    const packResult = serializeSceneAssetToPack(
+      sceneAsset,
+      componentMap(component as Component),
+      'scene-0000-0000-0000-000000000001',
+    );
     expect(packResult.ok).toBe(true);
     if (!packResult.ok) return;
 
@@ -123,7 +128,7 @@ describe('m3-t1: serialize refs index with schema derivation', () => {
   });
 
   it('(b) array<shared<>> field elements go to refs[] and are replaced with refs indices', () => {
-    defineComponent('Test_SPackSharedArray', {
+    const component = defineComponent('Test_SPackSharedArray', {
       sources: { type: 'array<shared<TestAsset>>' },
       // biome-ignore lint/suspicious/noExplicitAny: defineComponent constraint too strict
     } as any);
@@ -141,7 +146,11 @@ describe('m3-t1: serialize refs index with schema derivation', () => {
       ],
     };
 
-    const packResult = serializeSceneAssetToPack(sceneAsset, 'scene-bbbb-bbbb-bbbb-bbbbbbbbbbbb');
+    const packResult = serializeSceneAssetToPack(
+      sceneAsset,
+      componentMap(component as Component),
+      'scene-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+    );
     expect(packResult.ok).toBe(true);
     if (!packResult.ok) return;
 
@@ -172,7 +181,7 @@ describe('m3-t1: serialize refs index with schema derivation', () => {
     // HANDLE_FIELD_NAMES whitelist did NOT include it (only assetHandle,
     // material, skeleton, clip, cubemap, materials). Schema derivation
     // auto-covers it by reading comp.schema[field] prefix.
-    defineComponent('Test_STilesetPack', {
+    const component = defineComponent('Test_STilesetPack', {
       tileset: { type: 'shared<TestAsset>' },
       // biome-ignore lint/suspicious/noExplicitAny: defineComponent constraint too strict
     } as any);
@@ -189,7 +198,11 @@ describe('m3-t1: serialize refs index with schema derivation', () => {
       ],
     };
 
-    const packResult = serializeSceneAssetToPack(sceneAsset, 'scene-cccc-cccc-cccc-cccccccccccc');
+    const packResult = serializeSceneAssetToPack(
+      sceneAsset,
+      componentMap(component as Component),
+      'scene-cccc-cccc-cccc-cccccccccccc',
+    );
     expect(packResult.ok).toBe(true);
     if (!packResult.ok) return;
 
@@ -204,7 +217,7 @@ describe('m3-t1: serialize refs index with schema derivation', () => {
   });
 
   it('(d) GUID missing from refs index -> serialize returns err (fail-fast, R-7)', () => {
-    defineComponent('Test_SFailFastPack', {
+    const component = defineComponent('Test_SFailFastPack', {
       loneRef: { type: 'shared<TestAsset>' },
       // biome-ignore lint/suspicious/noExplicitAny: defineComponent constraint too strict for complex schema types
     } as any);
@@ -227,7 +240,11 @@ describe('m3-t1: serialize refs index with schema derivation', () => {
     // — this is a structural guarantee, not a data-producible scenario in normal use.
     // We verify the structural property that the return type is Result-shaped
     // and the happy path produces ok.
-    const packResult = serializeSceneAssetToPack(sceneAsset, 'scene-dddd-dddd-dddd-dddddddddddd');
+    const packResult = serializeSceneAssetToPack(
+      sceneAsset,
+      componentMap(component as Component),
+      'scene-dddd-dddd-dddd-dddddddddddd',
+    );
     expect(packResult.ok).toBe(true);
     if (!packResult.ok) return;
 
@@ -249,7 +266,7 @@ describe('m3-t2: unregistered component silently skipped', () => {
     // Register a component for the other entity fields so resolveComponent
     // can find it, but do NOT register 'Unreg_TestSkip' — it only exists
     // in the SceneAsset POD data.
-    defineComponent('Test_SRegComp', {
+    const component = defineComponent('Test_SRegComp', {
       val: 'f32',
     });
 
@@ -266,7 +283,11 @@ describe('m3-t2: unregistered component silently skipped', () => {
       ],
     };
 
-    const packResult = serializeSceneAssetToPack(sceneAsset, 'scene-eeee-eeee-eeee-eeeeeeeeeeee');
+    const packResult = serializeSceneAssetToPack(
+      sceneAsset,
+      componentMap(component as Component),
+      'scene-eeee-eeee-eeee-eeeeeeeeeeee',
+    );
     expect(packResult.ok).toBe(true);
     if (!packResult.ok) return;
 
@@ -298,7 +319,7 @@ describe('m3-t2: unregistered component silently skipped', () => {
   });
 
   it('(b) unregistered component skip does not block other registered components on same entity', () => {
-    defineComponent('Test_SRegComp2', {
+    const component = defineComponent('Test_SRegComp2', {
       count: 'i32',
     });
 
@@ -315,7 +336,11 @@ describe('m3-t2: unregistered component silently skipped', () => {
       ],
     };
 
-    const packResult = serializeSceneAssetToPack(sceneAsset, 'scene-ffff-ffff-ffff-ffffffffffff');
+    const packResult = serializeSceneAssetToPack(
+      sceneAsset,
+      componentMap(component as Component),
+      'scene-ffff-ffff-ffff-ffffffffffff',
+    );
     expect(packResult.ok).toBe(true);
     if (!packResult.ok) return;
 
@@ -458,7 +483,7 @@ describe('w18 — override-value shared handle→GUID two-state NULL-sentinel (A
   });
 
   it('(c) scalar shared<> valid handle -> GUID string (non-null branch)', () => {
-    expect(resolveComponent('W18_ScalarShared')).toBeDefined();
+    expect(W18_ScalarShared.name).toBe('W18_ScalarShared');
     const reg = mkReg();
     const w = new World();
     const root = mountOne(reg, w);

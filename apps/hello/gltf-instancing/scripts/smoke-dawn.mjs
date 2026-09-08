@@ -15,7 +15,7 @@
 //   3. parseGltf(box.gltf) -> IR; bridge IR -> MeshAsset / MaterialAsset /
 //      SceneAsset PODs; registerWithGuid each against the GUIDs in
 //      box.gltf.meta.json so loadByGuid hits the in-memory fast-path.
-//   4. await renderer.ready + 300 x renderer.draw(world).
+//   4. await runtime host initialization + 300 x lease-bound renderer.draw(...).
 //   5. copyTextureToBuffer + mapAsync grid sample; verdict =
 //      4 criteria (a) backend=webgpu (b) frames>=300
 //      (c) per-pixel distance to clear color >= SMOKE_PIXEL_THRESHOLD on
@@ -138,17 +138,17 @@ const mockCanvas = {
 
 // --- 3. Drive engine ECS path through the gltf importer ---------------------
 
-const { World } = await import('@forgeax/engine-ecs');
-const enginePkg = await import('@forgeax/engine-runtime');
-const { createRenderer } = enginePkg;
+const { createWorldContext, World } = await import('@forgeax/engine-ecs');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const {
   Camera,
   DirectionalLight,
   Instances,
   MeshFilter,
   MeshRenderer,
+  renderComponentsPlugin,
 } = await import('@forgeax/engine-render');
-const { ChildOf, Name, Transform } = await import('@forgeax/engine-scene');
+const { ChildOf, Name, scenePlugin, Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
 } = await import('@forgeax/engine-assets-runtime');
@@ -159,24 +159,22 @@ const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
 
 let renderer;
+let assets;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  assets = constructed.value.assets;
 } catch (err) {
   console.error(
-    `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
+    `[smoke] FAIL - renderer host construction failed: ${err instanceof Error ? err.message : String(err)}`,
   );
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[hello-gltf-instancing] backend=${renderer.backend}`);
-
-const assets = renderer.assets;
-if (!assets) {
-  console.error('[smoke] FAIL - AssetRegistry is null');
-  process.exit(1);
-}
+console.log('[hello-gltf-instancing] pipeline=Standard');
 
 // Read + parse the gltf source (same Tier-B fork the browser bundle
 // hands to parseGltf). The data URI buffer is resolved inline so
@@ -272,7 +270,14 @@ const meshAsset = {
   kind: 'mesh',
   vertices: interleavedVerts,
   indices: meshIr.indices,
-  submeshes: [{ indexOffset: 0, indexCount: meshIr.indices.length, vertexCount, topology: 'triangle-list' }],
+  submeshes: [{
+    indexOffset: 0,
+    indexCount: meshIr.indices.length,
+    vertexCount,
+    topology: 'triangle-list',
+    materialSlot: 0,
+  }],
+  materialSlots: [{ slotName: 'Default' }],
   attributes: {
     position: meshIr.positions,
     normal: normals ?? new Float32Array(vertexCount * 3).fill(0),
@@ -305,8 +310,17 @@ const materialAsset = {
 };
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldContext = await createWorldContext(world, [
+  renderComponentsPlugin(),
+  scenePlugin(),
+]);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const frameRequest = {
+  leases: [worldAttachment1.value],
+  camera: { lease: worldAttachment1.value },
+  environment: { lease: worldAttachment1.value },
+};
 assets.catalog(meshGuid, meshAsset);
 // catalog the material payload so loadByGuid<MaterialAsset>(materialGuid) hits
 // the fast-path (parity with src/main.ts); allocSharedRef mints the column handle.
@@ -348,20 +362,17 @@ if (!instanceRes.ok) {
 }
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint });
+});
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = renderer.draw(frameRequest);
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
 }
@@ -442,9 +453,8 @@ for (const name of meshSiteNames) {
 console.log(`[smoke] perSiteDistance=${JSON.stringify(perSiteDistance)}`);
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES)
-  failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
+  failures.push(`(a) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (meshedRenderCount < 1) {
   failures.push(
     `(c) single-mesh sample - 0 of ${meshSiteNames.length} meshed sites exceed threshold=${SMOKE_PIXEL_THRESHOLD} distance from clear color; all 3 sites too close to clear. perSiteDistance=${JSON.stringify(perSiteDistance)}`,
@@ -479,7 +489,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 4 criteria GREEN: backend=webgpu, frames=${framesObserved}, meshed sites above threshold=${meshedRenderCount}/${meshSiteNames.length}, RhiError count=0`,
+  `[smoke] PASS - 3 criteria GREEN: pipeline=Standard, frames=${framesObserved}, meshed sites above threshold=${meshedRenderCount}/${meshSiteNames.length}, RhiError count=0`,
 );
 
 device.destroy?.();

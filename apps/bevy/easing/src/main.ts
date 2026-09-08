@@ -43,7 +43,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = appResult.value;
-  console.warn(`[bevy-easing] backend=${app.renderer.backend}`);
+  console.warn(`[bevy-easing] state=${app.renderer.inspect().state}`);
 
   buildEasingWorld(app.world);
 

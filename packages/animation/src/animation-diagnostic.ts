@@ -5,7 +5,9 @@ export type AnimationDiagnosticCode =
   | 'animation-target-transform-missing'
   | 'animation-target-id-duplicate'
   | 'animation-target-owner-stale'
-  | 'animation-channel-missing';
+  | 'animation-channel-missing'
+  | 'animation-target-morph-weights-missing'
+  | 'animation-morph-weight-count-mismatch';
 
 export interface AnimationDiagnosticDetail {
   readonly player: number;
@@ -17,9 +19,13 @@ export interface AnimationDiagnosticDetail {
     | 'transform-missing'
     | 'target-id-duplicate'
     | 'target-stale'
-    | 'channel-missing';
+    | 'channel-missing'
+    | 'morph-weights-missing'
+    | 'morph-weight-count-mismatch';
   readonly target?: number;
-  readonly property?: 'translation' | 'rotation' | 'scale';
+  readonly property?: 'translation' | 'rotation' | 'scale' | 'weights';
+  readonly expectedWeightCount?: number;
+  readonly actualWeightCount?: number;
 }
 
 export interface AnimationDiagnostic {

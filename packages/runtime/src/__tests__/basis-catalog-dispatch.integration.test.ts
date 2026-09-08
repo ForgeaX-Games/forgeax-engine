@@ -27,6 +27,7 @@ import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { TranscodeCaps } from '@forgeax/engine-types';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { BasisEncoderModule, BasisModuleFactory } from '../../../codec/src/wasm/basis-types';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const ENCODER_GLUE = new URL('../../../codec/pkg/encode/basis_encoder.mjs', import.meta.url);
@@ -39,10 +40,29 @@ const PACK_INDEX_URL = '/basis-catalog-dispatch-pack-index.json';
 const PACK_URL = `/ddc/${GUID_TEX}.pack.json`;
 const W = 16;
 const H = 16;
-const NO_CAPS: TranscodeCaps = { bc: false, etc2: false, astc: false };
+const CAPABILITY_CELLS = [
+  [{ bc: false, etc2: false, astc: false }, 'rgba'],
+  [{ bc: false, etc2: false, astc: true }, 'astc'],
+  [{ bc: true, etc2: false, astc: false }, 'bc'],
+  [{ bc: false, etc2: true, astc: false }, 'etc'],
+  [{ bc: true, etc2: true, astc: true }, 'all'],
+] as const;
+const NO_CAPS = CAPABILITY_CELLS[0][0];
 
 let basisKtx2: Uint8Array;
+let uastcLdrKtx2: Uint8Array;
+let uastcHdrKtx2: Uint8Array;
+let rawBasis: Uint8Array;
 let originalFetch: typeof globalThis.fetch;
+
+type TextureFixture = {
+  readonly bytes: Uint8Array;
+  readonly extension: 'ktx2' | 'basis';
+  readonly mediaType: 'image/ktx2' | 'image/basis';
+  readonly container: 'ktx2' | 'basis';
+  readonly profile: 'etc1s' | 'uastc-ldr' | 'uastc-hdr';
+  readonly colorSpace: 'srgb' | 'linear';
+};
 
 function parseGuid(g: string): AssetGuid {
   const parsed = AssetGuid.parse(g);
@@ -66,20 +86,59 @@ beforeAll(async () => {
       pixels[i + 3] = 255;
     }
   }
-  const enc = await basisEncode(pixels, {
-    mode: 'etc1s',
-    width: W,
-    height: H,
-    srgb: true,
-    perceptual: true,
-    uastcSupercompression: false,
-    mipGen: false,
+  async function encode(mode: 'etc1s' | 'uastc-ldr' | 'uastc-hdr', source: Uint8Array) {
+    const enc = await basisEncode(source, {
+      mode,
+      width: W,
+      height: H,
+      srgb: mode !== 'uastc-hdr',
+      perceptual: mode !== 'uastc-hdr',
+      uastcSupercompression: mode === 'uastc-ldr',
+      mipGen: false,
+    });
+    if (!enc.ok) throw new Error(`basisEncode failed: ${enc.error.code}`);
+    return enc.value;
+  }
+  basisKtx2 = await encode('etc1s', pixels);
+  uastcLdrKtx2 = await encode('uastc-ldr', pixels);
+  uastcHdrKtx2 = await encode('uastc-hdr', new Uint8Array(W * H * 8));
+
+  const factory = (
+    (await import(/* @vite-ignore */ ENCODER_GLUE.href)) as {
+      default: BasisModuleFactory<BasisEncoderModule>;
+    }
+  ).default;
+  const mod = await factory({
+    locateFile: () => new URL('../../../codec/pkg/encode/basis_encoder.wasm', import.meta.url).href,
   });
-  if (!enc.ok) throw new Error(`basisEncode failed: ${enc.error.code}`);
-  basisKtx2 = enc.value;
+  mod.initializeBasis();
+  const encoder = new mod.BasisEncoder();
+  try {
+    encoder.setSliceSourceImage(0, pixels, W, H, 0);
+    encoder.setCreateKTX2File(false);
+    encoder.setFormatMode(mod.basis_tex_format.cUASTC_LDR_4x4.value);
+    encoder.setPerceptual(false);
+    encoder.setMipGen(false);
+    const bytes = new Uint8Array(1 << 20);
+    const length = encoder.encode(bytes);
+    if (length <= 0) throw new Error('raw Basis encode failed');
+    rawBasis = bytes.slice(0, length);
+  } finally {
+    encoder.delete();
+  }
 });
 
-function wireFetch(rowCompression: 'basis-etc1s' | undefined): void {
+function wireFetch(
+  includeCodec: boolean,
+  fixture: TextureFixture = {
+    bytes: basisKtx2,
+    extension: 'ktx2',
+    mediaType: 'image/ktx2',
+    container: 'ktx2',
+    profile: 'etc1s',
+    colorSpace: 'srgb',
+  },
+): void {
   globalThis.fetch = ((input: string) => {
     const url = typeof input === 'string' ? input : String(input);
     if (url === PACK_INDEX_URL) {
@@ -109,17 +168,23 @@ function wireFetch(rowCompression: 'basis-etc1s' | undefined): void {
                 payload: {
                   width: W,
                   height: H,
-                  format: 'rgba8unorm-srgb',
-                  colorSpace: 'srgb',
+                  format: fixture.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba16float',
+                  colorSpace: fixture.colorSpace,
                 },
                 refs: [],
                 artifacts: {
                   body: {
-                    path: `${GUID_TEX}.ktx2`,
-                    mediaType: 'image/ktx2',
-                    ...(rowCompression === undefined
-                      ? {}
-                      : { assetCodec: { name: 'basis', profile: 'etc1s' } }),
+                    path: `${GUID_TEX}.${fixture.extension}`,
+                    mediaType: fixture.mediaType,
+                    ...(includeCodec
+                      ? {
+                          assetCodec: {
+                            name: 'basis',
+                            container: fixture.container,
+                            profile: fixture.profile,
+                          },
+                        }
+                      : {}),
                   },
                 },
               },
@@ -132,17 +197,24 @@ function wireFetch(rowCompression: 'basis-etc1s' | undefined): void {
       ok: true,
       arrayBuffer: () =>
         Promise.resolve(
-          basisKtx2.buffer.slice(basisKtx2.byteOffset, basisKtx2.byteOffset + basisKtx2.byteLength),
+          fixture.bytes.buffer.slice(
+            fixture.bytes.byteOffset,
+            fixture.bytes.byteOffset + fixture.bytes.byteLength,
+          ),
         ),
     });
   }) as unknown as typeof globalThis.fetch;
 }
 
-async function loadWith(rowCompression: 'basis-etc1s' | undefined) {
-  wireFetch(rowCompression);
+async function loadWith(
+  includeCodec: boolean,
+  fixture?: TextureFixture,
+  caps: TranscodeCaps = NO_CAPS,
+) {
+  wireFetch(includeCodec, fixture);
   const reg = new AssetRegistry(makeMockShaderRegistry());
   reg.configurePackIndex(PACK_INDEX_URL);
-  reg.setTranscodeCaps(NO_CAPS);
+  reg.setTranscodeCaps(caps);
   return reg.loadByGuid(parseGuid(GUID_TEX));
 }
 
@@ -158,12 +230,12 @@ describe.skipIf(!pkgBuilt)('Basis catalog dispatch round-trip (M6 fix)', () => {
     // Catalog v2 carries package navigation only. The optional codec hint is
     // owned by the artifact descriptor, so a valid KTX2 artifact remains
     // loadable when that hint is absent from the package row.
-    const result = await loadWith(undefined);
+    const result = await loadWith(false);
     expect(result.ok).toBe(true);
   });
 
   it('artifact codec=basis-etc1s takes the transcode arm and loads', async () => {
-    const result = await loadWith('basis-etc1s');
+    const result = await loadWith(true);
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error(`load failed: ${result.error.code}`);
     const tex = result.value as { kind: string; width: number; height: number; format: string };
@@ -173,5 +245,76 @@ describe.skipIf(!pkgBuilt)('Basis catalog dispatch round-trip (M6 fix)', () => {
     // NO_CAPS -> the transcode arm degrades to the uncompressed sRGB fallback
     // (section 8 P3), never a scheme=1 reject.
     expect(tex.format).toBe('rgba8unorm-srgb');
+  });
+
+  it('loads every real KTX2/Basis profile through Catalog and loadByGuid', async () => {
+    const fixtures: readonly TextureFixture[] = [
+      {
+        bytes: basisKtx2,
+        extension: 'ktx2',
+        mediaType: 'image/ktx2',
+        container: 'ktx2',
+        profile: 'etc1s',
+        colorSpace: 'srgb',
+      },
+      {
+        bytes: uastcLdrKtx2,
+        extension: 'ktx2',
+        mediaType: 'image/ktx2',
+        container: 'ktx2',
+        profile: 'uastc-ldr',
+        colorSpace: 'srgb',
+      },
+      {
+        bytes: uastcHdrKtx2,
+        extension: 'ktx2',
+        mediaType: 'image/ktx2',
+        container: 'ktx2',
+        profile: 'uastc-hdr',
+        colorSpace: 'linear',
+      },
+      {
+        bytes: rawBasis,
+        extension: 'basis',
+        mediaType: 'image/basis',
+        container: 'basis',
+        profile: 'uastc-ldr',
+        colorSpace: 'srgb',
+      },
+    ];
+
+    for (const fixture of fixtures) {
+      for (const [caps, arm] of CAPABILITY_CELLS) {
+        const result = await loadWith(true, fixture, caps);
+        expect(result.ok, `${fixture.container}:${fixture.profile}:${arm}`).toBe(true);
+        if (!result.ok) continue;
+        const texture = result.value as {
+          kind: string;
+          width: number;
+          height: number;
+          format: string;
+          data: Uint8Array;
+          colorSpace: string;
+        };
+        expect(texture.kind).toBe('texture');
+        expect(texture.width).toBe(W);
+        expect(texture.height).toBe(H);
+        expect(texture.data.byteLength).toBeGreaterThan(0);
+        expect(texture.colorSpace).toBe(fixture.colorSpace);
+        const expected =
+          fixture.profile === 'uastc-hdr'
+            ? caps.bc
+              ? 'bc6h-rgb-ufloat'
+              : 'rgba16float'
+            : caps.bc
+              ? `bc7-rgba-unorm${fixture.colorSpace === 'srgb' ? '-srgb' : ''}`
+              : caps.astc
+                ? `astc-4x4-unorm${fixture.colorSpace === 'srgb' ? '-srgb' : ''}`
+                : caps.etc2
+                  ? `etc2-rgba8unorm${fixture.colorSpace === 'srgb' ? '-srgb' : ''}`
+                  : `rgba8unorm${fixture.colorSpace === 'srgb' ? '-srgb' : ''}`;
+        expect(texture.format, `${fixture.container}:${fixture.profile}:${arm}`).toBe(expected);
+      }
+    }
   });
 });

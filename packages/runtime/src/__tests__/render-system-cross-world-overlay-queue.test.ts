@@ -28,11 +28,12 @@
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
-import { Camera, extractFrames, MeshFilter, MeshRenderer } from '@forgeax/engine-render/internal';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
 import type { Handle, MaterialAsset, MaterialPass, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { extractFrames } from '../../../render/src/render-system-extract';
 
 // Two-index owner shape w4-w6 introduces (see w1 for rationale).
 interface OwnerSplit {
@@ -89,7 +90,11 @@ function registerMesh(world: World): Handle<'MeshAsset', 'shared'> {
     ]),
     indices: new Uint16Array([0, 1, 2]),
     attributes: { position: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]) },
-    submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+    submeshes: [
+      { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list', materialSlot: 0 },
+    ],
+
+    materialSlots: [{ slotName: 'Default' }],
   });
 }
 

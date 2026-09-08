@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // Dawn smoke for Bevy `move_sprite`: a real sprite follows Time-driven motion,
 // reaches both bounds, and reverses direction through the shared ECS step.
 
@@ -55,22 +56,18 @@ gpu.requestAdapter = async (options) => {
   adapter.requestDevice = async (descriptor) => { device = await originalRequestDevice(descriptor); return device; };
   return adapter;
 };
-const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: manifestUrl });
+const renderer = await createSmokeRenderer(createRenderer, canvas, {}, { shaderManifestUrl: manifestUrl });
 gpu.requestAdapter = originalRequestAdapter;
-console.log(`[bevy-move-sprite] backend=${renderer.backend}`);
+console.log(`[bevy-move-sprite] backend=${rendererBackend(renderer)}`);
 const errors = [];
-renderer.onError((error) => errors.push(error));
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
+subscribeSmokeErrors(renderer, (error) => errors.push(error));
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const pixels = makeSpritePixels();
 const texture = { kind: 'texture', width: SPRITE_SIZE, height: SPRITE_SIZE, format: 'rgba8unorm-srgb', data: pixels, colorSpace: 'srgb', mipmap: false };
 const textureHandle = world.allocSharedRef('TextureAsset', texture);
-const upload = await renderer.store.uploadTexture(textureHandle, texture, { bytes: pixels, width: SPRITE_SIZE, height: SPRITE_SIZE, mime: 'image/png', colorSpace: 'srgb', mipmap: false });
-if (!upload.ok) throw new Error(`${upload.error.code}: ${upload.error.hint}`);
 buildMoveSpriteWorld(world, unwrapHandle(textureHandle));
 
 const positions = [];
@@ -97,7 +94,7 @@ for (let i = 0; i < FRAMES; i++) {
   positions.push(motion.x);
   directions.push(Math.sign(motion.velocity));
   world.update().unwrap();
-  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const draw = drawSmokeFrame(renderer, world);
   if (!draw.ok) throw new Error(`${draw.error.code}: ${draw.error.hint}`);
   if (i === 5) earlyFrame = await capture();
   if (i === FRAMES - 1) lateFrame = await capture();
@@ -118,7 +115,7 @@ mkdirSync(dirname(pngPath), { recursive: true });
 writeFileSync(pngPath, writeReferencePng(lateFrame, WIDTH, HEIGHT));
 console.log(`[smoke] frames=${FRAMES} minX=${minSeen.toFixed(3)} maxX=${maxSeen.toFixed(3)} reversals=${reversals} motionMeanDelta=${motionDelta.toFixed(5)} errors=${errors.length} png=${pngPath}`);
 const visible = lateFrame.some((value, index) => index % bytesPerPixel === 3 && value > 0) || earlyFrame.some((value, index) => index % bytesPerPixel === 3 && value > 0);
-if (renderer.backend !== 'webgpu' || FRAMES < 100 || minSeen > MIN_X + 0.2 || maxSeen < MAX_X - 0.2 || reversals < 2 || motionDelta <= 0.0005 || !visible || errors.length > 0) {
+if (rendererBackend(renderer) !== 'webgpu' || FRAMES < 100 || minSeen > MIN_X + 0.2 || maxSeen < MAX_X - 0.2 || reversals < 2 || motionDelta <= 0.0005 || !visible || errors.length > 0) {
   console.error('[smoke] FAIL - backend/frames/visibility/bounds/reversal/motion/error criterion failed');
   process.exit(1);
 }

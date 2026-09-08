@@ -189,7 +189,11 @@ export {
   type FbxErrorDetail,
   fbxErr,
 } from './errors.js';
-export { fbxImporter } from './fbx-importer.js';
+export {
+  deriveFbxSourceKeys,
+  fbxImporter,
+  sourceKeyForFbxOutput,
+} from './fbx-importer.js';
 export {
   type FbxRawAnimDoc,
   type FbxRawClip,
@@ -201,4 +205,11 @@ export { type FbxRawNode, type FbxRawNodes, parseScene } from './parse-scene.js'
 export { type FbxRawSkeletonDoc, parseSkeleton } from './parse-skeleton.js';
 export { type FbxRawSkinDoc, parseSkin } from './parse-skin.js';
 export { type FbxRawTexture, type FbxRawTextures, parseTextures } from './parse-texture.js';
+export {
+  type FbxTextureCandidate,
+  type FbxTexturePathRequest,
+  type FbxTextureResolution,
+  type FbxTextureResolutionStrategy,
+  resolveFbxTexturePath,
+} from './resolve-texture-path.js';
 export { toAssetPack } from './to-asset-pack.js';

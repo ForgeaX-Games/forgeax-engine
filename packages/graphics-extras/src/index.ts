@@ -23,13 +23,14 @@ export {
 
 // ─── tile-bits SSOT (feat-20260608-tilemap-object-layer-rendering) ─────────
 export { decodeTileBits, encodeTileBits } from './tile-bits';
+export { tilesetContribution } from './tileset-decoder';
 
 // ─── VideoElementProvider host bridge ─────────────────────────────────────
 export {
   VIDEO_ELEMENT_PROVIDER_KEY,
   type VideoElementProvider,
 } from './video-element-provider';
-export { videoLoader } from './video-loader';
+export { videoContribution, videoLoader } from './video-loader';
 // ─── VideoPlayer component ────────────────────────────────────────────────
 export { VideoPlayer } from './video-player';
 // ─── video high-perf upload capability probe ──────────────────────────────

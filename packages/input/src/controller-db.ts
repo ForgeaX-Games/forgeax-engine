@@ -40,7 +40,8 @@ export interface ControllerDbEntry {
 export type ControllerDb = Readonly<Record<string, readonly ControllerDbEntry[]>>;
 
 /** Recognised web platform section labels (D-13). */
-export type ControllerPlatform = 'Windows' | 'Mac OS X' | 'Linux' | 'Android' | 'iOS';
+const CONTROLLER_PLATFORMS = ['Windows', 'Mac OS X', 'Linux', 'Android', 'iOS'] as const;
+export type ControllerPlatform = (typeof CONTROLLER_PLATFORMS)[number];
 
 /** Parse one `key:source` mapping token into a MappingToken. */
 function parseMappingToken(source: string): MappingToken | undefined {
@@ -189,11 +190,11 @@ export function extractGuidFromGamepadId(id: string): string | undefined {
 export function platformFromUserAgent(ua: string): ControllerPlatform | undefined {
   // Order matters: iOS + Android both contain substrings that overlap with
   // the desktop checks, so test the mobile/specific cases first.
-  if (/iPhone|iPad|iPod/.test(ua)) return 'iOS';
-  if (/Android/.test(ua)) return 'Android';
-  if (/Windows/.test(ua)) return 'Windows';
-  if (/Mac OS X|Macintosh/.test(ua)) return 'Mac OS X';
-  if (/Linux/.test(ua)) return 'Linux';
+  if (/iPhone|iPad|iPod/.test(ua)) return CONTROLLER_PLATFORMS[4];
+  if (/Android/.test(ua)) return CONTROLLER_PLATFORMS[3];
+  if (/Windows/.test(ua)) return CONTROLLER_PLATFORMS[0];
+  if (/Mac OS X|Macintosh/.test(ua)) return CONTROLLER_PLATFORMS[1];
+  if (/Linux/.test(ua)) return CONTROLLER_PLATFORMS[2];
   return undefined;
 }
 

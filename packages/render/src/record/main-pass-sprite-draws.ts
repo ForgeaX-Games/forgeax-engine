@@ -2,7 +2,7 @@
 // feat-20260704 M5/w31: further-split from main-pass.ts (AC-05 <=1500 lines/file).
 // recordSpritePass + sprite entity/transparent/instance-buffer helpers, moved verbatim.
 
-import { buildMeshAttributeMapForUvSets } from '@forgeax/engine-geometry';
+import type { World } from '@forgeax/engine-ecs';
 import {
   type BindGroup,
   type Buffer,
@@ -25,19 +25,101 @@ import {
 import type { InstanceBufferCacheEntry } from '../instance-buffer-cache';
 import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '../materials';
 import { SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET } from '../pbr-pipeline';
-import { buildBeginRenderPassDescriptor } from '../pipeline-spec';
-import type { _InternalRenderPipelineContext } from '../render-pipeline-context';
-import { MATERIAL_PER_ENTITY_STRIDE, STANDARD_PBR_UBO_SIZE } from '../render-system';
+import {
+  buildBeginRenderPassDescriptor,
+  variantSetFromVertexLayoutProjection,
+} from '../pipeline-spec';
 import type { MaterialSnapshot, SpriteInstancesSnapshot } from '../render-system-extract';
 import { worldEntityKey } from './frame-snapshot';
 import { entityHasTransparentSubmesh, residentTextureView } from './main-pass-material';
-import { interleaveSpriteInstanceBuffer, spriteInstancesCacheHit } from './main-pass-sprite';
 import {
   extractEntryResourceHandle,
   getOrCreatePerEntity,
   MAX_UNIFORM_INSTANCES,
   MESH_PER_ENTITY_STRIDE,
+  packInstanceStorageBuffer,
 } from './mesh-ssbo';
+import type { _InternalRenderPipelineContext } from './render-context';
+import { MATERIAL_PER_ENTITY_STRIDE, STANDARD_PBR_UBO_SIZE } from './render-context';
+
+export type { SpriteInstancesSnapshot };
+
+/**
+ * Build the interleaved sprite instance payload consumed by this record owner.
+ * The extract stage validates the two packed arrays before they reach this
+ * function, so the record path has one source of count-mismatch errors.
+ */
+export function interleaveSpriteInstanceBuffer(
+  transforms: Float32Array,
+  regions: Float32Array,
+  includePrevious = false,
+): Float32Array {
+  const count = transforms.length / 16;
+  const stride = includePrevious ? 36 : 20;
+  const regionOffset = includePrevious ? 32 : 16;
+  const out = new Float32Array(count * stride);
+  for (let i = 0; i < count; i++) {
+    const dstBase = i * stride;
+    const transformBase = i * 16;
+    const regionBase = i * 4;
+    for (let k = 0; k < 16; k++) out[dstBase + k] = transforms[transformBase + k] ?? 0;
+    if (includePrevious) {
+      for (let k = 0; k < 16; k++) {
+        out[dstBase + 16 + k] = transforms[transformBase + k] ?? 0;
+      }
+    }
+    for (let k = 0; k < 4; k++) {
+      out[dstBase + regionOffset + k] = regions[regionBase + k] ?? 0;
+    }
+  }
+  return out;
+}
+
+/**
+ * Check whether the existing per-entity sprite buffer still matches the
+ * extract snapshot and interleaved byte count.
+ */
+export function spriteInstancesCacheHit(
+  entry: InstanceBufferCacheEntry | undefined,
+  snapshot: SpriteInstancesSnapshot,
+  requestedBytes: number,
+): boolean {
+  return (
+    entry !== undefined &&
+    entry.uploadedArchVersion === snapshot.archVersion &&
+    entry.uploadedByteLength === requestedBytes
+  );
+}
+
+/**
+ * Decide whether the LDR record needs the transparent sprite sub-pass. This
+ * remains beside the sprite record owner so the frame stage and draw stage
+ * share the same transparent-material rule.
+ */
+export function computeSplitLdrSprite(
+  validatedOrdered: readonly (
+    | {
+        readonly source: {
+          readonly material: MaterialSnapshot;
+          readonly materials?: readonly MaterialSnapshot[];
+        };
+      }
+    | undefined
+  )[],
+  tonemapActive: boolean,
+): boolean {
+  if (tonemapActive) return false;
+  for (const entry of validatedOrdered) {
+    if (entry === undefined) continue;
+    const materials = entry.source.materials;
+    if (materials !== undefined) {
+      if (materials.some((material) => material.transparent === true)) return true;
+    } else if (entry.source.material.transparent === true) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * feat-20260704 M3/w19: LDR sprite split sub-pass, extracted verbatim from
@@ -61,8 +143,10 @@ export function recordSpritePass(
     materialSlot: number,
     submeshMaterial: MaterialSnapshot,
     entityKey: number,
+    materialWorld: World,
   ) => BindGroup,
   skylightResources: SkylightBindGroupResources,
+  graphPass?: RhiRenderPassEncoder,
 ): boolean {
   const {
     runtime,
@@ -76,9 +160,11 @@ export function recordSpritePass(
     splitLdrSprite,
   } = c;
   let geometryPassEnded = false;
-  if (splitLdrSprite && ldrSpritePassView !== null) {
-    pass.end();
-    geometryPassEnded = true;
+  if (splitLdrSprite && (graphPass !== undefined || ldrSpritePassView !== null)) {
+    if (graphPass === undefined) {
+      pass.end();
+      geometryPassEnded = true;
+    }
 
     // feat-20260604 M2 / w9 (F-1): under MSAA the sprite sub-pass writes the
     // count=4 transparent-pass view of the SAME multisample texture the
@@ -93,36 +179,38 @@ export function recordSpritePass(
     // (preserves prior content from the main forward pass under the sprites).
     // Stencil ops auto-emitted by the helper because depthFormat carries
     // stencil8.
-    const spritePass: RhiRenderPassEncoder = encoder.beginRenderPass(
-      buildBeginRenderPassDescriptor(
-        {
-          // SSOT for the sprite-pass color format is the resolved transparent
-          // attachment. Native linear-LDR frames use graph-owned `ldrColor`
-          // (possibly rgba16float); swap-chain fallback frames use their raw
-          // storage format. WebGPU requires the attachment format and PSO
-          // target to match, so both are resolved by the same helper.
-          colorFormats: [transparentPassColorFormat(c) as unknown as GPUTextureFormat],
-          depthFormat: 'depth24plus-stencil8',
-          sampleCount: msaaActive ? 4 : 1,
-        },
-        {
-          colorViews: [spriteColorView],
-          depthView: geometryDepthView,
-          ...(msaaActive ? { resolveTargets: [ldrSpritePassView] } : {}),
-        },
-        'forward',
-        { colorLoadOp: 'load', depthLoadOp: 'load' },
-      ) as never,
-    );
+    const spritePass: RhiRenderPassEncoder =
+      graphPass ??
+      encoder.beginRenderPass(
+        buildBeginRenderPassDescriptor(
+          {
+            // SSOT for the sprite-pass color format is the resolved transparent
+            // attachment. Native linear-LDR frames use graph-owned `ldrColor`
+            // (possibly rgba16float); swap-chain fallback frames use their raw
+            // storage format. WebGPU requires the attachment format and PSO
+            // target to match, so both are resolved by the same helper.
+            colorFormats: [transparentPassColorFormat(c) as GPUTextureFormat],
+            depthFormat: 'depth24plus-stencil8',
+            sampleCount: msaaActive ? 4 : 1,
+          },
+          {
+            colorViews: [spriteColorView],
+            depthView: geometryDepthView,
+            ...(msaaActive ? { resolveTargets: [ldrSpritePassView] } : {}),
+          },
+          'forward',
+          { colorLoadOp: 'load', depthLoadOp: 'load' },
+        ) as never,
+      );
 
-    spritePass.setBindGroup(0, viewBindGroup as BindGroup);
+    spritePass.setBindGroup(0, viewBindGroup as BindGroup, [0]);
 
     // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w14 (D-7):
     // sprite PSO resolution migrated from the dedicated boot-time PSO
     // fields (deleted) to the generic per-MaterialShader pipeline cache.
     // feat-20260626-collapse M2 / M2-T2: blend factor pair literal moved
     // to the public `SPRITE_PREMULTIPLIED_ALPHA_BLEND` named constant
-    // (re-exported from `@forgeax/engine-runtime`) so any AI user
+    // (re-exported from `@forgeax/engine-runtime`) so each AI user
     // building a transparent material declares the same blend by
     // reference; the previous implicit blend-state factory helper is
     // gone. Cache miss still surfaces as a structured
@@ -180,7 +268,7 @@ export function recordSpritePass(
         // storage format. `transparentPassColorFormat` is the single owner for
         // this format so lazy PSO construction cannot fall back to the geometry
         // sRGB view.
-        transparentPassColorFormat(c, pipelineState) as unknown as GPUTextureFormat,
+        transparentPassColorFormat(c, pipelineState) as GPUTextureFormat,
       ) ?? null;
     const spritePH_withRegion =
       runtime.getMaterialShaderPipeline?.(
@@ -193,7 +281,7 @@ export function recordSpritePass(
         'forward',
         undefined,
         msaaActive ? 4 : 1,
-        transparentPassColorFormat(c) as unknown as GPUTextureFormat,
+        transparentPassColorFormat(c) as GPUTextureFormat,
       ) ?? null;
 
     // bug-20260629: spritePH===null check moved OUTSIDE the entity loop so the
@@ -236,7 +324,7 @@ export function recordSpritePass(
         'forward',
         undefined,
         msaaActive ? 4 : 1,
-        transparentPassColorFormat(c) as unknown as GPUTextureFormat,
+        transparentPassColorFormat(c) as GPUTextureFormat,
       ) ?? null;
 
     recordSpriteEntityDraws(
@@ -276,7 +364,7 @@ export function recordSpritePass(
       resolveMaterialBindGroup,
     );
 
-    spritePass.end();
+    if (graphPass === undefined) spritePass.end();
   }
   return geometryPassEnded;
 }
@@ -304,6 +392,7 @@ function recordSpriteTransparentPbrDraws(
     materialSlot: number,
     submeshMaterial: MaterialSnapshot,
     entityKey: number,
+    materialWorld: World,
   ) => BindGroup,
 ): void {
   const { runtime, pipelineState, frameState, bindGroupCounts, validatedOrdered, meshBindGroup } =
@@ -370,13 +459,20 @@ function recordSpriteTransparentPbrDraws(
     const subVariantSet = frameState.isHdrpActive
       ? ''
       : 'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true';
-    const subMeshUvAttributes =
-      entry.mesh.uvSetCount > 1 ? buildMeshAttributeMapForUvSets(entry.mesh.uvSetCount) : undefined;
+    const projectionVariantSetResult = variantSetFromVertexLayoutProjection(
+      entry.mesh.layoutProjection,
+      subVariantSet,
+    );
+    if (!projectionVariantSetResult.ok) {
+      runtime.errorRegistry.fire(projectionVariantSetResult.error);
+      continue;
+    }
+    const projectionVariantSet = projectionVariantSetResult.value;
 
     for (let smIdx = 0; smIdx < entry.mesh.submeshes.length; smIdx++) {
       const sm = entry.mesh.submeshes[smIdx];
       if (sm === undefined) continue;
-      const matSlotIdx = smIdx < matsForRebind.length ? smIdx : 0;
+      const matSlotIdx = sm.materialSlot;
       const submeshMaterial = matsForRebind[matSlotIdx] ?? entry.source.material;
       // Only transparent submeshes belong in this blend sub-pass; opaque
       // submeshes were drawn in the geometry pass.
@@ -388,7 +484,12 @@ function recordSpriteTransparentPbrDraws(
       // order), then resolve the PSO; a first-frame async-compile miss skips
       // only the draw, not the BG (one transient frame, PSO flows in next).
       const materialSlot = materialSlotIndices[i]?.[matSlotIdx] ?? materialSlotIndices[i]?.[0] ?? 0;
-      const subBg = resolveMaterialBindGroup(materialSlot, submeshMaterial, entry.source.entityKey);
+      const subBg = resolveMaterialBindGroup(
+        materialSlot,
+        submeshMaterial,
+        entry.source.entityKey,
+        entry.world ?? c.world,
+      );
       spritePass.setBindGroup(1, subBg, [materialSlot * MATERIAL_PER_ENTITY_STRIDE]);
 
       const subPipeline =
@@ -398,18 +499,21 @@ function recordSpriteTransparentPbrDraws(
           submeshMaterial.renderState,
           sm.topology,
           entry.mesh.indexFormat,
-          subVariantSet,
+          projectionVariantSet,
           'forward',
-          subMeshUvAttributes,
+          undefined,
           sampleCount,
           // Non-sRGB blend view (same override the sprite path uses).
-          transparentPassColorFormat(c) as unknown as GPUTextureFormat,
+          transparentPassColorFormat(c) as GPUTextureFormat,
+          undefined,
+          undefined,
+          undefined,
+          entry.mesh.layoutProjection,
         ) ?? null;
       if (subPipeline === null) continue;
 
       if (lastPbrSubPipelineHandle !== subPipeline) {
-        // biome-ignore lint/suspicious/noExplicitAny: opaque RHI pipeline handle
-        spritePass.setPipeline(subPipeline as any);
+        spritePass.setPipeline(subPipeline);
         lastPbrSubPipelineHandle = subPipeline;
       }
       if (entry.mesh.indexed) {
@@ -457,8 +561,7 @@ function recordSpriteEntityDraws(
     foldDispatchPlan,
     materialSlotIndices,
   } = c;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI pipeline handle
-  let lastSpritePipelineHandle: any = null;
+  let lastSpritePipelineHandle: RenderPipeline | null = null;
   let lastSpriteVertexBuffer: GpuBuffer | null = null;
   let lastSpriteIndexBuffer: GpuBuffer | null = null;
   for (let i = 0; i < validatedOrdered.length; i++) {
@@ -539,8 +642,7 @@ function recordSpriteEntityDraws(
       continue;
     }
     if (lastSpritePipelineHandle !== activeSpritePH) {
-      // biome-ignore lint/suspicious/noExplicitAny: opaque RHI pipeline handle
-      spritePass.setPipeline(activeSpritePH as any);
+      spritePass.setPipeline(activeSpritePH);
       lastSpritePipelineHandle = activeSpritePH;
     }
 
@@ -593,8 +695,11 @@ function recordSpriteEntityDraws(
       // bucketSize (a structural-shape signal) so static frames hit the
       // cache.
       const bucketCacheKey = -1 - (((foldHeadBucket.materialHandle & 0xffff) << 16) | (i & 0xffff));
-      const bucketBytes = foldHeadBucket.transforms.byteLength;
       const uniformFallback = runtime.device.caps.storageBuffer === false;
+      const bucketPayload = uniformFallback
+        ? foldHeadBucket.transforms
+        : packInstanceStorageBuffer(foldHeadBucket.transforms);
+      const bucketBytes = bucketPayload.byteLength;
       const bucketBufUsage = uniformFallback
         ? GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST
         : GPU_BUFFER_USAGE_STORAGE | GPU_BUFFER_USAGE_COPY_DST;
@@ -632,7 +737,7 @@ function recordSpriteEntityDraws(
         const writeRes = runtime.device.queue.writeBuffer(
           activeBucket.buffer.handle,
           0,
-          foldHeadBucket.transforms,
+          bucketPayload,
         );
         if (!writeRes.ok) {
           runtime.errorRegistry.fire(writeRes.error);
@@ -672,8 +777,7 @@ function recordSpriteEntityDraws(
                 },
               },
             ],
-            // biome-ignore lint/suspicious/noExplicitAny: opaque RHI descriptor
-          }) as any;
+          });
           if (!spriteInstBgResult.ok) throw spriteInstBgResult.error;
           spritePass.setBindGroup(3, spriteInstBgResult.value as BindGroup);
           spritePass.drawIndexed(spriteEntry.mesh.indexCount, spriteInstanceCount, 0, 0, 0);
@@ -683,7 +787,10 @@ function recordSpriteEntityDraws(
       }
 
       {
-        const requestedBytes = spriteInst.transforms.byteLength;
+        const instancePayload = uniformFallback
+          ? spriteInst.transforms
+          : packInstanceStorageBuffer(spriteInst.transforms);
+        const requestedBytes = instancePayload.byteLength;
         const cap = runtime.device.limits.maxStorageBufferBindingSize;
         if (typeof cap === 'number' && requestedBytes > cap) {
           runtime.errorRegistry.fire(
@@ -739,7 +846,7 @@ function recordSpriteEntityDraws(
             const writeRes = runtime.device.queue.writeBuffer(
               activeSprite.buffer.handle,
               0,
-              spriteInst.transforms,
+              instancePayload,
             );
             if (!writeRes.ok) {
               runtime.errorRegistry.fire(writeRes.error);
@@ -809,7 +916,7 @@ function recordSpriteEntityDraws(
       | undefined;
     let spriteTexView = pipelineState.defaultWhiteTextureView;
     if (spriteTexHandle !== undefined) {
-      const tv = residentTextureView(world, store, runtime, spriteTexHandle);
+      const tv = residentTextureView(spriteEntry.world ?? world, store, runtime, spriteTexHandle);
       if (tv !== undefined) spriteTexView = tv as never;
     }
     const spritePassBaseMaterialEntries = [
@@ -857,6 +964,28 @@ function recordSpriteEntityDraws(
       },
       {
         binding: 8,
+        resource: {
+          kind: 'textureView' as const,
+          value: pipelineState.defaultWhiteTextureView,
+        },
+      },
+      {
+        binding: 9,
+        resource: { kind: 'sampler' as const, value: pipelineState.defaultSampler },
+      },
+      {
+        binding: 10,
+        resource: {
+          kind: 'textureView' as const,
+          value: pipelineState.defaultWhiteTextureView,
+        },
+      },
+      {
+        binding: 11,
+        resource: { kind: 'sampler' as const, value: pipelineState.defaultSampler },
+      },
+      {
+        binding: 12,
         resource: {
           kind: 'textureView' as const,
           value: pipelineState.defaultWhiteTextureView,
@@ -926,15 +1055,20 @@ function resolveSpriteInstancesBuffer(
   const spriteInstancesSnap: SpriteInstancesSnapshot | undefined =
     spriteEntry.source.spriteInstances;
   if (spriteInstancesSnap !== undefined) {
-    const requestedBytes =
-      spriteInstancesSnap.transforms.byteLength + spriteInstancesSnap.regions.byteLength;
+    const uniformFallback = runtime.device.caps.storageBuffer === false;
+    const interleaved = interleaveSpriteInstanceBuffer(
+      spriteInstancesSnap.transforms,
+      spriteInstancesSnap.regions,
+      !uniformFallback,
+    );
+    const requestedBytes = interleaved.byteLength;
     const cap = runtime.device.limits.maxStorageBufferBindingSize;
     if (typeof cap === 'number' && requestedBytes > cap) {
       runtime.errorRegistry.fire(
         new RhiError({
           code: 'limit-exceeded',
           expected: `requestedBytes (${requestedBytes}) <= maxStorageBufferBindingSize (${cap})`,
-          hint: 'reduce SpriteInstances instance count to fit within device.limits.maxStorageBufferBindingSize (80 bytes per instance: mat4 64B + region 16B)',
+          hint: 'reduce SpriteInstances instance count to fit within device.limits.maxStorageBufferBindingSize (144 bytes per instance: current mat4 64B + previous mat4 64B + region 16B)',
           detail: {
             maxStorageBufferBindingSize: cap,
             requestedBytes,
@@ -951,7 +1085,9 @@ function resolveSpriteInstancesBuffer(
       } else if (requestedBytes > 0) {
         const bufRes = runtime.device.createBuffer({
           size: requestedBytes,
-          usage: GPU_BUFFER_USAGE_STORAGE | GPU_BUFFER_USAGE_COPY_DST,
+          usage:
+            (uniformFallback ? GPU_BUFFER_USAGE_UNIFORM : GPU_BUFFER_USAGE_STORAGE) |
+            GPU_BUFFER_USAGE_COPY_DST,
           mappedAtCreation: false,
         });
         if (!bufRes.ok) {
@@ -974,10 +1110,6 @@ function resolveSpriteInstancesBuffer(
         }
       }
       if (activeSpriteInst !== null && requestedBytes > 0) {
-        const interleaved = interleaveSpriteInstanceBuffer(
-          spriteInstancesSnap.transforms,
-          spriteInstancesSnap.regions,
-        );
         const writeRes = runtime.device.queue.writeBuffer(
           activeSpriteInst.buffer.handle,
           0,
@@ -999,8 +1131,7 @@ function transparentPassColorFormat(
   c: _InternalRenderPipelineContext,
   pipelineState: _InternalRenderPipelineContext['pipelineState'] = c.pipelineState,
 ): string {
+  if (c.transparentColorFormat !== undefined) return c.transparentColorFormat;
   if (!c.runtime.device.caps.storageBuffer) return pipelineState.colorAttachmentFormat;
-  return (
-    c.frameState.perFrameGraph?.getColorTargetDescriptor('ldrColor')?.format ?? pipelineState.format
-  );
+  return pipelineState.format;
 }

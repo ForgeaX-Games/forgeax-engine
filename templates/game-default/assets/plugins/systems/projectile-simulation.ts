@@ -2,7 +2,7 @@ import { Collider, ColliderShapeValue, CollidingEntities, RigidBody, RigidBodyTy
 import { FixedTime, FixedUpdate, type CommandBuffer, type ComponentData, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-scene';
 import { Layer, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { SpriteAnimation, SpriteRegionOverride, SPRITE_PLAYBACK_MODE_LOOP } from '@forgeax/engine-render/authoring';
+import { SpriteAnimation, SpriteRegionOverride, SpritePlayback } from '@forgeax/engine-render/authoring';
 import { quat, type Handle } from '@forgeax/engine-runtime';
 import type { InputSnapshot } from '@forgeax/engine-input';
 import { inState } from '@forgeax/engine-state';
@@ -188,7 +188,7 @@ export function installProjectileSimulationSystem(ctx: ProjectileSimulationSyste
               : ctx.projectileMaterial;
         const spriteAnimationComponents = atlasActive
           ? [
-            { component: SpriteAnimation, data: { frameCount: ctx.spriteAtlasLoop!.frameCount, frameDuration: ctx.spriteAtlasLoop!.frameDuration, regions: new Float32Array(ctx.spriteAtlasLoop!.regions), playbackMode: SPRITE_PLAYBACK_MODE_LOOP } },
+            { component: SpriteAnimation, data: { frameCount: ctx.spriteAtlasLoop!.frameCount, frameDuration: ctx.spriteAtlasLoop!.frameDuration, regions: new Float32Array(ctx.spriteAtlasLoop!.regions), playbackMode: SpritePlayback.loop } },
             { component: SpriteRegionOverride, data: { region: new Float32Array(ctx.spriteAtlasLoop!.regions.slice(0, 4)) } },
           ]
           : [];

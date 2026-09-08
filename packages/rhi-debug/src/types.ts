@@ -1,11 +1,11 @@
-// @forgeax/engine-rhi-debug/src/types — RhiCallEvent closed union, Tape, InspectReport, RhiCapsRecorded.
+// @forgeax/engine-rhi-debug/src/types — RhiCallEvent closed union, Tape, work inspection types, RhiCapsRecorded.
 //
 // Shape:
 // - RhiCallEvent: closed union (~40 kind incl. initialData + frameMark), each kind name 1:1 with RHI method name.
 //   Excludes: writeTimestamp/resolveQuerySet (per OOS-3).
 //   Includes: core RHI + copyExternalImageToTexture + clearBuffer (per IS-11).
 // - Tape: header with formatVersion, rhiCapsRecorded, events array, blobPool map.
-// - InspectReport: frameIdx, drawIdx, bindings, drawCall, rt (path string, not inline base64).
+// - InspectReport: frameIdx, workIndex, bindings, drawCall, rt (path string, not inline base64).
 // - RhiCapsRecorded: subset of RhiCaps relevant to cross-device replay.
 //
 // Related: requirements IS-3 / IS-5 / IS-11; plan-strategy §3.1 types.ts module + §8 naming conv.
@@ -47,7 +47,7 @@ export interface RhiCapsRecorded {
 
 /**
  * Marker event inserted at frame boundaries. Appears after all RHI calls
- * within frame N, before any calls in frame N+1.
+ * within frame N, before calls in frame N+1.
  *
  * Bootstrap-period calls (before the first frameMark) are assigned to frameIdx=0,
  * appearing before the `frameMark { frameIdx: 0 }` event (per AC-08 / Q&A q14).
@@ -169,11 +169,21 @@ export interface RhiCallEventCreateRenderPipeline {
   readonly kind: 'createRenderPipeline';
   readonly handleId: HandleId;
   readonly desc: {
-    readonly vertex?: GPUVertexState | undefined;
+    /** Serialized stage omits opaque shader module; the handle id is authoritative. */
+    readonly vertex?: {
+      readonly entryPoint?: string | undefined;
+      readonly buffers: Iterable<GPUVertexBufferLayout | null | undefined>;
+      readonly constants?: Record<string, number> | undefined;
+    };
     readonly primitive?: GPUPrimitiveState | undefined;
     readonly depthStencil?: GPUDepthStencilState | undefined;
     readonly multisample?: GPUMultisampleState | undefined;
-    readonly fragment?: GPUFragmentState | undefined;
+    /** Serialized stage omits opaque shader module; the handle id is authoritative. */
+    readonly fragment?: {
+      readonly entryPoint?: string | undefined;
+      readonly targets: Iterable<GPUColorTargetState | null | undefined>;
+      readonly constants?: Record<string, number> | undefined;
+    };
   };
   readonly layoutHandleId: HandleId;
   /** HandleId of the re-created vertex shader module for cross-device binding. */
@@ -261,10 +271,24 @@ export interface RhiCallEventBeginRenderPass {
   readonly cmdHandleId: HandleId;
   readonly passHandleId: HandleId;
   readonly desc: {
-    readonly colorAttachments: Iterable<GPURenderPassColorAttachment | null | undefined>;
-    readonly depthStencilAttachment?: GPURenderPassDepthStencilAttachment | undefined;
-    readonly occlusionQuerySet?: GPUQuerySet | undefined;
-    readonly timestampWrites?: GPURenderPassTimestampWrites | undefined;
+    /** Attachment handles are replaced by the parallel HandleId arrays on replay. */
+    readonly colorAttachments: Iterable<
+      | {
+          readonly view: unknown;
+          readonly resolveTarget?: unknown;
+          readonly [key: string]: unknown;
+        }
+      | null
+      | undefined
+    >;
+    readonly depthStencilAttachment?:
+      | {
+          readonly view: unknown;
+          readonly [key: string]: unknown;
+        }
+      | undefined;
+    readonly occlusionQuerySet?: unknown | undefined;
+    readonly timestampWrites?: unknown | undefined;
     readonly maxDrawCount?: number | undefined;
   };
   readonly colorAttachmentViewHandleIds: readonly (HandleId | undefined)[];
@@ -626,7 +650,7 @@ export interface InspectBindingEntry {
 }
 
 /**
- * Information about the draw call at the inspected drawIdx.
+ * Information about the work item at the inspected workIndex.
  */
 export interface InspectDrawCall {
   readonly pipelineKind: 'render' | 'compute';
@@ -785,8 +809,8 @@ export interface InspectRtPixels {
  * The RT readback at the inspected draw call, in one of two genuinely
  * distinct forms keyed by execution environment:
  *
- * - `string` — a PNG **file path** on disk, produced by the Node CLI path
- *   (`inspector.inspectAt`), which encodes the readback to a PNG under the
+ * - `string` — a PNG **file path** on disk, produced by the DevKit Node shell
+ *   after `rhi.inspect`, which encodes the readback to a PNG under the
  *   inspect/ output dir. Discriminate with `typeof rt === 'string'`.
  * - {@link InspectRtPixels} — the native `{ width, height, format, pixels }` tuple,
  *   produced by the node-free browser path (`inspectDrawJson`), which cannot
@@ -794,15 +818,15 @@ export interface InspectRtPixels {
  *   `typeof rt === 'object'` (or `'pixels' in rt`).
  *
  * AI users branch on `typeof` — the union is the single source of truth for
- * "what an `rt` field may hold", so no `as any` cast is needed at either
+ * "what an `rt` field may hold", so no untyped-value cast is needed at either
  * producer.
  */
 export type InspectRtPayload = string | InspectRtPixels;
 
 /**
- * Structured report produced by inspectAt(replay, drawIdx, fields?).
+ * Structured report produced by inspectWork(replay, workIndex, fields?).
  *
- * frameIdx/drawIdx/passIdx are **always present** — they identify the inspected
+ * frameIdx/workIndex/passIdx are **always present** — they identify the inspected
  * draw and are computed regardless of the `fields` selector.
  *
  * bindings/drawCall/rt are **field-cropped**: each is present only when the
@@ -812,7 +836,7 @@ export type InspectRtPayload = string | InspectRtPixels;
  * (`report.drawCall?.pipelineKind`, `if (report.bindings) …`).
  *
  * frameIdx: the frame index containing this draw call.
- * drawIdx: the global draw event index within the tape.
+ * workIndex: the global work ordinal within the tape.
  * passIdx: the render/compute pass index containing this draw.
  * bindings: the bind group bindings active at this draw call (cropped: present
  *     when fields includes 'bindings' or is undefined).
@@ -829,7 +853,7 @@ export type InspectRtPayload = string | InspectRtPixels;
  */
 export interface InspectReport {
   readonly frameIdx: number;
-  readonly drawIdx: number;
+  readonly workIndex: number;
   readonly passIdx: number;
   readonly bindings?: readonly InspectBindingEntry[] | undefined;
   readonly drawCall?: InspectDrawCall | undefined;
@@ -838,8 +862,8 @@ export interface InspectReport {
 }
 
 /**
- * Fields selector for inspectAt — controls which data is computed and returned.
- * An empty array means "minimum report" (frameIdx/drawIdx/passIdx only).
+ * Fields selector for inspectWork — controls which data is computed and returned.
+ * An empty array means "minimum report" (frameIdx/workIndex/passIdx only).
  * undefined means "full report" (all fields including RT PNG).
  */
 export type InspectFields = 'bindings' | 'drawCall' | 'rt';

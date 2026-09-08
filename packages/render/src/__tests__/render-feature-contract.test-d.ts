@@ -1,5 +1,5 @@
 import { ok } from '@forgeax/engine-types';
-import type { RenderFeature } from '../features/types';
+import type { RenderFeature, RenderFeaturePlanContext } from '../features/types';
 
 type AlphaFrame = {
   readonly visibleCount: number;
@@ -12,35 +12,26 @@ type BetaFrame = {
 const alphaFeature = {
   identity: 'synthetic.alpha',
   extract({ owner }) {
-    const frame: AlphaFrame = { visibleCount: owner };
-    return ok(frame);
+    return ok<AlphaFrame>({ visibleCount: owner });
   },
-  prepare(data: AlphaFrame) {
+  plan(data: AlphaFrame, context: RenderFeaturePlanContext) {
     const count: number = data.visibleCount;
     void count;
-    return ok(undefined);
-  },
-  contribute(data: AlphaFrame) {
-    const count: number = data.visibleCount;
-    void count;
-    return ok(undefined);
+    void context;
+    return ok({ resources: [], passes: [] });
   },
 } satisfies RenderFeature<AlphaFrame>;
 
 const betaFeature = {
   identity: 'synthetic.beta',
   extract() {
-    return ok({ bounds: [0, 0, 1, 1] as const });
+    return ok<BetaFrame>({ bounds: [0, 0, 1, 1] });
   },
-  prepare(data: BetaFrame) {
+  plan(data: BetaFrame, context: RenderFeaturePlanContext) {
     const bounds: BetaFrame['bounds'] = data.bounds;
     void bounds;
-    return ok(undefined);
-  },
-  contribute(data: BetaFrame) {
-    const bounds: BetaFrame['bounds'] = data.bounds;
-    void bounds;
-    return ok(undefined);
+    void context;
+    return ok({ resources: [], passes: [] });
   },
 } satisfies RenderFeature<BetaFrame>;
 

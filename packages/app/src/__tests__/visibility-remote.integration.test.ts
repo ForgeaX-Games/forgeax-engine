@@ -1,5 +1,6 @@
 import { World } from '@forgeax/engine-ecs';
 import type { Renderer } from '@forgeax/engine-render';
+import { Visibility } from '@forgeax/engine-render';
 import { defaultConnect } from '@forgeax/engine-types/inspector-client';
 import { describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
@@ -36,15 +37,16 @@ function makeRendererStub(): Renderer {
     onError: () => () => {},
     onLost: () => () => {},
     dispose: () => {},
-    visibilityStats: { explicitlyHidden: 1 },
   } as unknown as Renderer;
 }
 
 describe('createApp to remote visibility discovery', () => {
-  it('introspects then evaluates a Query, recovers an invalid write, and reads stats', async () => {
+  it('introspects then evaluates a Query and recovers an invalid write', async () => {
     const previous = process.env.FORGEAX_ENGINE_REMOTE_SERVE;
     process.env.FORGEAX_ENGINE_REMOTE_SERVE = '1';
-    const result = await createApp({ renderer: makeRendererStub(), world: new World() });
+    const world = new World();
+    world.components.register(Visibility).unwrap();
+    const result = await createApp({ renderer: makeRendererStub(), world });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.remote).toBeDefined();
@@ -74,7 +76,7 @@ describe('createApp to remote visibility discovery', () => {
           const query = world.query({ read: [render.Visibility] }).unwrap();
           let current;
           for (const row of query) {
-            current = render.visibilityStateFromU32(row.get(render.Visibility).state);
+            current = ['inherited', 'hidden', 'visible'][row.get(render.Visibility).state];
           }
           const effective = render.resolveVisibility(world).effective(entity);
           const invalid = world.set(entity, render.Visibility, { state: 99 });
@@ -92,7 +94,6 @@ describe('createApp to remote visibility discovery', () => {
             },
             recovered: recovered.ok,
             restored: render.resolveVisibility(world).effective(entity),
-            visibilityStats: renderer.visibilityStats,
           };
         })()`);
         expect(value).toMatchObject({
@@ -101,7 +102,6 @@ describe('createApp to remote visibility discovery', () => {
           invalid: { code: 'component-field-invalid-value' },
           recovered: true,
           restored: 'visible',
-          visibilityStats: { explicitlyHidden: 1 },
         });
         expect((value as { invalid: { hint: string } }).invalid.hint.length).toBeGreaterThan(0);
       } finally {

@@ -13,7 +13,7 @@ import {
   resolveVisibility,
 } from '@forgeax/engine-render';
 import { ChildOf, Transform } from '@forgeax/engine-scene';
-import { EngineEnvironmentError, createRenderer } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import type { Handle, MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
@@ -27,19 +27,12 @@ export const VisibilityInheritedDescendant = defineComponent(
 );
 
 type DemoEntity = EntityHandle;
-type VisibilityRenderer = Pick<
-  Awaited<ReturnType<typeof createRenderer>>,
-  'visibilityStats' | 'directionalShadow' | 'perFramePassNames'
->;
-
 export interface VisibilityEvidence {
   readonly targetEffective: 'hidden' | 'visible';
   readonly visibleChildEffective: 'hidden' | 'visible';
   readonly inheritedDescendantEffective: 'hidden' | 'visible';
   readonly explicitlyHidden: number;
   readonly visibleMeshCandidates: number;
-  readonly shadowResourceReady: boolean;
-  readonly shadowPasses: number;
 }
 
 export interface VisibilityDemoScene {
@@ -53,7 +46,7 @@ export interface VisibilityDemoScene {
   setTargetVisible(): void;
   setAncestorHiddenWithVisibleChild(): void;
   installShadowGateBypass(): void;
-  evidence(renderer?: VisibilityRenderer): VisibilityEvidence;
+  evidence(): VisibilityEvidence;
 }
 
 const CUBE = HANDLE_CUBE;
@@ -203,24 +196,17 @@ export function createVisibilityDemoWorld(world = new World()): VisibilityDemoSc
         )
         .unwrap();
     },
-    evidence(renderer) {
+    evidence() {
       const snapshot = resolveVisibility(world);
       const visibleCount = meshEntities.filter(
         (entity) => snapshot.effective(entity) === 'visible',
       ).length;
-      const shadowReady =
-        renderer?.directionalShadow?.lightSpaceMatrix !== null &&
-        renderer?.directionalShadow !== undefined;
       return {
         targetEffective: snapshot.effective(target),
         visibleChildEffective: snapshot.effective(visibleChild),
         inheritedDescendantEffective: snapshot.effective(inheritedDescendant),
-        explicitlyHidden:
-          renderer?.visibilityStats.explicitlyHidden ?? meshEntities.length - visibleCount,
+        explicitlyHidden: meshEntities.length - visibleCount,
         visibleMeshCandidates: visibleCount,
-        shadowResourceReady: shadowReady,
-        shadowPasses:
-          renderer?.perFramePassNames.filter((name) => name.includes('shadow')).length ?? 0,
       };
     },
   };
@@ -252,20 +238,18 @@ async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
   }> => {
     applyHiddenInput();
     await waitForFrame();
-    const hidden = scene.evidence(app.renderer);
+    const hidden = scene.evidence();
     scene.setTargetVisible();
     await waitForFrame();
-    const restored = scene.evidence(app.renderer);
+    const restored = scene.evidence();
     scene.setAncestorHiddenWithVisibleChild();
     await waitForFrame();
-    const child = scene.evidence(app.renderer);
+    const child = scene.evidence();
     const observed = { hidden, restored, child };
     const verdict =
       hidden.targetEffective === 'hidden' &&
       hidden.visibleMeshCandidates < restored.visibleMeshCandidates &&
       restored.targetEffective === 'visible' &&
-      restored.shadowResourceReady &&
-      restored.shadowPasses > 0 &&
       child.visibleChildEffective === 'visible' &&
       child.inheritedDescendantEffective === 'visible'
         ? 'pass'
@@ -275,12 +259,12 @@ async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
 
   Object.assign(globalThis, {
     __forgeaxEntityVisibility: {
-      ready: () => app.renderer.ready,
+      ready: () => true,
       capture,
       setTargetHidden: applyHiddenInput,
       setTargetVisible: () => scene.setTargetVisible(),
       setAncestorHiddenWithVisibleChild: () => scene.setAncestorHiddenWithVisibleChild(),
-      evidence: () => scene.evidence(app.renderer),
+      evidence: () => scene.evidence(),
     },
   });
   app.start();

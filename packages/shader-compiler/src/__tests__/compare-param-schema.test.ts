@@ -89,10 +89,15 @@ describe('compareParamSchemaSuperset (M2 / w6)', () => {
             {
               binding: 0,
               visibility: 0x2 as GPUShaderStageFlags,
-              sampler: { type: 'non-filtering' },
+              buffer: { type: 'uniform', hasDynamicOffset: false, minBindingSize: 0 },
             },
             {
               binding: 1,
+              visibility: 0x2 as GPUShaderStageFlags,
+              sampler: { type: 'non-filtering' },
+            },
+            {
+              binding: 2,
               visibility: 0x2 as GPUShaderStageFlags,
               texture: {
                 sampleType: 'unfilterable-float',

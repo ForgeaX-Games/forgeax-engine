@@ -23,11 +23,28 @@
         pointer-events: none;
         user-select: none;
       }
+      #texture-recovery-state {
+        position: fixed;
+        right: 16px;
+        top: 16px;
+        max-width: 360px;
+        margin: 0;
+        padding: 8px 12px;
+        color: #b9f6ca;
+        background: rgba(0, 0, 0, 0.55);
+        border: 1px solid #2a4a38;
+        border-radius: 6px;
+        font: 12px/1.4 ui-monospace, SFMono-Regular, monospace;
+        white-space: pre-wrap;
+        pointer-events: none;
+        user-select: none;
+      }
     </style>
   </head>
   <body>
     <canvas id="app"></canvas>
     <div id="texture-hud">Backend: --  Mode: --</div>
+    <pre id="texture-recovery-state">{"phase":"booting"}</pre>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

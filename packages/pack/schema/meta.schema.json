@@ -3,6 +3,7 @@
   "$id": "https://github.com/ForgeaX-Games/forgeax-engine/packages/pack/schema/meta.schema.json",
   "title": "ExternalAssetPackage",
   "description": "Schema for .meta.json files describing an external asset package (source file + import settings + derived sub-assets).",
+  "$comment": "ScriptablePack durable consumer kinds are published by SCRIPTABLE_PACK_ASSET_KINDS in @forgeax/engine-pack/source; Meta sub-asset kind remains open for producer extensions.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "kind", "importer", "importSettings", "subAssets"],
@@ -52,6 +53,20 @@
         "type": "object",
         "description": "Producer-owned payload; the pack schema validates object shape and the producer contract validates sourceKey identity.",
         "additionalProperties": true
+      }
+    },
+    "sourceOverrideDescriptors": {
+      "type": "array",
+      "description": "Producer-declared authoring contracts for stable source override keys.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sourceKey", "payloadSchema"],
+        "properties": {
+          "sourceKey": { "type": "string", "minLength": 1 },
+          "semantic": { "type": "string", "enum": ["mesh-material-slot-defaults"] },
+          "payloadSchema": { "type": "object" }
+        }
       }
     },
     "paramSchema": {

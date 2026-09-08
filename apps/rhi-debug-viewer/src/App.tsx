@@ -1,268 +1,740 @@
-// App.tsx — top-level React component managing ViewModel + Tape state and dockview layout.
-//
-// Responsibilities:
-//   1. ViewModel + Tape state (Tape is needed by TextureViewer for real RT/depth render).
-//   2. Tape load via loadTapeFromFiles -> deserializeTape -> buildViewModel.
-//   3. window.__forgeaxViewer = vm (same object reference, zero-copy per AC-14/D-4).
-//   4. Dockview 4-panel workspace.
-//   5. Layout persistence via localStorage + Reset Layout button.
-//   6. Full-screen drag-drop (drop a tape pair anywhere) + compact header Import button,
-//      so the dock owns the full main area.
-//   7. Monitor/matrix-style dark theme via globals.css design tokens.
-
-import type { DockviewApi, DockviewReadyEvent } from 'dockview-react';
-import { DockviewReact } from 'dockview-react';
-import 'dockview-react/dist/styles/dockview.css';
-import type { Tape } from '@forgeax/engine-rhi-debug';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { DropOverlay } from './components/DropZone';
-import { ErrorBanner } from './components/ErrorBanner';
+import type { V7Tape } from '@forgeax/engine-rhi-debug';
+import { err } from '@forgeax/engine-types';
+import { type DockviewApi, DockviewReact, type DockviewReadyEvent } from 'dockview-react';
+import {
+  ChevronDown,
+  Columns3,
+  FileUp,
+  Layers3,
+  LayoutPanelTop,
+  PanelTopOpen,
+  RotateCcw,
+} from 'lucide-react';
+import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EventBrowser } from './components/EventBrowser';
 import { PipelineState } from './components/PipelineState';
 import { ResourceInspector } from './components/ResourceInspector';
-import { TextureViewer } from './components/TextureViewer';
-import { resetToDefaultLayout, wireLayoutPersistence } from './layout-persistence';
-import { SelectionProvider } from './selection-context';
+import { DrawCallViewer } from './components/TextureViewer';
+import { PanelNavigationProvider } from './panel-navigation';
+import { SelectionProvider, useSelection } from './selection-context';
 import { loadStatusAnchor } from './selectors';
-import type { TapeLoadError } from './tape-source';
-import { loadTapeFromFiles, loadTapeFromUrls } from './tape-source';
-import { TapeContext, ViewModelContext } from './viewer-context';
-import type { ViewModel } from './viewer-model';
-import { buildViewModel } from './viewer-model';
+import { loadTapeFromFiles, loadTapeFromUrl, type TapeLoadError } from './tape-source';
+import {
+  openViewerReplay,
+  type ReadResource,
+  type RhiDebugViewerGlobal,
+  ViewerContext,
+  type ViewerReplay,
+  type ViewerSelectionSnapshot,
+  ViewModelContext,
+  viewerNoWebGpuError,
+  viewerShellCapability,
+} from './viewer-context';
+import {
+  buildViewerModel,
+  type InspectWork,
+  type ViewerArtifactRef,
+  type ViewerModel,
+} from './viewer-model';
+import {
+  DEFAULT_WORKSPACE_LAYOUT,
+  LAYOUT_STORAGE_KEY,
+  type LayoutRecovery,
+  PANEL_IDS,
+  readWorkspaceLayout,
+  resetWorkspaceLayout,
+  type WorkspaceLayout,
+  writeWorkspaceLayout,
+} from './workspace-layout';
 
-const components = {
-  eventBrowser: EventBrowser,
-  pipelineState: PipelineState,
-  textureViewer: TextureViewer,
-  resourceInspector: ResourceInspector,
+import 'dockview-react/dist/styles/dockview.css';
+
+interface ViewerPanelsProps {
+  readonly model: ViewerModel;
+  readonly tape?: V7Tape | null;
+  readonly inspectWork?: InspectWork;
+  readonly readResource?: ReadResource;
+  readonly artifactRef?: ViewerArtifactRef | null;
+  readonly capability?: ReturnType<typeof viewerShellCapability>;
+}
+
+function defaultInspectWork(): ReturnType<InspectWork> {
+  return Promise.resolve(err(viewerNoWebGpuError()));
+}
+
+function defaultReadResource(): ReturnType<ReadResource> {
+  return Promise.resolve(err(viewerNoWebGpuError()));
+}
+
+export function ViewerPanels({
+  model,
+  tape = null,
+  inspectWork = defaultInspectWork,
+  readResource = defaultReadResource,
+  artifactRef = null,
+  capability = viewerShellCapability(),
+}: ViewerPanelsProps) {
+  return (
+    <ViewerContext.Provider value={{ model, tape, inspectWork, readResource, capability }}>
+      <SelectionProvider>
+        <ViewerGlobalBridge
+          model={model}
+          inspectWork={inspectWork}
+          readResource={readResource}
+          artifactRef={artifactRef}
+          capability={capability}
+        />
+        <div
+          className="h-full min-h-0 grid grid-cols-[minmax(13rem,22rem)_minmax(20rem,1.35fr)_minmax(18rem,1fr)] grid-rows-2 gap-2"
+          data-forgeax-viewer="v7"
+        >
+          <div className="row-span-2 min-h-0">
+            <EventBrowser />
+          </div>
+          <div className="row-span-2 min-h-0">
+            <DrawCallViewer />
+          </div>
+          <div className="min-h-0">
+            <PipelineState />
+          </div>
+          <div className="min-h-0">
+            <ResourceInspector />
+          </div>
+        </div>
+      </SelectionProvider>
+    </ViewerContext.Provider>
+  );
+}
+
+interface ViewerGlobalBridgeProps {
+  readonly model: ViewerModel;
+  readonly inspectWork: InspectWork;
+  readonly readResource: ReadResource;
+  readonly artifactRef: ViewerArtifactRef | null;
+  readonly capability: ReturnType<typeof viewerShellCapability>;
+}
+
+function ViewerGlobalBridge({
+  model,
+  inspectWork,
+  readResource,
+  artifactRef,
+  capability,
+}: ViewerGlobalBridgeProps) {
+  const selection = useSelection();
+  const selectionSnapshot = useMemo<ViewerSelectionSnapshot>(
+    () => ({
+      selectedWorkIndex: selection.selectedWorkIndex,
+      selectedCommandIndex: selection.selectedCommandIndex,
+      selectedEventIndex: selection.selectedEventIndex,
+      selectedPassIndex: selection.selectedPassIndex,
+      selectedResourceId: selection.selectedResourceId,
+      selectedSubresource: selection.selectedSubresource,
+    }),
+    [
+      selection.selectedCommandIndex,
+      selection.selectedEventIndex,
+      selection.selectedPassIndex,
+      selection.selectedResourceId,
+      selection.selectedSubresource,
+      selection.selectedWorkIndex,
+    ],
+  );
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const globalApi: RhiDebugViewerGlobal = {
+      model,
+      artifactRef,
+      inspectWork,
+      readResource,
+      capability,
+      selection: selectionSnapshot,
+    };
+    (window as unknown as { __forgeaxRhiDebug?: RhiDebugViewerGlobal }).__forgeaxRhiDebug =
+      globalApi;
+  }, [artifactRef, capability, inspectWork, model, readResource, selectionSnapshot]);
+  return null;
+}
+
+interface DockviewWorkspaceProps {
+  readonly model: ViewerModel | null;
+  readonly tape: V7Tape | null;
+  readonly inspectWork: InspectWork;
+  readonly readResource: ReadResource;
+  readonly artifactRef: ViewerArtifactRef | null;
+  readonly capability: ReturnType<typeof viewerShellCapability>;
+  readonly onRecovery: (recovery: LayoutRecovery | null) => void;
+  readonly onLayoutActions: (actions: LayoutActions | null) => void;
+}
+
+interface LayoutActions {
+  readonly floatResource: () => void;
+  readonly splitResource: () => void;
+  readonly stackPipeline: () => void;
+  readonly reset: () => void;
+}
+
+function LayoutMenu({ actions }: { readonly actions: LayoutActions | null }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [open]);
+
+  const run = (action: (() => void) | undefined) => {
+    action?.();
+    setOpen(false);
+  };
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        className="forgeax-button-quiet"
+        aria-label="Layout menu"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={actions === null}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <LayoutPanelTop size={13} /> Layout <ChevronDown size={12} />
+      </button>
+      {open && (
+        <div className="forgeax-layout-menu" role="menu" aria-label="Layout actions">
+          <button
+            type="button"
+            role="menuitem"
+            data-forgeax-layout-action="float"
+            onClick={() => run(actions?.floatResource)}
+          >
+            <PanelTopOpen size={14} />
+            <span>
+              <strong>Float resource</strong>
+              <small>Detach Buffer / Resource</small>
+            </span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            data-forgeax-layout-action="split"
+            onClick={() => run(actions?.splitResource)}
+          >
+            <Columns3 size={14} />
+            <span>
+              <strong>Split resource</strong>
+              <small>Move it beside inspectors</small>
+            </span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            data-forgeax-layout-action="stack"
+            onClick={() => run(actions?.stackPipeline)}
+          >
+            <Layers3 size={14} />
+            <span>
+              <strong>Stack pipeline</strong>
+              <small>Return Pipeline to the Resource Inspector group</small>
+            </span>
+          </button>
+          <div className="forgeax-layout-menu-separator" />
+          <button type="button" role="menuitem" onClick={() => run(actions?.reset)}>
+            <RotateCcw size={14} />
+            <span>
+              <strong>Reset layout</strong>
+              <small>Restore the three-region default</small>
+            </span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function panelComponent(id: (typeof PANEL_IDS)[number], Component: () => ReactElement) {
+  return function DockviewPanel() {
+    return (
+      <div className="h-full min-h-0" data-forgeax-panel={id}>
+        <Component />
+      </div>
+    );
+  };
+}
+
+const panelComponents = {
+  eventBrowser: panelComponent(PANEL_IDS[0], EventBrowser),
+  pipelineState: panelComponent(PANEL_IDS[1], PipelineState),
+  drawCallViewer: panelComponent(PANEL_IDS[2], DrawCallViewer),
+  resourceInspector: panelComponent(PANEL_IDS[3], ResourceInspector),
 };
 
-/** Default 4-panel RenderDoc-style layout: EventBrowser left, PipelineState +
- *  TextureViewer stacked top-right, ResourceInspector bottom-right. */
-function applyDefaultLayout(api: DockviewApi) {
-  api.addPanel({ id: 'eventBrowser', component: 'eventBrowser', title: 'Event Browser' });
+function addDefaultPanels(api: DockviewApi): void {
   api.addPanel({
-    id: 'pipelineState',
-    component: 'pipelineState',
-    title: 'Pipeline State',
-    position: { referencePanel: 'eventBrowser', direction: 'right' },
+    id: PANEL_IDS[0],
+    component: 'eventBrowser',
+    title: 'Event browser',
+    renderer: 'always',
   });
-  const pipelineGroup = api.getPanel('pipelineState')?.group;
-  if (pipelineGroup) {
-    api.addPanel({
-      id: 'textureViewer',
-      component: 'textureViewer',
-      title: 'Texture Viewer',
-      position: { referenceGroup: pipelineGroup },
+  api.addPanel({
+    id: PANEL_IDS[2],
+    component: 'drawCallViewer',
+    title: 'Draw Call Viewer',
+    renderer: 'always',
+    position: { referencePanel: PANEL_IDS[0], direction: 'right' },
+  });
+  api.addPanel({
+    id: PANEL_IDS[1],
+    component: 'pipelineState',
+    title: 'Pipeline state',
+    renderer: 'always',
+    position: { referencePanel: PANEL_IDS[2], direction: 'right' },
+  });
+  api.addPanel({
+    id: PANEL_IDS[3],
+    component: 'resourceInspector',
+    title: 'Resource Inspector',
+    renderer: 'always',
+    position: { referencePanel: PANEL_IDS[1], direction: 'within' },
+    inactive: true,
+  });
+}
+
+function hasDockviewShape(topology: unknown): topology is Parameters<DockviewApi['fromJSON']>[0] {
+  return Boolean(topology && typeof topology === 'object' && 'grid' in topology);
+}
+
+function DockviewWorkspace({
+  model,
+  tape,
+  inspectWork,
+  readResource,
+  artifactRef,
+  capability,
+  onRecovery,
+  onLayoutActions,
+}: DockviewWorkspaceProps) {
+  const apiRef = useRef<DockviewApi | null>(null);
+  const storage =
+    typeof window === 'undefined'
+      ? null
+      : (() => {
+          try {
+            return window.localStorage;
+          } catch {
+            return null;
+          }
+        })();
+
+  useEffect(() => {
+    if (model !== null || typeof window === 'undefined') return;
+    delete (window as unknown as { __forgeaxRhiDebug?: RhiDebugViewerGlobal }).__forgeaxRhiDebug;
+  }, [model]);
+  const persistLayout = useCallback(() => {
+    const api = apiRef.current;
+    if (!api || !storage) return;
+    const result = writeWorkspaceLayout(storage, api.toJSON());
+    if (!result.ok) onRecovery(result.error);
+  }, [onRecovery, storage]);
+
+  const handleReady = useCallback(
+    ({ api }: DockviewReadyEvent) => {
+      apiRef.current = api;
+      let saved: { readonly layout: WorkspaceLayout; readonly recovery: LayoutRecovery | null } = {
+        layout: DEFAULT_WORKSPACE_LAYOUT,
+        recovery: null,
+      };
+      if (storage) saved = readWorkspaceLayout(storage);
+      onRecovery(saved.recovery);
+      api.clear();
+      if (hasDockviewShape(saved.layout.topology)) {
+        try {
+          // `clear()` above removes every panel, so deserialization must create
+          // the serialized panel records instead of looking for reusable ones.
+          api.fromJSON(saved.layout.topology, { reuseExistingPanels: false });
+        } catch (error) {
+          onRecovery({
+            code: 'layout-corrupt',
+            detail: error instanceof Error ? error.message : 'Saved layout could not be restored.',
+          });
+          api.clear();
+          addDefaultPanels(api);
+        }
+      } else {
+        addDefaultPanels(api);
+      }
+      api.onDidLayoutChange(() => persistLayout());
+      persistLayout();
+    },
+    [onRecovery, persistLayout, storage],
+  );
+
+  const reset = useCallback(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    api.clear();
+    addDefaultPanels(api);
+    if (storage) {
+      try {
+        resetWorkspaceLayout(storage);
+      } catch (error) {
+        onRecovery({
+          code: 'layout-storage-failed',
+          detail: error instanceof Error ? error.message : 'Layout storage is unavailable.',
+        });
+        return;
+      }
+    }
+    onRecovery(null);
+    persistLayout();
+  }, [onRecovery, persistLayout, storage]);
+
+  const runLayoutAction = useCallback(
+    (action: (api: DockviewApi) => void) => {
+      const api = apiRef.current;
+      if (!api) return;
+      try {
+        action(api);
+        persistLayout();
+      } catch (error) {
+        onRecovery({
+          code: 'layout-corrupt',
+          detail: error instanceof Error ? error.message : 'Dockview layout action failed.',
+        });
+      }
+    },
+    [onRecovery, persistLayout],
+  );
+
+  const floatResource = useCallback(() => {
+    runLayoutAction((api) => {
+      const panel = api.getPanel(PANEL_IDS[3]);
+      if (!panel) return;
+      api.addFloatingGroup(panel, { x: 760, y: 120, width: 460, height: 320 });
     });
-    api.addPanel({
-      id: 'resourceInspector',
-      component: 'resourceInspector',
-      title: 'Resource Inspector',
-      position: { referenceGroup: pipelineGroup, direction: 'below' },
+  }, [runLayoutAction]);
+
+  const splitResource = useCallback(() => {
+    runLayoutAction((api) => {
+      const panel = api.getPanel(PANEL_IDS[3]);
+      const reference = api.getPanel(PANEL_IDS[1]);
+      if (!panel || !reference) return;
+      panel.api.moveTo({ group: reference.group, position: 'right' });
     });
-  }
+  }, [runLayoutAction]);
+
+  const stackResource = useCallback(() => {
+    runLayoutAction((api) => {
+      const panel = api.getPanel(PANEL_IDS[1]);
+      const target = api.getPanel(PANEL_IDS[3]);
+      if (!panel || !target) return;
+      panel.api.moveTo({ group: target.group, position: 'center' });
+    });
+  }, [runLayoutAction]);
+
+  const openPanel = useCallback((panelId: (typeof PANEL_IDS)[number]) => {
+    apiRef.current?.getPanel(panelId)?.api.setActive();
+  }, []);
+
+  useEffect(() => {
+    onLayoutActions({
+      floatResource,
+      splitResource,
+      stackPipeline: stackResource,
+      reset,
+    });
+    return () => onLayoutActions(null);
+  }, [floatResource, onLayoutActions, reset, splitResource, stackResource]);
+
+  return (
+    <div
+      className="forgeax-workspace flex h-full min-h-0 flex-col"
+      data-forgeax-workspace="dockview"
+      data-forgeax-layout-key={LAYOUT_STORAGE_KEY}
+    >
+      <ViewModelContext.Provider value={model}>
+        {model && tape ? (
+          <ViewerContext.Provider value={{ model, tape, inspectWork, readResource, capability }}>
+            <PanelNavigationProvider openPanel={openPanel}>
+              <SelectionProvider>
+                <ViewerGlobalBridge
+                  model={model}
+                  inspectWork={inspectWork}
+                  readResource={readResource}
+                  artifactRef={artifactRef}
+                  capability={capability}
+                />
+                <div className="forgeax-dockview dockview-theme-abyss min-h-0 flex-1">
+                  <DockviewReact components={panelComponents} onReady={handleReady} />
+                </div>
+              </SelectionProvider>
+            </PanelNavigationProvider>
+          </ViewerContext.Provider>
+        ) : (
+          <PanelNavigationProvider openPanel={openPanel}>
+            <SelectionProvider>
+              <div className="forgeax-dockview dockview-theme-abyss min-h-0 flex-1">
+                <DockviewReact components={panelComponents} onReady={handleReady} />
+              </div>
+            </SelectionProvider>
+          </PanelNavigationProvider>
+        )}
+      </ViewModelContext.Provider>
+    </div>
+  );
 }
 
 type AppState =
-  | { status: 'empty' }
-  | { status: 'loaded'; viewModel: ViewModel; tape: Tape }
-  | { status: 'parse-error'; error: TapeLoadError };
+  | { readonly status: 'empty' }
+  | {
+      readonly status: 'loading';
+      readonly fileName: string;
+      readonly source: 'drop' | 'picker';
+    }
+  | {
+      readonly status: 'loaded';
+      readonly model: ViewerModel;
+      readonly tape: V7Tape;
+      readonly artifactRef: ViewerArtifactRef;
+      readonly replay: ViewerReplay;
+    }
+  | { readonly status: 'parse-error'; readonly error: TapeLoadError };
 
 export function App() {
   const [state, setState] = useState<AppState>({ status: 'empty' });
   const [isDragOver, setIsDragOver] = useState(false);
-  const apiRef = useRef<DockviewApi | null>(null);
-  const persistDisposeRef = useRef<(() => void) | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // One monotonically increasing token owns the active load. A delayed URL
-  // handoff must never overwrite a file pair the user imported afterwards.
-  const loadGenerationRef = useRef(0);
+  const dragDepthRef = useRef(0);
+  const generationRef = useRef(0);
+  const replayRef = useRef<ViewerReplay | null>(null);
+  const [layoutRecovery, setLayoutRecovery] = useState<LayoutRecovery | null>(null);
+  const [layoutActions, setLayoutActions] = useState<LayoutActions | null>(null);
 
-  const handleFiles = useCallback(async (files: File[]) => {
-    const generation = ++loadGenerationRef.current;
-    setState({ status: 'empty' });
-
-    const result = await loadTapeFromFiles(files);
-    if (generation !== loadGenerationRef.current) return;
-    if (!result.ok) {
-      setState({ status: 'parse-error', error: result.error });
-      return;
-    }
-
-    const tape = result.value;
-    const vm = buildViewModel(tape);
-
-    (window as unknown as Record<string, unknown>).__forgeaxViewer = vm;
-
-    setState({ status: 'loaded', viewModel: vm, tape });
+  const replaceReplay = useCallback((replay: ViewerReplay | null) => {
+    const previous = replayRef.current;
+    replayRef.current = replay;
+    if (previous !== null) void previous.dispose();
   }, []);
 
-  // The editor opens this page with a signed-by-shape, dev-only capture pair.
-  // Manual import remains available for saved captures and regular reviewer use.
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const tapeUrl = params.get('tapeUrl');
-    const reportUrl = params.get('reportUrl');
-    if (!tapeUrl || !reportUrl) return;
-
-    const generation = ++loadGenerationRef.current;
-
-    void (async () => {
-      setState({ status: 'empty' });
-      const result = await loadTapeFromUrls(tapeUrl, reportUrl);
-      if (generation !== loadGenerationRef.current) return;
+  const loadFiles = useCallback(
+    async (files: File[], source: 'drop' | 'picker') => {
+      const generation = ++generationRef.current;
+      setState({
+        status: 'loading',
+        fileName:
+          files.length === 1 && files[0] !== undefined ? files[0].name : `${files.length} files`,
+        source,
+      });
+      const result = await loadTapeFromFiles(files);
+      if (generation !== generationRef.current) return;
       if (!result.ok) {
+        replaceReplay(null);
         setState({ status: 'parse-error', error: result.error });
         return;
       }
-      const tape = result.value;
-      const vm = buildViewModel(tape);
-      (window as unknown as Record<string, unknown>).__forgeaxViewer = vm;
-      setState({ status: 'loaded', viewModel: vm, tape });
-    })();
-
-    return () => {
-      if (loadGenerationRef.current === generation) loadGenerationRef.current++;
-    };
-  }, []);
-
-  const onReady = useCallback((event: DockviewReadyEvent) => {
-    apiRef.current = event.api;
-    const dispose = wireLayoutPersistence(event.api, () => {
-      applyDefaultLayout(event.api);
-    });
-    persistDisposeRef.current = dispose;
-  }, []);
+      const replay = await openViewerReplay(result.value.tape);
+      if (generation !== generationRef.current) {
+        await replay.dispose();
+        return;
+      }
+      replaceReplay(replay);
+      setState({
+        status: 'loaded',
+        tape: result.value.tape,
+        model: buildViewerModel(result.value.tape),
+        artifactRef: result.value.artifactRef,
+        replay,
+      });
+    },
+    [replaceReplay],
+  );
 
   useEffect(() => {
-    return () => {
-      if (persistDisposeRef.current) {
-        persistDisposeRef.current();
-        persistDisposeRef.current = null;
+    const tapeUrl = new URLSearchParams(window.location.search).get('tapeUrl');
+    if (!tapeUrl) return;
+    const generation = ++generationRef.current;
+    void (async () => {
+      const result = await loadTapeFromUrl(tapeUrl);
+      if (generation !== generationRef.current) return;
+      if (!result.ok) {
+        replaceReplay(null);
+        setState({ status: 'parse-error', error: result.error });
+        return;
       }
+      const replay = await openViewerReplay(result.value.tape);
+      if (generation !== generationRef.current) {
+        await replay.dispose();
+        return;
+      }
+      replaceReplay(replay);
+      setState({
+        status: 'loaded',
+        tape: result.value.tape,
+        model: buildViewerModel(result.value.tape),
+        artifactRef: result.value.artifactRef,
+        replay,
+      });
+    })();
+    return () => {
+      if (generationRef.current === generation) generationRef.current++;
     };
-  }, []);
+  }, [replaceReplay]);
 
-  const handleResetLayout = useCallback(() => {
-    const api = apiRef.current;
-    if (!api) return;
-    resetToDefaultLayout(api, () => {
-      applyDefaultLayout(api);
-    });
-  }, []);
+  useEffect(
+    () => () => {
+      replaceReplay(null);
+    },
+    [replaceReplay],
+  );
 
-  // Full-screen drag-drop: dropping a tape pair anywhere loads it.
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(true);
-  }, []);
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    // Only clear when leaving the window (relatedTarget null), not on child enter.
-    if (e.relatedTarget === null) setIsDragOver(false);
-  }, []);
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
+  useEffect(() => {
+    const containsFiles = (event: DragEvent) =>
+      Array.from(event.dataTransfer?.types ?? []).includes('Files');
+    const handleDragEnter = (event: DragEvent) => {
+      if (!containsFiles(event)) return;
+      event.preventDefault();
+      dragDepthRef.current++;
+      setIsDragOver(true);
+    };
+    const handleDragOver = (event: DragEvent) => {
+      if (!containsFiles(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer !== null) event.dataTransfer.dropEffect = 'copy';
+    };
+    const handleDragLeave = (event: DragEvent) => {
+      if (!containsFiles(event)) return;
+      event.preventDefault();
+      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+      if (dragDepthRef.current === 0 || event.relatedTarget === null) setIsDragOver(false);
+    };
+    const handleDrop = (event: DragEvent) => {
+      if (!containsFiles(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      dragDepthRef.current = 0;
       setIsDragOver(false);
-      const files = Array.from(e.dataTransfer.files);
-      if (files.length > 0) handleFiles(files);
-    },
-    [handleFiles],
-  );
-
-  const handleImportClick = useCallback(() => fileInputRef.current?.click(), []);
-  const handleInputChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const files = Array.from(e.target.files ?? []);
-      if (files.length > 0) handleFiles(files);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    },
-    [handleFiles],
-  );
+      void loadFiles(Array.from(event.dataTransfer?.files ?? []), 'drop');
+    };
+    window.addEventListener('dragenter', handleDragEnter, true);
+    window.addEventListener('dragover', handleDragOver, true);
+    window.addEventListener('dragleave', handleDragLeave, true);
+    window.addEventListener('drop', handleDrop, true);
+    return () => {
+      window.removeEventListener('dragenter', handleDragEnter, true);
+      window.removeEventListener('dragover', handleDragOver, true);
+      window.removeEventListener('dragleave', handleDragLeave, true);
+      window.removeEventListener('drop', handleDrop, true);
+    };
+  }, [loadFiles]);
 
   const loaded = state.status === 'loaded';
+  const loadedSummary =
+    state.status === 'loaded'
+      ? `${state.model.passes.length} passes · ${state.model.works.length} works · ${state.model.resources.length} resources`
+      : state.status === 'loading'
+        ? `Loading ${state.fileName}`
+        : 'Deterministic frame replay and inspection';
 
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: full-window file drop target (drag-drop only, not click/keyboard); import-by-click is the header button
-    <div
+    <section
       className="dark min-h-screen h-screen flex flex-col bg-background text-foreground"
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-      {...{ [loadStatusAnchor()]: state.status === 'empty' ? 'empty' : undefined }}
+      aria-label="RHI tape drop area"
+      {...{ [loadStatusAnchor()]: state.status }}
     >
-      <header className="border-b border-border px-4 py-2.5 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-brand" />
-          <h1 className="text-sm font-semibold tracking-tight">RHI Debug Viewer</h1>
+      <header className="forgeax-appbar">
+        <div className="flex items-center gap-3">
+          <div className="forgeax-logo">RHI</div>
+          <div>
+            <h1 className="text-sm font-semibold tracking-tight">RHI Debug Viewer</h1>
+            <p className="text-[10px] text-muted-foreground">{loadedSummary}</p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
+          <LayoutMenu actions={layoutActions} />
+          <span className="forgeax-badge">v7 · .rhitape</span>
           <button
             type="button"
-            onClick={handleResetLayout}
-            className="px-2.5 py-1 text-xs font-medium rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            className="forgeax-button-primary"
+            onClick={() => fileInputRef.current?.click()}
           >
-            Reset Layout
-          </button>
-          <button
-            type="button"
-            onClick={handleImportClick}
-            className="px-2.5 py-1 text-xs font-medium rounded-md bg-brand text-brand-foreground hover:opacity-90 transition-opacity"
-          >
-            Import
+            <FileUp size={13} /> Import tape
           </button>
           <input
             ref={fileInputRef}
             type="file"
-            accept=".tape.bin,.json"
-            multiple
-            onChange={handleInputChange}
+            accept=".rhitape"
             className="hidden"
-            aria-label="Select tape files"
+            aria-label="Select one v7 RHI tape"
+            onChange={(event) => {
+              void loadFiles(Array.from(event.target.files ?? []), 'picker');
+              event.target.value = '';
+            }}
           />
         </div>
       </header>
-
       {state.status === 'parse-error' && (
-        <div className="px-4 pt-3 shrink-0">
-          <ErrorBanner error={state.error} />
+        <div
+          className="border-b border-danger/40 bg-danger/10 px-4 py-2 text-xs"
+          {...{ [loadStatusAnchor()]: 'parse-error' }}
+        >
+          <strong>{state.error.code}</strong>: {state.error.hint}
         </div>
       )}
-
-      <main className="flex-1 min-h-0 p-2">
-        <div className="h-full w-full" {...{ [loadStatusAnchor()]: loaded ? 'loaded' : 'empty' }}>
-          {loaded ? (
-            <div className="dockview-theme-forgeax h-full w-full">
-              <ViewModelContext.Provider value={state.viewModel}>
-                <TapeContext.Provider value={state.tape}>
-                  <SelectionProvider>
-                    <DockviewReact onReady={onReady} components={components} />
-                  </SelectionProvider>
-                </TapeContext.Provider>
-              </ViewModelContext.Provider>
-            </div>
-          ) : (
-            <div className="h-full w-full flex flex-col items-center justify-center gap-3 text-center">
-              <p className="text-sm text-muted-foreground">
-                Drop a <code className="text-xs bg-muted px-1 rounded">frame-N.tape.bin</code> +{' '}
-                <code className="text-xs bg-muted px-1 rounded">frame-N.report.json</code> pair
-                anywhere
-              </p>
-              <button
-                type="button"
-                onClick={handleImportClick}
-                className="px-3 py-1.5 text-xs font-medium rounded-md bg-brand text-brand-foreground hover:opacity-90 transition-opacity"
-              >
-                Import a capture
-              </button>
-            </div>
-          )}
+      {state.status === 'loading' && (
+        <div
+          className="border-b border-brand/35 bg-brand/10 px-4 py-2 text-xs text-brand"
+          {...{ [loadStatusAnchor()]: 'loading' }}
+        >
+          Loading {state.fileName} from {state.source === 'drop' ? 'drop' : 'file picker'}…
         </div>
+      )}
+      {layoutRecovery && (
+        <div
+          className="border-b border-warning/40 bg-warning/10 px-4 py-2 text-xs"
+          data-forgeax-layout-recovery={layoutRecovery.code}
+        >
+          Layout reset: {layoutRecovery.code} — {layoutRecovery.detail}
+        </div>
+      )}
+      <main
+        className="flex-1 min-h-0 p-2"
+        {...{ [loadStatusAnchor()]: loaded ? 'loaded' : state.status }}
+      >
+        <DockviewWorkspace
+          model={state.status === 'loaded' ? state.model : null}
+          tape={state.status === 'loaded' ? state.tape : null}
+          inspectWork={state.status === 'loaded' ? state.replay.inspectWork : defaultInspectWork}
+          readResource={state.status === 'loaded' ? state.replay.readResource : defaultReadResource}
+          artifactRef={state.status === 'loaded' ? state.artifactRef : null}
+          capability={state.status === 'loaded' ? state.replay.capability : viewerShellCapability()}
+          onRecovery={setLayoutRecovery}
+          onLayoutActions={setLayoutActions}
+        />
       </main>
-
-      {isDragOver && <DropOverlay />}
-    </div>
+      {isDragOver && (
+        <div
+          className="pointer-events-none fixed inset-0 z-50 grid place-items-center border-2 border-brand/70 bg-background/75 text-sm backdrop-blur-sm"
+          data-forgeax-drop-overlay="ready"
+        >
+          <div className="rounded-xl border border-brand/40 bg-card/95 px-8 py-6 text-center shadow-2xl">
+            <FileUp className="mx-auto mb-3 text-brand" size={28} />
+            <strong>Drop one .rhitape file</strong>
+            <p className="mt-1 text-xs text-muted-foreground">It will replace the current tape.</p>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }

@@ -1,206 +1,244 @@
-// apps/hello/topology -- line-list primitive topology end-to-end demo
-// (feat-20260604-mesh-topology-debug-draw / M6 / w16).
+// hello-topology -- the focused public Points/Lines carrier.
 //
-// What this demo proves end-to-end (requirements AC-11 + AC-12):
-//   - A MeshAsset authored with `topology: 'line-list'` and NO index buffer
-//     (vertex-only) registers, uploads, and renders through the non-indexed
-//     `pass.draw(vertexCount)` path with a line-list PSO (M1-M5 capability).
-//   - The spawned mesh draws as DISCRETE line segments (a wireframe box's 12
-//     edges), not a filled triangle face -- visual evidence the topology field
-//     reached the immutable WebGPU pipeline.
-//
-// Geometry (OOS-1: no debug-line geometry factory -- the demo hand-builds the
-// vertex buffer): a unit cube's 12 edges expressed as 24 vertices (2 per edge),
-// drawn as 12 independent line segments. Each vertex carries the standard
-// 12-float interleaved layout (position vec3 + normal vec3 + uv vec2 +
-// tangent vec4); normal/uv/tangent are zero-filled because the unlit material
-// ignores them.
-//
-// Material: forgeax::default-unlit with a bright cyan baseColor so the lines
-// read clearly against the black clear color regardless of lighting (line
-// primitives have no meaningful face normals).
-//
-// Recipe (charter P1 progressive disclosure):
-//   (1) createApp(canvas, {}, { shaderManifestUrl }) + spawn Camera with clear* fields
-//   (2) world.allocSharedRef('MeshAsset', { kind: 'mesh', ... }) -> meshHandle
-//   (3) world.allocSharedRef('MaterialAsset', unlit material) -> materialHandle
-//   (4) world.spawn Transform + MeshFilter + MeshRenderer
-//   (5) world.spawn Camera with an explicit look-at pose (no light needed for unlit)
-//   (6) app.start()
+// The query-free URL remains the legacy line-list topology oracle. The two
+// focused URLs use the same public MeshAsset and Materials.unlit authoring
+// with Points and Lines attached; evidenceLane selects only the carrier URL.
 
 import { createApp } from '@forgeax/engine-app';
 import type { CanvasAppError } from '@forgeax/engine-app';
-
+import { buildMeshAttributeMapForUvSets } from '@forgeax/engine-geometry';
+import {
+  Camera,
+  Lines,
+  Materials,
+  MeshFilter,
+  MeshRenderer,
+  PointShapeValue,
+  Points,
+  perspective,
+} from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
-import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { perspective } from '@forgeax/engine-render';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
-
 import type { Handle, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
-// --- shared geometry builder -------------------------------------------------
-
-/**
- * Number of floats per vertex in the engine's interleaved vertex layout:
- * position vec3 + normal vec3 + uv vec2 + tangent vec4 = 12 floats.
- * (AssetRegistry.validateMeshPayload enforces vertices.length % 12 === 0.)
- */
 const FLOATS_PER_VERTEX = 12;
+const FOCUSED_ROUTES = ['?evidenceLane=webgpu', '?evidenceLane=wgpu-webgl2'] as const;
 
-/**
- * Build a vertex-only line-list MeshAsset for a unit-cube wireframe: 12 edges,
- * 24 vertices (2 per edge), drawn as discrete segments. No index buffer -- the
- * engine takes the non-indexed `pass.draw(24)` path with a line-list PSO.
- */
+/** Build the legacy vertex-only line-list wireframe retained by this carrier. */
 export function buildWireframeBoxLineList(half = 0.8): MeshAsset {
-  // 8 cube corners.
-  const c: readonly (readonly [number, number, number])[] = [
-    [-half, -half, -half], // 0
-    [half, -half, -half], // 1
-    [half, half, -half], // 2
-    [-half, half, -half], // 3
-    [-half, -half, half], // 4
-    [half, -half, half], // 5
-    [half, half, half], // 6
-    [-half, half, half], // 7
+  const corners: readonly (readonly [number, number, number])[] = [
+    [-half, -half, -half], [half, -half, -half], [half, half, -half], [-half, half, -half],
+    [-half, -half, half], [half, -half, half], [half, half, half], [-half, half, half],
   ];
-  // 12 edges as corner-index pairs.
   const edges: readonly (readonly [number, number])[] = [
-    [0, 1], [1, 2], [2, 3], [3, 0], // back face
-    [4, 5], [5, 6], [6, 7], [7, 4], // front face
-    [0, 4], [1, 5], [2, 6], [3, 7], // connecting edges
+    [0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4],
+    [0, 4], [1, 5], [2, 6], [3, 7],
   ];
-
-  const vertexCount = edges.length * 2;
-  const vertices = new Float32Array(vertexCount * FLOATS_PER_VERTEX);
-  const position = new Float32Array(vertexCount * 3);
-
-  let v = 0;
-  for (const [a, b] of edges) {
-    for (const ci of [a, b]) {
-      const corner = c[ci] as readonly [number, number, number];
-      const base = v * FLOATS_PER_VERTEX;
-      vertices[base + 0] = corner[0];
-      vertices[base + 1] = corner[1];
-      vertices[base + 2] = corner[2];
-      // normal (3), uv (2), tangent (4) left at 0 -- unlit ignores them.
-      position[v * 3 + 0] = corner[0];
-      position[v * 3 + 1] = corner[1];
-      position[v * 3 + 2] = corner[2];
-      v++;
+  const vertices = new Float32Array(edges.length * 2 * FLOATS_PER_VERTEX);
+  const position = new Float32Array(edges.length * 2 * 3);
+  let vertex = 0;
+  for (const [first, second] of edges) {
+    for (const cornerIndex of [first, second]) {
+      const corner = corners[cornerIndex] as readonly [number, number, number];
+      const vertexOffset = vertex * FLOATS_PER_VERTEX;
+      vertices.set(corner, vertexOffset);
+      position.set(corner, vertex * 3);
+      vertex += 1;
     }
   }
+  return meshAsset('line-list', vertices, position, vertex);
+}
 
+function meshAsset(
+  topology: 'point-list' | 'line-list',
+  vertices: Float32Array,
+  position: Float32Array,
+  vertexCount: number,
+): MeshAsset {
   return {
     kind: 'mesh',
     vertices,
-    // No `indices`: vertex-only line-list takes the non-indexed draw path.
-    attributes: { position },
-    submeshes: [
-      {
-        indexOffset: 0,
-        indexCount: 0,
-        vertexCount,
-        topology: 'line-list',
-      },
-    ],
+    attributes: { ...buildMeshAttributeMapForUvSets(1), position },
+    submeshes: [{
+      indexOffset: 0,
+      indexCount: 0,
+      vertexCount,
+      topology,
+      materialSlot: 0,
+    }],
+    materialSlots: [{ slotName: 'focused-points-lines' }],
   };
 }
 
-// --- bootstrap ---------------------------------------------------------------
-
-const canvas = document.querySelector<HTMLCanvasElement>('#app');
-if (!canvas) {
-  throw new Error('[topology] missing <canvas id="app"> in index.html');
+function createFocusedMesh(topology: 'point-list' | 'line-list'): MeshAsset {
+  const positions = topology === 'point-list'
+    ? [[-0.65, 0.25, 0], [-0.2, 0.55, 0], [0.25, 0.2, 0], [0.65, 0.5, 0]]
+    : [[-0.8, -0.45, 0], [0.8, -0.45, 0], [-0.8, -0.1, 0], [0.8, -0.1, 0], [-0.8, 0.25, 0], [0.8, 0.25, 0]];
+  const vertices = new Float32Array(positions.length * FLOATS_PER_VERTEX);
+  const position = new Float32Array(positions.length * 3);
+  positions.forEach((value, index) => {
+    vertices.set(value, index * FLOATS_PER_VERTEX);
+    position.set(value, index * 3);
+  });
+  return meshAsset(topology, vertices, position, positions.length);
 }
 
-bootstrap(canvas).catch((err: unknown) => {
-  if (err instanceof EngineEnvironmentError) {
-    const inner = err.detail.webgpuError;
-    const code = inner !== undefined && 'code' in inner ? inner.code : '<none>';
-    console.error(`[topology] EngineEnvironmentError: webgpu inner=${code}`);
-  } else {
-    console.error('[topology] bootstrap error:', err);
-  }
-});
+const canvas = document.querySelector<HTMLCanvasElement>('#app');
+if (canvas === null) throw new Error('[topology] missing <canvas id="app"> in index.html');
 
-async function bootstrap(target: HTMLCanvasElement): Promise<void> {
-  const appRes = await createApp(target, {}, forgeaxBundlerAdapter());
-  if (!appRes.ok) {
-    reportAppError(appRes.error);
-    return;
-  }
-  const app = appRes.value;
-  console.warn(`[topology] backend=${app.renderer.backend}`);
+const query = new URLSearchParams(window.location.search);
+const evidenceLane = query.get('evidenceLane');
+const falsify = query.get('falsify');
+const authoringSandbox = query.get('authoringSandbox') === '1';
+void (evidenceLane === 'webgpu' || evidenceLane === 'wgpu-webgl2'
+  ? bootstrapFocused(canvas, evidenceLane, falsify, authoringSandbox)
+  : bootstrapLegacy(canvas));
 
-  const ready = await app.renderer.ready;
-  if (!ready.ok) {
-    console.error('[topology] renderer.ready failed:', ready.error.code, ready.error.hint);
-    return;
-  }
+async function bootstrapFocused(
+  target: HTMLCanvasElement,
+  lane: 'webgpu' | 'wgpu-webgl2',
+  falsify: string | null,
+  authoringSandbox: boolean,
+): Promise<void> {
+  const appOptions = lane === 'wgpu-webgl2' ? await loadWebGl2Options() : {};
+  const appResult = await createApp(target, appOptions, forgeaxBundlerAdapter());
+  if (!appResult.ok) return reportAppError(appResult.error);
+  const app = appResult.value;
+  const world = app.world;
+  const material = Materials.unlit([0.1, 0.9, 1, falsify === 'alpha' ? 0.4 : 1], {
+    castShadow: false,
+    renderState: {
+      ...(falsify === 'depth-sort' || falsify === 'alpha'
+        ? { depthWriteEnabled: false }
+        : {}),
+      ...(falsify === 'alpha'
+        ? {
+            blend: {
+              color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha' },
+              alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+            },
+          }
+        : {}),
+    },
+    queue: falsify === 'sort' ? 3001 : 3000,
+  });
+  const materialHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', material);
+  const pointMeshHandle = world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', createFocusedMesh('point-list'));
+  const lineMeshHandle = world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', createFocusedMesh('line-list'));
 
-  const assets = app.renderer.assets;
+  world.spawn(
+    { component: Transform, data: { pos: [falsify === 'frustum' ? 0.85 : 0, 0, -2], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
+    { component: MeshFilter, data: { assetHandle: pointMeshHandle } },
+    { component: MeshRenderer, data: { materials: [materialHandle] } },
+    {
+      component: Points,
+      data: {
+        sizePx: 16,
+        shape: falsify === 'point-square' ? PointShapeValue.square : PointShapeValue.circle,
+      },
+    },
+  ).unwrap();
+  world.spawn(
+    { component: Transform, data: { pos: [0, 0, -2], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
+    { component: MeshFilter, data: { assetHandle: lineMeshHandle } },
+    { component: MeshRenderer, data: { materials: [materialHandle] } },
+    { component: Lines, data: { widthPx: falsify === 'line-width' ? 1 : 4 } },
+  ).unwrap();
+  world.spawn(
+    { component: Transform, data: { pos: [0, 0, 2], quat: [0, 0, 0, 1] } },
+    { component: Camera, data: { ...perspective({ fov: Math.PI / 4, aspect: 16 / 9 }) } },
+  ).unwrap();
+
+  const start = app.start();
+  if (!start.ok) return reportAppError(start.error);
+  const backend = app.renderer.inspect().capabilities.backendKind;
+  const hud = document.querySelector<HTMLDivElement>('#topology-hud');
+  if (hud !== null) hud.textContent = `evidenceLane=${lane} backend=${backend} points-lines`;
+  const host = window as typeof window & {
+    __pointsLinesEvidence?: {
+      readonly evidenceLane: typeof lane;
+      readonly routes: readonly string[];
+      readonly backend: typeof backend;
+      readonly backendKind: typeof backend;
+      readonly authoringSandbox: boolean;
+      readonly validationErrors: number;
+      readonly falsify: string | null;
+      readonly viewport: { readonly width: number; readonly height: number; readonly dpr: number };
+      readonly authoring: {
+        readonly pointSizePx: number;
+        readonly pointShape: string;
+        readonly lineWidthPx: number;
+        readonly depthWriteEnabled: boolean;
+        readonly alpha: number;
+        readonly sortQueue: number;
+        readonly frustumMarginPx: number;
+      };
+      readonly inspect: () => unknown;
+      readonly capture: () => string;
+    };
+  };
+  host.__pointsLinesEvidence = {
+    evidenceLane: lane,
+    routes: FOCUSED_ROUTES,
+    backend,
+    backendKind: backend,
+    authoringSandbox,
+    validationErrors: 0,
+    falsify,
+    get viewport() {
+      return { width: target.width, height: target.height, dpr: globalThis.devicePixelRatio || 1 };
+    },
+    authoring: {
+      pointSizePx: 16,
+      pointShape: falsify === 'point-square' ? 'square' : 'circle',
+      lineWidthPx: falsify === 'line-width' ? 1 : 4,
+      depthWriteEnabled: falsify !== 'depth-sort',
+      alpha: falsify === 'alpha' ? 0.4 : 1,
+      sortQueue: falsify === 'sort' ? 3001 : 3000,
+      frustumMarginPx: falsify === 'frustum' ? 8 : 0,
+    },
+    inspect: () => app.renderer.inspect().renderScene.pointsLines,
+    capture: () => target.toDataURL('image/png'),
+  };
+  console.warn(`[topology] evidenceLane=${lane} backend=${backend}`);
+}
+
+async function loadWebGl2Options(): Promise<{
+  readonly rhi: import('@forgeax/engine-rhi').RhiInstance;
+}> {
+  const backend = await import('@forgeax/engine-rhi-wgpu');
+  await backend.ensureReady();
+  return { rhi: backend.rhi };
+}
+
+async function bootstrapLegacy(target: HTMLCanvasElement): Promise<void> {
+  const appResult = await createApp(target, {}, forgeaxBundlerAdapter());
+  if (!appResult.ok) return reportAppError(appResult.error);
+  const app = appResult.value;
+  const assets = app.assets;
   if (assets === null) {
     console.error('[topology] AssetRegistry is null (renderer construction failed)');
     return;
   }
   const world = app.world;
-
-  // Step 2: mint the vertex-only line-list mesh as a shared ref.
-  const meshHandle: Handle<'MeshAsset', 'shared'> = world.allocSharedRef(
-    'MeshAsset',
-    buildWireframeBoxLineList(),
-  );
-
-  // Step 3: mint the unlit material (bright cyan -- ignores lighting).
-  const materialHandle: Handle<'MaterialAsset', 'shared'> = world.allocSharedRef<
+  const meshHandle: Handle<'MeshAsset', 'shared'> = world.allocSharedRef('MeshAsset', buildWireframeBoxLineList());
+  const materialHandle: Handle<'MaterialAsset', 'shared'> = world.allocSharedRef(
     'MaterialAsset',
-    MaterialAsset
-  >('MaterialAsset', {
-    kind: 'material',
-    passes: [
-      { name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } },
-    ],
-    values: {
-      baseColor: [0.1, 0.9, 1.0],
-    },
-  });
-
-  // Step 4: spawn the wireframe box.
+    Materials.unlit([0.1, 0.9, 1, 1], { castShadow: false }),
+  );
   world.spawn(
-    {
-      component: Transform,
-      data: { quat: [0, 0, 0, 1], scale: [1, 1, 1]},
-    },
+    { component: Transform, data: { quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
     { component: MeshFilter, data: { assetHandle: meshHandle } },
     { component: MeshRenderer, data: { materials: [materialHandle] } },
   ).unwrap();
-
-  // Step 5: spawn the camera looking at the box from an oblique angle so
-  // multiple edges are visible (no light needed for the unlit material).
-  // The quaternion is the public camera pose for eye=[1.6,1.4,3.2] and
-  // target=[0,0,0]. Identity would look straight down -Z and clip the box
-  // into the lower-left corner of the browser viewport.
   world.spawn(
-    {
-      component: Transform,
-      data: { pos: [1.6, 1.4, 3.2], quat: [-0.1804578, 0.22576895, 0.04260031, 0.9563726]},
-    },
-    {
-      component: Camera,
-      data: {
-        ...perspective({ fov: Math.PI / 4, aspect: 16 / 9 }),
-      },
-    },
+    { component: Transform, data: { pos: [1.6, 1.4, 3.2], quat: [-0.1804578, 0.22576895, 0.04260031, 0.9563726] } },
+    { component: Camera, data: { ...perspective({ fov: Math.PI / 4, aspect: 16 / 9 }) } },
   ).unwrap();
-
-  const startRes = app.start();
-  if (!startRes.ok) {
-    reportAppError(startRes.error);
-    return;
-  }
-  console.warn('[topology] running. Wireframe box drawn as 12 line-list segments.');
+  const start = app.start();
+  if (!start.ok) return reportAppError(start.error);
+  console.warn(`[topology] legacy backend=${app.renderer.inspect().capabilities.backendKind}`);
 }
 
 function reportAppError(err: CanvasAppError | EngineEnvironmentError): void {

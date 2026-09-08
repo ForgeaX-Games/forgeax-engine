@@ -54,12 +54,12 @@
 //
 // charter mapping: proposition 2 (Bevy ChildOf+Children pair, holder
 // perspective) + proposition 3 (machine-readable schema:
-// `Children.schema.entities === 'array<entity>'`) + proposition 4 (explicit
+// `componentSchema(Children).entities === 'array<entity>'`) + proposition 4 (explicit
 // failure: dangling entries surface to the AI user via `world.get(parent, Entity)` liveness probe,
 // not silent drop) + proposition 5 (consistent abstraction: Children is the
 // generic relationship-mirror shape, not a ChildOf special case).
 
-import { defineComponent } from '@forgeax/engine-ecs';
+import { defineRelationship } from '@forgeax/engine-ecs';
 
 /**
  * Hierarchy forward-list of child entities.
@@ -103,10 +103,11 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *     // if the child has been despawned (OOS-01 dangling-entity surface).
  *   }
  */
-export const Children = defineComponent(
-  'Children',
-  {
-    entities: { type: 'array<entity>' },
-  },
-  { transient: true },
-);
+export const { source: ChildOf, target: Children } = defineRelationship({
+  sourceName: 'ChildOf',
+  sourceField: 'parent',
+  targetName: 'Children',
+  targetField: 'entities',
+  exclusive: true,
+  linkedSpawn: true,
+});

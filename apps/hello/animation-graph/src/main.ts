@@ -26,8 +26,10 @@
 // HUD shows weights[] + total sum; when overlay is on, sum > 1 (Add is
 // non-normalizing, so the additive layer's 0.3 stacks on top).
 
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
 import { ENTITY_NULL_RAW, Update } from '@forgeax/engine-ecs';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
@@ -43,15 +45,14 @@ import { Skin } from '@forgeax/engine-skinning';
 
 import { Camera } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { SceneInstance } from '@forgeax/engine-render';
 import { DirectionalLight } from '@forgeax/engine-render';
 
-import type { AnimationClip, Handle, SceneAsset } from '@forgeax/engine-types';
+import { type AnimationClip, type SceneAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { refreshHud } from './hud';
 
-const PACK_INDEX_URL = '/pack-index.json';
 
 // Fox.glb sub-asset GUIDs (same as hello-skin; sourced from Fox.glb.meta.json).
 const FOX_SCENE_GUID = '019eb2ce-6232-74a0-8da7-00be6d2f8774';
@@ -76,7 +77,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[animation-graph] createApp failed:', appRes.error);
@@ -84,15 +85,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
   const app = appRes.value;
   const world: World = app.world;
-  const renderer = app.renderer;
-  console.warn(`[animation-graph] backend=${renderer.backend}`);
+  console.warn('[animation-graph] Standard pipeline active');
 
-  const assets = renderer.assets;
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[animation-graph] asset owner unavailable');
+    return;
+  }
   if (assets === null) {
     console.error('[animation-graph] AssetRegistry is null');
     return;
   }
-  assets.configurePackIndex(PACK_INDEX_URL);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   // Load Fox scene + 3 animation clips from the pack index.
   const sceneGuidRes = AssetGuid.parse(FOX_SCENE_GUID);
@@ -107,8 +111,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
   const sceneHandle = world.allocSharedRef('SceneAsset', sceneRes.value);
 
-  type ClipHandle = Handle<'AnimationClip', 'shared'>;
-  const clipHandles: { name: string; clip: ClipHandle }[] = [];
   for (const def of CLIPS) {
     const guidRes = AssetGuid.parse(def.guid);
     if (!guidRes.ok) {
@@ -120,19 +122,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       console.error('[animation-graph] loadByGuid failed for', def.name, clipRes.error);
       return;
     }
-    const clip = world.allocSharedRef('AnimationClip', clipRes.value);
-    clipHandles.push({ name: def.name, clip });
   }
 
-  const findClip = (name: string): ClipHandle => {
-    const entry = clipHandles.find((c) => c.name === name);
+  const findClipGuid = (name: string): string => {
+    const entry = CLIPS.find((clip) => clip.name === name);
     if (entry === undefined) throw new Error(`[animation-graph] clip '${name}' not found`);
-    return entry.clip;
+    return entry.guid;
   };
-  const surveyHandle = findClip('Survey');
-  const walkHandle = findClip('Walk');
-  const runHandle = findClip('Run');
-
   // Build DAG: Add(base=Blend(Survey, Blend(Walk,Run)), additive=[overlay@0.3]).
   // Node indices (construction order):
   //   0: surveyBase clip(survey)
@@ -143,12 +139,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   //   5: overlayLeaf   clip(survey, weight=0.3)  <- synthetic additive
   //   6: root          add(4, [5])
   const graphResult = defineAnimationGraph((b) => {
-    const surveyBase = b.clip(surveyHandle);
-    const walkLeaf = b.clip(walkHandle);
-    const runLeaf = b.clip(runHandle);
+    const surveyBase = b.clip(findClipGuid('Survey'));
+    const walkLeaf = b.clip(findClipGuid('Walk'));
+    const runLeaf = b.clip(findClipGuid('Run'));
     const walkRunBlend = b.blend([walkLeaf, runLeaf]);
     const baseBlend = b.blend([surveyBase, walkRunBlend]);
-    const overlayLeaf = b.clip(surveyHandle, 0.3);
+    const overlayLeaf = b.clip(findClipGuid('Survey'), 0.3);
     return b.add(baseBlend, [overlayLeaf]);
   });
   if (!graphResult.ok) {
@@ -295,7 +291,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     after: ['input-frame-start-scan'],
     queries: [],
     fn: () => {
-      const snap = app.renderer.input.snapshot(world);
+      const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
 
       if (snap !== undefined) {
         let changed = false;

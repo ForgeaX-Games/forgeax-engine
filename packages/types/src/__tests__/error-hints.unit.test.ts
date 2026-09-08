@@ -116,6 +116,7 @@ describe('ImportErrorDetail load-vs-conversion layering (feat-20260629 D-5 / w10
       | 'source-read-failed'
       | 'import-produced-no-assets'
       | 'guid-mismatch'
+      | 'mesh-material-slot-topology-change'
       | 'import-internal-error'
       | 'source-validation-failed'
       | 'unknown-source-key'

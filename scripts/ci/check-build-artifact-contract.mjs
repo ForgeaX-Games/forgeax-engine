@@ -875,12 +875,64 @@ function validateProvenance(contract) {
     (classNames.includes('shared-asset-pack') && classNames.includes('shared-engine-shaders')
       ? {
           producer: 'shared-app-inputs',
-          consumer: 'app-shard',
+          consumers: ['app-shard'],
           payloadClasses: ['shared-asset-pack', 'shared-engine-shaders'],
         }
       : null);
   if (shared) {
     const payloadClasses = shared.payloadClasses ?? [];
+    const sharedConsumers = shared.consumers ?? [];
+    const payloadDefinitions = [
+      ['payload', shared.payload],
+      ['fullPayload', shared.fullPayload],
+    ];
+    for (const [name, payload] of payloadDefinitions) {
+      if (payload === undefined) continue;
+      if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+        errors.push({
+          code: 'ci-artifact-shared-payload-invalid',
+          actual: `${name} must be an object of relative paths`,
+          expected: `${name} is an object with non-empty string values`,
+        });
+        continue;
+      }
+      for (const [field, path] of Object.entries(payload)) {
+        if (typeof path !== 'string' || path.trim() === '') {
+          errors.push({
+            code: 'ci-artifact-shared-payload-invalid',
+            actual: `${name}.${field}=${String(path)}`,
+            expected: `${name}.${field} is a non-empty relative path string`,
+          });
+        }
+      }
+    }
+    if (shared.fullPayload !== undefined) {
+      const requiredFullFields = ['assetCatalog', 'assetPayloadRoot', 'engineShaderManifest'];
+      for (const field of requiredFullFields) {
+        if (
+          typeof shared.fullPayload[field] !== 'string' ||
+          shared.fullPayload[field].trim() === ''
+        ) {
+          errors.push({
+            code: 'ci-artifact-shared-payload-invalid',
+            actual: `fullPayload.${field} is missing`,
+            expected: `fullPayload.${field} is a non-empty relative path string`,
+          });
+        }
+      }
+      for (const field of ['assetCatalog', 'engineShaderManifest']) {
+        if (
+          shared.payload?.[field] !== undefined &&
+          shared.payload[field] !== shared.fullPayload[field]
+        ) {
+          errors.push({
+            code: 'ci-artifact-shared-payload-inconsistent',
+            actual: `payload.${field}=${shared.payload[field]}`,
+            expected: `fullPayload.${field}=${shared.payload[field]}`,
+          });
+        }
+      }
+    }
     if (
       shared.producer !== 'shared-app-inputs' ||
       !prov.producerRoster?.includes(shared.producer)
@@ -892,14 +944,20 @@ function validateProvenance(contract) {
         hint: 'Declare shared-app-inputs in provenance.producerRoster before app shards consume shared inputs.',
       });
     }
-    if (shared.consumer !== 'app-shard') {
+    if (
+      !Array.isArray(sharedConsumers) ||
+      sharedConsumers.length === 0 ||
+      !sharedConsumers.includes('app-shard') ||
+      new Set(sharedConsumers).size !== sharedConsumers.length
+    ) {
       errors.push({
         code: 'ci-artifact-shared-consumer-unknown',
-        actual: shared.consumer ?? 'missing',
-        expected: 'app-shard',
-        hint: 'Only the app-shard consumer may consume the shared-app-inputs payload classes.',
+        actual: sharedConsumers,
+        expected: 'a unique non-empty consumer list including app-shard',
+        hint: 'Declare every shared-app-inputs consumer once, including the producing app-shard contract.',
       });
     }
+    const sharedReadOnlyConsumers = new Set(['app-shard', ...(shared.readOnlyConsumers ?? [])]);
     for (const className of payloadClasses) {
       if (!contract.artifactClasses?.[className] || !prov.payloadClasses?.includes(className)) {
         errors.push({
@@ -910,12 +968,16 @@ function validateProvenance(contract) {
         });
       }
       for (const [consumerName, consumer] of Object.entries(contract.consumers ?? {})) {
-        if (consumerName !== 'app-shard' && consumer.requiredArtifactClasses?.includes(className)) {
+        if (
+          !sharedConsumers.includes(consumerName) &&
+          consumer.requiredArtifactClasses?.includes(className) &&
+          !sharedReadOnlyConsumers.has(consumerName)
+        ) {
           errors.push({
             code: 'ci-artifact-shared-consumer-unknown',
             actual: consumerName,
-            expected: 'app-shard',
-            hint: 'Route shared-app-inputs only through the app-shard consumer contract.',
+            expected: [...sharedReadOnlyConsumers],
+            hint: 'Declare a read-only shared-app-inputs consumer explicitly in sharedInputs.readOnlyConsumers.',
           });
         }
       }

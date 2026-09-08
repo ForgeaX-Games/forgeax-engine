@@ -1,14 +1,10 @@
 import { err, ok, type Result } from '@forgeax/engine-types';
 
-export type VfxDataInterfaceKind = 'camera' | 'scene-depth' | 'noise' | 'channel';
+export type VfxDataInterfaceKind = keyof VfxDataInterfaceBindingTypeByKind;
 
 export type VfxDataInterfaceToken = `vfx:${VfxDataInterfaceKind}`;
 
-export type VfxDataInterfaceBindingType =
-  | 'uniform'
-  | 'sampled-depth'
-  | 'sampled-float'
-  | 'storage-read';
+export type VfxDataInterfaceBindingType = VfxDataInterfaceBindingTypeByKind[VfxDataInterfaceKind];
 
 type VfxDataInterfaceBindingTypeByKind = {
   readonly camera: 'uniform';

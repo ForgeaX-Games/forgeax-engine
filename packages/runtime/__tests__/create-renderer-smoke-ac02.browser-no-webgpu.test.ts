@@ -25,36 +25,36 @@ describe('createRenderer smoke AC-02 — navigator.gpu absent browser integratio
     expect(adapter).toBeNull();
   });
 
-  it('AC-02: createRenderer either succeeds (Channel 3) or throws EngineEnvironmentError — never returns a no-op renderer', async () => {
+  it('AC-02: createRenderer either succeeds (Channel 3) or returns EngineEnvironmentError — never returns a no-op renderer', async () => {
     const canvas = document.createElement('canvas');
     canvas.width = 64;
     canvas.height = 64;
 
-    try {
-      const renderer = await createRenderer(canvas);
+    const result = await createRenderer(canvas);
+    if (result.ok) {
       // Channel 3 succeeded (rhi-wgpu wasm with internal webgl backend).
       // Verify it is a real renderer, not a no-op stub.
-      expect(renderer.backend).toBe('webgpu');
-      expect(typeof renderer.draw).toBe('function');
+      expect(result.value.inspect().capabilities.backendKind).toBe('webgpu');
+      expect(typeof result.value.draw).toBe('function');
       // The old channel 4 stub would have set rhiAvailable=false on the
       // renderer — verify that property does not exist or is not false.
-      const rendererAny = renderer as unknown as Record<string, unknown>;
+      const rendererAny = result.value as unknown as Record<string, unknown>;
       expect(rendererAny.rhiAvailable).not.toBe(false);
-      renderer.dispose();
-    } catch (error: unknown) {
-      // Channel 3 failed — acceptable in headless CI without a real GPU
-      // context. The critical assertion: the error MUST be an
-      // EngineEnvironmentError (loud, structured failure), not a silent
-      // swallow that returns a no-op renderer.
-      expect(error).toBeInstanceOf(EngineEnvironmentError);
-      if (error instanceof EngineEnvironmentError) {
-        // Verify the structured detail is populated so AI consumers can
-        // diagnose the failure (charter P4 explicit failure).
-        expect(error.reason).toBeTruthy();
-        const hasWebgpu = error.detail.webgpuError !== undefined;
-        const hasWgpu = error.detail.wgpuError !== undefined;
-        expect(hasWebgpu || hasWgpu).toBe(true);
-      }
+      result.value.dispose();
+      return;
+    }
+    // Channel 3 failed — acceptable in headless CI without a real GPU
+    // context. The critical assertion: the error MUST be an
+    // EngineEnvironmentError (loud, structured failure), not a silent
+    // swallow that returns a no-op renderer.
+    expect(result.error).toBeInstanceOf(EngineEnvironmentError);
+    if (result.error instanceof EngineEnvironmentError) {
+      // Verify the structured detail is populated so AI consumers can
+      // diagnose the failure (charter P4 explicit failure).
+      expect(result.error.reason).toBeTruthy();
+      const hasWebgpu = result.error.detail.webgpuError !== undefined;
+      const hasWgpu = result.error.detail.wgpuError !== undefined;
+      expect(hasWebgpu || hasWgpu).toBe(true);
     }
   });
 });

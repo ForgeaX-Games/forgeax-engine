@@ -1,8 +1,8 @@
 import {
   defineComponent,
-  defineSharedKernel,
   type QuerySpan,
 } from '@forgeax/engine-ecs';
+import { defineSharedKernel } from '@forgeax/engine-ecs/shared';
 
 export const ExecutionParticle = defineComponent('ExecutionParticle', {
   x: 'f32',

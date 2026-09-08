@@ -137,6 +137,10 @@ const BINARY_EXTS = new Set([
 // Text files that must NOT be flagged (extension-keyed). `.gltf` is JSON text.
 const TEXT_ALLOW = new Set(['gltf']);
 
+// FBX has both an auditable ASCII form and a binary form. Accept only the
+// former; the NUL sniff below keeps binary FBX out of the engine repository.
+const TEXT_OR_BINARY_EXTS = new Set(['fbx']);
+
 const SNIFF_BYTES = 8192;
 
 function trackedFiles() {
@@ -194,6 +198,8 @@ for (const p of trackedFiles()) {
 
   const ext = extOf(p);
   if (TEXT_ALLOW.has(ext)) continue;
+
+  if (TEXT_OR_BINARY_EXTS.has(ext) && !hasNulByte(p)) continue;
 
   if (BINARY_EXTS.has(ext)) {
     violations.push({ path: p, reason: `banned binary extension .${ext}` });

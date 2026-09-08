@@ -1,55 +1,61 @@
-import { World } from '@forgeax/engine-ecs';
-import type { Renderer } from '@forgeax/engine-render';
+import { createWorldContext, World } from '@forgeax/engine-ecs';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  executionBootstrapHostPlugin,
   loadBootstrapEntry,
   prepareBootstrapEntry,
-  runPreparedBootstrap,
   validateExecutionBootstrapData,
 } from '../execution';
 
-const renderer = { assets: {} } as Renderer;
+function moduleUrl(source: string): string {
+  return `data:text/javascript,${encodeURIComponent(source)}`;
+}
 
 describe('execution bootstrap isolation', () => {
-  it('prepares and runs a thick bootstrap against the realm-local owners', async () => {
-    const url =
-      'data:text/javascript,export default function(data){return {run(ctx){ctx.world.insertResource(%22bootstrapped%22,data.value);ctx.registerCleanup(()=>ctx.world.insertResource(%22cleaned%22,true));ctx.setPointerLockAllowed(false)}}}';
+  it('activates realm-local bootstrap plugins and disposes their effects', async () => {
+    const url = moduleUrl(`export default function(data){return {plugins:[{
+      name:'test-bootstrap',inject:['world','executionBootstrapHost'],apply(ctx){
+        ctx.world.insertResource('bootstrapped',data.value);
+        ctx.effect(()=>()=>ctx.world.insertResource('cleaned',true),'test/cleanup');
+        ctx.executionBootstrapHost.setPointerLockAllowed(false);
+      }
+    }]}}`);
     const prepared = await prepareBootstrapEntry(url, { value: true });
     expect(prepared.ok).toBe(true);
     if (!prepared.ok) return;
     const world = new World();
-    const cleanup = vi.fn();
     const pointerLock = vi.fn();
-    const ran = await runPreparedBootstrap(url, prepared.value, {
-      world,
-      renderer,
-      assets: renderer.assets,
-      data: { value: true },
-      registerCleanup: cleanup,
-      setPointerLockAllowed: pointerLock,
-    });
-    expect(ran.ok).toBe(true);
+    const close = vi.fn();
+    const context = await createWorldContext(world, [
+      executionBootstrapHostPlugin({
+        port: { close } as unknown as MessagePort,
+        setPointerLockAllowed: pointerLock,
+      }),
+      ...(prepared.value.plugins ?? []),
+    ]);
     expect(world.getResource('bootstrapped')).toBe(true);
-    expect(cleanup).toHaveBeenCalledOnce();
     expect(pointerLock).toHaveBeenCalledWith(false);
+    await context.fiber.dispose();
+    expect(world.getResource('cleaned')).toBe(true);
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it('keeps schedule identity in the realm-local World', async () => {
-    const url = `data:text/javascript,export default function(){return {run({world}){world.addSystem(world.scheduleToken('Update'),{name:'module-system',queries:[],fn(){}}).unwrap()}}}`;
+    const url = moduleUrl(`export default function(){return {plugins:[{
+      name:'module-system',inject:['world'],apply(ctx){
+        const system={name:'module-system',queries:[],fn(){}};
+        ctx.world.addSystem(ctx.world.scheduleToken('Update'),system).unwrap();
+        ctx.effect(()=>()=>ctx.world.removeSystem(ctx.world.scheduleToken('Update'),system.name),'test/system');
+      }
+    }]}}`);
     const prepared = await prepareBootstrapEntry(url, undefined);
     expect(prepared.ok).toBe(true);
     if (!prepared.ok) return;
     const world = new World();
-    const result = await runPreparedBootstrap(url, prepared.value, {
-      world,
-      renderer,
-      assets: renderer.assets,
-      data: undefined,
-      registerCleanup: () => () => {},
-      setPointerLockAllowed: () => {},
-    });
-    expect(result.ok).toBe(true);
+    const context = await createWorldContext(world, prepared.value.plugins ?? []);
     expect(world.inspect().scheduleSystemCount(world.scheduleToken('Update'))).toBe(1);
+    await context.fiber.dispose();
+    expect(world.inspect().scheduleSystemCount(world.scheduleToken('Update'))).toBe(0);
   });
 
   it('rejects a missing default export structurally', async () => {

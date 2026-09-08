@@ -11,6 +11,7 @@
 // - plan-strategy D-4: State stores variant index (u32), decoded via token.variants
 
 import type { World } from '@forgeax/engine-ecs';
+import { err, ok, type Result } from '@forgeax/engine-types';
 import type { StateToken, StateTokenVariant } from './define-state';
 import type { StateError } from './errors';
 import { invalidVariant, stateNotRegistered } from './errors';
@@ -19,10 +20,6 @@ import { nextStateResourceKey, previousStateResourceKey, stateResourceKey } from
 interface NextStatePayload {
   value: number;
   force: boolean;
-}
-
-function errWrap(err: StateError): { ok: false; error: StateError } {
-  return { ok: false, error: err };
 }
 
 /**
@@ -36,7 +33,7 @@ export function setNextState<T extends StateToken>(
   world: World,
   token: T,
   variant: StateTokenVariant<T>,
-): { ok: true; value: undefined } | { ok: false; error: StateError } {
+): Result<void, StateError> {
   return _runCheckAndWrite(world, token, variant, false);
 }
 
@@ -47,59 +44,58 @@ export function setNextStateForce<T extends StateToken>(
   world: World,
   token: T,
   variant: StateTokenVariant<T>,
-): { ok: true; value: undefined } | { ok: false; error: StateError } {
+): Result<void, StateError> {
   return _runCheckAndWrite(world, token, variant, true);
 }
 
-function _runCheckAndWrite(world: World, token: StateToken, variant: string, force: boolean) {
+function _runCheckAndWrite(
+  world: World,
+  token: StateToken,
+  variant: string,
+  force: boolean,
+): Result<void, StateError> {
   const nsKey = nextStateResourceKey(token);
   if (!world.hasResource(nsKey)) {
-    return errWrap(stateNotRegistered(token.name));
+    return err(stateNotRegistered(token.name));
   }
 
   const idx = token.nameToIdx.get(variant as never);
   if (idx === undefined) {
-    return errWrap(invalidVariant(token.name, variant, token.variants));
+    return err(invalidVariant(token.name, variant, token.variants));
   }
 
   world.insertResource<NextStatePayload>(nsKey, { value: idx, force });
-  return { ok: true as const, value: undefined };
+  return ok(undefined);
 }
 
 /**
  * Read the current state value for `token`.
  */
-export function getState(
-  world: World,
-  token: StateToken,
-): { ok: true; value: string } | { ok: false; error: StateError } {
+export function getState(world: World, token: StateToken): Result<string, StateError> {
   const key = stateResourceKey(token);
   if (!world.hasResource(key)) {
-    return errWrap(stateNotRegistered(token.name));
+    return err(stateNotRegistered(token.name));
   }
   const idx = world.getResource<number>(key);
   const variant = token.variants[idx];
   if (variant === undefined) {
-    return errWrap(invalidVariant(token.name, String(idx), token.variants));
+    return err(invalidVariant(token.name, String(idx), token.variants));
   }
-  return { ok: true as const, value: variant };
+  return ok(variant);
 }
 
 /**
  * Read the previous-frame state value for `token`.
  */
-export function getPreviousState(
-  world: World,
-  token: StateToken,
-): { ok: true; value: string } | { ok: false; error: StateError } {
+export function getPreviousState(world: World, token: StateToken): Result<string, StateError> {
   const key = previousStateResourceKey(token);
   if (!world.hasResource(key)) {
-    return errWrap(stateNotRegistered(token.name));
+    return err(stateNotRegistered(token.name));
   }
   const idx = world.getResource<number>(key);
   const variant = token.variants[idx];
   if (variant === undefined) {
-    return errWrap(invalidVariant(token.name, String(idx), token.variants));
+    return err(invalidVariant(token.name, String(idx), token.variants));
   }
-  return { ok: true as const, value: variant };
+  return ok(variant);
 }

@@ -8,7 +8,7 @@ vi.mock('../dev/watcher.js', async (importOriginal) => {
   return { ...actual, watchDevRoots: () => () => {} };
 });
 
-import { pluginPack } from '../index.js';
+import { createPluginPackInternal as pluginPack } from '../plugin-pack.js';
 
 const GUID = '01900000-0000-7000-8000-00000000000a';
 
@@ -120,8 +120,16 @@ describe('authored development pack serving', () => {
     const secondResponse = await request(middlewares, entry.packageUrl);
     expect(secondResponse.statusCode).toBe(200);
     expect(secondResponse.headers['cache-control']).toBe('no-store');
-    expect(secondResponse.body).toBe(updatedBody);
-    expect(JSON.parse(secondResponse.body).assets[0].payload.marker).toBe('updated');
+    expect(secondResponse.body).not.toBe(updatedBody);
+    expect(JSON.parse(secondResponse.body)).toMatchObject({
+      schemaVersion: '2.0.0',
+      kind: 'internal-text-package',
+      scopeId: binding.scopeId,
+      generation: expect.any(Number),
+      digest: expect.stringMatching(/^sha256:/),
+      outputSetDigest: expect.stringMatching(/^sha256:/),
+      assets: [{ payload: { marker: 'updated' } }],
+    });
 
     await plugin.closeBundle();
   });

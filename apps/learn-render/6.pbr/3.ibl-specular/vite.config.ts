@@ -4,6 +4,7 @@ import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { withRhiDebug } from '../../../shared/src/rhi-debug-vite-preset';
+import { optionalAssetPack } from '../../../shared/src/optional-asset-pack.js';
 
 // RHI-debug frame capture wired via the shared preset. Same vendor
 // newport_loft.hdr Skylight input + pluginPack wiring as sibling 2.ibl-irradiance;
@@ -11,6 +12,7 @@ import { withRhiDebug } from '../../../shared/src/rhi-debug-vite-preset';
 // vitePluginRhiDebug + fs.allow.
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
+const assetRoots = [resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/textures')];
 const runtimeBinding = createStandaloneRuntimeAssetBinding('learn-render-6-3-ibl-specular');
 
 export default withRhiDebug({
@@ -18,11 +20,8 @@ export default withRhiDebug({
   rootDepth: 4,
   port: 5197,
   extraPlugins: [
-    pluginPack({
-      runtimeBinding,
-      refresh: reloadAssetHost(),
-      importers: [imageImporter],
-      roots: [resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/textures')],
-    }),
+    ...optionalAssetPack(assetRoots, () =>
+      pluginPack({ runtimeBinding, refresh: reloadAssetHost(), importers: [imageImporter], roots: assetRoots }),
+    ),
   ],
 });

@@ -15,7 +15,13 @@
 
 import { describe, expect, it } from 'vitest';
 import { World } from '@forgeax/engine-ecs';
-import { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue } from '@forgeax/engine-physics';
+import {
+  Collider,
+  ColliderShapeValue,
+  RigidBody,
+  RigidBodyTypeValue,
+  registerPhysicsComponents,
+} from '@forgeax/engine-physics';
 import { Transform } from '@forgeax/engine-scene';
 import { registerPropagateTransforms } from '@forgeax/engine-scene';
 import { loadRapier2D } from '../src/wasm-loader';
@@ -23,6 +29,13 @@ import {
   createRapier2DPhysicsWorld,
   registerPhysicsSystems2D,
 } from '../src/rapier-physics-world-2d';
+
+function prepareWorld(): World {
+  const world = new World();
+  world.components.register(Transform).unwrap();
+  registerPhysicsComponents(world);
+  return world;
+}
 
 describe('feat-20260528 M3 t18 Rapier2D low-level primitives (collision, kinematic, despawn, rotation)', () => {
   it('kinematic body: position follows setNextKinematicTranslation in 2D', async () => {
@@ -209,7 +222,7 @@ describe('rapier-authored-transform-pose.test.ts', () => {
       return;
     }
 
-    const world = new World();
+    const world = prepareWorld();
     const pw = createRapier2DPhysicsWorld(RAPIER);
     world.insertResource('PhysicsWorld', pw);
     const obstacle = world
@@ -250,7 +263,7 @@ describe('bug-20260529 M2 real ECS bridge (regression)', () => {
       return;
     }
 
-    const world = new World();
+    const world = prepareWorld();
     const pw = createRapier2DPhysicsWorld(RAPIER);
     world.insertResource('PhysicsWorld', pw);
 
@@ -345,7 +358,7 @@ describe('feat-20260709 M4 / w18 -- cuboid halfExtents array passes through the 
       return;
     }
 
-    const world = new World();
+    const world = prepareWorld();
     const pw = createRapier2DPhysicsWorld(RAPIER);
     world.insertResource('PhysicsWorld', pw);
 
@@ -407,7 +420,7 @@ describe('bug-20260713 solo round-22 Rapier2D raycast entity resolution', () => 
       return;
     }
 
-    const world = new World();
+    const world = prepareWorld();
     const pw = createRapier2DPhysicsWorld(RAPIER);
     world.insertResource('PhysicsWorld', pw);
 
@@ -465,7 +478,7 @@ describe('bug-20260713 solo round-26 Rapier2D bare-Collider static floor', () =>
       return;
     }
 
-    const world = new World();
+    const world = prepareWorld();
     const pw = createRapier2DPhysicsWorld(RAPIER);
     world.insertResource('PhysicsWorld', pw);
 

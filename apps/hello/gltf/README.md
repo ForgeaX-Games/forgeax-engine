@@ -15,7 +15,7 @@ pnpm --filter @forgeax/hello-gltf smoke  # dawn-node 300 frames + pixel readback
 
 `src/main.ts` walks the AI-discoverable surface:
 
-1. `assets.configurePackIndex('/box-pack-index.json')` — declares the prod fetch URL up front. The dev / smoke path resolves through the in-memory fast-path after the gltf parser populates the GUID -> Asset bridge; the real pack-index emit (vite-plugin-pack with gltf-aware scan) lives in `feat-future-gltf-buildtime-cook`.
+1. `configureRuntimeAssetCatalog(assets, runtimeBinding)` — selects the scoped dev catalog or the static `/pack-index.json` emitted by `vite-plugin-pack`.
 2. `await assets.loadByGuid<MeshAsset>(meshGuid)` — Tier-B cube positions + indices.
 3. `await assets.loadByGuid<MaterialAsset>(materialGuid)` — UnlitMaterial with `baseColor` scalar.
 4. `await assets.loadByGuid<SceneAsset>(sceneGuid)` then `assets.instantiate(handle, world)` — single Box node + Camera node materialised into ECS entities.

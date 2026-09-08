@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { AttachmentReport, CaseReport, CrossRuntimeCaseReport } from '../contracts/types';
+import type { AttachmentReport, CaseReport, CrossRuntimeCaseReport, VertexColorCaseReport } from '../contracts/types';
 
 export async function writeCaseReport(
   path: string,
@@ -19,6 +19,17 @@ export async function writeCrossRuntimeCaseReport(
   path: string,
   report: CrossRuntimeCaseReport,
 ): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+}
+
+export async function writeVertexColorCaseReport(
+  path: string,
+  report: VertexColorCaseReport,
+): Promise<void> {
+  if (report.frameCount !== 300 || report.verdict !== 'passed' || report.status !== 'complete') {
+    throw new Error('vertex-color report writer only publishes complete passing evidence');
+  }
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 }

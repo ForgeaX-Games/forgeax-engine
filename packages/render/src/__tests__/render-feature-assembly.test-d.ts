@@ -1,6 +1,6 @@
 import { ok } from '@forgeax/engine-types';
-import type { RenderFeature } from '../features/types';
-import type { RendererOptions } from '../renderer';
+import type { RenderFeature, RenderFeaturePlanContext } from '../features/types';
+import type { RendererOptions } from '../render-contract';
 
 type BoundsFrame = {
   readonly visibleCount: number;
@@ -15,15 +15,11 @@ const boundsFeature = {
   extract({ owner }) {
     return ok({ visibleCount: owner });
   },
-  prepare(data: BoundsFrame) {
+  plan(data: BoundsFrame, context: RenderFeaturePlanContext) {
     const count: number = data.visibleCount;
     void count;
-    return ok(undefined);
-  },
-  contribute(data: BoundsFrame) {
-    const count: number = data.visibleCount;
-    void count;
-    return ok(undefined);
+    void context;
+    return ok({ resources: [], passes: [] });
   },
 } satisfies RenderFeature<BoundsFrame>;
 
@@ -32,15 +28,11 @@ const overlayFeature = {
   extract() {
     return ok({ layer: 'overlay' as const });
   },
-  prepare(data: OverlayFrame) {
+  plan(data: OverlayFrame, context: RenderFeaturePlanContext) {
     const layer: 'overlay' = data.layer;
     void layer;
-    return ok(undefined);
-  },
-  contribute(data: OverlayFrame) {
-    const layer: 'overlay' = data.layer;
-    void layer;
-    return ok(undefined);
+    void context;
+    return ok({ resources: [], passes: [] });
   },
 } satisfies RenderFeature<OverlayFrame>;
 

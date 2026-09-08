@@ -15,6 +15,7 @@
 //   D-10: all fixture data programmatic
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import { packMeshBinV4 } from '@forgeax/engine-import';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -38,25 +39,7 @@ function parseGuid(g: string): AssetGuid {
  * Uint16 indices, JSON submesh + aabb tail. Compatible with unpackMeshBin.
  */
 function makeMeshBinPayload(): Uint8Array {
-  const floatsPerVertex = 12;
-  const vlen = 3 * floatsPerVertex;
-  const ilen = 3;
-  const iwidth = 2;
-  const jsonTail =
-    '{"submeshes":[{"indexOffset":0,"indexCount":3,"vertexCount":36,"topology":"triangle-list"}],"aabb":[0,0,0,0,1,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0]}';
-  const jsonBytes = new TextEncoder().encode(jsonTail);
-
-  const header = new ArrayBuffer(28);
-  const dv = new DataView(header);
-  dv.setUint32(0, 2, true);
-  dv.setUint32(4, 1, true);
-  dv.setUint32(8, 12, true);
-  dv.setUint32(12, vlen, true);
-  dv.setUint32(16, ilen, true);
-  dv.setUint32(20, iwidth, true);
-  dv.setUint32(24, jsonBytes.length, true);
-
-  const vertices = new Float32Array(vlen);
+  const vertices = new Float32Array(36);
   for (let i = 0; i < 3; i++) {
     const b = i * 12;
     vertices[b + 0] = i * 1;
@@ -74,17 +57,31 @@ function makeMeshBinPayload(): Uint8Array {
   }
   const indices = new Uint16Array([0, 1, 2]);
 
-  const totalSize = 28 + vlen * 4 + ilen * iwidth + jsonBytes.length;
-  const total = new Uint8Array(totalSize);
-  let offset = 0;
-  total.set(new Uint8Array(header), offset);
-  offset += 28;
-  total.set(new Uint8Array(vertices.buffer, vertices.byteOffset, vertices.byteLength), offset);
-  offset += vlen * 4;
-  total.set(new Uint8Array(indices.buffer, indices.byteOffset, indices.byteLength), offset);
-  offset += ilen * iwidth;
-  total.set(jsonBytes, offset);
-  return total;
+  const packed = packMeshBinV4(
+    {
+      vertices,
+      indices,
+      attributes: {
+        position: new Float32Array(9),
+        normal: new Float32Array(9),
+        uv: new Float32Array(6),
+        tangent: new Float32Array(12),
+      },
+      submeshes: [
+        {
+          indexOffset: 0,
+          indexCount: 3,
+          vertexCount: 3,
+          topology: 'triangle-list',
+          materialSlot: 0,
+        },
+      ],
+      aabb: new Float32Array([0, 0, 0, 1, 1, 1]),
+    },
+    'runtime://four-path',
+  );
+  if (!packed.ok) throw new Error(packed.error.actual);
+  return packed.value;
 }
 
 let originalFetch: typeof globalThis.fetch;

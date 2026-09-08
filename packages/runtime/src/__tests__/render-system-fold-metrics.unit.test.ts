@@ -2,7 +2,7 @@
 // counter unit tests (AC-06).
 //
 // Drives the pure helper `incrementFoldedDrawsMetric(plan, metrics)` co-
-// located in render-system-fold.ts: every fold-eligible head bucket
+// located in record/mesh-ssbo.ts: every fold-eligible head bucket
 // (bucketSize > 1) in the dispatch plan contributes one
 // `metrics.increment('render.instancing.foldedDraws')` call. The helper is
 // the SSOT for "how many instanced drawIndexed will this frame emit"; the
@@ -30,14 +30,14 @@
 //   - Semantics: count of instanced drawIndexed emitted this frame; not
 //     entity count, not pre-filter bucket count.
 
-import type { DispatchEntry } from '@forgeax/engine-render/internal';
+import { describe, expect, it, vi } from 'vitest';
+import { createEngineMetrics } from '../../../render/src/engine-metrics';
 import {
-  createEngineMetrics,
   type FoldBucket,
   type FoldDispatchPlan,
   incrementFoldedDrawsMetric,
-} from '@forgeax/engine-render/internal';
-import { describe, expect, it, vi } from 'vitest';
+} from '../../../render/src/record/mesh-ssbo';
+import type { DispatchEntry } from '../../../render/src/render-system-extract';
 
 const METRIC_KEY = 'render.instancing.foldedDraws';
 

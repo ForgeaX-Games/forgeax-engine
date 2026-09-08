@@ -229,7 +229,14 @@ const meshAsset = {
   vertices,
   indices,
   attributes: { position: positions, normal: normals, uv: uvs, tangent: tangents, uv1 },
-  submeshes: [{ indexOffset: 0, indexCount: indices.length, vertexCount, topology: 'triangle-list' }],
+  submeshes: [{
+    indexOffset: 0,
+    indexCount: indices.length,
+    vertexCount,
+    topology: 'triangle-list',
+    materialSlot: 0,
+  }],
+  materialSlots: [{ slotName: 'Default' }],
   aabb: new Float32Array([-HALF_W, -HALF_H, -0.01, HALF_W, HALF_H, 0.01]),
 };
 const materialAsset = {
@@ -280,14 +287,9 @@ try {
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[falsify-smoke] FAIL - renderer.ready: ${ready.error.code}`);
-  process.exit(1);
-}
 
 const errors = [];
 renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));

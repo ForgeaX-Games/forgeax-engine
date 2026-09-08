@@ -27,7 +27,7 @@
 //          mixed perspective + ortho deferred to feat-future-camera-depth-func);
 //          plan-tasks.json w9 acceptanceCheck.
 
-import { defineComponent, type ShapeOf } from '@forgeax/engine-ecs';
+import { defineComponent, type SchemaOf, type ShapeOf } from '@forgeax/engine-ecs';
 import { TONEMAP_SHADER_MODE } from '@forgeax/engine-shader';
 
 /**
@@ -160,18 +160,19 @@ export function tonemapToU32(mode: Tonemap): number {
  * (feat-20260528-fxaa-post-processing / w2;
  *  feat-20260604-learn-render-4-10-anti-aliasing-msaa adds `'msaa'`).
  *
- * Three members:
+ * Four members:
  *   `'none'` - default; no anti-aliasing (zero-overhead opt-out path)
  *   `'fxaa'` - FXAA 3.11 fullscreen post-processing pass (screen-space, shading-aliasing)
  *   `'msaa'` - 4x hardware multi-sample anti-aliasing (geometry-edge coverage).
  *              Active on both HDR and LDR-swap-chain paths, so a default Camera
  *              (`tonemap='none'`) with `antialias='msaa'` is NOT a silent no-op.
+ *   `'taa'`  - temporal anti-aliasing; renderer temporal projection owns its
+ *              jitter and successful-submit history contract.
  *
  * MSAA and FXAA are orthogonal: MSAA resolves geometry-edge aliasing, FXAA
- * resolves shading/high-frequency aliasing. Future modes (`'smaa'` / `'taa'`)
- * remain deferred.
+ * resolves shading/high-frequency aliasing. TAA is mutually exclusive with both.
  */
-export type Antialias = 'none' | 'fxaa' | 'msaa';
+export type Antialias = 'none' | 'fxaa' | 'msaa' | 'taa';
 
 /** Numeric encoding of anti-alias disabled (schema value for `antialias`). */
 export const ANTIALIAS_NONE = 0;
@@ -179,6 +180,8 @@ export const ANTIALIAS_NONE = 0;
 export const ANTIALIAS_FXAA = 1;
 /** Numeric encoding of MSAA multi-sample anti-aliasing (schema value for `antialias`). */
 export const ANTIALIAS_MSAA = 2;
+/** Numeric encoding of temporal anti-aliasing (schema value for `antialias`). */
+export const ANTIALIAS_TAA = 3;
 
 /**
  * Map a `camera.antialias` numeric value to the closed `Antialias`
@@ -188,8 +191,9 @@ export function antialiasFromF32(value: number): Antialias {
   if (value === ANTIALIAS_NONE) return 'none';
   if (value === ANTIALIAS_FXAA) return 'fxaa';
   if (value === ANTIALIAS_MSAA) return 'msaa';
+  if (value === ANTIALIAS_TAA) return 'taa';
   throw new RangeError(
-    `Invalid antialias value: ${value}. Expected ${ANTIALIAS_NONE} (none), ${ANTIALIAS_FXAA} (fxaa), or ${ANTIALIAS_MSAA} (msaa).`,
+    `Invalid antialias value: ${value}. Expected ${ANTIALIAS_NONE} (none), ${ANTIALIAS_FXAA} (fxaa), ${ANTIALIAS_MSAA} (msaa), or ${ANTIALIAS_TAA} (taa).`,
   );
 }
 
@@ -256,8 +260,8 @@ export function bloomEnabledFromF32(value: number): BloomEnabled {
  * N>1 fires 'render-system-multi-camera' + uses first). Multi-viewport is
  * OOS (see feat-future-multi-viewport). The orthographic path reuses the
  * same near / far as the perspective path — both variants share the single
- * Camera archetype (17 scalar f32 columns + the `clearColor` array<f32,4>
- * column + the `autoAspect` bool column).
+ * Camera archetype (17 scalar f32 columns + one historyVersion u32 column +
+ * the `clearColor` array<f32,4> column + the `autoAspect` bool column).
  *
  * @example Perspective camera at (0, 0, 3) looking down -Z (zero-config tonemap):
  *   world.spawn(
@@ -311,6 +315,7 @@ export const Camera = defineComponent('Camera', {
   exposure: { type: 'f32', default: 1.0 },
   whitePoint: { type: 'f32', default: 4.0 },
   antialias: { type: 'f32', default: 0 },
+  historyVersion: { type: 'u32', default: 0 },
   bloom: { type: 'f32', default: 0 },
   bloomThreshold: { type: 'f32', default: 1.0 },
   bloomIntensity: { type: 'f32', default: 1.0 },
@@ -340,19 +345,19 @@ export const Camera = defineComponent('Camera', {
 
 // ─── Camera POD type (derived from Camera token — single source, AC-07) ─────
 //
-// ShapeOf<typeof Camera.schema> resolves the 19-field POD from the Camera
+// ShapeOf<SchemaOf<typeof Camera>> resolves the 20-field POD from the Camera
 // token's schema, which is itself derived from Camera.fields[k].type (D-A7).
 // This replaces the hand-maintained CameraDataPod interface — the field set
 // lives exclusively in the Camera component definition above.
-type CameraPod = ShapeOf<typeof Camera.schema>;
+type CameraPod = ShapeOf<SchemaOf<typeof Camera>>;
 
 // ─── Camera factory functions (w13 SSOT refactoring) ─────────────────────
 //
-// Standalone factory functions that return 19-field CameraPod objects
+// Standalone factory functions that return 20-field CameraPod objects
 // matching the Camera component column shape. Not static methods because
 // TypeScript const-namespace merge is not supported, and Object.assign
 // would break the Camera token's reference identity (archetype columns /
-// queries key off the global Component.id carried by the token).
+// queries key off the global owner identity associated with the token).
 //
 // Import as:
 //   import { Camera, perspective, orthographic } from '@forgeax/engine-render';

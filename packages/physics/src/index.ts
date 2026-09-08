@@ -24,7 +24,7 @@ export {
   RIGID_BODY_TYPE_STATIC,
   RigidBody,
   RigidBodyTypeValue,
-  registerColliderRemoveListener,
+  registerPhysicsComponents,
   rigidBodyTypeFromF32,
 } from './components';
 export type { PhysicsErrorCode, PhysicsErrorDetail } from './errors';

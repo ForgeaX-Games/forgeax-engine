@@ -41,12 +41,12 @@
  * | code | trigger |
  * |:--|:--|
  * | `'module-not-found'` | resolver throws an error distinguishable as module-not-found (e.g. "Cannot find module"). Detail carries `slug` so AI users can surface which game path failed. |
- * | `'invalid-format'` | resolver returns a module whose shape is wrong: no `bootstrap` export, `bootstrap` is null, or `bootstrap` is not a function. Detail carries `exportKeys` (all keys of the returned module) so AI users can inspect the module shape. |
+ * | `'invalid-format'` | resolver returns a module without a valid native Cordis default export. Detail carries `exportKeys` so AI users can inspect the module shape. |
  * | `'import-failed'` | resolver throws a generic Error (network error, build error, etc.) not distinguishable as module-not-found. Detail carries the original `cause` Error so AI users can chain narrow. |
  *
  * Plan-strategy D-3 locks the count at 3.
  */
-export type LoadGameErrorCode = 'module-not-found' | 'invalid-format' | 'import-failed';
+export type LoadGameErrorCode = keyof typeof loadGameErrorPolicy;
 
 /**
  * Detail variant for the `'module-not-found'` arm.
@@ -62,9 +62,8 @@ export interface LoadGameDetailModuleNotFound {
  * Detail variant for the `'invalid-format'` arm.
  *
  * `exportKeys` carries the keys of the module object returned by the
- * resolver. AI users inspect these to understand why the module shape
- * was rejected (e.g. used a default export instead of a named `bootstrap`
- * export, or the module exports a non-function value).
+ * resolver. AI users inspect these to understand why the native default
+ * plugin export was rejected.
  */
 export interface LoadGameDetailInvalidFormat {
   readonly exportKeys: string[];
@@ -171,19 +170,20 @@ type LoadGameErrorPolicy = { readonly expected: string; readonly hint: string };
 
 const loadGameErrorPolicy = {
   'module-not-found': {
-    expected: 'resolver should return a module with a `bootstrap` export for the given slug',
+    expected:
+      'resolver should return a module with a native Cordis default export for the given slug',
     hint: 'verify the game slug matches an existing template directory; check the resolver import path for typos',
   },
   'invalid-format': {
-    expected: 'resolved module must have a `bootstrap` export that is a function',
-    hint: 'the template must export a `bootstrap` function matching the BootstrapEntry signature; check for named-export vs default-export confusion',
+    expected: 'resolved module must default-export a Cordis function, class, or object plugin',
+    hint: 'default-export one plugin and let the Host mount it into App.pluginContext',
   },
   'import-failed': {
     expected:
       'resolver should complete without throwing; import path, network, and build errors are forwarded here',
     hint: 'inspect detail.cause for the original error (network failure, build error, dynamic import timeout, etc.)',
   },
-} satisfies Record<LoadGameErrorCode, LoadGameErrorPolicy>;
+} satisfies Record<string, LoadGameErrorPolicy>;
 
 export const LOAD_GAME_EXPECTED: Readonly<Record<LoadGameErrorCode, string>> = Object.fromEntries(
   Object.entries(loadGameErrorPolicy).map(([code, policy]) => [code, policy.expected]),

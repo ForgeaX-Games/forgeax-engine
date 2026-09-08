@@ -6,7 +6,7 @@ import {
   SharedKernelEligibilityError,
   type SharedKernelExecutor,
   sharedKernelEligibility,
-} from '../execution';
+} from '../execution/shared-kernel';
 import { defineSystemSet } from '../schedule';
 import { Update } from '../schedule-token';
 import { World } from '../world';

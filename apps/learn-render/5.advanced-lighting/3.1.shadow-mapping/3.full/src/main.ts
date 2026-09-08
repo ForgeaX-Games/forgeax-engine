@@ -9,6 +9,7 @@
 //   - "// 3. bootstrap"       entry point wiring (1)+(2)
 
 // 1. engine usage
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { type App, createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
@@ -16,21 +17,19 @@ import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import { createDevImportTransport } from '@forgeax/engine-runtime';
+
 import { Materials } from '@forgeax/engine-render';
 
 import { createPlaneGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
-import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
+import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../../shared/src/learn-render-first-person';
+import { captureCanvasPixels } from '../../../../../shared/src/canvas-capture';
 
 // 2. scene constants
 
-const PACK_INDEX_URL = '/pack-index.json';
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-5-3-1-shadow-mapping-full',
-);
+
 
 // Wood texture GUID from forgeax-engine-assets/learn-opengl/textures/wood.png.meta.json.
 const WOOD_GUID_STR = '019e3969-1d48-7c3b-ac24-6d68f457065f';
@@ -81,14 +80,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 5.3.1 directional shadow] createApp failed:', appRes.error);
     return;
   }
   const app = appRes.value;
-  const renderer = app.renderer;
   const world = app.world;
 
   app.onError((error) => {
@@ -97,14 +95,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     if (bus !== undefined) bus.push({ code: error.code, hint: error.hint });
   });
 
-  const assets = renderer.assets;
-  if (assets === null) {
+  const assets = app.assets;
+  if (assets === undefined) {
     console.error('[learn-render 5.3.1 directional shadow] AssetRegistry is null');
     return;
   }
 
-  assets.configureRuntimeBinding(runtimeBinding);
-  assets.configurePackIndex(PACK_INDEX_URL);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   // Load wood texture through GUID pipeline.
   const woodGuidRes = AssetGuid.parse(WOOD_GUID_STR);
@@ -195,7 +192,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
   ).unwrap();
 
-  addFirstPersonSystem(app.world, app.renderer, {
+  addFirstPersonSystem(app.world, {
     name: 'learn-render-5.3.1-first-person',
     overrideBackend: undefined,
   });
@@ -247,29 +244,29 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     world.set(cameraEntity, Camera, { aspect: window.innerWidth / window.innerHeight });
   });
 
-  console.warn(`[learn-render 5.3.1 directional shadow] backend=${renderer.backend}`);
-
-  installCaptureHook(app, world);
+  installCaptureHook(app, world, target);
 }
 
 // RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives
 // one update + draw + readPixels so the live canvas read is anchored to the same
 // frame the capture records. Only meaningful when the page is served with
 // FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
-function installCaptureHook(app: App, world: App['world']): void {
+function installCaptureHook(app: App, world: App['world'], target: HTMLCanvasElement): void {
   type CaptureHook = () => Promise<Uint8Array>;
   const win = window as unknown as { __captureShadowFull?: CaptureHook };
   const renderer = app.renderer;
+  const attached = renderer.attach(world);
+  if (!attached.ok) throw attached.error;
+  const lease = attached.value;
   win.__captureShadowFull = async (): Promise<Uint8Array> => {
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    const r = await renderer.readPixels();
-    if (!r.ok) {
-      throw new Error(
-        `[learn-render 5.3.1 directional shadow] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
-      );
-    }
-    return r.value;
+    const frame = renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } });
+    if (!frame.ok) throw frame.error;
+    const observed = await renderer.observe(frame.value, { include: ['draws'] });
+    if (!observed.ok) throw observed.error;
+    const captured = await captureCanvasPixels(target);
+    if (!captured.ok) throw captured.error;
+    return captured.value;
   };
 }
 

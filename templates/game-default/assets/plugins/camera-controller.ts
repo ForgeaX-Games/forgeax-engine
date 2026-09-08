@@ -1,6 +1,7 @@
 import { AudioListener } from '@forgeax/engine-audio';
-import type { BootstrapContext } from '@forgeax/engine-app';
+import type { GameHost } from '@forgeax/engine-app';
 import { type EntityHandle, type World } from '@forgeax/engine-ecs';
+import type { Context } from '@forgeax/engine-plugin';
 import { ANTIALIAS_FXAA, BLOOM_ENABLED, Camera, perspective, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
 import { quat } from '@forgeax/engine-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
@@ -9,8 +10,8 @@ import type { UiAsset, UiResult } from '@forgeax/engine-ui';
 import { installHud, HUD_UI_GUID, type HudHandle, type ViewMode } from './hud';
 import { createGameSettingsState, mountSettings, SETTINGS_UI_GUID, type GameSettingsState, type SettingsHandle } from './settings';
 import { GameplayInput, CameraRig, PlayerBodyPart } from './components/gameplay';
-import { installDepthOfField, DEPTH_OF_FIELD_ID, type DepthOfFieldHandle } from './depth-of-field';
-import { installChromaticAberration, CHROMATIC_ABERRATION_ID, type ChromaticAberrationHandle } from './chromatic-aberration';
+import { installDepthOfField, type DepthOfFieldHandle } from './depth-of-field';
+import { installChromaticAberration, type ChromaticAberrationHandle } from './chromatic-aberration';
 import { installRenderSettingsSystems } from './systems/render-settings';
 import type { LoadedScene } from './scene-runtime';
 import { PERSPECTIVE_FOV_INITIAL } from './camera-zoom';
@@ -38,16 +39,17 @@ export type CameraController = {
 };
 
 type CameraControllerArgs = {
+  readonly context: Context;
   readonly world: World;
   readonly canvas: HTMLCanvasElement;
-  readonly host: BootstrapContext | undefined;
+  readonly host: GameHost | undefined;
   readonly loaded: LoadedScene | null;
   readonly player: EntityHandle | undefined;
   readonly initX: number;
   readonly initZ: number;
 };
 
-async function loadUiAsset(host: BootstrapContext | undefined, guidText: string): Promise<UiResult<UiAsset>> {
+async function loadUiAsset(host: GameHost | undefined, guidText: string): Promise<UiResult<UiAsset>> {
   const fail = (message: string): UiResult<UiAsset> => ({
     ok: false,
     error: {
@@ -75,7 +77,7 @@ function cameraModeValue(value: number): ViewMode {
 
 /** Assemble the camera owner and its screen-space presentation boundary. */
 export async function createCameraController(args: CameraControllerArgs): Promise<CameraController> {
-  const { world, canvas, host, loaded, player, initX, initZ } = args;
+  const { context, world, canvas, host, loaded, player, initX, initZ } = args;
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
   canvas.height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
@@ -150,21 +152,20 @@ export async function createCameraController(args: CameraControllerArgs): Promis
     ...(uiHost ? { host: uiHost } : {}),
     ...(hudLoad.ok ? {} : { error: hudLoad.error }),
   });
-  host?.registerCleanup?.(() => hud.dispose());
+  context.effect(() => () => hud.dispose(), 'game-default/hud');
 
   world.insertResource('gameDefaultSettings', settingsState);
-  world.registerSimulationTransientResource('gameDefaultSettings');
   if (uiHost) {
     settings = mountSettings(settingsAsset, uiHost, settingsState, canvas, settingsLoad.ok ? undefined : settingsLoad.error);
   }
-  const depthOfField = installDepthOfField(world, host?.renderer, settingsState.depthOfField);
+  const depthOfField = await installDepthOfField(context, world, host, host?.renderer, settingsState.depthOfField);
   if (!depthOfField.installed && depthOfField.error) console.warn(`[game] depth-of-field unavailable: ${depthOfField.error}`);
-  const chromaticAberration = installChromaticAberration(world, host?.renderer, [DEPTH_OF_FIELD_ID, CHROMATIC_ABERRATION_ID]);
+  const chromaticAberration = await installChromaticAberration(context, world, host, host?.renderer);
   if (!chromaticAberration.installed && chromaticAberration.error) console.warn(`[game] chromatic aberration unavailable: ${chromaticAberration.error}`);
   installRenderSettingsSystems({ world, camera, settings: settingsState, depthOfField });
-  host?.registerCleanup?.(() => settings.dispose());
-  host?.registerCleanup?.(() => depthOfField.dispose());
-  host?.registerCleanup?.(() => chromaticAberration.dispose());
+  context.effect(() => () => settings.dispose(), 'game-default/settings');
+  context.effect(() => () => depthOfField.dispose(), 'game-default/depth-of-field');
+  context.effect(() => () => chromaticAberration.dispose(), 'game-default/chromatic-aberration');
 
   const cameraState = {
     get mode(): ViewMode {

@@ -4,28 +4,27 @@
 //  added 'fullscreen-input-not-found').
 //
 // Closed 7-member PostProcessErrorCode union + PostProcessError discriminated-union class.
-//   - 'post-process-already-registered' (programmer error) -> postProcess.register THROWS a
-//     PostProcessError, mirroring ShaderRegistry.installMaterialArtifact's Map.has -> throw
+//   - 'post-process-already-registered' (programmer error) -> fullscreen effect registration THROWS a
+//     PostProcessError, mirroring ShaderCatalog.installMaterialArtifact's Map.has -> throw
 //     fail-fast (research Finding M2-4). A second register under the same id is a coding
 //     mistake that must surface immediately.
-//   - 'post-process-not-found' (runtime path) -> addFullscreenPass returns Result.err with
+//   - 'post-process-not-found' (runtime path) -> the typed fullscreen plan returns Result.err with
 //     this code when the supplied id resolves to no registered post-process (stale / wrong
 //     id). AI users branch on `err.code === 'post-process-not-found'` by property access.
 //   - 'fullscreen-input-not-found' (runtime path, feat-20260609 M1 / D-2) -> the
 //     dispatchFullscreenPass generic branch THROWS this when reads[0] references a
 //     graph resource key that the per-pass resolve context cannot resolve (typo /
-//     unregistered colorTarget / mis-ordered addColorTarget vs addFullscreenPass).
+//     an unregistered colorTarget / mis-ordered color-target declaration vs the typed fullscreen pass).
 //   - 'ssao-radius-non-positive' (runtime path, feat-20260612-hdrp-ssao M2 / w10) ->
 //     SSAO radius parameter <= 0; fires when config.ssao.radius value is non-positive.
 //   - 'ssao-bias-negative' (runtime path, feat-20260612-hdrp-ssao M2 / w10) ->
 //     SSAO bias parameter < 0; fires when config.ssao.bias value is negative.
 //
 // D-1: a NEW independent union rather than folding into RuntimeErrorCode /
-// PipelineErrorCode (plan-strategy D-9). RuntimeErrorCode's members are render / skin /
-// shadow domain; a separate union keeps the post-process error surface cohesive and
-// additively evolvable (mirrors pipeline-errors.ts D-1 reasoning verbatim).
+// RuntimeErrorCode's members are render / skin / shadow domain; a separate union
+// keeps the post-process error surface cohesive and additively evolvable.
 //
-// Also per D-4: the postProcess.register channel is parallel to installMaterialArtifact;
+// Also per D-4: the fullscreen effect channel is parallel to installMaterialArtifact;
 // material shader errors carry 4-BGL / 12-float-vertex / depth / triangle-list semantics,
 // while post-process errors carry 0-vertex-buffer / no-depth / input-texture-BGL semantics.
 // Mixing the two error spaces would confuse AI users who branch on code for diagnostics.
@@ -44,12 +43,12 @@
  *
  * | code | channel | trigger |
  * |:--|:--|:--|
- * | `'post-process-already-registered'` | throw | a second `postProcess.register(id, entry)` under an already-registered `id` |
- * | `'post-process-not-found'` | throw / `Result.err` | `addFullscreenPass({shader: id})` where `id` resolves to no registered post-process |
- * | `'fullscreen-input-not-found'` | throw | `addFullscreenPass({reads: [key]})` where `key` is not a graph-declared color target, or a depth key missing TEXTURE_BINDING (D-4) |
+ * | `'post-process-already-registered'` | throw | a second fullscreen effect registration under an already-registered `id` |
+ * | `'post-process-not-found'` | throw / `Result.err` | a typed fullscreen plan whose `shader` id resolves to no registered post-process |
+ * | `'fullscreen-input-not-found'` | throw | a typed fullscreen plan whose `reads` key is not a graph-declared color target, or a depth key missing TEXTURE_BINDING (D-4) |
  * | `'ssao-radius-non-positive'` | throw | SSAO `radius <= 0` |
  * | `'ssao-bias-negative'` | throw | SSAO `bias < 0` |
- * | `'params-size-mismatch'` | throw | `postProcess.register({params})` with `byteSize < 16` or `defaultValue.length !== byteSize` (feat-20260621 M-A4 / D-4) |
+ * | `'params-size-mismatch'` | throw | a fullscreen effect declaration with `params.byteSize < 16` or `defaultValue.length !== byteSize` (feat-20260621 M-A4 / D-4) |
  * | `'params-update-size-mismatch'` | throw | per-frame data-driven write where `PostProcessParams.data` byteLength !== registered `params.byteSize` (feat-20260621 M-A4 / D-4) |
  */
 export type PostProcessErrorCode = keyof typeof POST_PROCESS_POLICY;
@@ -80,7 +79,7 @@ export interface PostProcessNotFoundDetail {
 export interface FullscreenInputNotFoundDetail {
   /** The reads[0] key that resolved to undefined (e.g. 'offscreenColor' / 'hdrColor'). */
   readonly readsKey: string;
-  /** The pass name passed to addFullscreenPass (the 2nd argument; e.g. 'pp' / 'post'). */
+  /** The name assigned to the typed fullscreen pass (e.g. 'pp' / 'post'). */
   readonly passName: string;
 }
 
@@ -168,11 +167,11 @@ const POST_PROCESS_POLICY = {
       '(engine builtins use the forgeax:: prefix; user passes use <package>::<id>).',
   },
   'post-process-not-found': {
-    expected: 'addFullscreenPass references a registered post-process id',
+    expected: 'typed fullscreen plan references a registered post-process id',
     hint: (detail) =>
       `no post-process is registered for id '${(detail as PostProcessNotFoundDetail).id}'. ` +
-      `First call renderer.postProcess.register('${(detail as PostProcessNotFoundDetail).id}', {source, reads?}), ` +
-      'then reference it via addFullscreenPass({shader: id}).',
+      `Register '${(detail as PostProcessNotFoundDetail).id}' with the feature host ({source, reads?}), ` +
+      'then reference it from a typed fullscreen RenderFeaturePlan.',
   },
   'fullscreen-input-not-found': {
     expected: 'reads key must be a graph-declared colorTarget with TEXTURE_BINDING',
@@ -181,8 +180,8 @@ const POST_PROCESS_POLICY = {
       return (
         `fullscreen pass '${d.passName}' references reads key '${d.readsKey}' but that key is not ` +
         `declared as a graph color target, or the target is not sampleable as a texture. ` +
-        `First call graph.addColorTarget('${d.readsKey}', {format, size}) ` +
-        `(or check spelling) before addFullscreenPass(g, '${d.passName}', { shader, color, reads: ['${d.readsKey}'] }). ` +
+        `First declare graph color target '${d.readsKey}' with its format and size ` +
+        `(or check spelling) before the typed fullscreen pass '${d.passName}' reads it. ` +
         `If '${d.readsKey}' is a depth target, ensure it has TEXTURE_BINDING usage (0x04) ` +
         `and is declared via graph.addColorTarget. Consider switching pipeline if your pipeline does not expose a sampleable depth target.`
       );
@@ -238,13 +237,13 @@ const POST_PROCESS_POLICY = {
   }
 >;
 
-class PostProcessErrorClass extends Error {
-  readonly code: PostProcessErrorCode;
+class PostProcessErrorClass<C extends PostProcessErrorCode> extends Error {
+  readonly code: C;
   readonly expected: string;
   readonly hint: string;
-  readonly detail: PostProcessErrorDetail;
+  readonly detail: PostProcessErrorDetailFor<C>;
 
-  constructor(args: { code: PostProcessErrorCode; detail: PostProcessErrorDetail }) {
+  constructor(args: { code: C; detail: PostProcessErrorDetailFor<C> }) {
     const policy = POST_PROCESS_POLICY[args.code];
     const hint = policy.hint(args.detail);
     super(`post-process: ${args.code} (${hint})`);
@@ -261,10 +260,18 @@ class PostProcessErrorClass extends Error {
  * `C` and whose `detail` narrows to `PostProcessErrorDetailFor<C>`, so `if (err.code === 'X')`
  * simultaneously narrows `err.detail` (charter P3 + P4 discriminated union).
  */
-type PostProcessErrorVariant<C extends PostProcessErrorCode> = PostProcessErrorClass & {
+type PostProcessErrorVariant<C extends PostProcessErrorCode> = PostProcessErrorClass<C> & {
   readonly code: C;
   readonly detail: PostProcessErrorDetailFor<C>;
 };
+
+interface PostProcessErrorConstructor {
+  new <C extends PostProcessErrorCode>(args: {
+    code: C;
+    detail: PostProcessErrorDetailFor<C>;
+  }): PostProcessErrorVariant<C>;
+  readonly prototype: PostProcessErrorClass<PostProcessErrorCode>;
+}
 
 /**
  * Public PostProcessError type - mapped from the authoritative code union.
@@ -283,14 +290,6 @@ export type PostProcessError = {
   [C in PostProcessErrorCode]: PostProcessErrorVariant<C>;
 }[PostProcessErrorCode];
 
-interface PostProcessErrorConstructor {
-  new <C extends PostProcessErrorCode>(args: {
-    code: C;
-    detail: PostProcessErrorDetailFor<C>;
-  }): PostProcessErrorVariant<C>;
-  readonly prototype: PostProcessErrorClass;
-}
-
 /**
  * PostProcessError constructor - `new PostProcessError({ code, detail })`.
  *
@@ -300,5 +299,4 @@ interface PostProcessErrorConstructor {
  * without manual cast (AppError pattern; TS class declarations cannot directly express
  * `<C> ... PostProcessErrorVariant<C>` polymorphism, hence the typed-cast affordance).
  */
-export const PostProcessError: PostProcessErrorConstructor =
-  PostProcessErrorClass as unknown as PostProcessErrorConstructor;
+export const PostProcessError: PostProcessErrorConstructor = PostProcessErrorClass;

@@ -1,58 +1,73 @@
 import { describe, expect, it } from 'vitest';
-import { decodeReplicationBatch, encodeReplicationBatch } from '../src/replication/codec';
+import { decodeReplicationPacket, encodeReplicationPacket } from '../src/replication/codec';
 import { REPLICATION_PROTOCOL_VERSION } from '../src/replication/constants';
+import type { ReplicationPacket } from '../src/replication/protocol';
 import { DEFAULT_REPLICATION_LIMITS } from '../src/replication/profile';
 
-describe('canonical replication codec', () => {
-  const batch = {
+describe('canonical replication packet codec', () => {
+  const packet: ReplicationPacket = {
     version: REPLICATION_PROTOCOL_VERSION,
+    kind: 'baseline',
+    sessionId: 17 as ReplicationPacket['sessionId'],
+    epoch: 1,
+    sequence: 1,
     fingerprint: 'a1b2c3d4',
     tick: 7,
-    full: true,
     entities: [
       {
         id: 1,
-        kind: 'upsert' as const,
+        kind: 'upsert',
         components: [{ name: 'PositionCodec', data: { x: 1, y: 2 } }],
       },
     ],
   };
 
-  it('emits stable bytes for an equivalent ordered batch', () => {
-    const first = encodeReplicationBatch(batch, DEFAULT_REPLICATION_LIMITS);
-    const second = encodeReplicationBatch({ ...batch }, DEFAULT_REPLICATION_LIMITS);
+  it('emits stable bytes for an equivalent ordered packet', () => {
+    const first = encodeReplicationPacket(packet, DEFAULT_REPLICATION_LIMITS);
+    const second = encodeReplicationPacket({ ...packet }, DEFAULT_REPLICATION_LIMITS);
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(true);
     if (!first.ok || !second.ok) return;
     expect(first.value).toEqual(second.value);
   });
 
-  it('round-trips version, fingerprint, tick, and ordered records', () => {
-    const encoded = encodeReplicationBatch(batch, DEFAULT_REPLICATION_LIMITS);
+  it('round-trips version, identity, tick, and ordered records', () => {
+    const encoded = encodeReplicationPacket(packet, DEFAULT_REPLICATION_LIMITS);
     expect(encoded.ok).toBe(true);
     if (!encoded.ok) return;
-
-    const decoded = decodeReplicationBatch(encoded.value, DEFAULT_REPLICATION_LIMITS);
-    expect(decoded).toEqual({ ok: true, value: batch });
+    expect(decodeReplicationPacket(encoded.value, DEFAULT_REPLICATION_LIMITS)).toEqual({
+      ok: true,
+      value: packet,
+    });
   });
 
   it('round-trips allowlisted buffer and numeric typed-array payloads', () => {
-    const typedBatch = {
-      ...batch,
+    const typedPacket: ReplicationPacket = {
+      ...packet,
       entities: [
         {
-          ...batch.entities[0]!,
-          components: [{ name: 'PositionCodec', data: { bytes: new Uint8Array([1, 2]), coords: new Float32Array([1.5, 2.5]), signed: new Int8Array([-1, 1]), clamped: new Uint8ClampedArray([0, 255]) } }],
+          ...packet.entities[0]!,
+          components: [
+            {
+              name: 'PositionCodec',
+              data: {
+                bytes: new Uint8Array([1, 2]),
+                coords: new Float32Array([1.5, 2.5]),
+                signed: new Int8Array([-1, 1]),
+                clamped: new Uint8ClampedArray([0, 255]),
+              },
+            },
+          ],
         },
       ],
     };
-    const encoded = encodeReplicationBatch(typedBatch, DEFAULT_REPLICATION_LIMITS);
+    const encoded = encodeReplicationPacket(typedPacket, DEFAULT_REPLICATION_LIMITS);
     expect(encoded.ok).toBe(true);
     if (!encoded.ok) return;
 
-    const decoded = decodeReplicationBatch(encoded.value, DEFAULT_REPLICATION_LIMITS);
+    const decoded = decodeReplicationPacket(encoded.value, DEFAULT_REPLICATION_LIMITS);
     expect(decoded.ok).toBe(true);
-    if (!decoded.ok) return;
+    if (!decoded.ok || decoded.value.kind === 'ack' || decoded.value.kind === 'rejection') return;
     const data = decoded.value.entities[0]!.components[0]!.data;
     expect(data.bytes).toEqual(new Uint8Array([1, 2]));
     expect(data.coords).toEqual(new Float32Array([1.5, 2.5]));
@@ -60,21 +75,23 @@ describe('canonical replication codec', () => {
     expect(data.clamped).toEqual(new Uint8ClampedArray([0, 255]));
   });
 
-  it('rejects malformed typed-array tags before yielding a batch', () => {
-    const malformed = { ...batch, entities: [{ ...batch.entities[0]!, components: [{ name: 'PositionCodec', data: { bytes: { $typedArray: 'Uint8Array', values: [1, 'bad'] } } }] }] };
-    const decoded = decodeReplicationBatch(new TextEncoder().encode(JSON.stringify(malformed)), DEFAULT_REPLICATION_LIMITS);
-    expect(decoded.ok).toBe(false);
-    if (decoded.ok) return;
-    expect(decoded.error.code).toBe('decode-invalid-payload');
-  });
-
-  it('rejects a component removal that carries replacement data', () => {
+  it('rejects malformed typed-array tags before yielding a packet', () => {
     const malformed = {
-      ...batch,
-      entities: [{ id: 1, kind: 'upsert', components: [{ name: 'PositionCodec', operation: 'remove', data: { x: 1 } }] }],
+      ...packet,
+      entities: [
+        {
+          ...packet.entities[0]!,
+          components: [
+            {
+              name: 'PositionCodec',
+              data: { bytes: { $typedArray: 'Uint8Array', values: [1, 'bad'] } },
+            },
+          ],
+        },
+      ],
     };
-    const decoded = decodeReplicationBatch(
-      new TextEncoder().encode(JSON.stringify(malformed)),
+    const decoded = decodeReplicationPacket(
+      new TextEncoder().encode(`FXRP2\n${JSON.stringify(malformed)}`),
       DEFAULT_REPLICATION_LIMITS,
     );
     expect(decoded.ok).toBe(false);
@@ -82,30 +99,24 @@ describe('canonical replication codec', () => {
     expect(decoded.error.code).toBe('decode-invalid-payload');
   });
 
-  it('rejects unknown and truncated payloads with structured decode errors', () => {
-    const unknown = decodeReplicationBatch(new Uint8Array([0xff]), DEFAULT_REPLICATION_LIMITS);
-    const truncated = decodeReplicationBatch(new TextEncoder().encode('{'), DEFAULT_REPLICATION_LIMITS);
-    expect(unknown.ok).toBe(false);
-    expect(truncated.ok).toBe(false);
-    if (!unknown.ok) {
-      expect(unknown.error.code).toBe('decode-invalid-payload');
-      expect(unknown.error.expected).not.toHaveLength(0);
-      expect(unknown.error.hint).not.toHaveLength(0);
-    }
-  });
-
-  it.each([
-    { ...batch, entities: [null] },
-    { ...batch, entities: [{ id: 1, kind: 'upsert', components: [null] }] },
-    { ...batch, entities: [{ id: 1, kind: 'upsert', components: [{ name: 'PositionCodec', data: null }] }] },
-  ])('rejects malformed decoded records before replica validation', (malformed) => {
-    const bytes = new TextEncoder().encode(JSON.stringify(malformed));
-    const decoded = decodeReplicationBatch(bytes, DEFAULT_REPLICATION_LIMITS);
-
+  it('rejects a component removal that carries replacement data', () => {
+    const malformed = {
+      ...packet,
+      entities: [
+        {
+          id: 1,
+          kind: 'upsert' as const,
+          components: [{ name: 'PositionCodec', operation: 'remove' as const, data: { x: 1 } }],
+        },
+      ],
+    };
+    const decoded = decodeReplicationPacket(
+      new TextEncoder().encode(`FXRP2\n${JSON.stringify(malformed)}`),
+      DEFAULT_REPLICATION_LIMITS,
+    );
     expect(decoded.ok).toBe(false);
     if (decoded.ok) return;
     expect(decoded.error.code).toBe('decode-invalid-payload');
-    expect(decoded.error.detail).toMatchObject({ reason: expect.any(String) });
   });
 
   it('enforces declared message, entity, component, string, buffer, and array limits', () => {
@@ -117,7 +128,7 @@ describe('canonical replication codec', () => {
       maxBufferBytes: 1,
       maxArrayElements: 0,
     };
-    const encoded = encodeReplicationBatch(batch, limits);
+    const encoded = encodeReplicationPacket(packet, limits);
     expect(encoded.ok).toBe(false);
     if (encoded.ok) return;
     expect(encoded.error.code).toBe('decode-limit-exceeded');

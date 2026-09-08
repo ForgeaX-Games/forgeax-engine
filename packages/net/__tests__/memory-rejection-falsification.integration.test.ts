@@ -5,7 +5,8 @@ import {
   createMemoryEndpointPairWithController,
   type MemoryFaultController,
 } from '../src/endpoint/memory';
-import { encodeReplicationBatch, type ReplicationBatch } from '../src/replication/codec';
+import { encodeReplicationPacket } from '../src/replication/codec';
+import type { ReplicationDataPacket, ReplicationEntityRecord } from '../src/replication/protocol';
 import { createReplicaCoordinator, type ReplicaCoordinator } from '../src/replication/replica';
 import { defineReplication, type ReplicationProfile } from '../src/replication/profile';
 import { NetSession } from '../src/session/net-session';
@@ -33,11 +34,41 @@ function snapshot(replica: ReplicaCoordinator) {
   }));
 }
 
-function batch(profile: ReplicationProfile, tick: number, entities: ReplicationBatch['entities']): Uint8Array {
-  return encodeReplicationBatch(
-    { version: 1, fingerprint: profile.fingerprint, tick, full: false, entities },
+function packet(profile: ReplicationProfile, sequence: number, entities: readonly ReplicationEntityRecord[]): Uint8Array {
+  const value: ReplicationDataPacket = {
+    version: 2,
+    kind: 'delta',
+    sessionId: 17 as ReplicationDataPacket['sessionId'],
+    epoch: 1,
+    sequence,
+    fingerprint: profile.fingerprint,
+    tick: sequence,
+    entities,
+  };
+  return encodeReplicationPacket(
+    value,
     profile.limits,
   ).unwrap();
+}
+
+function baselinePacket(profile: ReplicationProfile): Uint8Array {
+  const value: ReplicationDataPacket = {
+    version: 2,
+    kind: 'baseline',
+    sessionId: 17 as ReplicationDataPacket['sessionId'],
+    epoch: 1,
+    sequence: 1,
+    fingerprint: profile.fingerprint,
+    tick: 1,
+    entities: [
+      {
+        id: 1,
+        kind: 'upsert',
+        components: [{ name: 'NetworkedRejected', data: { enabled: true } }],
+      },
+    ],
+  };
+  return encodeReplicationPacket(value, profile.limits).unwrap();
 }
 
 type RejectionCase = {
@@ -57,7 +88,7 @@ const cases: readonly RejectionCase[] = [
   {
     name: 'malformed',
     code: 'decode-invalid-payload',
-    bytes: (replication) => batch(replication, 2, []),
+    bytes: (replication) => packet(replication, 2, []),
     fault: (controller) => controller.malformNextDelivery(),
   },
   {
@@ -74,25 +105,37 @@ const cases: readonly RejectionCase[] = [
     name: 'schema',
     code: 'schema-invalid',
     bytes: (replication) =>
-      batch(replication, 2, [
+      packet(replication, 2, [
         { id: 1, kind: 'upsert', components: [{ name: 'NetworkedRejected', data: { forged: true } }] },
       ]),
   },
   {
     name: 'order',
     code: 'ordering-invalid-tick',
-    bytes: (replication) => batch(replication, 1, []),
+    bytes: (replication) => packet(replication, 3, []),
   },
   {
     name: 'identity',
     code: 'identity-invalid',
-    bytes: (replication) => batch(replication, 2, [{ id: 0, kind: 'upsert', components: [] }]),
+    bytes: (replication) =>
+      new TextEncoder().encode(
+        `FXRP2\n${JSON.stringify({
+          version: 2,
+          kind: 'delta',
+          sessionId: 17,
+          epoch: 1,
+          sequence: 2,
+          fingerprint: replication.fingerprint,
+          tick: 2,
+          entities: [{ id: 0, kind: 'upsert', components: [] }],
+        })}`,
+      ),
   },
   {
     name: 'unresolved reference',
     code: 'remap-unresolved-reference',
     bytes: (replication) =>
-      batch(replication, 2, [
+      packet(replication, 2, [
         { id: 2, kind: 'upsert', components: [{ name: 'LinkRejected', data: { target: 77 } }] },
       ]),
   },
@@ -112,13 +155,7 @@ describe('memory protocol rejection falsification', () => {
     authorityEndpoint
       .send(
         2 as PeerId,
-        batch(replication, 1, [
-          {
-            id: 1,
-            kind: 'upsert',
-            components: [{ name: 'NetworkedRejected', data: { enabled: true } }],
-          },
-        ]),
+        baselinePacket(replication),
       )
       .unwrap();
     expect(session.receiveEvents()).toEqual([]);
@@ -131,6 +168,6 @@ describe('memory protocol rejection falsification', () => {
     expect(errors[0]!.code).toBe(code);
     expect(snapshot(replica)).toEqual(before);
     expect(authorityEndpoint.poll()).toContainEqual({ kind: 'peer-disconnected', peerId: 2 });
-    expect(authorityEndpoint.send(2 as PeerId, batch(replication, 2, [])).ok).toBe(false);
+    expect(authorityEndpoint.send(2 as PeerId, packet(replication, 2, [])).ok).toBe(false);
   });
 });

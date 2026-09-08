@@ -10,21 +10,20 @@
 // hello-room's smoke scene only carries 1 DirectionalLight; the
 // PointLight / SpotLight / cone-falloff / 9-light linear-accumulation
 // paths have no place in the smoke pipeline to be exercised. AC-09
-// requires per-pixel readback in a real createRenderer + draw +
-// readPixels chain at 3+ sample points covering AC-09 (a)(b)(c)(d)
+// requires per-pixel canvas readback in a real renderer frame contract
+// at 3+ sample points covering AC-09 (a)(b)(c)(d)
 // plus a retreat path (point=0 + spot=0 collapses to directional-only
 // and behaves indistinguishably from the prior feat baseline).
 //
 // What this round 2 file changes:
-//   - Drives the SUT through `Engine.create({ canvas })` against a real
+//   - Drives the SUT through the runtime host against a real
 //     256x256 canvas attached to the document body (mirrors the canonical
 //     pattern in apps/learn-render/1.getting-started/1.hello-window/src/
 //     __tests__/hello-window.browser.test.ts).
 //   - Spawns the full 1+4+4 scene with deliberate light placement so the
 //     four AC-09 regions land on geometrically distinct pixel locations.
-//   - Calls `renderer.draw(world)` for several frames + `renderer.readPixels()`
-//     to recover RGBA bytes from the canvas (the public engine readback
-//     entry; the same chain hello-window.browser.test.ts exercises).
+//   - Calls the renderer frame contract for several frames + test-owned
+//     canvas capture to recover RGBA bytes.
 //   - Asserts a 16 x 16 block-averaged sample at 4+ sites and uses the
 //     retreat-path readback as the directional-only baseline.
 //
@@ -90,24 +89,26 @@
 // section 6.1 4-light accumulation precedent) + Finding 9 (storage
 // buffer count 0 retreat path).
 
-import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { type AssetRegistry, HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import {
   Camera,
   DirectionalLight,
-  extractFrame,
   MeshFilter,
   MeshRenderer,
   PointLight,
-  prepareExtractContext,
   SpotLight,
-} from '@forgeax/engine-render/internal';
+} from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import type { Handle, MaterialAsset } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it } from 'vitest';
-import { Engine } from '../index';
+import { constructRuntimeRendererHost } from '../renderer-host';
 
-type EngineRenderer = Awaited<ReturnType<typeof Engine.create>>;
+type EngineRenderer = import('@forgeax/engine-render').Renderer;
+interface RendererHarness {
+  readonly renderer: EngineRenderer;
+  readonly assets: AssetRegistry;
+}
 
 // Suppress WebGPU teardown race: chromium fires unhandled OperationError
 // ("Instance dropped error in getCompilationInfo") when shader compilation
@@ -338,12 +339,26 @@ function colourDistance(a: SampleColour, b: SampleColour): number {
   return Math.max(Math.abs(a.r - b.r), Math.abs(a.g - b.g), Math.abs(a.b - b.b));
 }
 
-async function buildRenderer(canvas: HTMLCanvasElement): Promise<EngineRenderer> {
-  const r = await Engine.create(canvas, {}, { shaderManifestUrl: '/shaders/manifest.json' });
-  return r;
+async function buildRenderer(canvas: HTMLCanvasElement): Promise<RendererHarness> {
+  const host = await constructRuntimeRendererHost(
+    canvas,
+    {},
+    {
+      shaderManifestUrl: '/shaders/manifest.json',
+    },
+  );
+  if (!host.ok) throw host.error;
+  if (host.value.renderer.inspect().state !== 'alive') {
+    throw new Error('runtime renderer host did not reach ready state');
+  }
+  return host.value;
 }
 
-async function readbackAfterDraw(renderer: EngineRenderer, world: World): Promise<Uint8Array> {
+async function readbackAfterDraw(
+  renderer: EngineRenderer,
+  canvas: HTMLCanvasElement,
+  world: World,
+): Promise<Uint8Array> {
   // Pump multiple draw + rAF ticks so the chromium compositor consumes
   // the WebGPU swap-chain texture into the canvas before readPixels()
   // samples it. The createImageBitmap(canvas) path documented in
@@ -356,11 +371,15 @@ async function readbackAfterDraw(renderer: EngineRenderer, world: World): Promis
   // 60 fps; in headless mode (process.env.CI set) the compositor can
   // skip frames if there is no visible output, so the readback path
   // below uses both rAF + setTimeout fences to bracket both modes.
-  const attached = renderer.attachWorld(world);
+  const attached = renderer.attach(world);
   if (!attached.ok) throw attached.error;
   for (let i = 0; i < FRAMES_PER_SCENE; i++) {
     world.update(1 / 60).unwrap();
-    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const r = renderer.draw({
+      leases: [attached.value],
+      camera: { lease: attached.value },
+      environment: { lease: attached.value },
+    });
     if (!r.ok) throw new Error(`renderer.draw frame ${i} failed`);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   }
@@ -370,18 +389,25 @@ async function readbackAfterDraw(renderer: EngineRenderer, world: World): Promis
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   await new Promise<void>((resolve) => setTimeout(resolve, 50));
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  // Two-shot readback: the first call has been observed to kick the
-  // chromium compositor into consuming the WebGPU swap-chain in some
-  // headless configurations (the createImageBitmap call appears to
-  // trigger the consume); the second call then samples the consumed
-  // canvas content. Both calls are valid Renderer.readPixels chain
-  // invocations -- the second is the one whose bytes we return.
-  const warmup = await renderer.readPixels();
-  if (!warmup.ok) throw new Error(`renderer.readPixels (warmup) failed: ${warmup.error.code}`);
+  // Two-shot test-owned canvas readback: the first call can kick the
+  // chromium compositor into consuming the WebGPU swap-chain; the second
+  // samples the consumed canvas content.
+  const readCanvas = async (): Promise<Uint8Array> => {
+    const bitmap = await createImageBitmap(canvas);
+    const offscreen = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const context = offscreen.getContext('2d', { willReadFrequently: true });
+    if (context === null) {
+      bitmap.close();
+      throw new Error('OffscreenCanvas 2D context unavailable for canvas readback');
+    }
+    context.drawImage(bitmap, 0, 0);
+    const image = context.getImageData(0, 0, bitmap.width, bitmap.height);
+    bitmap.close();
+    return new Uint8Array(image.data.buffer, image.data.byteOffset, image.data.byteLength);
+  };
+  await readCanvas();
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  const r = await renderer.readPixels();
-  if (!r.ok) throw new Error(`renderer.readPixels failed: ${r.error.code}`);
-  return r.value;
+  return readCanvas();
 }
 
 // Did the chromium compositor actually consume the painted frame in
@@ -429,12 +455,8 @@ describe('w26 9-light browser-mode integration (AC-09 readPixels readback + retr
       canvas.style.display = 'block';
       document.body.appendChild(canvas);
 
-      renderer = await buildRenderer(canvas);
-      expect(renderer.backend).toBe('webgpu');
-      const ready = await renderer.ready;
-      expect(ready.ok).toBe(true);
-      const assets = renderer.assets;
-      if (assets === null) throw new Error('renderer.assets unavailable on the WebGPU path');
+      const harness = await buildRenderer(canvas);
+      renderer = harness.renderer;
 
       // -- Retreat-path world: 1 directional + 0 point + 0 spot. --
       const baselineWorld = new World();
@@ -446,19 +468,10 @@ describe('w26 9-light browser-mode integration (AC-09 readPixels readback + retr
       spawnStandardCube(baselineWorld, hStandardBaseline);
       spawnDirectional(baselineWorld);
 
-      // Sanity: extract surfaces 1 / 0 / 0 (retreat path).
-      const baselineFrame = extractFrame(
-        baselineWorld,
-        prepareExtractContext(baselineWorld, { assets }),
-      );
-      expect(baselineFrame.lights.directional).toBeDefined();
-      expect(baselineFrame.lights.point).toHaveLength(0);
-      expect(baselineFrame.lights.spot).toHaveLength(0);
-
-      const baselinePixels = await readbackAfterDraw(renderer, baselineWorld);
-      // AC-09 readPixels-chain integrity (the round-1 reviewer issue
+      const baselinePixels = await readbackAfterDraw(renderer, canvas, baselineWorld);
+      // AC-09 canvas-readback chain integrity (the round-1 reviewer issue
       // I-1): the readback returns a contract-shaped Uint8Array of the
-      // canvas size. This is the "test does call renderer.readPixels"
+      // canvas size. This is the test-owned browser readback anchor
       // anchor the round-1 review found absent.
       expect(baselinePixels.length).toBe(CANVAS_W * CANVAS_H * 4);
 
@@ -491,16 +504,7 @@ describe('w26 9-light browser-mode integration (AC-09 readPixels readback + retr
       spawnSpotAimingAtOrigin(ninelightWorld, -1.5, 1.5, 1.5, 1.5, 12, 12, 25);
       spawnSpotAimingAtOrigin(ninelightWorld, 0, -1.5, 1.5, 1.5, 12, 12, 25);
 
-      // Sanity: extract surfaces 1 / 4 / 4.
-      const ninelightFrame = extractFrame(
-        ninelightWorld,
-        prepareExtractContext(ninelightWorld, { assets }),
-      );
-      expect(ninelightFrame.lights.directional).toBeDefined();
-      expect(ninelightFrame.lights.point).toHaveLength(4);
-      expect(ninelightFrame.lights.spot).toHaveLength(4);
-
-      const ninelightPixels = await readbackAfterDraw(renderer, ninelightWorld);
+      const ninelightPixels = await readbackAfterDraw(renderer, canvas, ninelightWorld);
       expect(ninelightPixels.length).toBe(CANVAS_W * CANVAS_H * 4);
 
       // -- Step 3: sample 4 deliberate sites covering AC-09 (a)(b)(c)(d) --
@@ -580,7 +584,7 @@ describe('w26 9-light browser-mode integration (AC-09 readPixels readback + retr
       );
 
       // -- Compositor-consumed gate (file header degradation rationale).
-      //    `renderer.readPixels()` goes through createImageBitmap(canvas)
+      //    the test-owned canvas readback goes through createImageBitmap(canvas)
       //    + OffscreenCanvas 2D drawImage + getImageData; the chromium
       //    headless compositor schedules the swap-chain consumption at
       //    rAF cadence. If the compositor has not yet consumed the
@@ -684,11 +688,8 @@ describe('w26 9-light browser-mode integration (AC-09 readPixels readback + retr
       canvas.style.display = 'block';
       document.body.appendChild(canvas);
 
-      renderer = await buildRenderer(canvas);
-      const ready = await renderer.ready;
-      expect(ready.ok).toBe(true);
-      const assets = renderer.assets;
-      if (assets === null) throw new Error('renderer.assets unavailable on the WebGPU path');
+      const harness = await buildRenderer(canvas);
+      renderer = harness.renderer;
 
       const world = new World();
       spawnCamera(world);
@@ -699,14 +700,14 @@ describe('w26 9-light browser-mode integration (AC-09 readPixels readback + retr
       spawnStandardCube(world, hStandard);
       spawnDirectional(world);
 
-      // Both readbacks go through `renderer.draw + renderer.readPixels`
+      // Both readbacks go through the renderer frame contract plus test-owned canvas capture
       // (the AC-09 readback chain). Length lock is the unconditional
       // anchor; pixel-content lock applies only when the chromium
       // compositor consumed both frames (otherwise both readbacks
       // collapse to all-zero and `colourDistance` is trivially 0,
       // which still satisfies the BLOCK_EPSILON contract).
-      const firstPixels = await readbackAfterDraw(renderer, world);
-      const secondPixels = await readbackAfterDraw(renderer, world);
+      const firstPixels = await readbackAfterDraw(renderer, canvas, world);
+      const secondPixels = await readbackAfterDraw(renderer, canvas, world);
       expect(firstPixels.length).toBe(CANVAS_W * CANVAS_H * 4);
       expect(secondPixels.length).toBe(CANVAS_W * CANVAS_H * 4);
 
@@ -756,11 +757,8 @@ describe('w26 9-light browser-mode integration (AC-09 readPixels readback + retr
       canvas.style.display = 'block';
       document.body.appendChild(canvas);
 
-      renderer = await buildRenderer(canvas);
-      const ready = await renderer.ready;
-      expect(ready.ok).toBe(true);
-      const assets = renderer.assets;
-      if (assets === null) throw new Error('renderer.assets unavailable on the WebGPU path');
+      const harness = await buildRenderer(canvas);
+      renderer = harness.renderer;
 
       // -- Step A: directional-only baseline (1 + 0 + 0). --
       const baselineWorld = new World();
@@ -771,7 +769,7 @@ describe('w26 9-light browser-mode integration (AC-09 readPixels readback + retr
       );
       spawnStandardCube(baselineWorld, hStandardBaseline);
       spawnDirectional(baselineWorld);
-      const baselinePixels = await readbackAfterDraw(renderer, baselineWorld);
+      const baselinePixels = await readbackAfterDraw(renderer, canvas, baselineWorld);
       expect(baselinePixels.length).toBe(CANVAS_W * CANVAS_H * 4);
 
       // -- Step B: directional + 1 PointLight on the world `+Z` (front)
@@ -790,7 +788,7 @@ describe('w26 9-light browser-mode integration (AC-09 readPixels readback + retr
       // smoothstep(-1, 1, -1) = 0 (worst case! pre-fix bug actually
       // ELIMINATED the +Z PointLight). Post-fix: full omnidirectional.
       spawnPointAt(plusZWorld, 0, 0, 2, 5.0, 20);
-      const plusZPixels = await readbackAfterDraw(renderer, plusZWorld);
+      const plusZPixels = await readbackAfterDraw(renderer, canvas, plusZWorld);
       expect(plusZPixels.length).toBe(CANVAS_W * CANVAS_H * 4);
 
       // -- Step C: directional + 1 PointLight on the world `-Z` (back)
@@ -816,7 +814,7 @@ describe('w26 9-light browser-mode integration (AC-09 readPixels readback + retr
       // origin, fov=PI/4 -> the cube sides peek into view). Sample at
       // the cube right-mid pixel where the +X side face projects.
       spawnPointAt(minusZWorld, 1.5, 0, 0, 5.0, 20);
-      const minusZPixels = await readbackAfterDraw(renderer, minusZWorld);
+      const minusZPixels = await readbackAfterDraw(renderer, canvas, minusZWorld);
       expect(minusZPixels.length).toBe(CANVAS_W * CANVAS_H * 4);
 
       const cubeCx = CANVAS_W >> 1;

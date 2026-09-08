@@ -1,32 +1,29 @@
-// @forgeax/apps-shared/scripts/rhi-debug-browser-admission -- shared browser
-// admission path for public, trigger, and remote-live RHI-debug captures.
+// Shared Chromium admission for the single raw .rhitape browser path.
 
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { chromium } from 'playwright';
+import { buildFrameModel, decodeTape } from '@forgeax/engine-rhi-debug';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..', '..', '..');
-const REMOTE_LIVE = resolve(REPO_ROOT, 'skills/forgeax-engine-cli/scripts/remote-live.mjs');
 const DEV_LIVE = resolve(REPO_ROOT, 'scripts/dev-live.mjs');
-const CLI = resolve(REPO_ROOT, 'packages/rhi-debug/dist/cli.mjs');
-
-/**
- * @typedef {Object} BrowserAdmissionOptions
- * @property {string} pkg
- * @property {string} label
- * @property {string} readyHook
- * @property {string} capturePrepareHook
- * @property {string} screenshotPath
- * @property {string} triggerLabel
- * @property {(input: {events: object[], blobPool: Map<string, Uint8Array>}) => object} assertTape
- * @property {(input: {label: string, capture: object, selected: object, inspected: object}) => string} formatCapture
- */
+const RAW_TAPE_ROUTE = '/__forgeax-debug/tape';
+const RHITAPE_MIME = 'application/x-forgeax-rhitape';
 
 /** @param {BrowserAdmissionOptions} options */
 export async function runRhiDebugBrowserAdmission(options) {
-  const { pkg, label, readyHook, capturePrepareHook, screenshotPath, triggerLabel, assertTape, formatCapture } = options;
+  const {
+    pkg,
+    label,
+    readyHook,
+    capturePrepareHook,
+    screenshotPath,
+    assertTape,
+    formatCapture,
+  } = options;
   const bridgePort = await findFreePort();
   const dev = spawn(process.execPath, [DEV_LIVE, pkg], {
     cwd: REPO_ROOT,
@@ -53,7 +50,11 @@ export async function runRhiDebugBrowserAdmission(options) {
     browser = await chromium.launch({
       headless: true,
       channel: 'chrome',
-      args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer', '--ignore-gpu-blocklist'],
+      args: [
+        '--enable-unsafe-webgpu',
+        '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
+        '--ignore-gpu-blocklist',
+      ],
     });
     const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
     const pageErrors = [];
@@ -68,26 +69,35 @@ export async function runRhiDebugBrowserAdmission(options) {
     await page.screenshot({ path: screenshotPath });
     console.log(`[${label}] browser screenshot=${screenshotPath}`);
 
+    const hasGpu = await page.evaluate(() => navigator.gpu !== undefined);
+    if (!hasGpu) {
+      console.log(`[${label}] ENVIRONMENT_BLOCKED -- Chromium has no navigator.gpu`);
+      return { status: 'environment-blocked', reason: 'webgpu-unavailable' };
+    }
+
     const health = await waitForRemoteHealth(bridgePort);
-    if (health.pageConnected !== true) throw new Error(`remote-live page did not connect: ${JSON.stringify(health)}`);
+    if (health.pageConnected !== true) {
+      throw new Error(`remote-live page did not connect: ${JSON.stringify(health)}`);
+    }
     const prep = await remoteEval(
       bridgePort,
       '(async () => { const updated = world.update(1 / 60); if (!updated.ok) throw updated.error; const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }); if (!drawn.ok) throw drawn.error; return { updated: true, drawn: true }; })()',
     );
-    if (prep.updated !== true || prep.drawn !== true) throw new Error(`remote-live capture preparation failed: ${JSON.stringify(prep)}`);
+    if (prep.updated !== true || prep.drawn !== true) {
+      throw new Error(`remote-live capture preparation failed: ${JSON.stringify(prep)}`);
+    }
 
-    const triggered = runTrigger(url, triggerLabel);
-    await verifyCaptured({ label, captureLabel: 'public trigger', capture: triggered, screenshotPath, assertTape, formatCapture });
-    const remoteCapture = await remoteEval(
-      bridgePort,
-      `(async () => { const prepare = globalThis.${capturePrepareHook}; if (typeof prepare !== 'function') throw new Error('capture preparation hook is unavailable'); await prepare(); return await globalThis.__forgeax.captureFrame(1); })()`,
-    );
-    await verifyCaptured({ label, captureLabel: 'remote-live', capture: remoteCapture, screenshotPath, assertTape, formatCapture });
+    const publicCapture = await captureAndUpload(page, capturePrepareHook);
+    await verifyCaptured({ label, captureLabel: 'public capture', capture: publicCapture, assertTape, formatCapture });
+
+    const remoteCapture = await remoteEval(bridgePort, captureExpression(capturePrepareHook));
+    await verifyCaptured({ label, captureLabel: 'remote capture', capture: remoteCapture, assertTape, formatCapture });
 
     if (pageErrors.length > 0) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
     if (consoleErrors.length > 0) throw new Error(`console errors: ${consoleErrors.join(' | ')}`);
-    console.log(`[${label}] public trigger + remote-live browser admission PASS`);
+    console.log(`[${label}] Browser admission + raw upload + strict decode PASS`);
     await page.close();
+    return { status: 'passed' };
   } finally {
     await browser?.close();
     dev.kill('SIGTERM');
@@ -125,7 +135,48 @@ export function collectRhiDebugDraws(events) {
       draws.push({ event, pass, pipeline, bindGroups: new Map(bindGroups), vertexBuffer, indexBuffer });
     }
   }
-  return { draws, groups, layouts, initialData };
+  return { draws, groups, layouts, pipelines, initialData };
+}
+
+async function captureAndUpload(page, capturePrepareHook) {
+  return page.evaluate(async ({ hook, route, mime }) => {
+    if (hook !== undefined) {
+      const prepare = globalThis[hook];
+      if (typeof prepare !== 'function') throw new Error(`capture preparation hook window.${hook} is not a function`);
+      await prepare();
+    }
+    const capture = await globalThis.__forgeax?.captureFrame();
+    if (!capture?.ok) throw new Error(`captureFrame failed: ${JSON.stringify(capture?.error)}`);
+    const runId = `browser-${Date.now()}-${crypto.randomUUID().replaceAll('-', '')}`;
+    const response = await fetch(`${location.origin}${route}?runId=${runId}`, {
+      method: 'POST',
+      headers: { 'content-type': mime },
+      body: capture.value.bytes,
+    });
+    const artifact = await response.json();
+    if (!response.ok) throw new Error(`raw tape upload failed: ${JSON.stringify(artifact)}`);
+    return { ...artifact, runId };
+  }, { hook: capturePrepareHook, route: RAW_TAPE_ROUTE, mime: RHITAPE_MIME });
+}
+
+function captureExpression(capturePrepareHook) {
+  const hook = JSON.stringify(capturePrepareHook);
+  return `(async () => {
+    const prepare = globalThis[${hook}];
+    if (typeof prepare !== 'function') throw new Error('capture preparation hook is unavailable');
+    await prepare();
+    const capture = await globalThis.__forgeax?.captureFrame();
+    if (!capture?.ok) throw new Error('remote captureFrame failed');
+    const runId = 'remote-' + Date.now() + '-' + crypto.randomUUID().replaceAll('-', '');
+    const response = await fetch(location.origin + '${RAW_TAPE_ROUTE}?runId=' + runId, {
+      method: 'POST',
+      headers: { 'content-type': '${RHITAPE_MIME}' },
+      body: capture.value.bytes,
+    });
+    const artifact = await response.json();
+    if (!response.ok) throw new Error(JSON.stringify(artifact));
+    return { ...artifact, runId };
+  })()`;
 }
 
 async function waitForUrl(child, readUrl, initialOutput) {
@@ -140,9 +191,10 @@ async function waitForUrl(child, readUrl, initialOutput) {
 }
 
 async function waitForRemoteHealth(port) {
+  const remote = resolve(REPO_ROOT, 'skills/forgeax-engine-cli/scripts/remote-live.mjs');
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    const result = spawnSync(process.execPath, [REMOTE_LIVE, '--health'], {
+    const result = spawnSync(process.execPath, [remote, '--health'], {
       cwd: REPO_ROOT,
       env: { ...process.env, FORGEAX_ENGINE_BRIDGE_PORT: String(port) },
       encoding: 'utf8',
@@ -157,7 +209,8 @@ async function waitForRemoteHealth(port) {
 }
 
 async function remoteEval(port, code) {
-  const result = spawnSync(process.execPath, [REMOTE_LIVE, code], {
+  const remote = resolve(REPO_ROOT, 'skills/forgeax-engine-cli/scripts/remote-live.mjs');
+  const result = spawnSync(process.execPath, [remote, code], {
     cwd: REPO_ROOT,
     env: { ...process.env, FORGEAX_ENGINE_BRIDGE_PORT: String(port) },
     encoding: 'utf8',
@@ -169,60 +222,42 @@ async function remoteEval(port, code) {
   return envelope.value;
 }
 
-function runTrigger(url, triggerLabel) {
-  const result = spawnSync(
-    process.execPath,
-    [CLI, 'trigger-browser', '--frames=1', `--label=${triggerLabel}`, `--dev-url=${url.replace(/\/$/, '')}`],
-    { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 },
-  );
-  if (result.status !== 0) throw new Error(`forgeax-rhi-debug trigger-browser failed: ${result.stderr || result.stdout}`);
-  const values = Object.fromEntries(result.stdout.trim().split('\n').map((line) => line.split(': ', 2)));
-  if (typeof values.tapePath !== 'string' || typeof values.reportPath !== 'string' || typeof values.runId !== 'string') {
-    throw new Error(`trigger-browser returned incomplete capture: ${result.stdout}`);
+async function verifyCaptured({ label, captureLabel, capture, assertTape, formatCapture }) {
+  if (capture?.kind !== 'rhi-tape' || typeof capture.path !== 'string' || typeof capture.digest !== 'string') {
+    throw new Error(`${captureLabel} returned an incomplete raw artifact: ${JSON.stringify(capture)}`);
   }
-  return values;
+  const bytes = new Uint8Array(readFileSync(capture.path));
+  const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+  if (digest !== capture.digest) throw new Error(`${captureLabel} digest mismatch: ${capture.digest} != ${digest}`);
+  const decoded = decodeTape(bytes);
+  if (!decoded.ok) throw new Error(`${captureLabel} strict decode failed: ${decoded.error.code}`);
+  const tape = decoded.value;
+  const blobPool = new Map(tape.blobs.map((blob) => [blob.hash, blob.bytes]));
+  const selected = assertTape?.({ events: tape.events, blobPool }) ?? {
+    drawOrdinal: lastDrawOrdinal(tape.events),
+  };
+  const model = buildFrameModel(tape);
+  const drawOrdinal = selected.drawOrdinal ?? lastDrawOrdinal(tape.events);
+  const draw = tape.events.filter((event) => event.kind === 'draw' || event.kind === 'drawIndexed')[drawOrdinal];
+  const bindings = tape.events.filter((event) => event.kind === 'setBindGroup');
+  if (draw === undefined || bindings.length === 0 || model.works.length === 0) {
+    throw new Error(`${captureLabel} model missing binding/draw state`);
+  }
+  const drawCall = draw.kind === 'drawIndexed'
+    ? { indexCount: draw.indexCount, instanceCount: draw.instanceCount }
+    : { indexCount: draw.vertexCount, instanceCount: draw.instanceCount };
+  const inspected = { bindings, drawCall, rt: capture.path };
+  const details = formatCapture?.({ label: captureLabel, capture, selected, inspected }) ??
+    `events=${tape.events.length} draws=${model.works.filter((work) => work.kind === 'draw' || work.kind === 'drawIndexed').length} works=${model.works.length}`;
+  console.log(`[${label}] ${captureLabel} raw artifact + strict decode PASS ${details}`);
 }
 
-async function verifyCaptured({ label, captureLabel, capture, screenshotPath, assertTape, formatCapture }) {
-  if (typeof capture?.tapePath !== 'string' || typeof capture.reportPath !== 'string') {
-    throw new Error(`${captureLabel} capture returned incomplete artifact paths: ${JSON.stringify(capture)}`);
+function lastDrawOrdinal(events) {
+  let ordinal = -1;
+  for (const event of events) {
+    if (event.kind === 'draw' || event.kind === 'drawIndexed') ordinal += 1;
   }
-  const tapePath = resolveCapturePath(capture.tapePath, screenshotPath);
-  const reportPath = resolveCapturePath(capture.reportPath, screenshotPath);
-  if (!existsSync(tapePath) || !existsSync(reportPath)) {
-    throw new Error(`${captureLabel} capture artifacts are missing: ${JSON.stringify({ tapePath, reportPath })}`);
-  }
-  const report = JSON.parse(readFileSync(reportPath, 'utf8'));
-  const tapeBytes = readFileSync(tapePath);
-  const blobPool = new Map(
-    report.header.blobEntries.map((entry) => [entry.hash, tapeBytes.subarray(entry.offset, entry.offset + entry.size)]),
-  );
-  const selected = assertTape({ events: report.events, blobPool });
-  const summary = JSON.parse(runCli(['summary', tapePath]));
-  if (summary.meta?.totalDraws <= selected.drawOrdinal) throw new Error(`${captureLabel} summary omitted selected draw: ${JSON.stringify(summary.meta)}`);
-  const inspected = JSON.parse(runCli(['inspect-offline', tapePath, String(selected.drawOrdinal), '--fields=bindings,drawCall,rt']));
-  if (inspected.drawCall?.indexCount <= 0 || inspected.bindings?.length === 0 || typeof inspected.rt !== 'string') {
-    throw new Error(`${captureLabel} selected draw replay inspect is incomplete: ${JSON.stringify(inspected)}`);
-  }
-  const details = formatCapture({ label: captureLabel, capture, selected, inspected, screenshotPath });
-  console.log(`[${label}] ${captureLabel} capture/replay/selected draw PASS ${details}`);
-}
-
-function runCli(args) {
-  const result = spawnSync(process.execPath, [CLI, ...args], {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-    maxBuffer: 32 * 1024 * 1024,
-  });
-  if (result.status !== 0) throw new Error(`rhi-debug ${args[0]} failed: ${result.stderr || result.stdout}`);
-  if (result.stdout.trim().length === 0) throw new Error(`rhi-debug ${args[0]} returned empty output`);
-  return result.stdout;
-}
-
-function resolveCapturePath(path, screenshotPath) {
-  if (path.startsWith('/')) return path;
-  const inApp = resolve(dirname(screenshotPath), '..', path);
-  return existsSync(inApp) ? inApp : resolve(REPO_ROOT, path);
+  return ordinal;
 }
 
 async function findFreePort() {

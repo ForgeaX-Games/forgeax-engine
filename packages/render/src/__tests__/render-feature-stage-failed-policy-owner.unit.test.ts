@@ -6,8 +6,6 @@ import type {
   RenderFeatureStage,
   RenderFeatureStageFailedDetail,
 } from '../features/types';
-import { RenderFeatureStageFailedError as PublicRenderFeatureStageFailedError } from '../index';
-import { RenderFeatureStageFailedError as InternalRenderFeatureStageFailedError } from '../internal';
 
 const evidence = [
   {
@@ -48,11 +46,6 @@ const evidence = [
 }[];
 
 describe('RenderFeatureStageFailedError policy ownership', () => {
-  it('keeps one owner for direct, public, and internal constructors', () => {
-    expect(PublicRenderFeatureStageFailedError).toBe(RenderFeatureStageFailedError);
-    expect(InternalRenderFeatureStageFailedError).toBe(RenderFeatureStageFailedError);
-  });
-
   it('preserves every recovery diagnostic and its type correlation', () => {
     expect(evidence.map(({ recovery }) => recovery)).toEqual([
       'next-frame',
@@ -106,8 +99,6 @@ describe('RenderFeatureStageFailedError policy ownership', () => {
 
     expect(error).toBeInstanceOf(Error);
     expect(error).toBeInstanceOf(RenderFeatureStageFailedError);
-    expect(error).toBeInstanceOf(PublicRenderFeatureStageFailedError);
-    expect(error).toBeInstanceOf(InternalRenderFeatureStageFailedError);
     expect(error.name).toBe('RenderFeatureStageFailedError');
     expect(typeof error.stack).toBe('string');
     expect(error.stack).toContain(`RenderFeatureStageFailedError: ${error.message}`);

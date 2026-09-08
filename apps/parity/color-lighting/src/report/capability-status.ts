@@ -1,4 +1,4 @@
-import type { CaseStatusInput } from './status';
+import type { CaseStatusInput, PipelineAuditObservation } from './status';
 
 export interface IblCapabilityStatusInput {
   readonly rgba16floatRenderable: boolean;
@@ -53,7 +53,7 @@ interface ReadyIblReadback {
   readonly size: { readonly width: number; readonly height: number };
   readonly rawHash: string;
   readonly frameId: number;
-  readonly lifetime: { readonly frameId: number; readonly state: 'active' | 'retired' };
+  readonly lifetime: { readonly frameId: number; readonly state: PipelineAuditObservation['lifetime'] };
 }
 
 export interface IblRawEvidenceInput {
@@ -74,7 +74,7 @@ export interface IblRawEvidence {
   readonly size: { readonly width: number; readonly height: number } | null;
   readonly rawHash: string | null;
   readonly frameId: number | null;
-  readonly lifetime: { readonly frameId: number; readonly state: 'active' | 'retired' } | null;
+  readonly lifetime: { readonly frameId: number; readonly state: PipelineAuditObservation['lifetime'] } | null;
   readonly capabilitySnapshot: { readonly rgba16floatRenderable: boolean };
   readonly fallbackArtifact: string | null;
   readonly lastKnownGood: string;

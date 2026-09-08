@@ -46,17 +46,17 @@
 import type { Mat4 } from '@forgeax/engine-math';
 import { mat4 } from '@forgeax/engine-math';
 import type { Buffer, RhiDevice } from '@forgeax/engine-rhi';
-import { SkinPaletteOverflowError } from '../errors';
+import { SkinPaletteOverflowError } from '../errors/render';
 import {
   GPU_BUFFER_USAGE_COPY_DST,
   GPU_BUFFER_USAGE_STORAGE,
   GPU_BUFFER_USAGE_UNIFORM,
 } from '../gpu-usage';
-import type { SkinPaletteSlice } from '../render-system-extract';
+import type { SkinPaletteSlice } from './skin-palette-types';
 
 const MAT4_BYTES = 64; // 16 f32 * 4 bytes
 // MAX_JOINTS = 255 matches `pbr-skin-mesh-array-bgl @binding(1)` static BG
-// entry size: 255 * 64 = 16320 B. The number is the MAX joints any single
+// entry size: 255 * 64 = 16320 B. The number is the MAX joints a single
 // skinned entity may have. On the storage path the shared buffer holds
 // many entities back-to-back; on the uniform path each entity owns one
 // 16320 B buffer.
@@ -219,18 +219,17 @@ export function createSkinPaletteAllocator(
     const payload = new Float32Array(count * 16);
     const temp = mat4.create();
     const ibm = mat4.create();
-    const ibmNums = ibm as unknown as number[];
     for (let i = 0; i < count; i++) {
       const ibmFlat = ibms[i];
       const jw = jointWorlds[i];
       if (ibmFlat === undefined || jw === undefined) continue;
       for (let k = 0; k < 16; k++) {
-        ibmNums[k] = ibmFlat[k] ?? 0;
+        ibm[k] = ibmFlat[k] ?? 0;
       }
       mat4.multiply(temp, jw, ibm);
       const base = i * 16;
       for (let j = 0; j < 16; j++) {
-        payload[base + j] = (temp as unknown as number[])[j] ?? 0;
+        payload[base + j] = temp[j] ?? 0;
       }
     }
     const res = device.queue.writeBuffer(slice.buffer, slice.byteOffset, payload);

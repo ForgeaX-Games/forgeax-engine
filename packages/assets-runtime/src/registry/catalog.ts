@@ -5,6 +5,7 @@ import {
   type AssetAuthoringCapability,
   type AssetEnvelope,
   AssetError,
+  type AssetPublicationEnvelope,
   type AssetRelation,
   authoringCapabilityForAssetKind,
   type CatalogDiagnostic,
@@ -15,6 +16,8 @@ import {
   type ProviderProvenance,
   type ResourceRevision,
   type RuntimeAssetBinding,
+  type SourceOverrideDescriptor,
+  type SourceOverrideMap,
 } from '@forgeax/engine-types';
 import type { AssetRegistry } from '../asset-registry';
 
@@ -32,6 +35,8 @@ export interface CatalogRecord {
   readonly revision?: ResourceRevision;
   readonly sourceKey?: string;
   readonly sourceIndex?: number;
+  readonly sourceOverrides?: SourceOverrideMap;
+  readonly sourceOverrideDescriptors?: readonly SourceOverrideDescriptor[];
   readonly relations?: readonly AssetRelation[];
   readonly diagnostics?: readonly CatalogDiagnostic[];
   /** Producer-owned projection axes; never infer these from locators. */
@@ -39,6 +44,8 @@ export interface CatalogRecord {
   readonly execution?: CookExecution;
   readonly lifecycle?: CatalogLifecycle;
   readonly projection?: CatalogProjection;
+  /** Complete producer publication tuple used by Scene publication fences. */
+  readonly publication?: AssetPublicationEnvelope;
 }
 
 /** Build the canonical row for an inline asset without inventing producer facts. */
@@ -55,7 +62,10 @@ export function createInlineCatalogRecord(
   };
 }
 
-type CatalogFetch = (input: string) => PromiseLike<{
+type CatalogFetch = (
+  input: string,
+  init?: { readonly cache?: 'no-store' },
+) => PromiseLike<{
   readonly ok: boolean;
   json(): Promise<unknown>;
 }>;
@@ -218,6 +228,22 @@ export function parseCatalog(
     ) {
       return err(parseError(`catalog refs for GUID ${rawRow.guid} to be a string array`));
     }
+    if (
+      rawRow.sourceOverrides !== undefined &&
+      (rawRow.sourceOverrides === null ||
+        typeof rawRow.sourceOverrides !== 'object' ||
+        Array.isArray(rawRow.sourceOverrides))
+    ) {
+      return err(parseError(`catalog sourceOverrides for GUID ${rawRow.guid} to be an object`));
+    }
+    if (
+      rawRow.sourceOverrideDescriptors !== undefined &&
+      !Array.isArray(rawRow.sourceOverrideDescriptors)
+    ) {
+      return err(
+        parseError(`catalog sourceOverrideDescriptors for GUID ${rawRow.guid} to be an array`),
+      );
+    }
     let resolvedUrl: string;
     try {
       resolvedUrl = resolveUrl(rawRow.packageUrl);
@@ -248,6 +274,15 @@ export function parseCatalog(
       ...(rawRow.revision !== undefined ? { revision: rawRow.revision as ResourceRevision } : {}),
       ...(typeof rawRow.sourceKey === 'string' ? { sourceKey: rawRow.sourceKey } : {}),
       ...(typeof rawRow.sourceIndex === 'number' ? { sourceIndex: rawRow.sourceIndex } : {}),
+      ...(rawRow.sourceOverrides !== undefined
+        ? { sourceOverrides: rawRow.sourceOverrides as SourceOverrideMap }
+        : {}),
+      ...(rawRow.sourceOverrideDescriptors !== undefined
+        ? {
+            sourceOverrideDescriptors:
+              rawRow.sourceOverrideDescriptors as readonly SourceOverrideDescriptor[],
+          }
+        : {}),
       ...(Array.isArray(rawRow.relations)
         ? { relations: rawRow.relations as readonly AssetRelation[] }
         : {}),
@@ -270,6 +305,9 @@ export function parseCatalog(
       ...(rawRow.projection !== undefined
         ? { projection: rawRow.projection as CatalogProjection }
         : {}),
+      ...(rawRow.publication !== undefined
+        ? { publication: rawRow.publication as AssetPublicationEnvelope }
+        : {}),
     };
     catalog.set(guid, row);
   }
@@ -285,10 +323,11 @@ export async function fetchCatalog(
   resolveUrl?: (packageUrl: string) => string,
   expectedRevision?: ResourceRevision,
   expectedScope?: Pick<RuntimeAssetBinding, 'scopeId' | 'generation'>,
+  requestInit?: { readonly cache?: 'no-store' },
 ): Promise<Result<Map<string, CatalogRecord>, AssetError>> {
   let raw: unknown;
   try {
-    const response = await fetch(url);
+    const response = requestInit === undefined ? await fetch(url) : await fetch(url, requestInit);
     if (!response.ok) {
       return err(
         new AssetError({
@@ -314,11 +353,17 @@ export async function fetchCatalog(
 export function fetchPackIndex(
   registry: AssetRegistry,
 ): Promise<Result<Map<string, CatalogRecord>, AssetError>> {
+  const expectedScope =
+    registry.runtimeBinding !== undefined &&
+    registry.packIndexUrl === registry.runtimeBinding.catalogUrl
+      ? registry.runtimeBinding
+      : undefined;
   return fetchCatalog(
     registry.packIndexUrl as string,
     globalThis.fetch,
     (packageUrl) => resolveCatalogAssetUrl(registry, packageUrl),
     undefined,
-    registry.runtimeBinding,
+    expectedScope,
+    { cache: 'no-store' },
   );
 }

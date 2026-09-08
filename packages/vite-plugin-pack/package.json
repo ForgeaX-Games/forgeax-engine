@@ -5,10 +5,11 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Vite plugin: dev HMR + /__pack routes + build-time pack-index.json emit for the forgeax engine asset package system.",
+  "description": "Vite plugin: dev HMR, build-time Pack output, and explicit project/build DDC lifecycle roots for the forgeax engine asset package system.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
+      "browser": null,
       "import": "./dist/index.mjs"
     },
     "./catalog-client": {
@@ -32,20 +33,30 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@forgeax/engine-codec": "workspace:*",
     "@forgeax/engine-ddc": "workspace:*",
-    "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-import": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
-    "@forgeax/engine-shader-compiler": "workspace:*",
-    "@forgeax/engine-ui": "workspace:*"
+    "@forgeax/engine-runtime": "workspace:*",
+    "typescript": "^5.8.3"
   },
   "peerDependencies": {
     "vite": "^7 || ^8"
   },
   "devDependencies": {
+    "@forgeax/engine-animation": "workspace:*",
     "@forgeax/engine-assets-runtime": "workspace:*",
+    "@forgeax/engine-audio-webaudio": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-gltf": "workspace:*",
+    "@forgeax/engine-image": "workspace:*",
+    "@forgeax/engine-render": "workspace:*",
+    "@forgeax/engine-shader": "workspace:*",
+    "@forgeax/engine-shader-compiler": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-ui": "workspace:*",
+    "@forgeax/engine-vfx": "workspace:*",
+    "@forgeax/engine-vfx-compiler": "workspace:*",
+    "@forgeax/engine-vfx-render": "workspace:*",
     "@types/node": "^20.14.0",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",

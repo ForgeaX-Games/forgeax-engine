@@ -8,27 +8,25 @@
 // TDD phase "red": collect-subtree.ts does not exist yet.
 
 import { type EntityHandle, World } from '@forgeax/engine-ecs';
-import { collectSubtree } from '@forgeax/engine-render/internal';
-import { Children, Name } from '@forgeax/engine-scene';
+import { ChildOf, collectSubtree, Name } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 
 // Build a chain of N entities linked by Children.
 // Returns the array of entity raw IDs from root down.
 function buildChain(world: World, depth: number): number[] {
   const ids: number[] = [];
-  // Spawn all entities first
+  let parent: EntityHandle | undefined;
   for (let i = 0; i < depth; i++) {
-    const res = world.spawn({ component: Name, data: { value: `e${i}` } });
+    const res =
+      parent === undefined
+        ? world.spawn({ component: Name, data: { value: `e${i}` } })
+        : world.spawn(
+            { component: Name, data: { value: `e${i}` } },
+            { component: ChildOf, data: { parent } },
+          );
     if (!res.ok) throw new Error(`spawn failed: ${i}`);
     ids.push(res.value as number);
-  }
-  // Wire parent -> child via Children.entities
-  for (let i = 0; i < depth - 1; i++) {
-    const addRes = world.addComponent(ids[i] as EntityHandle, {
-      component: Children,
-      data: { entities: [ids[i + 1] as number] },
-    });
-    if (!addRes.ok) throw new Error(`addComponent failed: ${i}`);
+    parent = res.value;
   }
   return ids;
 }

@@ -3,13 +3,14 @@ import { attachBrowserInputBackend, type InputBackend } from '@forgeax/engine-in
 import { err, ok, type Result } from '@forgeax/engine-types';
 import { APP_ERROR_HINTS, APP_EXPECTED, AppError, type AppError as AppErrorType } from '../errors';
 import { ErrorFanoutRegistry } from '../internal/error-fanout';
-import type { BundlerOptions } from '../types';
+import type { BundlerOptions, CanvasDrawingBufferSize } from '../types';
 import {
   APP_PHASE_CATALOG,
   type AppDispatchError,
   type CreateAppOptions,
   type ExecutionApp,
 } from '../types';
+import { normalizeExecutionBootstrapUrl } from './bootstrap-url';
 import { cloneExecutionReport } from './control';
 import { type EngineWorkerSession, startEngineWorker } from './engine-worker';
 import { createMeasurementSeries } from './measurement';
@@ -29,6 +30,8 @@ import type {
 export interface CreateWorkerExecutionAppOptions {
   readonly canvas: HTMLCanvasElement;
   readonly appOptions: CreateAppOptions;
+  /** Host-owned resize policy applied before each frame sent to the worker. */
+  readonly syncCanvas?: () => CanvasDrawingBufferSize;
   readonly bundler?: BundlerOptions;
   readonly capabilities: ExecutionCapabilities;
   readonly selection: ExecutionSelection;
@@ -71,9 +74,12 @@ export async function createWorkerExecutionApp(
 ): Promise<Result<ExecutionApp, AppErrorType>> {
   const executionOptions = options.appOptions.execution;
   if (executionOptions === undefined) throw new Error('execution options are required');
-  const bootstrapUrl = new URL(executionOptions.bootstrap, globalThis.location?.href).href;
+  const normalizedBootstrap = normalizeExecutionBootstrapUrl(executionOptions.bootstrap);
+  if (!normalizedBootstrap.ok) return normalizedBootstrap;
+  const bootstrapUrl = normalizedBootstrap.value;
   const startupTimeoutMs = executionOptions.startupTimeoutMs ?? 10_000;
   const frameTimeoutMs = executionOptions.frameTimeoutMs ?? 2_000;
+  const syncCanvas = options.syncCanvas;
   const started = await startEngineWorker({
     canvas: options.canvas,
     bootstrapUrl,
@@ -83,6 +89,9 @@ export async function createWorkerExecutionApp(
     ...(executionOptions.bootstrapPort === undefined
       ? {}
       : { bootstrapPort: executionOptions.bootstrapPort }),
+    ...(executionOptions.assetCatalog === undefined
+      ? {}
+      : { assetCatalog: executionOptions.assetCatalog }),
     ...(options.bundler?.shaderManifestUrl !== undefined
       ? { shaderManifestUrl: options.bundler.shaderManifestUrl }
       : {}),
@@ -94,7 +103,9 @@ export async function createWorkerExecutionApp(
 
   const session: EngineWorkerSession = started.value;
   const profiler = options.appOptions.profiler;
-  profiler?.registerPhaseCatalog('app', APP_PHASE_CATALOG);
+  const phaseCatalogRegistration = profiler?.registerPhaseCatalog('app', APP_PHASE_CATALOG);
+  let releasePhaseCatalog =
+    phaseCatalogRegistration?.ok === true ? phaseCatalogRegistration.value : undefined;
   const fanout = new ErrorFanoutRegistry(
     options.appOptions.silenceUnhandledErrors === undefined
       ? {}
@@ -186,6 +197,8 @@ export async function createWorkerExecutionApp(
     try {
       profiler?.activeSession()?.finish();
     } catch {}
+    releasePhaseCatalog?.();
+    releasePhaseCatalog = undefined;
   };
 
   const terminalFault = (message: ExecutionFaultMessage): void => {
@@ -233,7 +246,13 @@ export async function createWorkerExecutionApp(
       const deltaSeconds =
         lastTimestamp === 0 ? 0 : Math.max(0, (timestamp - lastTimestamp) / 1_000);
       lastTimestamp = timestamp;
-      const frame = ledger.issue(deltaSeconds, () => input.sample());
+      const canvasSize =
+        syncCanvas?.() ??
+        ({
+          width: options.canvas.width,
+          height: options.canvas.height,
+        } satisfies CanvasDrawingBufferSize);
+      const frame = ledger.issue(deltaSeconds, () => input.sample(), canvasSize);
       if (frame === undefined) return;
       frameProfile = profiler?.activeSession();
       if (frameProfile !== undefined && profilerCaptureId !== frameProfile.captureId) {
@@ -242,7 +261,7 @@ export async function createWorkerExecutionApp(
       }
       profileFrameOpen = frameProfile?.beginFrame(++profilerFrameId).ok ?? false;
       hostFrameOpen = profileFrameOpen
-        ? (frameProfile?.beginPhase({ source: 'app', phase: 'host-frame' }).ok ?? false)
+        ? (frameProfile?.beginPhase('app', 'host-frame').ok ?? false)
         : false;
       session.post(frame);
       frameSentAt = performance.now();
@@ -282,7 +301,7 @@ export async function createWorkerExecutionApp(
       }
       const audioStarted = performance.now();
       const audioProfileOpen = profileFrameOpen
-        ? (frameProfile?.beginPhase({ source: 'app', phase: 'host-audio' }).ok ?? false)
+        ? (frameProfile?.beginPhase('app', 'host-audio').ok ?? false)
         : false;
       for (const intent of message.audioIntents ?? []) audio.consume(intent);
       if (audioProfileOpen) frameProfile?.endPhase();

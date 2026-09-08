@@ -1,3 +1,5 @@
+// @perf-budget-skip: intentional public-root cold-import contract gate.
+
 import { describe, expect, it } from 'vitest';
 
 describe('animation graph registration stays plugin-owned', () => {

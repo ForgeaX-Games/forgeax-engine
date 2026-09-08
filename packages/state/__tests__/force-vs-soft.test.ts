@@ -16,7 +16,7 @@
 // - m4w4: transitionStatesSystem reads force flag from NextState payload
 
 import { describe, expect, it } from 'vitest';
-import { World, resolveComponent } from '@forgeax/engine-ecs';
+import { Entity, World } from '@forgeax/engine-ecs';
 import { defineState } from '../src/define-state';
 import { registerStatesPlugin } from '../src/register-plugin';
 import { setNextState, setNextStateForce, getState, getPreviousState } from '../src/set-next-state';
@@ -30,6 +30,13 @@ function makeWorld(): World {
   const world = new World();
   registerStatesPlugin(world);
   return world;
+}
+
+function resolveWorldComponent(world: World, name: string) {
+  if (name === 'Entity') return Entity;
+  const component = world.components.resolve(name);
+  if (component === undefined) throw new Error(`Component ${name} is not registered`);
+  return component;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -65,7 +72,7 @@ describe('force vs soft same-state transitions', () => {
     setNextStateForce(world, LevelId, 'main-menu');
     world.update(1 / 60).unwrap();
 
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
     expect(world.get(eExit, LevelScoped).ok).toBe(false);
     expect(world.get(eEnter, LevelScoped).ok).toBe(false);
   });
@@ -99,7 +106,7 @@ describe('force vs soft same-state transitions', () => {
     expect(exitCount).toBe(0);
     expect(enterCount).toBe(0);
 
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
     expect(world.get(entity, LevelScoped).ok).toBe(true);
   });
 
@@ -271,11 +278,11 @@ describe('force + scope despawn combined', () => {
     setNextStateForce(world, LevelId, 'main-menu');
     world.update(1 / 60).unwrap();
 
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
 
     expect(world.get(eExit, LevelScoped).ok).toBe(false);
     expect(world.get(eEnter, LevelScoped).ok).toBe(false);
-    expect(world.get(eSurvivor, resolveComponent('Entity')!).ok).toBe(true);
+    expect(world.get(eSurvivor, resolveWorldComponent(world, 'Entity')).ok).toBe(true);
   });
 
   it('soft same-state does NOT despawn any scope entities', () => {
@@ -292,10 +299,10 @@ describe('force + scope despawn combined', () => {
     setNextState(world, LevelId, 'main-menu');
     world.update(1 / 60).unwrap();
 
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
 
     expect(world.get(eExit, LevelScoped).ok).toBe(true);
     expect(world.get(eEnter, LevelScoped).ok).toBe(true);
-    expect(world.get(eSurvivor, resolveComponent('Entity')!).ok).toBe(true);
+    expect(world.get(eSurvivor, resolveWorldComponent(world, 'Entity')).ok).toBe(true);
   });
 });

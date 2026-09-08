@@ -28,14 +28,18 @@
 //
 // Exit codes (mirrors cube smoke): 0 green, 1 red (regression), 2 harness error.
 
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { chromium } from 'playwright';
+import { buildFrameModel, decodeTape } from '@forgeax/engine-rhi-debug';
 import { writeReferencePng } from '../png-codec.mjs';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..', '..', '..');
+const RAW_TAPE_ROUTE = '/__forgeax-debug/tape';
+const RHITAPE_MIME = 'application/x-forgeax-rhitape';
 
 /**
  * @typedef {Object} VerifyOptions
@@ -46,8 +50,7 @@ const REPO_ROOT = resolve(import.meta.dirname, '..', '..', '..');
  *                                  (pixel mode only). e.g. '__captureColors'.
  * @property {string} [capturePrepareHook] window fn name awaited immediately
  *                                  before captureFrame arms/snapshots the tape.
- * @property {number} [drawIdx]     draw to inspect in structural mode (default last color pass)
- * @property {number} [rtIdx]       RT index for readbackRt (pixel mode, default 0)
+ * @property {number} [workIndex]   work item to inspect in structural mode (default last work)
  * @property {number} [epsilon]     max whole-frame RGB pixel delta (default 0.02)
  * @property {number} [maxChannelEpsilon] max RGB-channel abs delta over any pixel (default 0.10)
  * @property {number} [coveredEpsilon]    max mean RGB delta over non-background pixels (default 0.03)
@@ -74,8 +77,7 @@ export async function verifyDemoCapture(opts) {
     mode,
     liveHook,
     capturePrepareHook,
-    drawIdx,
-    rtIdx = 0,
+    workIndex,
     epsilon = 0.02,
     maxChannelEpsilon = 0.1,
     coveredEpsilon = 0.03,
@@ -131,6 +133,7 @@ export async function verifyDemoCapture(opts) {
       headless: true,
       channel: 'chrome',
       args: [
+        '--disable-features=MacAppCodeSignClone',
         '--enable-unsafe-webgpu',
         '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
         '--ignore-gpu-blocklist',
@@ -164,6 +167,12 @@ export async function verifyDemoCapture(opts) {
         `bootstrap via createApp, or FORGEAX_ENGINE_RHI_DEBUG=1 did not reach the create-app guard.`,
     );
   }
+  const hasGpu = await page.evaluate(() => navigator.gpu !== undefined);
+  if (!hasGpu) {
+    await browser.close();
+    killVite();
+    fail(2, `[${label}] ENVIRONMENT_BLOCKED -- Chromium has no navigator.gpu`);
+  }
 
   // --- 3. capture the frame (and, in pixel mode, the live pixels) -------------
   // Critical for pixel mode: take the live readback in the SAME page.evaluate
@@ -182,7 +191,21 @@ export async function verifyDemoCapture(opts) {
           }
           await prepare();
         }
-        const cap = await globalThis.__forgeax.captureFrame(1);
+        const cap = await globalThis.__forgeax.captureFrame();
+        if (!cap?.ok) throw new Error(`captureFrame failed: ${JSON.stringify(cap?.error)}`);
+        const runId = `verify-${Date.now()}-${crypto.randomUUID().replaceAll('-', '')}`;
+        const uploadResponse = await fetch(
+          `${location.origin}/__forgeax-debug/tape?runId=${runId}`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/x-forgeax-rhitape' },
+            body: cap.value.bytes,
+          },
+        );
+        const artifact = await uploadResponse.json();
+        if (!uploadResponse.ok) {
+          throw new Error(`raw tape upload failed: ${JSON.stringify(artifact)}`);
+        }
         let live = null;
         let dims = null;
         if (mode === 'pixel') {
@@ -202,11 +225,11 @@ export async function verifyDemoCapture(opts) {
           }
           live = btoa(binary);
         }
-        return { cap, live, dims };
+        return { artifact: { ...artifact, runId }, live, dims };
       },
       { mode, liveHook, capturePrepareHook },
     );
-    captured = result.cap;
+    captured = result.artifact;
     livePixelsB64 = result.live;
     liveDims = result.dims;
   } catch (e) {
@@ -225,8 +248,8 @@ export async function verifyDemoCapture(opts) {
   killVite();
   await sleep(500);
 
-  // --- 4. validate returned artifact paths ------------------------------------
-  const missing = ['runId', 'tapePath', 'reportPath'].filter(
+  // --- 4. validate the single raw artifact and strict-decode it ----------------
+  const missing = ['runId', 'kind', 'digest', 'path'].filter(
     (k) => typeof captured?.[k] !== 'string' || captured[k].length === 0,
   );
   if (missing.length) {
@@ -238,82 +261,98 @@ export async function verifyDemoCapture(opts) {
     if (existsSync(inApp)) return inApp;
     return resolve(REPO_ROOT, rel);
   };
-  const tapeAbs = resolveArtifact(captured.tapePath);
-  const reportAbs = resolveArtifact(captured.reportPath);
+  const tapeAbs = resolveArtifact(captured.path);
   if (!existsSync(tapeAbs)) {
-    fail(1, `[${label}] RED -- tapePath missing on disk: ${tapeAbs}`);
+    fail(1, `[${label}] RED -- raw .rhitape path missing on disk: ${tapeAbs}`);
   }
-  if (!existsSync(reportAbs)) {
-    fail(1, `[${label}] RED -- reportPath missing on disk: ${reportAbs}`);
+  if (captured.kind !== 'rhi-tape') {
+    fail(1, `[${label}] RED -- raw artifact kind is not rhi-tape: ${captured.kind}`);
   }
-  let report;
-  try {
-    report = JSON.parse(readFileSync(reportAbs, 'utf-8'));
-  } catch (e) {
-    fail(1, `[${label}] RED -- report not valid JSON: ${e?.message ?? e}`);
+  const tapeBlob = new Uint8Array(readFileSync(tapeAbs));
+  const digest = `sha256:${createHash('sha256').update(tapeBlob).digest('hex')}`;
+  if (captured.digest !== digest) {
+    fail(1, `[${label}] RED -- raw artifact digest mismatch: ${captured.digest} != ${digest}`);
   }
+  const decoded = decodeTape(tapeBlob);
+  if (!decoded.ok) {
+    fail(
+      1,
+      `[${label}] RED -- strict v7 decode failed: ${decoded.error.code} ` +
+        `hint=${JSON.stringify(decoded.error.hint)}. Suspect: raw artifact corruption or non-v7 payload.`,
+    );
+  }
+  const tape = decoded.value;
+  const model = buildFrameModel(tape);
+  if (model.works.length === 0) {
+    fail(1, `[${label}] RED -- decoded tape has no workIndex entries`);
+  }
+  const selectedWorkIndex = typeof workIndex === 'number' ? workIndex : model.works.length - 1;
   if (assertCapture !== undefined) {
     try {
-      assertCapture(report);
+      assertCapture({
+        header: tape.header,
+        bootstrap: tape.bootstrap,
+        events: tape.events,
+        blobs: tape.blobs,
+      });
     } catch (e) {
       fail(1, `[${label}] RED -- capture contract failed: ${e?.message ?? e}`);
     }
   }
 
-  // --- 5. bootstrap dawn-node + replay ----------------------------------------
-  const tapeJson = JSON.stringify({ header: report.header, events: report.events });
-  const tapeBlob = new Uint8Array(readFileSync(tapeAbs));
-
-  const { deserializeTape, createReplay } = await import('@forgeax/engine-rhi-debug');
-  const deserRes = deserializeTape(tapeJson, tapeBlob);
-  if (!deserRes.ok) {
-    fail(
-      1,
-      `[${label}] RED -- deserializeTape failed: ${deserRes.error.code} ` +
-        `hint=${JSON.stringify(deserRes.error.hint)}. Suspect: tape self-containment regression.`,
-    );
-  }
-  const tape = deserRes.value;
+  // --- 5. strict-decoded artifact -> fresh Dawn replay ------------------------
   if (assertTape !== undefined) {
     try {
-      assertTape({ tape });
+      assertTape({
+        tape: {
+          ...tape,
+          blobPool: new Map(tape.blobs.map((blob) => [blob.hash, blob.bytes])),
+        },
+      });
     } catch (e) {
       fail(1, `[${label}] RED -- tape contract failed: ${e?.message ?? e}`);
     }
   }
   const { freshDevice, rhiWebgpu } = await bootstrapDawn(label);
-  console.log(`[${label}] tape: ${tape.events.length} events, ${tape.blobPool.size} blobs`);
+  console.log(`[${label}] tape: ${tape.events.length} events, ${tape.blobs.length} blobs`);
 
-  const replayRes = createReplay(tape, freshDevice, rhiWebgpu.createShaderModule);
+  const { openReplay } = await import('@forgeax/engine-rhi-debug');
+  const replayRes = await openReplay(tape, {
+    device: freshDevice,
+    createShaderModule: rhiWebgpu.createShaderModule,
+  });
   if (!replayRes.ok) {
     freshDevice.destroy?.();
-    fail(1, `[${label}] RED -- createReplay failed: ${replayRes.error.code} hint=${JSON.stringify(replayRes.error.hint)}`);
+    fail(1, `[${label}] RED -- openReplay failed: ${replayRes.error.code} hint=${JSON.stringify(replayRes.error.hint)}`);
   }
   const replay = replayRes.value;
-
-  const stepRes = await replay.stepTo(tape.events.length - 1);
-  if (!stepRes.ok) {
+  const workRes = await replay.inspectWork(selectedWorkIndex, ['pixels']);
+  if (!workRes.ok) {
     freshDevice.destroy?.();
-    fail(1, `[${label}] RED -- stepTo failed: ${stepRes.error.code} hint=${JSON.stringify(stepRes.error.hint)}`);
+    fail(1, `[${label}] RED -- inspectWork(${selectedWorkIndex}) failed: ${workRes.error.code} hint=${JSON.stringify(workRes.error.hint)}`);
   }
+  const work = workRes.value;
 
   if (mode === 'structural') {
-    await assertStructural({ label, replay, tape, freshDevice, drawIdx });
+    await assertStructural({ label, tape, work });
+    await replay.dispose();
     freshDevice.destroy?.();
-    green(label, `structural -- capture+replay+inspect all succeed (runId=${captured.runId})`);
+    green(label, `structural -- capture+replay+inspect workIndex=${work.workIndex} (runId=${captured.runId})`);
+    return;
   }
 
   // --- 6. pixel comparison (static demos) -------------------------------------
-  const rtRes = await replay.readbackRt(rtIdx);
-  if (!rtRes.ok) {
+  const rtRes = work.attachment;
+  if (rtRes === undefined || rtRes.kind !== 'texture' || rtRes.width === undefined || rtRes.height === undefined) {
     freshDevice.destroy?.();
-    fail(1, `[${label}] RED -- readbackRt(${rtIdx}) failed: ${rtRes.error.code} hint=${JSON.stringify(rtRes.error.hint)}`);
+    fail(1, `[${label}] RED -- replayed work attachment readback is unavailable`);
   }
-  const replayPixels = rtRes.value.pixels;
-  const rw = rtRes.value.width;
-  const rh = rtRes.value.height;
+  const replayPixels = rtRes.bytes;
+  const rw = rtRes.width;
+  const rh = rtRes.height;
 
   const livePixels = Uint8Array.from(Buffer.from(livePixelsB64, 'base64'));
+  await replay.dispose();
   freshDevice.destroy?.();
 
   if (livePixels.length !== replayPixels.length) {
@@ -352,7 +391,7 @@ export async function verifyDemoCapture(opts) {
     );
   }
 
-  const best = bestAlignmentDelta(livePixels, replayPixels, rw, rh, pixelDeltaAbsMeanRgb);
+  const best = bestAlignmentDelta(livePixels, replayPixels, rw, rh, normalizedRgbDelta);
 
   // Whole-frame mean alone is too lenient: a demo whose subject covers a small
   // fraction of a mostly-black frame can hide a large per-pixel error in the
@@ -420,7 +459,7 @@ export async function verifyDemoCapture(opts) {
 // helpers
 // ============================================================================
 
-async function bootstrapDawn(label) {
+export async function bootstrapDawn(label) {
   let createDawn;
   let gpuGlobals;
   try {
@@ -457,38 +496,22 @@ async function bootstrapDawn(label) {
   return { freshDevice: devRes.value, rhiWebgpu };
 }
 
-async function assertStructural({ label, replay, tape, freshDevice, drawIdx }) {
-  // Default to the last draw (the main color pass) when no drawIdx is given.
-  const idx = typeof drawIdx === 'number' ? drawIdx : lastDrawIdx(tape.events);
-  if (idx < 0) {
-    freshDevice.destroy?.();
-    fail(1, `[${label}] RED -- no draw/drawIndexed event found in tape`);
+async function assertStructural({ label, tape, work }) {
+  if (work.workIndex < 0 || tape.events[work.eventIndex] === undefined) {
+    fail(1, `[${label}] RED -- selected workIndex has no event in tape`);
   }
-  const { inspectDrawJson } = await import('@forgeax/engine-rhi-debug/inspect-core');
-  const inspectRes = await inspectDrawJson(replay, idx, tape.events, freshDevice);
-  if (!inspectRes.ok) {
-    freshDevice.destroy?.();
-    fail(1, `[${label}] RED -- inspectDrawJson draw ${idx} failed: ${inspectRes.error.code} hint=${JSON.stringify(inspectRes.error.hint)}`);
-  }
-  const r = inspectRes.value;
+  const bindings = tape.events.filter((event) => event.kind === 'setBindGroup');
   const missing = [];
-  if (!r.bindings || r.bindings.length === 0) missing.push('bindings');
-  if (!r.drawCall) missing.push('drawCall');
-  if (!r.rt) missing.push('rt');
+  if (bindings.length === 0) missing.push('bindings');
+  if (work.attachment === undefined) missing.push('rt');
   if (missing.length) {
-    freshDevice.destroy?.();
-    fail(1, `[${label}] RED -- inspect draw ${idx} missing: ${missing.join(', ')}`);
+    fail(1, `[${label}] RED -- inspect workIndex ${work.workIndex} missing: ${missing.join(', ')}`);
   }
-  console.log(`[${label}] inspect draw ${idx} OK -- bindings=${r.bindings.length} drawCall=true rt=true`);
-}
-
-/** Count draw/drawIndexed events and return the event-draw index of the last. */
-function lastDrawIdx(events) {
-  let count = -1;
-  for (const ev of events) {
-    if (ev && (ev.kind === 'draw' || ev.kind === 'drawIndexed')) count++;
+  const selectedEvent = tape.events[work.eventIndex];
+  if (selectedEvent === undefined) {
+    fail(1, `[${label}] RED -- workIndex ${work.workIndex} has no eventIndex ${work.eventIndex}`);
   }
-  return count;
+  console.log(`[${label}] inspect workIndex ${work.workIndex} (${selectedEvent.kind}) OK -- bindings=${bindings.length} attachment=true`);
 }
 
 /** Y-flip an RGBA tight buffer in place into a new buffer. */
@@ -548,7 +571,7 @@ function bestAlignmentDelta(live, replay, w, h, delta) {
 }
 
 /** Compute mean absolute RGB delta while preserving the RGBA buffer contract. */
-function pixelDeltaAbsMeanRgb(orig, replay) {
+function normalizedRgbDelta(orig, replay) {
   if (orig.length !== replay.length || orig.length % 4 !== 0) {
     throw new Error('pixel buffers must have equal RGBA length');
   }

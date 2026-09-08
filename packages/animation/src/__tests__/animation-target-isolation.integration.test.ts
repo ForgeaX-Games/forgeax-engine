@@ -1,5 +1,5 @@
 import type { EntityHandle } from '@forgeax/engine-ecs';
-import { Entity, World } from '@forgeax/engine-ecs';
+import { createWorldContext, Entity, World } from '@forgeax/engine-ecs';
 import { ChildOf, scenePlugin, Transform } from '@forgeax/engine-scene';
 import type { AnimationClip, AnimationTargetIdValue, Handle } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
@@ -55,7 +55,7 @@ async function spawnPair(world: World, clipHandle: Handle<'AnimationClip', 'shar
 describe('animation target isolation and lifecycle', () => {
   it('skips five malformed targets or channels while a valid sibling player continues', async () => {
     const world = new World();
-    expect((await animationPlugin().build(world)).ok).toBe(true);
+    await createWorldContext(world, [animationPlugin()]);
     const clipHandle = world.allocSharedRef('AnimationClip', clip());
     const valid = await spawnPair(world, clipHandle);
 
@@ -75,13 +75,12 @@ describe('animation target isolation and lifecycle', () => {
       .addComponent(duplicateTarget, { component: AnimationTargetId, data: { value: TARGET_ID } })
       .unwrap();
     world
-      .set(duplicate.player, AnimationTargets, { targets: [duplicate.target, duplicateTarget] })
+      .addComponent(duplicateTarget, { component: AnimatedBy, data: { player: duplicate.player } })
       .unwrap();
 
     const stale = await spawnPair(world, clipHandle);
     const staleRaw = stale.target;
     world.despawn(staleRaw).unwrap();
-    world.set(stale.player, AnimationTargets, { targets: [staleRaw] }).unwrap();
 
     const emptyClip = world.allocSharedRef('AnimationClip', {
       kind: 'animation-clip',
@@ -105,7 +104,6 @@ describe('animation target isolation and lifecycle', () => {
         'animation-target-missing',
         'animation-target-transform-missing',
         'animation-target-id-duplicate',
-        'animation-target-owner-stale',
         'animation-channel-missing',
       ]),
     );
@@ -113,8 +111,8 @@ describe('animation target isolation and lifecycle', () => {
 
   it('isolates two players sharing one Clip and TargetId while pause ownership swaps', async () => {
     const world = new World();
-    expect((await scenePlugin().build(world)).ok).toBe(true);
-    expect((await animationPlugin().build(world)).ok).toBe(true);
+    await createWorldContext(world, [scenePlugin()]);
+    await createWorldContext(world, [animationPlugin()]);
     const clipHandle = world.allocSharedRef('AnimationClip', clip());
     const a = await spawnPair(world, clipHandle);
     const b = await spawnPair(world, clipHandle);
@@ -133,7 +131,7 @@ describe('animation target isolation and lifecycle', () => {
 
   it('performs at most one final Transform set per target per update', async () => {
     const world = new World();
-    expect((await animationPlugin().build(world)).ok).toBe(true);
+    await createWorldContext(world, [animationPlugin()]);
     const clipHandle = world.allocSharedRef('AnimationClip', clip());
     const { target } = await spawnPair(world, clipHandle);
     const set = vi.spyOn(world, 'set');
@@ -148,7 +146,7 @@ describe('animation target isolation and lifecycle', () => {
 
   it('keeps targets alive after player despawn and permits stale-owner recovery', async () => {
     const world = new World();
-    expect((await animationPlugin().build(world)).ok).toBe(true);
+    await createWorldContext(world, [animationPlugin()]);
     const clipHandle = world.allocSharedRef('AnimationClip', clip());
     const first = await spawnPair(world, clipHandle);
     world.removeComponent(first.target, ChildOf).unwrap();
@@ -172,7 +170,7 @@ describe('animation target isolation and lifecycle', () => {
 
   it.each([30, 60, 120])('reaches the same target pose after one second at %iHz', async (hz) => {
     const world = new World();
-    expect((await animationPlugin().build(world)).ok).toBe(true);
+    await createWorldContext(world, [animationPlugin()]);
     const clipHandle = world.allocSharedRef('AnimationClip', clip());
     const { target } = await spawnPair(world, clipHandle);
     for (let frame = 0; frame < hz; frame++) world.update(1 / hz);

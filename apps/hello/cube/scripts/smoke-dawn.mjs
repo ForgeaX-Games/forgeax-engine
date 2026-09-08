@@ -16,7 +16,7 @@
 //      returns that texture each frame.
 //   3. Build a World identical to apps/hello/cube/src/main.ts (cube +
 //      Camera + DirectionalLight) and call createRenderer + await
-//      renderer.ready + 300x renderer.draw(world).
+//      runtime host initialization + 300x lease-bound renderer.draw(...).
 //   4. After the loop, copyTextureToBuffer + mapAsync NDC center sample;
 //      verdict = 4 criteria (a) backend=webgpu (b) frames>=300 (c) NDC pixel
 //      distance to black > eps (d) Renderer.onError RhiError count == 0.
@@ -170,10 +170,7 @@ const mockCanvas = {
 // consumed directly (no Vite middleware). We import after the GPU shim is
 // installed so the engine sees navigator.gpu.
 const { World } = await import('@forgeax/engine-ecs');
-const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  createRenderer,
-} = enginePkg;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 const { Name, Transform } = await import('@forgeax/engine-scene');
 const {
@@ -229,13 +226,12 @@ const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
 
 let renderer;
+let renderDiagnostics;
 try {
-  renderer = await createRenderer(mockCanvas, {
-        // M6 / w44: rawDeviceForContextConfigure is no longer required because
-    // the forgeax RhiCanvasContext.configure resolves the RhiDevice back to
-    // the raw GPUDevice via RAW_DEVICE_MAP internally (charter proposition
-    // 5; see packages/engine/src/createRenderer.ts ensureContextConfigured).
-  }, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  renderDiagnostics = constructed.value.debugDrawHost;
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
@@ -245,21 +241,18 @@ try {
   // adapter.requestDevice call.
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 
-console.log(`[hello-cube] backend=${renderer.backend}`);
+console.log(`[hello-cube] backend=${renderer.inspect().capabilities.backendKind}`);
 
 // Accumulate Renderer.onError fires for criterion (d).
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint });
+});
 
 // w25 — Renderer.ready resolves Result<void, RhiError>; branch on `.ok`.
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 // 300-frame loop; raf is unavailable in node so we drive sync calls.
 const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
@@ -275,7 +268,11 @@ let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   // w25 — draw returns Result; errors continue to fan out through onError.
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = renderer.draw({
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
 
@@ -283,7 +280,8 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
   // exposes bindGroupCounts as a readonly getter; the counter is reset
   // on every draw(world) entry and bumped on each cache-miss.
   if (framesObserved === 3) {
-    bindGroupCountFrame3 = renderer.bindGroupCounts.createBindGroup;
+    // Low-level cache counters are deliberately outside public Renderer inspection.
+    bindGroupCountFrame3 = renderDiagnostics.bindGroupCounts.createBindGroup;
   }
 }
 const device = sharedDevice;
@@ -346,7 +344,7 @@ const BLACK = [0, 0, 0];
 const dist = distance(ndcCenter, BLACK);
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (renderer.inspect().capabilities.backendKind !== 'webgpu') failures.push(`(a) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (dist <= SMOKE_PIXEL_THRESHOLD) {
   failures.push(`(c) NDC-center pixel ${JSON.stringify(ndcCenter)} too close to black (distance ${dist.toFixed(4)} <= ${SMOKE_PIXEL_THRESHOLD})`);

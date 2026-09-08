@@ -1,23 +1,57 @@
 // @forgeax/engine-pack
-// Disk schema, GUID tools, scanner, fail-fast error chain, and CLI bin.
-// Entry subpaths: . / schema / guid / errors / bridge / scanner
+// Disk schema, GUID tools, and browser-safe asset contracts.
+// Node-only catalog/build APIs live under @forgeax/engine-pack/build.
 
 export {
   type CookedMaterialRecord,
   collectMaterialCookRefs,
   createMaterialArtifactDigest,
+  createMaterialCookIdentity,
   type MaterialCookArtifact,
+  type MaterialCookIdentity,
+  type MaterialCookIdentityExpectation,
+  type MaterialCookIdentityInput,
   type MaterialCookReceipt,
   type MaterialCookRecordError,
   type MaterialCookRefs,
+  type MaterialCookWasmProvenance,
   projectCookedMaterialRecord,
   serializeCookedMaterialRecord,
   serializeMaterialCookReceipt,
   validateCookedMaterialRecord,
+  validateMaterialCookReceipt,
 } from './evidence/material-cook.js';
 export { buildOfflineAssetEvidence, packageVerification } from './evidence/offline-evidence.js';
-export { MESH_BIN_HEADER_V2_BYTES, MESH_BIN_VERSION } from './mesh-bin-contract.js';
+export {
+  decodeMeshBinHeader,
+  MESH_BIN_DIGEST_BYTES,
+  MESH_BIN_HEADER_V4_BYTES,
+  MESH_BIN_PROJECTION_VERSION,
+  MESH_BIN_VERSION,
+  type MeshBinContractError,
+  type MeshBinHeaderResult,
+  type MeshBinHeaderV4,
+  writeMeshBinHeader,
+} from './mesh-bin-contract.js';
 export { validateProducerContract, validateProducerOutputs } from './producer-contract.js';
+export {
+  type AssetReader,
+  isScriptablePackAssetKind,
+  projectScriptablePackMeta,
+  SCRIPTABLE_PACK_ASSET_KINDS,
+  type ScriptablePackAssetDeclaration,
+  type ScriptablePackAssetDeclarations,
+  type ScriptablePackAssetFor,
+  type ScriptablePackAssetKind,
+  type ScriptablePackDefinition,
+  type ScriptablePackError,
+  type ScriptablePackExternalAssets,
+  type ScriptablePackMetaJson,
+  type ScriptablePackOutputs,
+  type ScriptablePackPublicationEnvelope,
+  type ScriptablePackReadError,
+  validateScriptablePackDefinition,
+} from './scriptable-pack.js';
 export { calculateTopologyDiff, diffTopology } from './topology.js';
 
 import { err, ok, type PackV2, type PackV2Error, type Result } from '@forgeax/engine-types';
@@ -27,7 +61,37 @@ export { validateArtifactPath } from './artifact-path.js';
 
 import { validatePackV2 } from './schema-compiled.js';
 
-export type { PackV2, PackV2Error } from '@forgeax/engine-types';
+export type {
+  AnimationClip,
+  AnimationGraph,
+  Asset,
+  AudioClipAsset,
+  EquirectAsset,
+  FontAsset,
+  MaterialAsset,
+  MeshAsset,
+  PackV2,
+  PackV2Error,
+  ParticleEffectAsset,
+  RenderPipelineAsset,
+  SamplerAsset,
+  SceneAsset,
+  SkeletonAsset,
+  SkinAsset,
+  TextureAsset,
+  TilesetAsset,
+  VideoAsset,
+} from '@forgeax/engine-types';
+export {
+  type MaterialArtifactWriteInput,
+  type MaterialArtifactWriteResult,
+  writeMaterialArtifact,
+} from './material/artifact-writer.js';
+export {
+  projectRuntimePack,
+  type RuntimeAssetProjectionInput,
+  type RuntimePackProjectionInput,
+} from './runtime-projection.js';
 export { validateMeta, validatePack, validatePackV2 } from './schema-compiled.js';
 
 export function parsePackV2(value: unknown): Result<PackV2, PackV2Error> {

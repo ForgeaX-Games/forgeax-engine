@@ -1,1244 +1,278 @@
-# @forgeax/engine-ecs
+# `@forgeax/engine-ecs`
 
-Archetype ECS for forgeax-engine — `World` / `Entity` / `Component` / `Query` / `System` / `Schedule` / `Commands` / `Resource`. Position in the package family: see [AGENTS.md §Packages](../../AGENTS.md#packages).
+Archetype ECS for ForgeaX. The package owns the hot path shared by every
+domain: entity identity, component storage, relationships, queries, structural
+mutation, two schedules, resources, time, and optional shared numeric kernels.
 
-This README is the **per-package evolution-contract anchor** for `Result<T, E>`. AGENTS.md keeps the cross-package rule brief; concrete shape supersedes are logged here so AI users can locate each breaking change from its dated row.
+> [!IMPORTANT]
+> `World` is the state authority. Scene instances, render extraction, physics
+> backends, asset ownership, input collection, and application lifecycle stay
+> in their owning packages. Do not add a second ECS facade for one of those
+> domains.
 
-`world.despawnAll()` routes every live entity through the normal lifecycle and
-managed-reference cleanup path. Hosts can use it after assembling a production
-factory when a target World must be empty before a simulation restore.
+```mermaid
+flowchart LR
+  HOST["App host"] --> WORLD["World.update(delta)"]
+  WORLD --> FIXED["FixedUpdate"]
+  FIXED --> UPDATE["Update + command flush"]
+  UPDATE --> PUBLISH["Scene / render projections"]
+  WORLD --> QUERY["Query row / span"]
+  WORLD --> JOURNAL["Bounded change journal"]
+  JOURNAL --> PROJECTION["ecs/projection"]
+```
 
-## Time and scheduling
-
-`world.update(delta)` is the single host-neutral time entry point. Pass a measured frame delta (in seconds); the engine validates it, advances the `Time` resource, runs FixedUpdate iterations, and returns a `Result`.
-
-### One-shot takeoff
+## The smallest useful journey
 
 ```ts
-import { World, Update, Time, defineComponent, defineSystem } from '@forgeax/engine-ecs';
+import type { Result } from '@forgeax/engine-types';
+import {
+  type EcsError,
+  FixedTime,
+  Update,
+  World,
+  defineComponent,
+  defineSystem,
+} from '@forgeax/engine-ecs';
 
-const Position = defineComponent('Position', { x: 'f32', y: 'f32' });
-const Velocity = defineComponent('Velocity', { dx: 'f32', dy: 'f32' });
+const Position = defineComponent('Position', {
+  x: { type: 'f32', default: 0 },
+  y: { type: 'f32', default: 0 },
+});
 
 const Move = defineSystem({
   name: 'move',
-  queries: [{ write: [Position], read: [Velocity] }],
-  fn: (_world, [moving]) => {
-    for (const row of moving) {
+  queries: [{ write: [Position] }],
+  fn: (_world, [positions]) => {
+    for (const row of positions) {
       const position = row.mut(Position);
-      const velocity = row.get(Velocity);
-      position.x += velocity.dx;
-      position.y += velocity.dy;
+      position.x += 1;
     }
   },
 });
 
 const world = new World();
-world.spawn(
-  { component: Position, data: { x: 0, y: 0 } },
-  { component: Velocity, data: { dx: 1, dy: 0.5 } },
-).unwrap();
+const spawned = world.spawn({ component: Position, data: { x: 0, y: 0 } });
+if (!spawned.ok) throw spawned.error;
+const registered = world.addSystem(Update, Move);
+if (!registered.ok) throw registered.error;
+const stepped: Result<void, EcsError> = world.update(1 / 60);
+if (!stepped.ok) console.error(stepped.error.code, stepped.error.hint);
+```
+
+The normal data path is `world.query(descriptor)` with a row iterator or a
+packed `QuerySpan`. Success-path row access is direct and allocation-free;
+expected boundary failures use the shared `Result` carrier from
+`@forgeax/engine-types`.
+
+## Components and schema
+
+`defineComponent` accepts one closed storage vocabulary. The token exposes only
+the schema facts needed by a consumer: `name`, frozen `fields`, and `storage`.
+Authoring metadata, lifecycle callbacks, render policy, simulation policy, and
+open-ended metadata do not belong on a component token.
+
+| Shape | Use | Example |
+|:--|:--|:--|
+| scalar | numeric, boolean, or enum data | `{ type: 'f32', default: 0 }` |
+| `string` | managed text value | `{ type: 'string', default: '' }` |
+| `entity` | raw entity reference | `{ type: 'entity' }` |
+| `shared<Tag>` | externally owned shared payload handle | `{ type: 'shared<MeshAsset>' }` |
+| `array<T>` | variable array replaced as one value | `{ type: 'array<f32>' }` |
+| `array<T,N>` | fixed-size inline array | `{ type: 'array<f32, 4>' }` |
+| sparse tag | presence-only marker | `defineComponent('Disabled', {})` |
+
+The `fields` object is deeply frozen at definition time. A value replacement
+uses the ordinary mutation path:
+
+```ts
+const Trail = defineComponent('Trail', { points: { type: 'array<f32>' } });
+const entity = world.spawn({ component: Trail, data: { points: new Float32Array([0, 1]) } }).unwrap();
+const current = world.get(entity, Trail).unwrap();
+world.set(entity, Trail, { points: new Float32Array([...current.points, 2]) });
+```
+
+The Scene package may define a single-field `Name { value: 'string' }` token
+for authoring. ECS stores the value through the same closed `string` schema
+vocabulary, but does not own the Scene component or its authoring policy.
+
+Scene and Render own their domain schemas, for example `Instances { transforms`
+is a Render-owned projection whose array payload still follows ECS replacement
+semantics.
+
+There is no public `push`, `pop`, `capacity`, `reserveArrayCapacity`, view
+class, or user-managed target-array mutation API. A replacement is one bounded
+mutation, so an invalid value leaves the previous column and reference counts
+unchanged.
+
+Object-shaped numeric writes reject `NaN` before touching the column. The
+returned `component-numeric-value-invalid` error carries the component, field,
+entity, received value, and optional array index in `detail`; `Infinity` remains
+valid when the schema accepts it. Branch on `error.code` and use `error.hint` to
+choose the correction instead of parsing a message.
+
+## Relationships: one source, one materialized index
+
+Relationships preserve the reverse index because lookup complexity is part of
+the contract. Reading a parent's children is $O(1 + k)$ for $k$ direct children,
+not an $O(N)$ scan of every entity. The source is the only writable fact; the
+target is an engine-maintained, read-only materialized vector with a
+source-to-slot backpointer for amortized $O(1)$ attach, detach, and reparent.
+
+```ts
+import { defineRelationship } from '@forgeax/engine-ecs';
+
+const { source: ChildOf, target: Children } = defineRelationship({
+  sourceName: 'ChildOf',
+  sourceField: 'parent',
+  targetName: 'Children',
+  targetField: 'entities',
+  exclusive: true,
+  linkedSpawn: true,
+});
+
+const parent = world.spawn().unwrap();
+const child = world.spawn({ component: ChildOf, data: { parent } }).unwrap();
+const children = world.get(parent, Children).unwrap().entities;
+```
+
+`Children` and `AnimationTargets` are read projections, not a second write
+authority. `Children { entities` is a materialized target owned by ECS; the
+Scene package owns the `ChildOf` vocabulary and chooses where to use it. The
+same rule applies to `AnimationTargets`. Direct target writes are rejected by
+`World` at both the type and runtime boundaries.
+
+## Queries and projections
+
+Queries are the only public data-plane API. A row is the flexible path; a span
+is the packed numeric path and includes entity handles for owner-side identity.
+Raw `Table`, `Archetype`, `Column`, and `FieldView` values are package-private.
+
+```ts
+const query = world.query({ read: [Position] }).unwrap();
+for (const row of query) console.log(row.entity, row.get(Position).x);
+const writable = world.query({ write: [Position] }).unwrap();
+for (const span of writable.spans().unwrap()) {
+  const positions = span.mut(Position);
+  for (let i = 0; i < span.length; i += 1) positions.x[i] += 1;
+}
+```
+
+Incremental owners use the explicitly named projection subpath. It carries
+bounded change evidence only; a full rebuild uses the ordinary query path.
+
+```ts
+import { createWorldProjection } from '@forgeax/engine-ecs/projection';
+
+const projection = createWorldProjection(world, { components: [Position] });
+const next = projection.poll();
+if (next.status === 'rebuild') {
+  // Rebuild the owner's cache with world.query(...).spans().
+} else {
+  for (const change of next.changes) console.log(change.entity, change.kind);
+}
+```
+
+Projection output never contains table ids, rows, columns, or a duplicate
+snapshot data plane.
+
+## Schedules, time, and resources
+
+Only `Update` and `FixedUpdate` are user schedules. Registration is token-first;
+there is no frame-end schedule, system-parameter DSL, terminal render hook, or
+severity/error-handler registry.
+
+```ts
 world.addSystem(Update, Move).unwrap();
-
-const r = world.update(0.016); // ~60fps delta
-if (!r.ok) console.error(r.error.code, r.error.hint);
-```
-
-## Shared numeric kernels
-
-`World({ storage: 'shared' })` allocates numeric table columns in `SharedArrayBuffer`. Ordinary row queries keep their normal semantics; `query.spans()` exposes contiguous zero-copy `QuerySpan` views for numeric table data. Shared execution is opt-in per independently loadable Kernel module.
-
-```ts
-import { Update, defineSharedKernel, type QuerySpan } from '@forgeax/engine-ecs';
-
-function integrate(spans: readonly QuerySpan[]): void {
-  for (const span of spans) {
-    const position = span.mut(Position);
-    for (let index = 0; index < span.length; index += 1) position.x[index] += 1;
-  }
-}
-
-world.addSystem(Update, defineSharedKernel(
-  new URL('./integrate-kernel.mjs', import.meta.url).href,
-  {
-    name: 'integrate-shared',
-    queries: [{ write: [Position] }],
-    run: integrate,
-  },
-)).unwrap();
-```
-
-The Kernel is eligible only when its callback is a named module function, every access is declared, all projected fields are numeric table fields, and no optional/change/sparse projection requires row semantics. Small spans and Worlds without a shared executor run the same Kernel inline. A dispatch failure before any shard writes also runs inline safely.
-
-Once any shard may have written, failure is terminal for that World: `world.execution.health` becomes `poisoned`, future updates return `world-poisoned`, and the Kernel is never retried inline. Structural mutation, resources, relation mirrors, and command application remain serial barriers. App-level realm selection, reports, and explicit rebuild are documented by [`@forgeax/engine-app`](../app#execution-tiers).
-
-### Reusable system parameters
-
-`defineSystemParam` packages one named query/resource access contract and resolves it into the fourth argument of a system function. The parameter owns its query cache and required-resource validation; the system receives only the resolved value.
-
-```ts
-const PlayerCounter = defineSystemParam({
-  name: 'player-counter',
-  queries: [{ with: [Player] }],
-  resources: ['player-count'],
-  resolve: (world, [players]) => ({
-    players: Array.from(players).length,
-    count: world.getResource<{ value: number }>('player-count'),
-  }),
-});
-
-world.addSystem(Update, {
-  name: 'count-players',
+world.addSystem(FixedUpdate, {
+  name: 'fixed-step',
   queries: [],
-  params: [PlayerCounter],
-  fn: (_world, _queries, _commands, [counter]) => {
-    counter.count.value = counter.players;
-  },
-});
-```
-
-Each parameter definition gets an independent per-World query-state cache. Missing resources are reported through the existing system parameter validation path before any resolver or system body runs.
-
-### Schedule tokens
-
-`Update` and `FixedUpdate` are frozen nominal schedule tokens exported from `@forgeax/engine-ecs`. Every registration API takes one as its explicit first argument:
-
-| API | Shape |
-|:--|:--|
-| `world.addSystem(Update, descriptor)` | Register a single system |
-| `world.addSystems(Update, set, systems)` | Batch-register systems to a set |
-| `world.configureSets(Update, { set, before?, after? })` | Order sets |
-| `world.removeSystem(Update, name)` | Remove by name |
-| `world.replaceSystem(Update, name, descriptor)` | Replace in-place |
-
-All five APIs require a schedule token as the first argument. There is no optional-schedule overload.
-
-### Schedule data projection
-
-`world.scheduleData()` returns a JSON-safe, read-only projection of every registered schedule. It
-derives the current DAG before capture, so tooling can inspect the same ordering facts that
-`world.update(delta)` will execute without mutating game state.
-
-| Projection | Contents |
-|:--|:--|
-| `name` | Schedule token name (`Update`, `FixedUpdate`, or `FrameEnd`) |
-| `systems` | System names, set membership, before/after references, query component names, and resources |
-| `systemSets` | Set membership, set-level before/after edges, and `chained` policy |
-| `dependencies` | Expanded direct `[source, target]` DAG edges, including the `FixedUpdate` anchor in `Update` |
-
-The projection deliberately lives beside `world.inspect()` rather than widening its existing
-lightweight `schedules` summary. That keeps existing inspector consumers stable while exposing the
-dependency and access facts needed by schedule tooling.
-
-### Time and FixedTime resources
-
-The engine owns two protected resources:
-
-| Resource | Fields | Description |
-|:--|:--|:--|
-| `Time` | `delta`, `elapsed`, `maxDeltaSeconds` | Variable-rate clock. `delta` is the measured frame delta capped by `maxDeltaSeconds`. `elapsed` is cumulative wall time. |
-| `FixedTime` | `delta`, `maxStepsPerUpdate`, `tick`, `overstep`, `droppedSeconds`, `droppedUpdates` | Fixed-rate clock. `delta` is 1/60 by default. `tick` increments each FixedUpdate iteration; `overstep` is the seconds accrued toward the next iteration. |
-
-`Time` and `FixedTime` are protected — `world.insertResource` rejects them. Read them via `world.getResource(Time)` / `world.getResource(FixedTime)`.
-
-### Zero-delta
-
-`world.update(0)` runs Update schedules but does not advance `Time` or run FixedUpdate. Use this for headless stepping or deterministic trace replay.
-
-### Disabled entities
-
-`Disabled` is a zero-field marker exported from `@forgeax/engine-ecs`. Every
-query excludes entities carrying `Disabled` by default, including renderer
-queries. Add `Disabled` to the query's `with` tuple to inspect those entities;
-remove the component to re-enable them.
-
-```ts
-import { Disabled, Entity, Update, World, defineComponent } from '@forgeax/engine-ecs';
-
-const Target = defineComponent('Target', {});
-const world = new World();
-const entity = world.spawn({ component: Target, data: {} }).unwrap();
-world.addComponent(entity, { component: Disabled, data: {} }).unwrap();
-
-world.addSystem(Update, {
-  name: 'reenable-targets',
-  queries: [{ with: [Target, Disabled] }],
-  fn: (_world, [targets], commands) => {
-    for (const row of targets) commands.removeComponent(row.entity, Disabled);
+  fn: (fixedWorld) => {
+    const fixed = fixedWorld.getResource(FixedTime);
+    void fixed.tick;
   },
 }).unwrap();
 ```
 
-### Error codes
+`world.update(deltaSeconds)` advances the clock, runs zero or more fixed steps,
+runs one update step, and flushes each system's command buffer. Clock readers
+receive a stable read view; the scheduler owns writes. Resources are non-owning
+values: Cordis/plugin owners dispose external payloads, not `World`.
 
-`world.update(delta)` returns `Result<void, TimeDeltaInvalidError | TimeConfigInvalidError | ScheduleScopeMismatchError>`.
+## Failure and recovery
 
-| Error code | Trigger |
-|:--|:--|
-| `time-delta-invalid` | Negative, NaN, or Infinity delta |
-| `time-config-invalid` | Coherence violation: `maxDeltaSeconds < (maxStepsPerUpdate + 1) * fixedDeltaSeconds` |
-| `schedule-scope-mismatch` | Cross-schedule set/system reference (e.g., referencing a FixedUpdate set in Update's `configureSets`) |
-
-### Default config
-
-| Parameter | Default |
-|:--|:--|
-| `maxDeltaSeconds` | 0.1 |
-| `fixedDeltaSeconds` | 1/60 |
-| `maxStepsPerUpdate` | 4 |
-
-Pass `WorldOptions` to `new World()` to override:
+Branch on `error.code`, never on a message string. The closed ECS error union
+preserves `code`, `expected`, `hint`, `detail`, and `cause` where applicable.
 
 ```ts
-const world = new World({ time: { fixedDeltaSeconds: 1 / 30, maxStepsPerUpdate: 2 } });
-```
-
-## SystemSet scheduling
-
-A `SystemSet` is a pure system-grouping token: it gives its members shared ordering, condition, and chaining declarations without introducing a synchronization boundary, frame phase, or command flush. Define tokens at module scope, assign systems through `world.addSystems`, and express relationships between groups through `world.configureSets`.
-
-| Entry | Shape | Use |
-|:--|:--|:--|
-| `defineSystemSet({ name, runIf?, chained? })` | `=> SystemSet` | Defines and globally registers a frozen, nominal set token. A duplicate name silently replaces the previous token, matching `defineSystem` and `defineComponent`. |
-| `getRegisteredSystemSets()` | `=> ReadonlyMap<string, SystemSet>` | Enumerates the currently registered set tokens by name. |
-| `world.addSystems(Update, set, systems)` | `=> Result<void, SystemSetNotRegisteredError \| ScheduleScopeMismatchError>` | Registers each descriptor if needed and adds its name to `set`. A system can belong to multiple sets; re-adding it preserves its original registration index. |
-| `world.configureSets(Update, { set, before?, after? })` | `=> Result<void, SystemSetNotRegisteredError \| ScheduleScopeMismatchError>` | Orders one set relative to other sets. At schedule rebuild, each set edge expands to member-system edges; empty sets are therefore a no-op. |
-
-```ts
-import {
-  defineSystem,
-  defineSystemSet,
-  Update,
-  World,
-} from '@forgeax/engine-ecs';
-
-const GameplaySet = defineSystemSet({ name: 'gameplay', chained: true });
-const RenderSet = defineSystemSet({ name: 'render' });
-
-const Move = defineSystem({
-  name: 'move',
-  queries: [],
-  fn: (world) => {
-    // Update gameplay state.
-  },
-});
-const Animate = defineSystem({
-  name: 'animate',
-  queries: [],
-  fn: (world) => {
-    // Advance animation state.
-  },
-});
-
-const world = new World();
-world.addSystems(Update, GameplaySet, [Move, Animate]).unwrap();
-world.configureSets(Update, { set: GameplaySet, before: [RenderSet] }).unwrap();
-world.update(0);
-```
-
-`chained: true` adds edges between consecutive members in their `addSystems` insertion order. A system that belongs to several sets runs only when every applicable set-level `runIf` condition is true; each set condition is evaluated at most once per frame. Set ordering expands into ordinary scheduling edges only: it does **not** make a barrier, add a flush, or serialize unrelated systems.
-
-### Built-in set tokens
-
-Import built-in set tokens from the package that owns their registration contract, not from `@forgeax/engine-ecs`:
-
-| Token | Root-entry import |
-|:--|:--|
-| `TransformSet`, `AnimationSet` | `@forgeax/engine-runtime` |
-| `InputSet` | `@forgeax/engine-input` |
-| `StateSet` | `@forgeax/engine-state` |
-| `PhysicsSet` | `@forgeax/engine-physics` |
-
-### SystemSet failure anchors
-
-- `system-set-not-registered` is reported as `SystemSetNotRegisteredError` when `addSystems` or `configureSets` receives a forged or stale token. Re-import the current token or inspect `getRegisteredSystemSets()`.
-- A set edge that combines with other ordering edges to form a cycle raises `CyclicDependencyError`. Read `error.detail.cycle` for the structured cycle path rather than parsing the message.
-
-## Evolution log
-
-> Append-only registry of breaking-change rows for this package's public surface. Each row carries an ISO-date anchor (`YYYY-MM-DD`), the superseded shape, the new shape, a call-site upgrade diff, and the harness loop folder where the original decision lives. Per [AGENTS.md §Error model](../../AGENTS.md#error-model) the **Evolution contract** is: minor = add members only; major = rename / delete / reorder / narrow / deprecate. Rows below are all major edits.
-
-### 2026-06-22 — instantiateScene diagnostics envelope + unknown-field non-fatal (major)
-
-**Supersedes**: the legacy `world.instantiateScene` -> `Result<EntityHandle, ...>` surface with fatal-abort on unknown fields. Loop anchor: `.forgeax-harness/forgeax-loop/feat-20260622-s5-device-surface-self-heal-recover/`.
-
-**Shape diff**:
-
-| Aspect | Before | After |
-|:--|:--|:--|
-| `instantiateScene` success value | `EntityHandle` (branded number, synthetic root) | `{ root: EntityHandle; readonly diagnostics: readonly SceneInstantiateDiagnostic[] }` (envelope) |
-| Unknown-field behavior | `return err(SpawnDataUnknownFieldError)` — aborts entire scene | Skip the unknown field, record `SceneInstantiateDiagnostic` entry, continue (all entities spawn, known fields write correctly) |
-| New type | — | `SceneInstantiateDiagnostic = { readonly component: string; readonly field: string; readonly localId: number }` (barrel export from `@forgeax/engine-ecs`) |
-| Runtime `assets.instantiate()` | — | Keeps `Result<EntityHandle>` contract; internally unwraps `.root` |
-| NODE_ENV-gating | — | Not gated; diagnostics are production-observable (property-access, not string parsing) |
-
-**Call-site upgrade diff**:
-
-```diff
- // before — EntityHandle directly, unknown field aborts entire scene
--const r = world.instantiateScene(handle);
--if (r.ok) {
--  const root = r.value; // EntityHandle
--}
-
- // after — envelope with diagnostics
-+const r = world.instantiateScene(handle);
-+if (r.ok) {
-+  const { root, diagnostics } = r.value;
-+  for (const d of diagnostics) {
-+    // d.component, d.field, d.localId — property access
-+  }
-+}
-```
-
-**Why this row exists**: AI users porting code that assumes `instantiateScene` returns an `EntityHandle` directly will hit TS errors. The envelope adds `diagnostics` to the success path; old callers can `r.value.root` (mechanical). The runtime `assets.instantiate()` keeps the simpler `Result<EntityHandle>` contract for users who don't need diagnostics.
-
-### 2026-05-15 — Buffer / array schema vocab collapse (major)
-
-**Supersedes**: feat-20260514-ecs-children-instances-managed-buffer-array (the legacy `'buffer:<N>'` colon-literal keyword + `FixedArrayView<T>` / `VarArrayView<T>` value-shape exports + `defineComponent` `arrayStride` option). Loop anchor: `.forgeax-harness/forgeax-loop/feat-20260515-buffer-array-vocab-collapse/`.
-
-**Shape diff**:
-
-| Aspect | Before (feat-20260514) | After (this loop) |
-|:--|:--|:--|
-| Buffer keyword shape | `'buffer:<N>'` (colon-literal, fixed only) | `'buffer'` (variable capacity) + `'buffer<N>'` (fixed N-byte capacity); collapsed-vocab generic forms |
-| Value-shape exports | `FixedArrayView<T>` / `VarArrayView<T>` (length / get / set / push / pop / grow methods) | **deleted** — `world.get(...).<arrayField>` returns `TypedArrayFor<T>` read-only snapshot; mutations route through 3 new World commands `world.push` / `world.pop` / `world.capacity` |
-| `defineComponent` options | accepted `arrayStride: { transforms: 16 }` | `arrayStride` option removed; stride contract migrates to RenderSystem entry defensive fail-fast for `Instances.transforms` |
-| `EcsErrorCode` count | 23 (18 base + 5 `managed-array-*`) | 25 (18 base + 1 surviving `managed-array-element-type-not-allowed` + 3 collapsed-vocab capacity codes `fixed-size-mismatch` / `fixed-array-overflow` / `array-pop-empty` + 1 `instance-transforms-stride-mismatch` from RenderSystem entry + 1 `spawn-light-invalid-bounds` from PointLight / SpotLight spawn payload validation + 1 `cardinality-exceeded` from PointLightShadow cardinality=4 enforcement); rename + delete + add reshape (net 23 -> 25 across two minor adds) |
-| Single-import gate | `... / FixedArrayView / VarArrayView / ...` | view classes removed; gate set: `Handle / SchemaFieldType / ManagedRefStore / EcsErrorCode / EcsErrorDetail / EcsError / Name / TypedArrayFor` (+ all error classes) |
-| File `packages/ecs/src/managed-array-view.ts` | present (defines `FixedArrayView` / `VarArrayView`) | physically deleted |
-
-**Why this row exists** (charter proposition 4 text-over-image + proposition 5 consistent abstraction): the v2 simplification folds two value-shape view classes (`FixedArrayView` / `VarArrayView`) plus the colon-literal `'buffer:<N>'` keyword into one collapsed generic vocab (`array<T,N>` / `array<T>` / `buffer<N>` / `buffer`) plus a uniform 3-command surface (`world.push` / `world.pop` / `world.capacity`). AI users learn one keyword family and one command surface for every variable / fixed array + buffer; the legacy `as unknown as VarArrayView<...>` cast vanishes from the spawn-site, and `'array<entity>'` / `'array<f32>'` / `'buffer<16>'` / `'buffer'` become first-class, statically-extractable schema literals (covered by `Component.schema['<field>']` runtime self-discovery + offline ripgrep). Loop anchor above carries the full requirements / plan / verify trail.
-
-### 2026-05-15 — `'string'` collapse onto managed-ref dispatch + `World.setManagedRefStore` removal (major)
-
-**Supersedes**: the same-day additive 2026-05-15 row below (`'string'` -> `StringView`) + the M1 setter/getter form of `World.managedRefs`. Loop anchor: `.forgeax-harness/forgeax-loop/feat-20260515-string-managed-collapse/`.
-
-**Shape diff** (`SchemaVocabKeyword` count holds at 7; storage path changes; setter/getter pair deleted):
-
-| Aspect | Before (additive `'string'` -> `StringView` form, AM) | After (this loop, collapse) |
-|:--|:--|:--|
-| `FieldValueType<'string'>` | `StringView` (5-member view class: `byteLength` / `byteCapacity` / `get` / `set` / `clear`) | `string` (JS native, by reference) |
-| Storage column | `Uint32Array` of `BufferPool` slot ids; utf-8 bytes packed in slot | `Uint32Array` of `ManagedRefStore<any>` u32 handles (shared column shape with `ref<T>`) |
-| Release dispatch | `BufferPool.release(slot)` via `isStringField` predicate (separate arm from `ref<T>`) | `managedRefs.release(handle)` via `isManagedField` predicate (single arm shared with `ref<T>`) |
-| Predicate surface | `isStringField` + `isManagedRefField` (two predicates, two arms) | `isManagedField` (one predicate, one arm — collapses 'string' + 'ref<T>' into the managed family) |
-| `World.managedRefs` field | `ManagedRefStore<any> \| null`; wired via `world.setManagedRefStore(store)` setter; `getManagedRefStore()` getter | `ManagedRefStore<any>` (constructor-owned, private, always-on); setter + getter pair removed |
-| `StringView` exports | `import { StringView } from '@forgeax/engine-ecs'` | deleted (file `packages/ecs/src/string-view.ts` removed; `StringView` re-export deleted) |
-| `isStringField` export | `import { isStringField } from '@forgeax/engine-ecs'` | deleted (re-export removed; the predicate folded into `isManagedField`) |
-| Identity stability | `Object.is` not preserved across reads or archetype migration (per-call view rebuild) | `Object.is(read1, read2) === true` for consecutive reads with no intervening set (AC-03); preserved across archetype migration (AC-04 strong contract) |
-| Capacity overflow | `set(s)` past 256 KB routed `managed-buffer-out-of-bounds` via `BufferPool` | n/a — JS string capacity is bounded by host runtime, not by `BufferPool` buckets; `managed-buffer-out-of-bounds` JSDoc trigger drops the 'string' bullet |
-| Single-import gate | `Handle / SchemaFieldType / ManagedRefStore / EcsErrorCode / EcsErrorDetail / EcsError / FixedArrayView / VarArrayView / StringView / Name / isStringField` | `Handle / SchemaFieldType / ManagedRefStore / EcsErrorCode / EcsErrorDetail / EcsError / Name / TypedArrayFor` (drops `StringView` + `isStringField` + view classes) |
-| Grep-gate freeze | n/a | `pnpm grep:no-string-view-import` + `pnpm grep:no-set-managed-ref-store` — block accidental re-import / re-introduction of the deleted symbols |
-
-**Call-site upgrade diff** (minimum 1 example, charter proposition 4 text-over-image):
-
-```diff
- // before — additive form (StringView view-class)
--import { Name, World, type StringView } from '@forgeax/engine-ecs';
--const world = new World();
--world.setManagedRefStore(new ManagedRefStore());
--const e = world.spawn({ component: Name, data: { value: 'Player' } /* historic-bypass */ }).unwrap();
--const view: StringView = world.get(e, Name).unwrap().value;
--view.get();          // 'Player'
--view.byteLength;     // 6
-
- // after — collapse form (native string by reference)
-+import { Name, World } from '@forgeax/engine-ecs';
-+const world = new World();              // ManagedRefStore is constructor-owned
-+const e = world.spawn({ component: Name, data: { value: 'Player' } }).unwrap();
-+const value: string = world.get(e, Name).unwrap().value;
-+value;               // 'Player'  (native JS string)
-+value.length;        // 6
-```
-
-**Why this row exists**: AI users porting code from the additive form will hit TS errors on the deleted `StringView` import + the deleted `setManagedRefStore` setter. Grepping `2026-05-15` lands on the AGENTS.md three-row registry + this evolution log row. The collapse simplifies the AI-user mental model: `'string'` is no longer a third value-shape sibling — it materialises as a native JS string by reference, the same shape downstream code already manipulates.
-
-### 2026-05-15 — `'string'` schema vocab keyword + `Name` component (minor, superseded same day)
-
-**Supersedes**: nothing (additive). Loop anchor: `.forgeax-harness/forgeax-loop/feat-20260515-ecs-name-component-and-string-schema/`.
-
-**Shape diff** (additive only — closed unions extended without rename / delete / reorder, evolution minor):
-
-| Aspect | Before | After (this loop) |
-|:--|:--|:--|
-| `SchemaVocabKeyword` count | 6 (`buffer:N` / `ref<T>` / `handle<T>` / `entity` / `array<T,N>` / `array<T>`) | 7 (added `'string'` — bare-literal sibling, no `<>` wrapper). **Note**: the later feat-20260515-buffer-array-vocab-collapse row above replaces `buffer:N` with `'buffer'` / `'buffer<N>'` and physically deletes the array view classes; the gate / value-shape entries below describe the snapshot at the close of *this* loop and were superseded one cut later. |
-| `EcsErrorCode` count | 23 | 23 (capacity overflow reuses `managed-buffer-out-of-bounds`; KD-7 / AC-07: no new code) |
-| Value-shape exports | `FixedArrayView<T>` / `VarArrayView<T>` (later **deleted** by the buffer-array-vocab-collapse row above) | + `StringView` (5-member surface: `byteLength` / `byteCapacity` / `get` / `set` / `clear`; same `@internal` constructor + `errorRouter` envelope contract as the legacy array views — `StringView` survives the collapse) |
-| Pre-built component tokens | none specific to `string` | + `Name { value: 'string' }` (single-field exemplar, `defineComponent('Name', { value: 'string' })`) |
-| Single-import gate | `Handle / SchemaFieldType / ManagedRefStore / EcsErrorCode / EcsErrorDetail / EcsError / FixedArrayView / VarArrayView` (the two view-class entries are dropped one cut later by the buffer-array-vocab-collapse row above) | + `StringView` / `Name` / `isStringField` |
-| README discoverability gate | `pnpm grep:readme-array-vocab-mentioned` | + `node scripts/grep/check-readme-string-vocab-mentioned.mjs` (`'string'` literal + `Name { value:` + `StringView` must surface in `packages/ecs/README.md`) |
-
-**Why this row exists** (charter proposition 4 text-over-image): AI users discovering the new keyword via IDE autocomplete on `SchemaVocabKeyword` see `'string'` as the seventh union member; grepping `Name { value:` lands on every component declaration site; reading the BufferPool 3-path release loop in `world.ts` finds the `isStringField` branch alongside `isManagedBufferField` / `isManagedArrayField`. No call-site migration is required (additive only); existing `array<T,N>` / `array<T>` / handle / buffer / entity vocab keywords retain their byte-for-byte runtime form.
-
-### 2026-05-11 — Result narrow form realignment
-
-**Supersedes**: `feat-20260507-ecs-refactor` KD-1 (`packages/ecs/src/result.ts` plain-union `Result<T, E>` with method-getter surface).
-
-**Loop anchor**: `.forgeax-harness/forgeax-loop/feat-20260511-tetris-retro-followups/` (requirements §6.3 AC-14 / plan-decisions D-P8 direction B / research §F-12).
-
-**Shape diff**:
-
-| Aspect | Old shape (KD-1, plain union + method-getter) | New shape (this loop, discriminated union + plain fields) |
-|:--|:--|:--|
-| Discriminant | `_ok: true` / `_ok: false` (private-by-convention prefix) | `readonly ok: boolean` (public boolean discriminant) |
-| Value accessor | `_value: T` on ok branch | `readonly value: T` on ok branch |
-| Error accessor | `_error: E` on err branch | `readonly error: E` on err branch |
-| Method surface | `.isOk()` / `.isErr()` / `.map(fn)` / `.mapErr(fn)` getters | `.unwrap()` / `.unwrapOr(default)` only (`.isOk` / `.isErr` / `.map` / `.mapErr` **removed**) |
-| Narrow idiom | `if (r.isOk()) { r._value }` | `if (r.ok) { r.value }` |
-| Alignment | ecs-private union (rhi unchanged) | byte-for-byte aligned with `packages/rhi/src/errors.ts` Result (charter proposition 5, consistent abstraction) |
-
-**Call-site upgrade diff** (minimum 1 example, charter proposition 4 text-over-image):
-
-```diff
- // before — KD-1 plain union + method-getter surface
--const r = world.get(entity, Position);
--if (r.isOk()) {
--  const data = r._value;
--  use(data);
--} else {
--  console.error(r._error.code);
--}
--const doubled = r.map((data) => data.pos[0] * 2);
-
- // after — feat-20260511-tetris-retro-followups discriminated union + plain fields
-+const r = world.get(entity, Position);
-+if (r.ok) {
-+  const data = r.value;
-+  use(data);
-+} else {
-+  console.error(r.error.code);
-+}
-+// `.map` removed — inline the transform after `.ok` narrow
-+const doubled = r.ok ? r.value.pos[0] * 2 : 0;
-```
-
-**Why this row exists**: AI users porting code written against the KD-1 surface will see TypeScript errors (`Property 'isOk' does not exist on type 'Result<T, E>'`). Grepping `2026-05-11` in `packages/*/README.md` lands here and on the matching `packages/runtime/README.md` row; the diff above is the mechanical port. Decision rationale, OQ branches, and AI-user charter mapping live in the harness loop anchor above — not duplicated here.
-
-### 2026-06-02 — Entity as id=0 component + alive absorption + removeComponent rejection (major)
-
-**Supersedes**: `World.isAlive` / `_getEntityGenerationForIndexSlot` / `EntityRecord.alive` deleted; the `arch.entities` side-array is demoted (no longer the entity-identity surface — survives as internal swap-pop bookkeeping, see table). Loop anchor: `.forgeax-harness/forgeax-loop/feat-20260602-archetype-stores-full-packed-entity/`.
-
-**Shape diff** — Entity identity reshaped as a real id=0 component, with archetype rows carrying the full packed handle in a uniform column:
-
-| Aspect | Before | After |
-|:--|:--|:--|
-| Entity identity storage | `arch.entities[row]` (24-bit index slot only, side-array) | id=0 `Entity` component column `self: 'entity'` (full packed 32-bit handle) |
-| Rebuilding a handle from a row | `arch.entities[i]` + `_getEntityGenerationForIndexSlot` + `encodeEntity` (three-step) | `row.entity` from a public Query; internal Table code reads `Entity.self` |
-| Liveness probe | `world.isAlive(e)` (public method) | `world.get(e, Entity)` (returns `err(STALE_ENTITY)` for despawned handles; works on any entity ref field via `'entity'` vocab) |
-| `EntityRecord.alive` field | present (boolean, dual-judgement with generation) | **deleted** — liveness is pure `record.generation === handle.gen` |
-| `despawn` | sets `alive = false`, pushes index to `freeIndices` | `generation += 1` unconditionally; pushes index to `freeIndices` only when new gen <= 255 |
-| gen>255 | unreachable (8-bit packing bounds gen to 0..255) | slot permanently retires (never reissued), serving as a tombstone |
-| `entityCount` (inspect) | scans `records[].alive` | sum of `arch.size` across all archetypes |
-| `removeComponent(e, Entity)` | N/A (no Entity component existed) | returns `err(code='remove-essential-component')` — the Entity column is structurally required |
-| `EcsErrorCode` count | 29 (post-drop-dangling-sweep + post-drop-registration) | 30 (net +1: `remove-essential-component` added) |
-| archetypeKey shape | `"2+5+7"` (components ids joined by +, no Entity column) | `"0+2+5+7"` (id=0 prefixed — the Entity column is always present) |
-| `_getEntityGenerationForIndexSlot` | `World` method + consumer `WorldInternalView` interfaces | **deleted** — 0 remaining callers |
-| `arch.entities` array | `Uint32Array` bare-index side-array — the entity-identity surface (read for handle rebuild) | **demoted** — full handle now lives in the id=0 `self` column; `arch.entities` survives only as internal row→index-slot swap-pop bookkeeping (`removeEntity` fixes up the displaced row's `records[].row`), never read for entity reconstruction |
-
-**Call-site upgrade diff**:
-
-```diff
- // before — three-step entity rebuild
--const idx = arch.entities[i];
--const gen = (world as WorldInternalView)._getEntityGenerationForIndexSlot(idx);
--const handle = encodeEntity(idx, gen);
--const inst = world.get(handle, Instances);
-
- // after — single column read (query path)
-+const handle = row.entity;
-+const inst = world.get(handle, Instances);
-
- // before — liveness check
--if (world.isAlive(parent)) { ... }
-
- // after — universal liveness probe
-+const r = world.get(parent, Entity);
-+if (r.ok) { ... }
-+// or: if (!r.ok && r.error.code === 'stale-entity') { ... }
-
- // before — remove Entity component (was not a real component)
--// N/A
-
- // after — essential-component rejection
-+const r = world.removeComponent(e, Entity);
-+// r.ok === false, r.error.code === 'remove-essential-component'
-```
-
-**gen>255 permanent retirement — forgeax-only, do not extrapolate**:
-
-> [!WARNING]
-> **Forgeax uses unbounded JS-number generation + packed handle taking the low 8 bits, with gen>255 slots permanently retiring as tombstones.** No native ECS (Bevy NonMaxU32 / EnTT tombstone / flecs tag bits / UECS swap-back) lets generation cross the packing bit-width to serve as a tombstone — this is a forgeax-unique idiom driven by JavaScript's lack of a native 8-bit integer type. **Do not extrapolate gen-wrap mentality from Bevy or EnTT experience:** forgeax generation never wraps, and a handle with generation=256 is a real, usable handle whose index slot will never be reissued. If you design a system that assumes "generation wraps modulo 256," it will be wrong on forgeax.
-
-**Why this row exists** (charter P4 consistent abstraction + P3 explicit failure): AI users porting code written against the three-step entity rebuild pattern read `row.entity` from a public Query and use `world.get(e, Entity)` for liveness. Internally, the Entity component column remains the packed-handle authority. The error code `remove-essential-component` makes the structural invariant explicit rather than permitting silent corruption.
-
-### 2026-06-11 — ECS storage naming SSOT (major)
-
-**Supersedes**: all prior naming / storage / error-code conventions for the archetype store. Loop anchor: `.forgeax-harness/forgeax-loop/feat-20260611-ecs-storage-naming-ssot/`.
-
-**Shape diff** — 9 sub-changes converge the archetype store onto a single-source-of-truth shape:
-
-| Sub-item | Before | After |
-|:--|:--|:--|
-| EntityHandle rename | `type Entity = ...` (branded handle; collided with id=0 `Entity` component token) | `type EntityHandle = ...` (unambiguous branded handle; `Entity` token for id=0 component only) |
-| Archetype single-field | `Archetype` carried `componentIds: ReadonlyArray<ComponentId>` + `entities: Uint32Array` as independent fields | `Archetype.components: ReadonlyArray<Component>` is the sole field; `componentIds` derived via `.components.map(c => c.id)` |
-| `arch.entities` deleted | side-array `Uint32Array` of row-to-index-slot mappings | removed entirely; swap-pop reads the id=0 `self` column via `columns.get(0)?.get('self')?.view[lastRow] & 0xffffff` |
-| `ESSENTIAL_COMPONENT_IDS` + `foldEssentials` | `archetypeKey` / `createArchetype` each hard-coded `Entity.id` prepend | single `ESSENTIAL_COMPONENT_IDS = [Entity.id]` constant + `foldEssentials(ids)` helper (2 call sites: `archetypeKey` + `createArchetype`) |
-| `isManaged` column | 4 `isXxxField` predicates each hand-written with OR expressions and string-match logic | `TYPE_METADATA` gains `isManaged: boolean` column; 4 predicates converge to single-line `TYPE_METADATA[key]?.isXxx ?? false` lookups |
-| `componentRegistry` deleted | `ArchetypeGraph.componentRegistry: Map<ComponentId, Component>` for reverse lookups | removed; `getRemoveEdge` derives component set from `src.components.filter(c => c.id !== removedId)` |
-| `EcsErrorCode` kebab | 7 SCREAMING_SNAKE code literals (`ENTITY_INDEX_OVERFLOW`, `STALE_ENTITY`, etc.) | 7 kebab-case code literals (`entity-index-overflow`, `stale-entity`, etc.); 96 cross-package references mechanically replaced |
-| `relationshipSyncDepth` eliminated | `private relationshipSyncDepth = 0` counter + `++`/`--` guards to prevent reentrant hook recursion | 4 `_xxxCore` private methods with `internal: boolean` parameter; public methods delegate `_xxxCore(args, false)`; hooks call `_xxxCore(args, true)` |
-| `EntityRecord.pending` derived delete | `EntityRecord.pending: boolean` field (written at 4 sites: spawn / allocate / materialize / despawn) | field removed; liveness derived from `record.generation === gen && record.archetypeId !== -1` (pending=true iff archetypeId === -1) |
-
-**Why this row exists**: every sub-item above changes a public API surface or a greppable code literal. AI users porting code post-M-6 will hit TS errors on removed fields (`arch.entities`, `arch.componentIds`, `graph.componentRegistry`, `record.pending`, `relationshipSyncDepth`), renamed types (`Entity` -> `EntityHandle`), and changed error-code strings (SCREAMING_SNAKE -> kebab-case). Grepping `2026-06-11` in `packages/*/README.md` lands on this row. The loop anchor above carries the full requirements / plan / verify trail.
-
-## Related packages
-
-- [`@forgeax/engine-runtime`](../engine-runtime) — consumes `Result` returned by `world.get` / `world.spawn` etc.
-- [`@forgeax/engine-rhi`](../rhi) — the cross-package `Result` SSOT this package aligns with.
-- [`@forgeax/engine-math`](../math) — POD math types consumed by component schemas.
-
-## Remote eval
-
-ECS inspection and mutation route through `@forgeax/engine-remote`'s single `eval` channel. The `createApp` entry point wires `app.remote` by default in dev mode (port 5732); the eval scope carries `world`, `renderer`, `assets`, and `debugAdapter` as live roots. Entity discovery uses the World-owned Query iterator:
-
-```ts
-// Inside eval scope (via in-process client.eval or WS JSON-RPC 2.0):
-const { Transform } = await _import('@forgeax/engine-scene');
-const query = world.query({ read: [Transform] }).unwrap();
-for (const row of query) {
-  const handle = row.entity;
-  const x = row.get(Transform).pos[0];
-}
-```
-
-Fixed-array fields are exposed as flat typed-array columns: row `i` starts at
-`i * arity` (`Transform.pos` has arity 3). There are no `.x` / `.y` / `.z`
-sub-fields on a query bundle.
-
-Spawning, setting components, and despawning execute directly through `world.spawn` / `world.set` / `world.despawn` — no `ECS_MUTATING_METHODS` blacklist. See [`@forgeax/engine-remote` README](../remote/README.md) for the full eval API, live roots, and security model.
-
-## CLI — `forgeax-engine-remote-ecs`
-
-`@forgeax/engine-ecs` ships the `forgeax-engine-remote-ecs` plugin bin (kubectl 4th-path; discovered via PATH-prefix scan for `forgeax-engine-remote-`). The bin connects to a running engine instance (default `ws://localhost:5732`) and sends eval scripts over JSON-RPC 2.0.
-
-```sh
-forgeax-engine-remote-ecs entities --with Transform
-forgeax-engine-remote-ecs components --port 5731
-forgeax-engine-remote-ecs world | jq .archetypes
-```
-
-Common flags: `--port <n>` (default 5732) / `--host <s>` (default localhost) / `--help`.
-
-## Schema vocabulary quick-ref
-
-Component fields accept two tiers of keywords. Both are surfaced through one type — `SchemaFieldType = ScalarFieldType | SchemaVocabKeyword` (`packages/ecs/src/component.ts`) — so AI users see the full vocabulary at one IDE-autocomplete site (charter proposition 1: one obvious entry).
-
-| Keyword | Tier | Resolves to (TS) | Storage column | Release path on remove / despawn / set | Source |
-|:--|:--|:--|:--|:--|:--|
-| `'f32'` / `'f64'` / `'i32'` / `'u32'` / `'i16'` / `'u16'` / `'i8'` / `'u8'` / `'bool'` / `'enum'` / `'ref'` | scalar (legacy) | `number` (`bool` widens to `boolean`) | matching typed-array (`'ref'` -> `Uint32Array`, plain u32) | none — POD; carry-over byte-equal | `ScalarFieldType` |
-| `` `ref<${string}>` `` | vocab — managed handle | `Handle<TargetTag, 'managed'>` | `Uint32Array` (packed handle) | `ManagedRefStore.release(handle)` (3-path: despawn / removeComponent / set) | `SchemaVocabKeyword` |
-| `` `handle<${string}>` `` | vocab — unmanaged handle | `Handle<TargetTag, 'unmanaged'>` | `Uint32Array` (packed handle) | none — external owner manages release | `SchemaVocabKeyword` |
-| `` `buffer` `` | vocab — variable-capacity managed buffer slot | `Uint8Array` read-only snapshot (resolved on `world.get`) | `Uint32Array` of `BufferPool` slot ids | `BufferPool.release(slot)` (3-path) | `SchemaVocabKeyword` |
-| `` `buffer<${number}>` `` | vocab — fixed-capacity managed buffer (capacity `N` bytes frozen at schema compile time) | `Uint8Array` read-only snapshot (resolved on `world.get`); `world.set` writes must satisfy `byteLength === N` (routes `fixed-size-mismatch` on violation) | stride-N `Uint8Array` inline column (feat-20260602); bytes laid out contiguously per row, no `BufferPool` slot | none — inline byte column; carry-over byte-equal | `SchemaVocabKeyword` |
-| `'entity'` | vocab — single entity ref | `Entity` (branded `number`) | `Uint32Array` (packed handle) | none — raw u32 returned verbatim on read; ECS does not validate liveness, the consumer self-checks (`world.isAlive` / generation / its own design) | `SchemaVocabKeyword` |
-| `` `array<${T}, ${N}>` `` | vocab — fixed-length managed array (`T` is `ManagedArrayElementType`; `N` is element count) | `TypedArrayFor<T>` read-only snapshot (length === N) | stride-N inline column (feat-20260602); elements laid out contiguously per row, no `BufferPool` slot; typed via `elemStorage(T)` (entity -> u32, scalars -> identity) | none — inline typed-array column; carry-over byte-equal | `SchemaVocabKeyword` |
-| `` `array<${T}>` `` | vocab — variable-length managed array (`T` is `ManagedArrayElementType`; capacity grows via `world.push`) | `TypedArrayFor<T>` read-only snapshot (length === current count) | `Uint32Array` of BufferPool slot ids + sidecar count column; live `count` tracked through `world.push / world.pop` | `BufferPool.release(slot)` (3-path); carry-over byte-equal + `count / capacity` preserved | `SchemaVocabKeyword` |
-| `'string'` | vocab — managed JS string (collapsed onto managed-ref dispatch by feat-20260515-string-managed-collapse) | `string` (JS native, by reference) | `Uint32Array` of `ManagedRefStore<any>` u32 handles (shared column shape with `ref<T>`) | `managedRefs.release(handle)` (3-path: despawn / removeComponent / set; routed through the single `isManagedField` predicate alongside `ref<T>`); carry-over byte-equal — the same JS string identity (`Object.is`) survives archetype migration | `SchemaVocabKeyword` (added 2026-05-15; `StringView` class deleted 2026-05-15 in same-day collapse) |
-
-> **Retired one-cut**: the legacy `'entity[]'` predecessor (v1 OOS-04 sidecar `Map<row, Entity[]>`) was replaced in one edit by `array<entity>` (the `T = entity` instantiation of the variable-length array vocab above). Sweep is now backed by the same BufferPool path as every other array — no sidecar map, no `[]` syntax. Loop anchor: [`feat-20260514-ecs-children-instances-managed-buffer-array`](../../.forgeax-harness/forgeax-loop/feat-20260514-ecs-children-instances-managed-buffer-array/).
-
-`ManagedArrayElementType` = `ScalarFieldType | 'entity'` (`packages/ecs/src/component.ts:78`); reference / handle / buffer / nested-array element types are forbidden (gate route `managed-array-element-type-not-allowed`).
-
-Runtime gate: `isSchemaVocabKeyword(s)` (component.ts:178). Storage map: `storageFieldType(s)` (component.ts:106). Managed-field probes: `isManagedRefField` / `isManagedBufferField` / `isEntityField`.
-
-> **Cross-mode safety** (charter proposition 5: consistent abstraction across the vocab families):
-> The handle-shaped keywords (`ref<T>` / `handle<T>` / `buffer` / `buffer<N>` / `entity`) share template-literal syntax + the `Handle<TargetTag, Mode>` phantom-tag form (or `Entity` for the entity case). The two array vocab keywords (`array<T,N>` / `array<T>`) share the same template-literal shape — different element types `T` produce different `TypedArrayFor<T>` snapshot types; cross-element-type, cross-shape (`array<T,N>` vs `array<T>` vs `buffer` vs `buffer<N>`), and cross-tag assignment is a TS error (`packages/ecs/src/__tests__/handle.test-d.ts:37,46,55,64` + `packages/ecs/src/__tests__/managed-array-vocab.test.ts` inline `expectType` anchors).
-
-## Transient view contract -- fixed `array<T,N>` and `buffer<N>`
-
-> [!IMPORTANT]
-> **The TypedArray view returned by `world.get(e, Transform).world` aliases the archetype column buffer directly.** It is valid only until the next structural change. Re-fetch the view on every access.
-
-Fixed-capacity inline columns (`array<T,N>` / `buffer<N>` as of feat-20260602) store their payload contiguously in a stride-N `TypedArray` column. The snapshot returned by `world.get` and the fast-path view returned by `_getArrayView` both alias the live column buffer -- not a copy, and not a `BufferPool` slot. This means:
-
-- **Every access must re-fetch the view** (`world.get(e, C).field` or the internal `_getArrayView` call). Do not hold the returned `TypedArray` across an operation that may grow, shrink, or remap columns.
-- **Structural change** = `spawn` / `despawn` / `addComponent` / `removeComponent` -- anything that causes archetype migration or column growth (`growColumn` detaches the old `ArrayBuffer` via `transfer()`).
-- **Holding a view across a structural change is undefined behaviour**: after growth the backing buffer is detached (the view becomes zero-length); after a swap-remove at the same row index the view points to the wrong entity.
-
-### Why the existing hot paths are already safe
-
-The inline layout merely makes an implicit contract explicit. Three per-frame consumers already conform:
-
-| Consumer | Pattern | Why safe |
-|:--|:--|:--|
-| `propagateTransforms` | Pins the view inside a single-pass loop over archetype rows | No spawn/despawn/migration occurs mid-pass |
-| `render-system-extract` | Fetches `_getArrayView`, copies 16 floats, discards the view | Fetch-use-copy within the same tick |
-| `pick` | Fetches the world matrix, transforms the ray, returns immediately | Fetch-use-return, no retention |
-
-AI users writing a new system that reads a fixed-capacity array field across spawns or component adds must re-fetch the view after each structural change. The contract is documented here and in the JSDoc of `_getArrayView` / `get` / `Transform.world`; no runtime epoch check is performed (accepted risk R-1, defer to future hardening).
-
-## Array / buffer field access — `world.push` / `world.pop` / `world.capacity` + read-only snapshot
-
-`array<T,N>` and `array<T>` resolve at `world.get(...).unwrap().<field>` to a `TypedArrayFor<T>` **read-only snapshot** (D-4: snapshots are throwaway; do not retain across calls; writing to the returned typed array has undefined effect on World state — go through the three commands below). One value shape, three commands:
-
-| Command | `array<T,N>` (fixed-length) | `array<T>` (variable-length) |
-|:--|:--|:--|
-| `world.push(e, C, 'f', v)` | not available (capacity frozen; pushes past `N` route `fixed-array-overflow`) | grows the live element count by 1; `count > capacity` triggers transparent `BufferPool` grow |
-| `world.pop(e, C, 'f')` | not available (length frozen) | returns the trailing element typed `T`; routes `array-pop-empty` when `count === 0` |
-| `world.capacity(e, C, 'f')` | returns `N` (literal-typed at compile time) | returns the current allocation; never decreases except on slot release |
-
-```ts
-import { defineComponent, World } from '@forgeax/engine-ecs';
-
-const C = defineComponent('C', { tag: 'array<u32>' });
-const world = new World();
-const e = world.spawn({ component: C, data: { tag: new Uint32Array(0) } }).unwrap();
-
-world.push(e, C, 'tag', 7);                  // count: 0 -> 1
-world.push(e, C, 'tag', 9);                  // count: 1 -> 2
-world.capacity(e, C, 'tag');                 // current allocation
-const snapshot = world.get(e, C).unwrap().tag; // TypedArrayFor<'u32'> (Uint32Array), read-only snapshot
-world.pop(e, C, 'tag');                      // count: 2 -> 1; returns 9
-```
-
-`fieldName` is statically constrained to `keyof S` filtered to fields whose schema keyword is `array<...>` / `array<..., N>` (`world.push(e, C, 'parent', x)` where `parent: 'entity'` is a TS error; `world.capacity(e, C, 'meta')` where `meta: 'buffer<N>'` is a TS error — `*.test-d.ts` locks each cross-shape rejection). For `buffer<N>` the entry is `world.set(e, C, { f: bytes })` with `bytes.byteLength === N` (routes `fixed-size-mismatch` on violation); `buffer` (variable) has no `byteLength` constraint and writes through the same `world.set`.
-
-Stride contract for `Instances.transforms` is **not** enforced at the ECS layer — `defineComponent` no longer accepts an `arrayStride` option. The defensive fail-fast (`length % 16 === 0`) lives at the RenderSystem entry that consumes `Instances.transforms` before GPU upload, where it routes `instance-transforms-stride-mismatch` (see [`packages/runtime/README.md`](../runtime/README.md)). AI users at the spawn site write `transforms: new Float32Array(N * 16)` directly — no stride option, no view wrapper.
-
-> **Carry-over rules (D-3, weak constraint)** — archetype migration preserves: (a) inline column bytes for fixed `array<T,N>` / `buffer<N>` are byte-equal (the full stride-N block is copied verbatim); for variable `array<T>` the BufferPool slot bytes are byte-equal and the slot stays live (no release/realloc); (b) `count` (queried via `world.capacity` for variable arrays) and the fixed `N` are unchanged; (c) the typed-array snapshot returned by post-migration `world.get` is byte-equal but is **not** the same JS object — identity (`Object.is`) is **not** part of the contract. AI users rely on contents, not identity.
-
-## Relationship — bidirectional entity relations (feat-20260531)
-
-A **relationship** is a binary entity-to-entity relation (parent-child, attachment, ownership) declared once on `defineComponent`; the engine then auto-maintains both directions. The canonical instance is `ChildOf` (source, holds the SSOT) ↔ `Children` (mirror, an `array<entity>` reverse list) in `@forgeax/engine-runtime`. The abstraction is generic — any relation (`FollowedBy` / `OwnedBy` / your own) uses the same shape.
-
-**Declare it** (third `defineComponent` arg, one nested entry — charter P1):
-
-```ts
-const ChildOf = defineComponent('ChildOf', { parent: 'entity' }, {
-  relationship: { mirror: 'Children', field: 'entities', exclusive: true, linkedSpawn: false },
-});
-```
-
-`RelationshipMeta` (`packages/ecs/src/component.ts`): `mirror` (mirror component **name**, string — resolved at define time via the global `resolveComponent` index, keeps `engine-ecs` free of any `engine-runtime` import), `field` (the mirror's `array<entity>` field), `exclusive` (single-target: re-attaching auto-reparents), `linkedSpawn?` (default `false` — despawning the target does **not** cascade-despawn its sources; set `true` for Bevy-style recursive despawn).
-
-**Define-order constraint** — the mirror component must be `defineComponent`'d **before** the holder. Relationship validation runs at `defineComponent` time (fail-fast throw): if the mirror name is unknown, `defineComponent` throws `RelationshipMirrorComponentNotRegisteredError`; if the mirror's field is not `'array<entity>'`, it throws `RelationshipMirrorFieldTypeMismatchError`. In a TS module, ESM top-level evaluation order guarantees this as long as the mirror's `defineComponent` call appears (or is imported) before the holder's — no separate registration step needed:
-
-| Failure | `err.code` |
-|:--|:--|
-| mirror name unknown at define time | `relationship-mirror-component-not-registered` |
-| mirror field not `array<entity>` | `relationship-mirror-field-type-mismatch` |
-
-**Commands** (synchronous `World` methods; the relationship hook maintains the mirror automatically — no manual `Children` push/pop):
-
-| Method | Effect |
-|:--|:--|
-| `addChild(parent, child, C, data)` | attach via relationship component `C`; O(depth) cycle check fail-fast (`relationship-self-cycle`); `exclusive` auto-reparents off any old target |
-| `removeChild(parent, child, C)` | detach (entity survives); parent-mismatch → `relationship-detach-mismatch` |
-| `reparent(child, newParent, C, data)` | atomic detach-then-attach; same cycle check |
-
-> The 4-arg `addChild(parent, child, component, data)` shape is the price of generality — the relation type is not hard-coded to `ChildOf`, so the holder `Component` token + its field `data` are explicit. Bare `addComponent(child, ChildOf, { parent })` works identically (the hook fires either way); the Commands add cycle-detection + atomic reparent on top.
-
-**Traverse** — `world.iterDescendants(e)` / `world.iterAncestors(e)` return `Iterable<EntityHandle>` for `for...of`; both carry a visited-set so corrupt cyclic data terminates instead of looping.
-
-**Lifecycle** — bidirectional sync runs at three `World` sites: `addComponent`/`spawn` (append to mirror, lazily creating the mirror component if absent), `removeComponent` (prune), `despawn` (prune the mirror entry; cascade only if `linkedSpawn`). It uses the same `onInsert`/`onRemove` lifecycle hooks available through `DefineComponentOptions`.
-
-> Eliminates the prior manual `Children` ↔ `ChildOf` two-step maintenance (OOS-09 / OOS-10).
-
-> Because the mirror component (`Children`) is a derived runtime view, it must be declared `transient: true` so scene collect never serializes it — see [§transient](#transient--serialization-skip-for-derived-runtime-state-feat-20260707) below.
-
-## transient — serialization-skip for derived runtime state (feat-20260707)
-
-`transient: true` declares a component as derived runtime state. `rootsToSceneAsset` collect skips transient components — they are never written to `SceneAsset` payload. However, they remain physically in archetype columns and participate normally in queries and `world.get`. After `instantiateScene`, relationship mirror hooks rebuild them (e.g., `Children` is rebuilt by `ChildOf`'s `onInsert` hook). `transient` only gates the collect write path, not runtime presence.
-
-**Relationship mirror obligation**: mirror targets of relationship components MUST declare `transient: true`. The engine provides `checkRelationshipMirrorsTransient(RELATIONSHIP_COMPONENTS, resolveComponent)` — a dev assertion at collect time that catches omissions. The assertion checks the **mirror token** (e.g., `Children`), not the **holder token** (e.g., `ChildOf`). `RELATIONSHIP_COMPONENTS` is a `ReadonlySet<Component>` of every component declared with `relationship` metadata; exported from `@forgeax/engine-ecs`. The assertion is **dev-gated** — `rootsToSceneAsset` runs it only when `NODE_ENV !== 'production'` (browser-safe probe), so it names an omitted mirror during development and adds zero production overhead.
-
-**Canonical example** — `Children` is the standard transient component:
-```ts
-export const Children = defineComponent('Children', {
-  entities: { type: 'array<entity>' },
-}, { transient: true });
-```
-It is the mirror of `ChildOf`, rebuilt by the mirror hook after `instantiateScene`, and never serialized. Mount round-trip fidelity (`rootsToSceneAsset` -> `instantiateScene` -> `rootsToSceneAsset` structural equivalence) is guaranteed by the `ChildOf` relationship graph, not by serialized `Children` data.
-
-### Field-level `transient` (feat-20260709)
-
-`transient: true` also declares on an **individual field** (via `FieldDescriptor`), not only a whole component. `rootsToSceneAsset` collect skips any field whose reflection carries `transient: true` — a generic mechanism keyed on `component.fields[fieldName].transient`, not a per-component special case. The field stays physically in its column and participates in queries / `world.get`; only the collect write path is gated.
-
-`simulationTransient: true` is the separate record/restore boundary for
-runtime-owned or presentation bindings that must remain in SceneAsset
-writeback. It is filtered only by the simulation projection; use `transient`
-when the field is also derived and must be omitted from scene serialization.
-
-The canonical use is a per-frame **derived cache** field: `Transform.world` (the resolved world mat4, recomposed every frame by the propagate kernel from the persisted local TRS) declares `transient: true`, so scene JSON never stores the reconstructable 16-float matrix (architecture-principles.md #2 Derive). After `instantiateScene` the first propagate pass re-derives an equivalent `world`.
-
-```ts
-export const Transform = defineComponent('Transform', {
-  pos: { type: 'array<f32, 3>', default: new Float32Array([0, 0, 0]) },
-  quat: { type: 'array<f32, 4>', default: new Float32Array([0, 0, 0, 1]) },
-  scale: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
-  world: { type: 'array<f32, 16>', default: IDENTITY_MAT4, transient: true },
-});
-```
-
-The flag is programmatically self-inspectable: `Transform.fields.world.transient === true` (Layer-2 reflection, see [§reflection](#layer-2-componentfieldsfieldname--per-field-pre-parsed-reflection)) — an AI user can confirm whether a field is serialized without reading source or trial-serializing.
-
-## Table components and sparse tags
-
-Components use table storage by default. Table components own SoA columns and are appropriate for data and stable marker identity. A zero-field marker that changes frequently can opt into sparse storage:
-
-```ts
-const Position = defineComponent('Position', { x: 'f32', y: 'f32' });
-const Enemy = defineComponent('Enemy', {}); // table tag
-const Selected = defineComponent('Selected', {}, { storage: 'sparse' });
-```
-
-`storage` is a frozen fact on the Component token. Sparse storage accepts only an empty schema and no relationship metadata; invalid declarations throw `SparseStorageRequiresTagError` with code `sparse-storage-requires-tag`. `Disabled` intentionally remains a table tag so the default `without Disabled` query predicate can reject whole Tables and preserve span capability.
-
-An Archetype owns the complete logical component set and maps each logical row to a physical Table row. Archetypes that differ only by sparse tags share one Table. Adding or removing a sparse tag moves only that logical mapping and its generation-safe sparse membership; it does not copy table data or change Table size, capacity, version, buffers, or table-component epochs.
-
-Use sparse tags for high-frequency membership such as selection or damage markers. Keep stable identity tags in table storage. Do not choose sparse merely because a schema is empty: it trades whole-Table filtering for cheaper membership flips.
-
-`world.inspect()` reports these owners separately: `archetypes[].componentNames` includes table and sparse identity, while `tables[].componentNames` includes physical table storage only.
-
-## Query
-
-`world.query(descriptor)` is the only constructor. It compiles component access, filters, span capability, and independent change-observation cursor into one persistent Query.
-
-| Descriptor role | Matching | Data permission |
-|:--|:--|:--|
-| `read` | component required | `row.get(Component)` |
-| `write` | component required | `row.mut(Component)` |
-| `optional` | does not filter | `row.get(Component)` may be `undefined` |
-| `with` / `without` | presence filter | none |
-| `changed` / `added` | row observation filter, AND across entries | none |
-
-```ts
-const query = world.query({
-  read: [Camera],
-  write: [Transform],
-  optional: [Velocity],
-  with: [Visible],
-  changed: [Transform],
-}).unwrap();
-
-for (const row of query) {
-  const camera = row.get(Camera);
-  const transform = row.mut(Transform);
-  const velocity = row.get(Velocity);
-  transform.pos[0] += velocity?.x ?? camera.fov;
-}
-```
-
-> [!IMPORTANT]
-> Query rows and spans are transient facades. Retain `row.entity`, not the row object or a span view. Structural mutation during iteration throws `query-iteration-invalidated`; re-entering the same Query throws `query-iteration-active`.
-
-Mutation evidence is owned by mutation. `row.mut(Component)` and `span.mut(Component)` mark the component through the same epoch owner used by `world.set`, `push`, and `pop`. Each Query advances its own observation cursor only after iteration completes.
-
-### Dense zero-copy spans
-
-`query.spans()` returns `Result<Iterable<QuerySpan>, QuerySpanUnavailableError>`. It exposes transient TypedArray views without gather or copy when every accessed component is dense and the descriptor has no `optional`, `changed`, or `added` role.
-
-```ts
-const query = world.query({ write: [Health], read: [HealthDecay] }).unwrap();
-for (const span of query.spans().unwrap()) {
-  const health = span.mut(Health).value;
-  const decay = span.get(HealthDecay).factor;
-  for (let i = 0; i < span.length; i++) {
-    health[i] = (health[i] ?? 0) * (decay[i] ?? 0);
-  }
-}
-```
-
-Capability rejection is structured: `query-span-unavailable` carries the reason instead of returning a boolean or silently falling back to copied rows.
-
-## Component lifecycle hooks (`onAdd` / `onInsert` / `onDiscard` / `onRemove`)
-
-`defineComponent` can attach four synchronous lifecycle hooks. They are useful for keeping an index or other derived data structure synchronized with component ownership; the callback receives the entity and a value snapshot, so it does not need to read a potentially migrating archetype row.
-
-```ts
-const index = new Map<number, EntityHandle>();
-const Marker = defineComponent('Marker', { key: 'u32' }, {
-  onAdd: () => {},
-  onInsert: (entity, value) => index.set(value.key, entity),
-  onDiscard: (_entity, value) => index.delete(value.key),
-  onRemove: () => {},
-});
-```
-
-`onAdd` fires only when the entity did not already carry the component. `onInsert` fires after spawn, add, and set writes. `onDiscard` receives the old value before a set replacement, component removal, or despawn; `onRemove` follows it while the component is still logically present. The same ordering applies to deferred `Commands` materialization. Hooks are synchronous and intentionally receive snapshots rather than a World handle; use systems or events when a callback needs broader world mutation.
-
-## Query combinations
-
-`query.combinations(k)` visits each unordered K-combination through the same descriptor, cursor, row facade, and invalidation rules. `k` defaults to 2; `k > N` yields nothing.
-
-```ts
-const bodies = world.query({ write: [Body, Transform] }).unwrap();
-for (const [left, right] of bodies.combinations(2)) {
-  applyPair(left.mut(Body), left.get(Transform), right.mut(Body), right.get(Transform));
-}
-```
-
-## Name component
-
-> [!TIP]
-> **30-second TLDR**: `Name { value: 'string' }` is the canonical single-field exemplar of the `'string'` schema vocab. Read returns a native JS `string` (no view class — collapsed onto the managed-ref dispatch by feat-20260515-string-managed-collapse). AI users round-trip via `world.get(e, Name).unwrap().value` and mutate via `world.set(e, Name, { value: 'NewName' })`. Despawn frees the underlying `ManagedRefStore` handle through the same 3-path release as every other managed field.
-
-```ts
-import { defineComponent, World } from '@forgeax/engine-ecs';
-import { Name } from '@forgeax/engine-scene';
-// Name is pre-defined; equivalent to: defineComponent('Name', { value: 'string' })
-
-const world = new World();
-const e = world.spawn({ component: Name, data: { value: 'Player' } }).unwrap();
-
-// Read: world.get returns Result<{ value: string }, EcsError>
-const value: string = world.get(e, Name).unwrap().value;
-value;               // 'Player'  (native JS string, by reference)
-
-// Mutate: world.set replaces the managed-ref handle in one shot
-world.set(e, Name, { value: 'Boss' }).unwrap();
-world.get(e, Name).unwrap().value;  // 'Boss'
-
-// Identity stability across reads with no intervening set (AC-03)
-const a = world.get(e, Name).unwrap().value;
-const b = world.get(e, Name).unwrap().value;
-Object.is(a, b);     // true  (managed-ref handle returns the same JS string)
-
-// Despawn releases the handle via the ManagedRefStore 3-path. Carry-over
-// across archetype migrations preserves Object.is identity (AC-04 strong
-// contract).
-world.despawn(e);
-```
-
-`Name` is exported from `@forgeax/engine-ecs` as a pre-built component token. The schema literal `Name { value: 'string' }` is the canonical grep target for AI users discovering the `'string'` vocab via `rg "Name { value:" packages apps templates` — the same pattern used by `Children { entities` / `Instances { transforms` for the `array<...>` vocab. Mutation, archetype carry-over (`Object.is` identity preserved per AC-04), and `ManagedRefStore` 3-path release are all covered by the unit tests at `packages/ecs/src/__tests__/name-component.test.ts` + `name-mutation.test.ts` + `string-release.test.ts` + `string-carry-over.test.ts` + `string-managed-dispatch.test.ts` + `string-identity-contract.test.ts`.
-
-## Error code source and recovery
-
-`EcsErrorCode` and `EcsErrorDetail` in `packages/ecs/src/errors.ts` are the closed-union SSOT. The
-error classes in that source file own each literal's severity, `.hint`, and narrowed `.detail`; do
-not maintain a second member list or count in this README. Verify the current source union with the
-executable gate:
-
-```sh
-node packages/ecs/scripts/check-ecs-error-code-count.mjs
-```
-
-Branch on `err.code` for exhaustive recovery. Read the matching error class JSDoc in `errors.ts` for
-the programmatic hint and detail shape; historical evolution rows below retain prior API decisions,
-not the current union.
-
-> **Charter proposition 1 (single-entry surface) — discoverability**:
-> Every name above is re-exported from `@forgeax/engine-ecs` (`packages/ecs/src/index.ts:322,328`). One `import { EcsErrorCode, ManagedRefReleasedError, ... } from '@forgeax/engine-ecs'` is enough — there is no second-best path. Enforced by the `pnpm grep:single-exit` gate (`packages/ecs/scripts/check-single-exit.mjs`).
-
-## Component.toSchemaJSON() — offline manifest discoverability
-
-`defineComponent(name, schema)` returns a frozen token whose `.schema` property **is** the manifest payload — the same string-keyed map the call site wrote, surviving every transform unchanged. The token also exposes a trivial `toSchemaJSON()` method (an alias for `JSON.stringify(this.schema)`) so AI users discover the manifest surface via IDE autocomplete on the token instead of having to remember the wrapping idiom:
-
-```ts
-const Mat = defineComponent('Mat', { albedo: 'ref<MaterialAsset>', count: 'u32' });
-Mat.toSchemaJSON();
-//   {"albedo":"ref<MaterialAsset>","count":"u32"}
-JSON.stringify(Mat.schema); // identical output — both forms are interchangeable
-```
-
-Charter proposition 3: the schema is **statically extractable** without bundling the runtime — `grep -rn "defineComponent('" packages apps templates` lands every component plus its full schema map in one ripgrep pass. Build-time tooling (manifest dumpers, codegen) inspects `Component.schema` directly; no reflection API is needed. Tests `packages/ecs/src/__tests__/component.test.ts` + `packages/ecs/src/__tests__/component-schema-json.test.ts` (feat-20260515 / w29) lock the round-trip.
-
-> **Offline manifest commitment (feat-20260515-buffer-array-vocab-collapse / plan-strategy §8.4)**: via `Component.toSchemaJSON()` (the `JSON.stringify(this.schema)` manifest payload), AI users perform **offline grep static analysis** in the repo root to discover which components use which `array<*>` / `buffer<*>` fields — no runtime startup, no reflection, no bundling required. A single ripgrep pass covers all four keyword shapes (`array<entity>` / `array<f32, 16>` / `buffer<16>` / `buffer`) at every declaration site. This is the concrete cash-out of charter proposition 1 (single-entry surface) + proposition 4 (text-over-image) for the feat-20260515 vocab collapse.
-
-## Component.schema['<field>'] — runtime self-discovery
-
-Charter proposition 4 (eager + lazy discoverability dual): the same `.schema` field that supports offline grep is also the runtime self-discovery surface. AI-user-authored debug code reads `Component.schema['<field>']` to ask "what keyword did this field declare?" without re-importing the source:
-
-```ts
-import { defineComponent } from '@forgeax/engine-ecs';
-const C = defineComponent('C', { mat: 'ref<MaterialAsset>', dim: 'buffer<1024>' });
-C.schema['mat'];  // 'ref<MaterialAsset>'  (literal-typed, not widened to string)
-C.schema['dim'];  // 'buffer<1024>'
-```
-
-Inspection helpers (`isManagedRefField` / `isManagedBufferField` / `isEntityField` / `isSchemaVocabKeyword`, all re-exported from `@forgeax/engine-ecs`) accept plain `string` so the runtime release loop in `World` calls them on the erased runtime schema map without a cast — same probe surface for AI-user runtime code and engine-internal code (charter proposition 5: one consistent abstraction).
-
-## Component reflection — three-layer introspection (feat-20260602)
-
-`defineComponent` now accepts a **field-descriptor object** form that aggregates `type` + `default` + field-level `meta` at each field declaration site. At registration time the engine pre-parses this input into three reflection layers on the frozen component token: `schema` and `fields` are read-only projections, while `meta` is an open extension map. This eliminates the 12 scattered type-intrinsic structures (`FIELD_SIZE_BYTES` / `VIEW_CTORS` / `SUPPORTED_FIELD_TYPES` / `storageFieldType` / `isSchemaVocabKeyword` etc.) — all converged into one global `TYPE_METADATA` table.
-
-### Input signature
-
-```ts
-import { defineComponent } from '@forgeax/engine-ecs';
-
-const C = defineComponent('C', {
-  x: { type: 'f32', default: 0, meta: { unit: 'm' } },
-  tags: 'array<u32>',  // bare type keyword still accepted (flat form)
-});
-```
-
-The second argument is a `FieldsInput` (map of field-name to `FieldSpec` — either a bare type keyword or a `FieldDescriptor { type, default?, meta? }` object). `meta` is an open namespace — the infra gives no key special meaning (OOS-1).
-
-### Layer 1: `component.meta` — component-level open namespace
-
-A `Record<string, unknown>` open map aggregating every field's `meta` sub-keys into a single component-level namespace. Component definitions may seed it with `DefineComponentOptions.meta`, and higher-level consumers may extend it after registration. The ECS assigns no meaning to any key:
-
-```ts
-const C = defineComponent('C', {
-  x: { type: 'f32', meta: { unit: 'm' } },
-  y: { type: 'f32', meta: { priority: 10 } },
-});
-C.meta.unit;      // 'm'
-C.meta.priority;  // 10
-C.meta.noSuchKey; // undefined (charter P3 — no silent default)
-```
-
-The infra **zero-interprets** any key — no special handling for `priority` / `blend` / etc. Downstream subsystems are expected to carve out their own key space via convention (e.g. prefix `volume.` / `blend.`), matching the `PackIndexEntry.metadata` "open namespace" precedent.
-
-The component token itself is frozen, but `component.meta` is intentionally mutable so a higher-level consumer can register namespaced annotations without changing the engine's component definition.
-
-### Layer 2: `component.fields[fieldName]` — per-field pre-parsed reflection
-
-A frozen `Record<fieldName, FieldReflection>` where each entry carries:
-
-| Field | Type | Description |
-|:--|:--|:--|
-| `type` | `SchemaFieldType` | The field-type keyword (same as `component.schema[fieldName]`) |
-| `default` | `unknown` (if present) | The layer-2 default value from the field descriptor |
-| `arrayMeta` | `ArrayMeta` (if `array<...>` field) | Pre-parsed array metadata — parsed **once** at registration |
-| `transient` | `boolean` (if declared) | Field-level serialization-skip flag — `true` means scene collect omits this field (see [§transient](#transient--serialization-skip-for-derived-runtime-state-feat-20260707)). Programmatically self-inspectable via `component.fields[fieldName].transient`. |
-
-`ArrayMeta` shape (`{ elementType: ManagedArrayElementType, length?: number }`):
-
-- `length` present => fixed-capacity (`array<T,N>`)
-- `length === undefined` => variable-capacity (`array<T>`) — variable is **derived** from `length` absence, no `isVariable` / `kind` discriminant (D-A1 user ruling, architecture-principles.md #2 Derive)
-
-```ts
-const C = defineComponent('C', { v: 'array<f32, 3>' });
-C.fields.v?.arrayMeta; // { elementType: 'f32', length: 3 }
-
-// Pre-parsed reuse (AC-03c): same object reference across multiple reads
-const a = C.fields.v?.arrayMeta;
-const b = C.fields.v?.arrayMeta;
-Object.is(a, b); // true — parse happens once at registration
-```
-
-`ElementBytes` / `variable` flag are intentionally **not stored** in `arrayMeta` — consumers derive them: `elementBytes` by looking up `TYPE_METADATA[arrayMeta.elementType].byteSize`; `variable` via `arrayMeta.length === undefined`.
-
-### Layer 3: `TYPE_METADATA` — global per-type intrinsic table
-
-A module-level frozen table (keyed by `SchemaFieldType`) converging the 12 former scattered structures into one multi-column map. Each row carries type-intrinsic properties:
-
-| Column | Meaning | Example (`'f32'`) |
-|:--|:--|:--|
-| `byteSize` | Column storage width | 4 |
-| `viewCtor` | TypedArray constructor | `Float32Array` (NB: actual ctor, not a string) |
-| `storage` | Normalized storage-family keyword or `null` | `'f32'` |
-| `isLegacyScalar` | From the 11-key `ScalarFieldType` set | `true` |
-| `isManagedRef` | Routed through `ManagedRefStore` release | `false` |
-| `isBuffer` | Routed through `BufferPool` release | `false` |
-| `isEntityRef` | `entity` keyword | `false` |
-| `isArray` | `array<...>` keyword family | `false` |
-| `isVocabKeyword` | From `SchemaVocabKeyword` union | `false` |
-| `fixedByteLength` | Fixed-`N` for `buffer<N>`, else `undefined` | `undefined` |
-
-**Key granularity**: scalar family = one row per concrete type (11 rows: `f32` / `f64` / `i32` / `u32` / `i16` / `u16` / `i8` / `u8` / `bool` / `enum` / `ref`); vocab family = one row per family (6 rows: `entity` / `string` / `buffer` / `ref` / `handle` / `array`). Parametrized parameters (`<T>` / `<N>`) are not independent keys — they stay as `arrayMeta.elementType` / `TYPE_METADATA` column lookups.
-
-```ts
-import { TYPE_METADATA } from '@forgeax/engine-ecs';
-
-TYPE_METADATA['f32'].byteSize;           // 4
-TYPE_METADATA['f32'].viewCtor;           // Float32Array (constructor)
-TYPE_METADATA['entity'].isEntityRef;     // true
-TYPE_METADATA['array'].isArray;          // true
-TYPE_METADATA['buffer'].fixedByteLength; // undefined (family-keyed table; the
-                                         // `buffer<N>` byte count is per-field,
-                                         // parsed into the field reflection, not a
-                                         // per-type column — there is no
-                                         // `'buffer<16>'` key)
-```
-
-### Naming disambiguation (AC-10)
-
-Two distinct namespaces use the name `fields`:
-
-| Context | Shape | Meaning |
-|:--|:--|:--|
-| `defineComponent(name, fields, ...)` — input parameter | `Record<string, FieldSpec>` | AI user writes field declarations here |
-| `component.fields[fieldName]` — token property | `Record<string, FieldReflection>` | AI user reads pre-parsed reflection here |
-
-Both are named `fields` but occupy **separate scopes** (parameter vs. property). IDE autocomplete and JSDoc distinguish them: "I write into `fields` at `defineComponent`; I read from `component.fields` on the token." No attribute-level name collision — `component.fields` is a property on the token, while the `defineComponent` parameter `fields` is a local argument at the call site.
-
-## SceneInstance lifecycle — `detach*` vs `despawnScene`
-
-> feat-20260608-scene-nesting-ecs-fication M3: the pre-feat
-> world-scoped scene-instance container + `class SceneInstance` API was
-> deleted; SceneInstance is now an ECS component (one row per instance,
-> live on the synthetic root entity) and the World gains 8 verb-prefixed
-> methods. Tearing an instance down has two distinct verbs — `detach*`
-> (sever bookkeeping, keep entities) and `despawnScene` (truly destroy
-> the entities). Picking the wrong one silently leaks entities or
-> destroys data you meant to keep, so the split is explicit.
-
-| Verb family | Calls `world.despawn`? | Entities after | Reversible? | Use when |
-|:--|:--|:--|:--|:--|
-| `detachSceneMember(root, member)` | no | stay alive in `world` | yes — `reattachSceneMember(root, member)` clears the tombstone | prefab-edit: promote spawned entities out of the instance and keep mutating them directly |
-| `despawnDescendants(root)` | yes — on every entity reached by `ChildOf` | destroyed | no | drop the subtree but keep the synthetic root |
-| `despawnScene(root)` | yes — `despawnDescendants(root) + world.despawn(root)` | all destroyed including synthetic root | no | tear the instance down for good and free its entities |
-
-### Synthetic root invariant (D-V-0 / R2/F-7)
-
-`world.instantiateScene(handle)` returns `{ root, diagnostics }` — `root` is a synthetic root `Entity` that
-carries `SceneInstance{source, mapping, state}` and identity
-`Transform`. The Transform attach is load-bearing — `propagateTransforms`
-walks the `ChildOf` chain `meshRenderer -> ... -> syntheticRoot` through
-the Transform liveMap and reports `RhiError(hierarchy-broken)` when a
-parent in the chain lacks Transform. The same invariant applies to
-*mount entities* (one per `SceneAsset.mounts[i]`); the runtime attaches
-identity Transform to each mount entity (R2/B-1) so the chain `cube ->
-innerSyntheticRoot -> mountEntity -> outerSyntheticRoot` resolves
-cleanly without per-frame errors. AI users normally never observe these
-intermediates — they read the synthetic root via `world.get(root,
-SceneInstance)` and address members through `mapping[localId]`.
-
-`diagnostics: readonly SceneInstantiateDiagnostic[]` is a structured array of unknown-field records. When a `.pack.json` carries a field name that no longer matches the registered component schema, that field is skipped (entity still spawns with known fields intact) and logged as a diagnostic entry `{ component, field, localId }`. This is production-observable (property-access, not NODE_ENV-gated) and covers the "stale field in old pack.json does not blank the entire 21-entity scene" studio scenario.
-
-### 8 World methods
-
-| Method | Signature | Effect |
-|:--|:--|:--|
-| `instantiateScene` | `(Handle<SceneAsset>, parent?: EntityHandle) => Result<{ root: EntityHandle; readonly diagnostics: readonly SceneInstantiateDiagnostic[] }, EcsError \| PackError>` | Materialise the SceneAsset; spawns 1 synthetic root + every entity / mount entity / nested member. Success returns `{ root, diagnostics }` — `root` is the synthetic root Entity, `diagnostics` is structured unknown-field records (property-access, production-observable). Unknown fields are skipped (do not abort the scene). |
-| `despawnScene` | `(root: EntityHandle, opts?: { keepDetached?: boolean }) => Result<number, EcsError>` | `despawnDescendants(root) + world.despawn(root)`. Returns the count of destroyed entities. |
-| `despawnDescendants` | `(root: EntityHandle, opts?: { keepDetached?: boolean }) => Result<number, EcsError>` | Walk `ChildOf` from `root` and despawn every descendant; root stays alive. Returns the count of destroyed entities. |
-| `setSceneOverride` | `<S>(root: EntityHandle, member: EntityHandle, component: Component<S>, field: keyof ShapeOf<S>, value: unknown) => Result<void, EcsError>` | Layer-0 override — write through to the live entity column AND record the diff in `state.overrides`. `member` is the live Entity; `component` and `field` are typed via the component's schema. |
-| `removeSceneOverride` | `<S>(root: EntityHandle, member: EntityHandle, component: Component<S>, field: keyof ShapeOf<S>) => Result<void, EcsError>` | Drop the diff and replay Layer 1 -> 2 -> 3 fallback. |
-| `detachSceneMember` | `(root: EntityHandle, member: EntityHandle) => Result<void, EcsError>` | Soft tombstone — mark the member's LocalEntityId in `state.detachedLocalIds`. Does NOT call `world.despawn`. |
-| `reattachSceneMember` | `(root: EntityHandle, member: EntityHandle) => Result<void, EcsError>` | Clear the tombstone. |
-| `getSceneAssetForInstance` | `(root: EntityHandle) => Handle<SceneAsset> \| undefined` | Read the originating handle. Equivalent to `world.get(root, SceneInstance).value.source`. |
-
-Read paths use the standard ECS query surface:
-`world.query({ read: [SceneInstance] })` for active-instance scans;
-`world.get(root, SceneInstance).value` for one-instance reads;
-`world.getSceneInstanceState(root)` for the full state ref payload
-(`overrides`, `detachedLocalIds`, `rootEntities`, `totalSlots`,
-`mountTimeOverrides`).
-
-### `despawnScene` destroy set
-
-```
-destroy set = every entity reachable from `root` via ChildOf
-```
-
-`despawnDescendants` walks the `ChildOf` graph rooted at `root` and
-despawns every reached entity. `despawnScene` then calls
-`world.despawn(root)` to drop the synthetic root itself. Detached
-members (those marked in `state.detachedLocalIds` via
-`detachSceneMember`) are still reachable through `ChildOf` *unless* the
-caller explicitly broke the link — they are despawned by default, since
-the soft-detach is bookkeeping-only and does not unwire the entity from
-the hierarchy. To genuinely promote an entity out of the instance,
-remove its `ChildOf` first (`world.removeComponent(member, ChildOf)`)
-then call `detachSceneMember`.
-
-### Known limitation — hand-attached orphans (OOS-1)
-
-`despawnScene` walks `ChildOf` starting from the synthetic root, so
-sub-entities a user hand-attached *underneath* a member entity ARE
-descendants and ARE despawned by `despawnScene`. The pre-feat
-limitation (where hand-attached entities sat outside the instance's
-`mapping()` and leaked) is fixed by the ChildOf-walking destroy set.
-
-### Runtime-facing reference
-
-The runtime-facing pages — error-code attribution, mount-window
-addressing rules, default-value 4-layer fallback, sample loop —
-live in `packages/runtime/README.md` §SceneInstance.
-
-## AI User affordance — charter proposition 1 / 4 / 5 alignment
-
-Narrative evidence that the new vocabulary lands the [AI User Charter](../../.claude/skills/forgeax-closed-loop/agents/ai-user-charter.md) propositions in code, not in prose. Per `requirements.md §8.5`:
-
-| Charter proposition | What it asks for | Where it lands in this loop | How to verify |
-|:--|:--|:--|:--|
-| **1. Single-entry surface** | One obvious import path; second-best paths are noise | `packages/ecs/src/index.ts` re-exports `Handle`, `SchemaFieldType`, `SchemaVocabKeyword`, `ManagedRefStore`, `EcsErrorCode`, `EcsErrorDetail`, `Name`, `TypedArrayFor`, plus all `EcsError` classes (the legacy `FixedArrayView<T>` / `VarArrayView<T>` value-shape exports were deleted by feat-20260515-buffer-array-vocab-collapse — array fields now resolve to `TypedArrayFor<T>` read-only snapshots, mutations route through `world.push` / `world.pop` / `world.capacity`; the same-day feat-20260515-string-managed-collapse deleted `StringView` + `isStringField` — `'string'` materialises as a native JS `string` by reference) — single ripgrep + 1-screen Schema vocabulary quick-ref + Array / buffer field access section cover the full vocab (progressive disclosure: scan the table, drill in only when needed) | `pnpm grep:single-exit` (`packages/ecs/scripts/check-single-exit.mjs`) gates re-exports of these symbols from any non-ecs package |
-| **4. Explicit failure boundaries (eager + lazy)** | Errors are structured (data, not messages); cross-mode + cross-shape + cross-element-type misuse refused at compile time, not runtime | `packages/ecs/src/errors.ts` — every error class carries `.code` (string-literal type member of `EcsErrorCode`), `.hint` (programmatic), `.detail` (discriminated by `.code` via `EcsErrorDetail`); compile-time refusal in `packages/ecs/src/__tests__/handle.test-d.ts` (cross-mode + cross-target rejection) + `packages/ecs/src/__tests__/managed-array-view.test-d.ts` (cross-shape + cross-element-type rejection) + `packages/ecs/src/__tests__/component-schema.test-d.ts` + `packages/ecs/src/__tests__/managed-array-element-type.test.ts` (`array<string>` rejection — string vocab does not nest into the array vocab; compile-time + runtime lock via `managed-array-element-type-not-allowed`); runtime AC-05 coverage routes the 4 collapsed-vocab capacity codes (`fixed-size-mismatch` / `fixed-array-overflow` / `array-pop-empty` / `instance-transforms-stride-mismatch`) through Layer-3 ErrorRouter; `'string'` allocation / release error paths reuse the existing `managed-ref-released` / `managed-ref-double-release` envelopes (collapsed onto the managed-ref dispatch — no new error code) | `pnpm test --filter @forgeax/engine-ecs` runs the full RED→GREEN suite; `tsc -b` runs the compile-time tests |
-| **5. Consistent abstraction across the family** | Same syntax for related concepts; learning one teaches all | The schema vocab keywords share template-literal string syntax — `ref<T>`, `handle<T>`, `buffer`, `buffer<N>`, `entity`, `array<T,N>`, `array<T>`, `string` (`packages/ecs/src/component.ts`); `array<T,N>` stores elements inline (stride-N column, feat-20260602) while `array<T>` keeps the BufferPool slot column — both resolve to the same `TypedArrayFor<T>` read shape; `'string'` shares the `ManagedRefStore` u32-handle column with `ref<T>` and materialises by reference as a native JS `string` (collapsed onto managed-ref dispatch, no view-class wrapper); two handle modes share the `Handle<TargetTag, Mode>` phantom-tag form (`packages/ecs/src/handle.ts`); `Result<T, E>` shape is identical to `@forgeax/engine-rhi` (see Evolution log row 2026-05-11 above) | Quick-ref table in §Schema vocabulary above; `Handle` cross-mode safety test cited in column 3 |
-
-Counter-examples actively rejected by this loop (so the table above is load-bearing, not aspirational):
-
-- ✗ Splitting the vocab keywords into `'managed-ref'` / `'managed-buffer'` constant exports + a separate `'unmanaged-ref'` keyword — would force AI users to import three names, breaking proposition 1
-- ✗ Throwing a plain `Error` from `ManagedRefStore.release` on double-release — string `.message` is unparseable; structured `.code = 'managed-ref-double-release'` + narrowed `.detail` is the form
-- ✗ Keeping `'entity[]'` and `array<entity>` as parallel keywords — would split AI users between two equivalent paths; proposition 5 (consistency) is enforced by deleting the legacy syntax in one cut (gate `pnpm grep:no-entity-array-literal`)
-- ✗ Letting `Instances.transforms` keep the `buffer: 'ref'` legacy keyword + carry a `Handle<InstancedBufferAsset>` — the AssetRegistry triplet (`createInstancedBuffer` / `updateInstancedBuffer` / `getInstancedGpuBuffer`) splits the per-entity transform lifecycle from the ECS entity; the array vocab folds it back into the BufferPool 3-path release (gate `pnpm grep:asset-registry-instanced-removed`)
-- ✗ Adding a new `string-capacity-exceeded` error code parallel to the managed-ref envelopes for `'string'` overflow — would split AI users' exhaustive switches across two codes meaning the same thing (handle release / re-acquire). The collapse onto managed-ref dispatch routes through `managed-ref-released` / `managed-ref-double-release`; the current union remains source-owned.
-
-### AI User affordance — Name + string vocab alignment
-
-The `'string'` schema vocab + `Name` component land charter propositions 1 / 4 / 5 with the same shape as the `array<T>` family — three propositions, three concrete cash-outs:
-
-| Proposition | What `'string'` + `Name` deliver | Verify |
-|:--|:--|:--|
-| **1. Single-entry surface** | `import { Name } from '@forgeax/engine-ecs'` is the only path; `Name.schema.value === 'string'` is the canonical literal AI users grep with `rg "'string'" packages/ecs/src` to find the keyword + `rg "Name { value:" packages apps templates` to find every component declaration site. The read shape is a native JS `string` (no view-class import required) | `pnpm grep:single-exit` (`Name` in `GATED_SYMBOLS`); `node scripts/grep/check-readme-string-vocab-mentioned.mjs` (reverse-coupling discoverability gate); `pnpm grep:no-string-view-import` + `pnpm grep:no-set-managed-ref-store` (freeze gates against re-introducing the deleted symbols) |
-| **4. Explicit failure boundaries (eager + lazy)** | Eager: `defineComponent('Bad', { items: 'array<string>' as const })` is a TS error (`array<string>` element type rejected at compile time — `string` vocab does not nest). Lazy: `world.set` on a stale entity routes `stale-entity` (Result err); `ManagedRefStore` double-release routes `managed-ref-double-release`; `world.push` past `array<T,N>` capacity routes `fixed-array-overflow`; AI users branch on `r.error.code` not `r.error.message` | `packages/ecs/src/__tests__/component-schema.test-d.ts` + `packages/ecs/src/__tests__/managed-array-element-type.test.ts` (compile-time + runtime refusal of `array<string>`); `packages/ecs/src/__tests__/string-release.test.ts` (release contract) |
-| **5. Consistent abstraction across the family** | `'string'` is a vocab keyword in the same `SchemaVocabKeyword` closed union as `'entity'` / `array<T>` / `ref<T>` etc.; `'string'` shares the `ManagedRefStore` u32-handle column with `ref<T>` (one storage path, one dispatch arm via `isManagedField`); the read materialises by reference as a native JS `string` — no view class is needed because the runtime owns the payload by reference. Array fields share the `TypedArrayFor<T>` snapshot contract instead of a view-class (post-buffer-array-vocab-collapse) | `packages/ecs/src/world.ts` release loop branches uniformly on `isManagedField` / `isManagedBufferField` / `isManagedArrayField` (managed-family arm collapses 'string' + 'ref<T>' into one branch) |
-
-### Code-site anchors (proposition -> file:line)
-
-The table above resolves to plain ripgrep targets. AI users running `rg <symbol> packages/ecs/src` should land directly on the referenced lines without intermediate documentation hops.
-
-| Proposition | Anchor | What lives there |
-|:--|:--|:--|
-| 1 — single-entry | `packages/ecs/src/index.ts` | Re-export blocks: `Result` + `EcsError`, `SchemaFieldType` + `SchemaVocabKeyword`, `Handle`, `ManagedRefStore`, entity utilities, component internals, schedule layer, `EcsErrorCode` + `EcsErrorDetail`, all error classes (managed-ref + managed-buffer + collapsed-vocab capacity families), `Name`, `TypedArrayFor`, entity constants. The legacy `FixedArrayView` + `VarArrayView` re-exports were deleted by feat-20260515-buffer-array-vocab-collapse — array fields read through `TypedArrayFor<T>` snapshots and write through `world.push` / `world.pop` / `world.capacity`. The `StringView` + `isStringField` re-exports were deleted same-day by feat-20260515-string-managed-collapse — `'string'` materialises as a native JS `string` |
-| 1 — gate | `packages/ecs/scripts/check-single-exit.mjs` | `GATED_SYMBOLS = ['Handle', 'SchemaFieldType', 'ManagedRefStore', 'EcsErrorCode', 'EcsErrorDetail', 'EcsError', 'Name', 'TypedArrayFor']` (the legacy `FixedArrayView` / `VarArrayView` entries were dropped by feat-20260515-buffer-array-vocab-collapse when the view classes were physically deleted; `StringView` + `isStringField` were dropped by feat-20260515-string-managed-collapse) |
-| 1 — README discoverability gate | `scripts/grep/check-readme-string-vocab-mentioned.mjs` | Reverse-coupling check: `'string'` literal + `Name { value:` schema literal must surface in `packages/ecs/README.md` (mirrors `check-readme-array-vocab-mentioned.mjs`; `StringView` literal dropped by feat-20260515-string-managed-collapse) |
-| 4 — eager (compile-time refusal) | `packages/ecs/src/__tests__/handle.test-d.ts` + `packages/ecs/src/__tests__/managed-array-view.test-d.ts` + `packages/ecs/src/__tests__/component-schema.test-d.ts` + `packages/ecs/src/__tests__/managed-array-element-type.test.ts` | `@ts-expect-error` clauses: plain-number widening / managed -> unmanaged / unmanaged -> managed / cross-target / cross-shape `array<T,N>` vs `array<T>` / cross-element-type; runtime: `array<string>` rejection (string vocab does not nest into array vocab) |
-| 4 — lazy (runtime structured failure) | `packages/ecs/src/errors.ts` | `EcsErrorCode` closed union and `EcsErrorDetail` discriminated map; the current member set and count are owned by the source file and the executable gate above; `'string'` allocation / release errors reuse `managed-ref-released` / `managed-ref-double-release` |
-| 4 — exhaustive consumption | `packages/ecs/src/errors.ts` (every class declares `readonly code` as a `'literal' as const`) | `switch (err.code)` is exhaustive against `EcsErrorCode`; `assertNever(code)` catches future additions at compile time |
-| 5 — keyword family syntax | `packages/ecs/src/component.ts` | `SchemaVocabKeyword = '...buffer' \| 'buffer<${N}>' \| 'ref<${string}>' \| 'handle<${string}>' \| 'entity' \| 'array<${T},${N}>' \| 'array<${T}>' \| 'string'` (template-literal family; `'buffer'` + `'buffer<N>'` are the angle-bracket-aligned vocab after feat-20260515 collapse — legacy `'buffer:N'` literal removed) |
-| 5 — handle two-axis brand | `packages/ecs/src/handle.ts` | `Handle<TargetTag, Mode>` phantom tag — same form for `'managed'` and `'unmanaged'`; cross-mode is a TS error, not a runtime check |
-| 5 — array snapshot + 3 commands | `packages/ecs/src/world.ts` | `world.get(e, C).<arrayField>` returns `TypedArrayFor<T>` read-only snapshot; `world.push(e, C, 'f', v)` / `world.pop(e, C, 'f')` / `world.capacity(e, C, 'f')` are the three element-granular commands. The legacy `FixedArrayView<T>` / `VarArrayView<T>` value-shape view classes were physically deleted by feat-20260515-buffer-array-vocab-collapse (`packages/ecs/src/managed-array-view.ts` removed); fixed `array<T,N>` columns store elements inline (stride-N, feat-20260602), variable `array<T>` columns carry a BufferPool slot id via a u32 column |
-| 5 — string by reference | `packages/ecs/src/world.ts` (managed-ref dispatch arms) | `'string'` materialises by reference as a native JS `string` via `managedRefs.resolve(handle).unwrap()` — same `ManagedRefStore` storage column as `ref<T>`, no view-class wrapper. The `StringView` class was deleted in same-day collapse (feat-20260515-string-managed-collapse) |
-| 5 — Result shape parity | `packages/ecs/README.md` Evolution log row 2026-05-11 | `Result<T, E>` `.ok` / `.value` / `.error` byte-for-byte aligned with `@forgeax/engine-rhi` |
-
-### TLDR for AI users (30 seconds)
-
-> [!TIP]
-> **One import**: `import { defineComponent, World, Handle, ManagedRefStore, Name, TypedArrayFor, EcsErrorCode, ... } from '@forgeax/engine-ecs'`. Re-exporting any of these from another package is a CI failure (`pnpm grep:single-exit`). Array fields no longer expose view classes — read via `world.get(e, C).<arrayField>` (`TypedArrayFor<T>` read-only snapshot), write via `world.push` / `world.pop` / `world.capacity`. `'string'` materialises as a native JS `string` (no view class).
->
-> **One schema syntax** for managed resources: `'ref<T>'` (managed handle, ECS releases), `'handle<T>'` (unmanaged, you release), `'buffer'` (variable byte slot), `'buffer<N>'` (fixed N-byte slot, contract — was `'buffer:N'` hint pre-feat-20260515), `'entity'` (raw entity ref; liveness probe via `world.get(ref, Entity)` returns `err(STALE_ENTITY)` for despawned handles), `'array<T,N>'` (fixed-length view), `'array<T>'` (variable-length view), `'string'` (managed JS string by reference). All template-literal strings, all surfaced through `SchemaFieldType`. The legacy `'entity[]'` syntax is retired one-cut by `'array<entity>'`; the legacy `'buffer:N'` syntax is retired one-cut by `'buffer<N>'` (feat-20260515-buffer-array-vocab-collapse).
->
-> **One error shape**: `Result<T, EcsError>` everywhere; `if (!r.ok) switch (r.error.code) { ... }`. `r.error.code` is a literal member of the source-owned `EcsErrorCode` union, and `r.error.detail` is narrowed per code via `EcsErrorDetail`. Programmatic recovery without parsing strings. The `'string'` allocation / release errors reuse `managed-ref-released` / `managed-ref-double-release` (collapsed onto managed-ref dispatch).
->
-> **One thing this loop does change**: `Name { value: 'string' }` ships as a single-field component exemplar; `'string'` materialises by reference as a native JS `string` on top of the `ManagedRefStore` u32-handle column shared with `ref<T>` (one storage cash-out, one dispatch arm). The legacy `FixedArrayView<T>` / `VarArrayView<T>` value-shape classes were physically deleted by feat-20260515-buffer-array-vocab-collapse (array fields read via `TypedArrayFor<T>` snapshots, write via `world.push` / `world.pop` / `world.capacity`); the `StringView` class was deleted same-day by feat-20260515-string-managed-collapse. Cross-cuts gated by `pnpm grep:single-exit` (`Name` / `TypedArrayFor`) + `node scripts/grep/check-readme-string-vocab-mentioned.mjs` + freeze gates `pnpm grep:no-string-view-import` + `pnpm grep:no-set-managed-ref-store` + `pnpm grep:no-managed-array-view-import` + `pnpm grep:no-array-stride-option` + `pnpm grep:no-buffer-colon-keyword` + `pnpm grep:no-managed-array-error-code`.
-
-## Dangling entity refs are the consumer's responsibility
-
-> [!IMPORTANT]
-> **The ECS does not back-stop dangling `'entity'` refs.** `world.get(e, C)` decodes an `'entity'` field by returning the raw u32 verbatim — it does **not** validate that the referenced entity is still alive, and it never mutates your component to "clean up" a stale ref. Liveness is the consumer's job: check with `world.get(ref, Entity)` (the universal liveness probe — returns `err(STALE_ENTITY)` for despawned handles), carry your own generation, or design so a stale ref cannot arise. ECS-level read-time validation was removed deliberately (feat-20260602-drop-entity-dangling-sweep) — it cost a per-read sweep on a path most consumers do not need.
-
-Earlier versions exposed an `onDangling: 'clear' | 'remove'` option plus two error codes (`entity-dangling-cleared` / `entity-dangling-component-removed`) that `world.get` raised when it noticed a dead ref. Both the option and the codes are gone. Earlier versions also provided `world.isAlive(e)` as a standalone liveness method; that was deleted in feat-20260602-archetype-stores-full-packed-entity — the universal `world.get(e, Entity)` probe replaces it. Migrate the catch into an explicit liveness self-check:
-
-```ts
-// Before — relied on the ECS to sweep dead refs on read:
-const r = world.get(child, ChildOf);
-if (!r.ok) {
-  switch (r.error.code) {
-    case 'entity-dangling-cleared':
-    case 'entity-dangling-component-removed':
-      respawnParentAndReattach();
+const result = world.update(1 / 60);
+if (!result.ok) {
+  switch (result.error.code) {
+    case 'world-poisoned':
+      // Stop the frame and ask the App execution owner to rebuild.
       break;
-    // ...
-  }
-}
-
-// After — the ECS returns the raw ref; you decide what a dead parent means:
-const r = world.get(child, ChildOf);
-if (r.ok) {
-  const parent = r.value.parent;
-  const probe = world.get(parent, Entity);
-  if (!probe.ok) {
-    // probe.error.code === 'stale-entity'
-    // your policy: re-parent, despawn the child, skip it, etc.
-    world.removeComponent(child, ChildOf);
+    default:
+      console.error(result.error.code, result.error.hint);
   }
 }
 ```
 
-Self-help affordances for stale refs:
+Expected command failures are reported before structural commit and leave the
+World unchanged. A system throw or an unknown post-write failure cannot prove
+that no row was mutated: the World becomes poisoned and must be rebuilt by the
+App execution owner. Shared-kernel partial writes follow the same fail-closed
+rule.
 
-- **`world.get(ref, Entity)`** — the universal liveness probe (replaces the deleted `world.isAlive`); call it at the exact point you are about to dereference, not eagerly across the whole world. Returns `Result<{ self: EntityHandle }, EcsError>` — check `.ok`, or branch on `r.error.code === 'stale-entity'`.
-- **Relationship `onRemove` hook** — for relationship components like `ChildOf`, despawning the *child* auto-removes it from the parent's `Children` mirror list (the reverse direction is maintained for you). Despawning the *parent* does **not** cascade (Bevy-aligned: removing a parent does not destroy its children) — if you want recursive teardown, set `linkedSpawn: true` on the relationship or despawn the subtree yourself.
-- **`'stale-entity'`** — write APIs that take an entity argument still fail-fast with this `EcsErrorCode` when handed a dead entity, so an accidental stale write surfaces structurally rather than corrupting data silently.
-- **`remove-essential-component`** — `world.removeComponent(e, Entity)` returns this structured error (the Entity column is structurally required on every archetype); despawn the entity instead if you want to retire it.
+```mermaid
+stateDiagram-v2
+  [*] --> Healthy
+  Healthy --> Healthy: expected failure / zero delta
+  Healthy --> Poisoned: system throw or partial write
+  Poisoned --> Rebuilt: App stops frame and replaces World
+  Rebuilt --> Healthy
+```
 
-## Managed handles carry a generation
+## Inspection
 
-> [!IMPORTANT]
-> A `Handle<T, 'unique'>` (from a `ref<T>` schema field / `world.allocUniqueRef`) or `Handle<T, 'shared'>` (from `world.allocSharedRef`, or the AssetRegistry's identity-preserving `world.internSharedRef` path) packs `(generation << 24) | slot` via the shared codec in `@forgeax/engine-types` — the same SSOT codec ECS `EntityHandle` uses. `allocSharedRef` always creates an independent resource; `internSharedRef` returns one producer-owned handle per `(target, payload object)` in that World and is reserved for catalogued payloads without per-handle deleters. Caching a handle past its holder's release-edge no longer silently resolves to the next payload: the store welds the slot's generation at allocation and compares it on every `resolve` / `retain` / `release`, returning a structured stale error (`'unique-ref-stale'` / `'shared-ref-stale'`) when the slot was released and re-allocated.
+`world.inspect()` is an explicit, detached, deeply frozen POD snapshot for
+diagnostics. It is not a live registry and is not a storage escape hatch.
+Consumers should use entity counts, active component names, schedule summaries,
+and resource keys; gameplay code should use queries.
 
-**Release edges** (the moments a handle's generation advances and old handles go stale):
+## Public surface and subpaths
 
-| Edge | Trigger |
+The root barrel is intentionally small. Advanced capabilities are named by
+their owner instead of being forwarded through the root.
+
+| Entry | Purpose |
 |:--|:--|
-| `world.despawn(e)` | The holder entity is gone; every `ref<T>` field on it releases. |
-| `world.removeComponent(e, C)` | Only `C`'s `ref<T>` fields release; other components on `e` are unaffected. |
-| `world.set(e, C, { ... })` overwrite of a `ref<T>` field | Replacing a managed value releases the prior payload **before** installing the new one. |
+| `@forgeax/engine-ecs` | World, components, relationships, queries, schedules, resources, errors |
+| `@forgeax/engine-ecs/projection` | Bounded change cursor and rebuild signal |
+| `@forgeax/engine-ecs/shared` | Shared numeric kernel contracts |
+| `@forgeax/engine-ecs/externalization` | Generic component projection and entity remap |
 
-**Consequences AI users must internalise:**
-
-- **Prefer reading through `world.get(e, C).<refField>`** at the point of use rather than stashing a handle in a long-lived JS variable. A stashed handle is now *safe* (it fails structurally instead of mis-resolving) but re-reading is still the simplest correct pattern.
-- **Stale resolve fails fast.** If the handle's slot has been released and re-allocated, `resolve` returns `err(code)` with `code === 'unique-ref-stale'` / `'shared-ref-stale'` — distinct from `'…-ref-released'` (slot currently free, nothing re-allocated). The stale error carries `.detail = { slot, expectedGeneration, actualGeneration }` so an AI user can tell **stale-by-reuse** (re-acquire the handle) from **released** (re-load the asset). See the `forgeax-engine-assets` skill section "Handle generation semantics" for the `switch (err.code)` recovery pattern.
-- **Double-release** stays detected by payload-presence (`'unique-ref-double-release'` / `'shared-ref-double-release'`) for a handle whose generation still matches; the generation check catches the orthogonal stale-by-reuse case first.
-- **Generation retires when it would exceed MAX_GEN (255), it does not wrap** — gen 255 is a usable handle; a re-used slot retires only after its bumped generation reaches 256 (retire-when-gen-exceeds-255; mirrors `EntityHandle`). The 24-bit slot index leaves 8 bits of generation.
-- **Throwing `onRelease` is throw-safe.** When a release-edge fires the `onRelease` callback, the slot's bookkeeping (callback table + payload map + freelist + generation bump) is cleared **before** the callback runs. A throwing `onRelease` re-propagates from the first `release` cleanly — the store is already consistent, and a second `release` returns the double-release error (plan-strategy D-1; AC-01/02).
-
-### BufferPool — slot id never escapes
-
-`BufferPool` (the backing store for `buffer<N>` schema-vocab fields) follows an operational-not-persistent contract, with one tightening: **the slot `id` returned by `pool.alloc(byteLength)` never escapes the ECS internals.** There is no public `Handle<Buffer>` surface today; archetype columns store the `id` as u32 and `world.get(e, C).<bufferField>` rebinds the live `Uint8Array` view through `pool.view(id)` at the point of access (no caller-facing caching).
-
-Because of that, `BufferPool` carries no generation tag and `BufferPool.prototype.release` is typed `Result<void, never>` — there is no error arm and the type contract is locked at compile time by `packages/ecs/src/__tests__/buffer-pool.test-d.ts`. If a future feature adds a public `Handle<Buffer>` surface, it should adopt the same packed-generation codec the unique/shared stores now use (`@forgeax/engine-types`) so slot re-use fails fast rather than mis-resolving.
-
-## Visibility inspection contract
-
-Quick start from an eval script:
-
-```ts
-const render = await _import('@forgeax/engine-render');
-const query = world.query({ read: [render.Visibility] }).unwrap();
-for (const row of query) console.log(row.get(render.Visibility).state);
-```
-
-| Fact | ECS authority | Not implied |
-|:--|:--|:--|
-| Current intent | `QueryRow.get` reads the registered `Visibility` field | It is not the final render decision |
-| Effective state | `resolveVisibility(world).effective(entity)` | ECS does not own cameras or picking |
-| Recovery | `world.set` returns a structured `Result` with `code`, `expected`, `hint`, and `detail` | Do not patch a demo with a replacement component |
-
-Diagnostics are read-only observations: query the current field, then ask the
-render package for effective visibility. If a write is rejected, switch on the
-returned error code, follow its hint, and retry the same `world.set` path with
-the enum label exposed by the reflected schema. The app registry projects
-component reflection into remote `introspect`; ECS remains the component owner.
-
-Out of scope: renderer culling, camera frusta, picking, app lifecycle, asset
-loading, and VFX shadow policy. Use the owning package contract for each.
-
-## Simulation record and restore
-
-> Use this seam to compare one ECS World across fresh targets and host frame
-> groupings. Do not use it for network rollback, disk saves, RHI tape replay, or
-> pixel comparison.
-
-The minimum path is one authored source World, one fresh target World, and one
-owner call for each operation:
-
-```ts
-const record = source.simulationRecord();
-if (!record.ok) return record.error;
-const restored = target.simulationRestore(record.value);
-if (!restored.ok) return restored.error;
-const report = simulationCompare({ facts });
-```
-
-| Field | Meaning | Owner rule |
-|:--|:--|:--|
-| `record` | Versioned ECS state plus clock, participants, and trace | ECS creates it |
-| `restore` | Atomic projection into a fresh target | ECS validates it |
-| `trace` | Ordered fixed-tick input samples | Feed fixed simulation, not render frames |
-| `participant` | Versioned external simulation state | Register one ready owner per stable id |
-| `tolerance` | Per numeric comparison allowance | Declare it in the report |
-| `error` | Closed code with `expected`, `hint`, and narrowed `detail` | Switch on `error.code` |
-
-Remote and Preview expose only the inspection summary: participant readiness,
-format/schema owners, baseline fingerprint, trace counts, report domains, and
-tolerance metadata. They never expose World, native physics, or Web Audio
-objects and never add restore or replay actions.
+`Result`, `ok`, `err`, and `Handle` come from `@forgeax/engine-types`; ECS does
+not forward them. There is no ECS remote bin, simulation record/restore
+protocol, scene-instance resolver, or compatibility alias for removed APIs.
 
 <details>
-<summary>Failure recovery</summary>
+<summary>Removed concepts</summary>
 
-Repair the field named by `detail.path`, register the missing or incompatible
-participant, or create a fresh target. Preserve the baseline fingerprint while
-diagnosing. Do not catch an expected error by parsing `message`.
+The one-cut surface deliberately removes `FrameEnd`, `setErrorHandler`,
+`defineSystemParam`, `ParamValidation`, simulation record/restore/trace APIs,
+scene lifecycle methods, raw storage exports, relationship metadata lookup,
+root `Result`/`Handle` forwarding, and array convenience commands. When a
+consumer needs one of those concerns, move the owner to App, Scene, Render,
+Physics, or the explicitly named ECS subpath.
 </details>
 
-RHI tape replay answers whether recorded GPU commands can run on another device.
-Game replay answers whether authored gameplay input can recreate a session. The
-simulation seam answers whether ECS state and fixed-tick semantics agree; it is
-the lower-level owner used by those consumers, not a replacement for either.
+## Verification
+
+- [x] Entity and component mutation use one World authority.
+- [x] Relationship targets remain materialized for $O(1 + k)$ reads.
+- [x] Query row/span are the only public data plane.
+- [x] `Update` and `FixedUpdate` are the only schedules.
+- [x] Expected failures are structured; unknown partial writes poison the World.
+- [x] Advanced projection/shared/externalization APIs are named subpaths.
+
+For the full migration rationale and acceptance matrix, see the canonical
+[ECS 80% architecture design](../../.forgeax-harness/docs/specs/2026-08-22-ecs-core-80-percent-architecture-reduction-design.md).

@@ -23,35 +23,28 @@
 // the rebuild path so dev tooling can see it).
 
 import { World } from '@forgeax/engine-ecs';
-import { toShared, type TilesetAsset } from '@forgeax/engine-types';
+import type { TextureAsset, TilesetAsset } from '@forgeax/engine-types';
 import { ChildOf, Transform } from '@forgeax/engine-scene';
 import { Camera } from '@forgeax/engine-render';
-import { createRenderer } from '@forgeax/engine-runtime';
-import { TileLayer, Tilemap, markTileLayerDirty } from '@forgeax/engine-render/authoring';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
+import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
 
 async function main(): Promise<void> {
   const canvas = document.getElementById('app') as HTMLCanvasElement | null;
   if (canvas === null) return;
-  const renderer = await createRenderer(canvas, {});
-  const ready = await renderer.ready;
-  if (!ready.ok) {
-    // eslint-disable-next-line no-console
-    console.error('[hello-tilemap] renderer.ready failed:', ready.error.code);
-    return;
-  }
+  const constructed = await constructRuntimeRendererHost(canvas, {});
+  if (!constructed.ok) throw constructed.error;
+  const { renderer, assets } = constructed.value;
   const world = new World();
-  const attachment = renderer.attachWorld(world);
+  const attachment = renderer.attach(world);
   if (!attachment.ok) throw attachment.error;
 
   // Register a placeholder atlas TextureAsset (shared-mode handle id; the
   // M0 baseline does not exercise sampling — the smoke gate verifies only
   // the extract system + dirty rebuild path).
-  const atlasHandle = toShared<'TextureAsset'>(101);
-
   const tileset: TilesetAsset = {
     kind: 'tileset',
-    guid: 'hello-tilemap/atlas',
-    atlases: [atlasHandle],
+    atlases: ['hello-tilemap/atlas'],
     tileWidth: 16,
     tileHeight: 16,
     columns: 2,
@@ -69,16 +62,25 @@ async function main(): Promise<void> {
       { regionIndex: 3 },
     ],
   };
-  const tilesetHandle = world.allocSharedRef<'TilesetAsset', TilesetAsset>(
-    'TilesetAsset',
-    tileset,
-  );
+  const atlas: TextureAsset = {
+    kind: 'texture',
+    width: 32,
+    height: 32,
+    format: 'rgba8unorm-srgb',
+    data: new Uint8Array(32 * 32 * 4).fill(255),
+    colorSpace: 'srgb',
+    mipmap: false,
+    mipLevelCount: 1,
+  };
+  const atlasCatalog = assets.catalog('hello-tilemap/atlas', atlas);
+  const tilesetCatalog = assets.catalog('hello-tilemap/tileset', tileset);
+  if (!atlasCatalog.ok || !tilesetCatalog.ok) return;
 
   const tilemap = world
     .spawn(
       {
         component: Tilemap,
-        data: { cols: 8, rows: 8, tileSize: [1, 1], chunkSize: 4, tileset: tilesetHandle },
+        data: { cols: 8, rows: 8, tileSize: [1, 1], chunkSize: 4, tileset: 'hello-tilemap/tileset' },
       },
       { component: Transform, data: {} },
     )
@@ -120,10 +122,14 @@ async function main(): Promise<void> {
       const view = world.get(layer, TileLayer).unwrap().tiles as Uint32Array;
       view[0] = 0;
       view[7 * cols + 7] = 1;
-      markTileLayerDirty(world, layer).unwrap();
+      world.set(layer, TileLayer, { dirty: 1 }).unwrap();
     }
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    renderer.draw({
+      leases: [attachment.value],
+      camera: { lease: attachment.value },
+      environment: { lease: attachment.value },
+    });
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);

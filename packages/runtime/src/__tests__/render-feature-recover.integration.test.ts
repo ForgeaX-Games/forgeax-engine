@@ -1,12 +1,9 @@
 import type { RenderFeature } from '@forgeax/engine-render';
-import {
-  createRenderFeatureHost,
-  RenderFeatureStageFailedError,
-  runRenderFeatureFrame,
-} from '@forgeax/engine-render/internal';
 import type { RhiCaps } from '@forgeax/engine-rhi';
 import { ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { RenderFeatureStageFailedError } from '../../../render/src/errors/render';
+import { createRenderFeatureHost, runRenderFeatureFrame } from '../../../render/src/features/host';
 
 const caps = (compute: boolean): Readonly<RhiCaps> => ({ compute }) as unknown as RhiCaps;
 
@@ -18,17 +15,9 @@ function recoverableFeature(calls: string[]): RenderFeature<{ readonly frame: nu
       calls.push(`extract:${frameNumber}`);
       return ok({ frame: frameNumber });
     },
-    prepare: (data) => {
-      calls.push(`prepare:${data.frame}`);
-      return ok(undefined);
-    },
-    contribute: (data) => {
-      calls.push(`contribute:${data.frame}`);
-      return ok(undefined);
-    },
-    recover: ({ frame }) => {
-      calls.push(`recover:${frame.frameNumber}`);
-      return ok(undefined);
+    plan: (data) => {
+      calls.push(`plan:${data.frame}`);
+      return ok({ resources: [], passes: [] });
     },
   };
 }
@@ -44,11 +33,7 @@ describe('render feature recovery lifecycle', () => {
       frameNumber: 1,
       caps: caps(true),
     });
-    expect(first.stageEvents.map((event) => event.stage)).toEqual([
-      'extract',
-      'prepare',
-      'contribute',
-    ]);
+    expect(first.stageEvents.map((event) => event.stage)).toEqual(['extract', 'plan']);
 
     host.setStatus(
       'synthetic.recoverable',
@@ -62,7 +47,7 @@ describe('render feature recovery lifecycle', () => {
       caps: caps(true),
     });
     expect(retry.errors).toEqual([]);
-    expect(calls.slice(-3)).toEqual(['extract:2', 'prepare:2', 'contribute:2']);
+    expect(calls.slice(-2)).toEqual(['extract:2', 'plan:2']);
 
     host.setStatus('synthetic.recoverable', 'disabled');
     const skipped = runRenderFeatureFrame(host, {
@@ -75,7 +60,7 @@ describe('render feature recovery lifecycle', () => {
 
     const recovered = host.recover({ frameNumber: 4, caps: caps(true) });
     expect(recovered).toEqual(ok(undefined));
-    expect(calls.at(-1)).toBe('recover:4');
+    expect(calls.at(-1)).toBe('plan:2');
 
     const resumed = runRenderFeatureFrame(host, {
       worlds: [],
@@ -84,7 +69,7 @@ describe('render feature recovery lifecycle', () => {
       caps: caps(true),
     });
     expect(resumed.errors).toEqual([]);
-    expect(resumed.stageEvents).toHaveLength(3);
+    expect(resumed.stageEvents).toHaveLength(2);
   });
 
   it('keeps registration through a pipeline switch and makes dispose terminal', () => {

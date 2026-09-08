@@ -1,9 +1,8 @@
 ---
 name: forgeax-engine-physics
 description: >-
-  forgeax-engine 物理：给 entity 挂 Transform + RigidBody + Collider 即被每帧驱动位置。
-  接口层（physics）+ rapier2d / rapier3d 两个 WASM 后端，三段式 tick，碰撞经 CollidingEntities 读。
-  Use when adding rigid bodies / colliders, enabling physics on an app, reading collision pairs, or choosing the 2D vs 3D rapier backend.
+  ForgeaX ECS physics and Rapier backend route. Use when adding bodies, colliders, character
+  movement, collision handling, or selecting and diagnosing a 2D/3D backend.
 ---
 
 # forgeax-engine-physics
@@ -12,7 +11,7 @@ description: >-
 
 ## 心智模型
 
-物理是**组件驱动**的：你不调"创建刚体"API，而是给 entity 挂上组件，`physicsSyncBackend` 系统每帧扫描 `(Transform, RigidBody, Collider)` 原型、为新 entity 在 Rapier 侧 `ensureBody`，`physicsStepSimulation` 推进模拟，`physicsWriteback` 把动态刚体的位置和旋转写回 `Transform`。`propagateTransforms` 后的 world TRS 是 static / 非 CharacterController kinematic Collider 的物理姿态来源：父子层级、旋转与缩放都投影到 Rapier；dynamic body 创建后由 Rapier 取得姿态所有权。后端选择经 `createApp` 的 `physics` 选项（`'rapier-2d' | 'rapier-3d'`），它把 `PhysicsWorld`（3D）/ `PhysicsWorld2D`（2D 接口）作为 World Resource 注入。`PhysicsWorld` Resource 未就绪时（WASM fire-and-forget 加载），三个系统都安全 early-return——不 fail，等下一帧。碰撞对经只读组件 `CollidingEntities` 读取。
+物理是**组件驱动**的：你不调"创建刚体"API，而是给 entity 挂上组件，`physicsSyncBackend` 系统每帧扫描 `(Transform, RigidBody, Collider)` 原型、为新 entity 在 Rapier 侧 `ensureBody`，`physicsStepSimulation` 推进模拟，`physicsWriteback` 把动态刚体的位置和旋转写回 `Transform`。`propagateTransforms` 后的 world TRS 是 static / 非 CharacterController kinematic Collider 的物理姿态来源：父子层级、旋转与缩放都投影到 Rapier；dynamic body 创建后由 Rapier 取得姿态所有权。后端选择经 `createApp` 的 `physics` 选项（`'rapier-2d' | 'rapier-3d'`），它把 `PhysicsWorld`（3D）/ `PhysicsWorld2D`（2D 接口）作为 World Resource 注入。`World` 把宿主帧 delta clamp 到 `Time.delta`，再用常量 `FixedTime.delta` 驱动物理，最多执行 `FixedTime.maxStepsPerUpdate` 次；丢弃的整步累计到 `droppedSeconds` / `droppedUpdates`，只保留 fractional `overstep`，后续健康帧不会重放。`PhysicsWorld` Resource 未就绪时（WASM fire-and-forget 加载），三个系统都安全 early-return——不 fail，等下一帧。碰撞对经只读组件 `CollidingEntities` 读取。
 
 ## 核心 API / 组件速查
 
@@ -59,14 +58,14 @@ app.registerUpdate(() => {
 ```
 
 > [!CAUTION]
-> 四个坑（feat-20260617 实测）：① `grounded` 是 bool 字段，`world.get(...).value.grounded` 是 JS `boolean`，比较用 `=== true`，**禁止** `!== 0`（恒 true）。② capsule 必须 spawn 在静置高度（中心 = 地面顶 + radius + halfHeight），埋进地里 KCC 接触退化、不上台阶/不报 grounded。③ 连续斜坡上 Rapier `computedGrounded()` 返回 false（贴地效果体现在轨迹 y 跟着下降，不在 flag）。④ WASM fire-and-forget 加载 + `physicsSyncBackend` 首 tick 是异步窗口——`PhysicsWorld` Resource 已注册但 `hasBody(entity)` 返 false，驱动前用 `if (!pw.hasBody(entity)) return;` 守护，勿靠捕 `body-not-found` 做控制流。`physicsSyncBackend` 对带 `CharacterController` 的原型跳过 kinematic 镜像，避免双写。完整 demo：`apps/hello/character`。
+> 四个常见坑：① `grounded` 是 JS `boolean`，比较用 `=== true`，禁止 `!== 0`（恒 true）。② capsule 必须 spawn 在静置高度（中心 = 地面顶 + radius + halfHeight），埋进地里会让 KCC 接触退化。③ 连续斜坡上的贴地效果看轨迹 y，不依赖 `computedGrounded()`。④ WASM 异步加载使首 tick 存在窗口；驱动前用 `if (!pw.hasBody(entity)) return;` 守护，勿靠捕 `body-not-found` 做控制流。`physicsSyncBackend` 对带 `CharacterController` 的原型跳过 kinematic 镜像，避免双写。完整 demo：`apps/hello/character`。
 
 ## 三段式 tick 顺序
 
 ```mermaid
 flowchart TD
   PT["propagateTransforms（引擎前置）"] --> SB["1. physicsSyncBackend：扫 (Transform,RigidBody,Collider)，ensureBody"]
-  SB --> SS["2. physicsStepSimulation：读 Time.dt，PhysicsWorld.step()"]
+  SB --> SS["2. physicsStepSimulation：读 FixedTime.delta，PhysicsWorld.step()"]
   SS --> WB["3. physicsWriteback：writebackDynamicBodies() -> 回写 Transform.pos"]
 ```
 
@@ -103,7 +102,7 @@ app.start();
 
 - **挂了组件但 entity 不动**：缺 `Transform`（写回目标）或缺 `createApp({ plugins: [physicsPlugin(...)] })`（没装 tick 系统）。三件套必须齐：`Transform` + `RigidBody` + `Collider`。
 - **前几帧没物理反应**：`PhysicsWorld` Resource 是 WASM fire-and-forget 异步加载，未就绪时系统 early-return；这是正常的，不是错误。
-- **dt 过大被跳过**：`physicsStepSimulation` 在 `dt <= 0` 或 `> 0.1s` 时跳过（防大步穿透）——切后台再回来的首帧大 dt 不会模拟。
+- **大 host delta 的恢复**：不要把宿主帧 delta 直接传给物理。`World` 先把 `Time.delta` clamp 到 `maxDeltaSeconds`，再以 `FixedTime.delta` 执行最多 `maxStepsPerUpdate` 次；超出的整步记录到 `droppedSeconds` / `droppedUpdates`，不会在下一健康帧追赶。`physicsStepSimulation` 的 `dt <= 0` / `> 0.1s` guard 是后端防御，不是大帧恢复路径。
 - **2D / 3D 后端选错**：`physics: 'rapier-2d'` 用 `PhysicsWorld2D` 接口，`'rapier-3d'` 用 `PhysicsWorld`；组件 schema 共用但坐标维度不同，别混。
 
 ## 深入

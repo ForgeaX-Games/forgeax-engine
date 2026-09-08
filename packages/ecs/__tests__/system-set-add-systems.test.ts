@@ -10,7 +10,7 @@ import { Update } from '../src/schedule-token';
 
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { defineComponent } from '../src/component';
-import { defineSystem, defineSystemSet, getRegisteredSystemSets } from '../src/schedule';
+import { defineSystem, defineSystemSet } from '../src/schedule';
 import { World } from '../src/world';
 
 const Pos = defineComponent('Pos', { x: 'f32', y: 'f32' });

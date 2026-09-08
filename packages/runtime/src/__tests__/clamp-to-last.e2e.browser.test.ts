@@ -34,10 +34,10 @@
 
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
-import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render/internal';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { afterEach, describe, expect, it } from 'vitest';
-import { Engine } from '../index';
+import { constructRuntimeRendererHost } from '../renderer-host';
 
 const W = 256;
 const H = 256;
@@ -61,12 +61,8 @@ const SUT_ATTRIBUTABLE_RENDER_CODES: ReadonlySet<string> = new Set([
   'vertex-storage-buffer-unavailable',
   'mesh-ssbo-capacity-exceeded',
   'mesh-ssbo-ceiling-reached',
-  'hdrp-caps-insufficient',
   'hdrp-light-budget-exceeded',
   'hdrp-index-list-overflow',
-  'hdrp-deferred-caps-insufficient',
-  'gbuffer-rt-alloc-failed',
-  'gbuffer-attachment-count-mismatch',
 ]);
 
 // Suppress WebGPU teardown race: chromium fires unhandled OperationError
@@ -83,11 +79,21 @@ if (typeof window !== 'undefined') {
 
 const browserReady = typeof navigator !== 'undefined' && navigator.gpu !== undefined;
 
-type EngineRenderer = Awaited<ReturnType<typeof Engine.create>>;
+type EngineRenderer = import('@forgeax/engine-render').Renderer;
 
 async function buildRenderer(canvas: HTMLCanvasElement): Promise<EngineRenderer> {
-  const r = await Engine.create(canvas, {}, { shaderManifestUrl: '/shaders/manifest.json' });
-  return r;
+  const host = await constructRuntimeRendererHost(
+    canvas,
+    {},
+    {
+      shaderManifestUrl: '/shaders/manifest.json',
+    },
+  );
+  if (!host.ok) throw host.error;
+  if (host.value.renderer.inspect().state !== 'alive') {
+    throw new Error('runtime renderer host did not reach alive state');
+  }
+  return host.value.renderer;
 }
 
 describe('clamp-to-last e2e browser (m3-w6)', () => {
@@ -136,8 +142,6 @@ describe('clamp-to-last e2e browser (m3-w6)', () => {
     document.body.appendChild(canvas);
 
     renderer = await buildRenderer(canvas);
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
 
     const world = new World();
     world.spawn(
@@ -165,14 +169,21 @@ describe('clamp-to-last e2e browser (m3-w6)', () => {
     );
 
     const sutErrors: Array<{ code: string }> = [];
-    renderer.onError((e) => {
-      sutErrors.push(e);
+    renderer.subscribe((event) => {
+      if (event.kind !== 'error') return;
+      sutErrors.push(event.error);
     });
 
-    expect(renderer.attachWorld(world).ok).toBe(true);
+    const attachment = renderer.attach(world);
+    expect(attachment.ok).toBe(true);
+    if (!attachment.ok) throw attachment.error;
     for (let f = 0; f < 10; f++) {
       world.update(1 / 60).unwrap();
-      const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      const drawn = renderer.draw({
+        leases: [attachment.value],
+        camera: { lease: attachment.value },
+        environment: { lease: attachment.value },
+      });
       expect(drawn.ok).toBe(true);
     }
 

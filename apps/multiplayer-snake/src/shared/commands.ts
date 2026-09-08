@@ -59,16 +59,16 @@ export function processReadyCommands(
 ): Set<number> {
   const ready = new Set<number>();
   for (const message of messages) {
-    if (!connected.has(message.peerId)) continue;
+    if (!connected.has(message.sessionId)) continue;
     const decoded = decodeCommand(message.data);
     if (decoded.ok && 'kind' in decoded.value && decoded.value.kind === 'ready')
-      ready.add(message.peerId);
+      ready.add(message.sessionId);
   }
   return ready;
 }
 
 export interface RawDirectionMessage {
-  readonly peerId: number;
+  readonly sessionId: number;
   readonly data: Uint8Array;
 }
 
@@ -78,10 +78,10 @@ export function processJoinCommands(
 ): Set<number> {
   const joined = new Set<number>();
   for (const message of messages) {
-    if (!connected.has(message.peerId)) continue;
+    if (!connected.has(message.sessionId)) continue;
     const decoded = decodeCommand(message.data);
     if (decoded.ok && 'kind' in decoded.value && decoded.value.kind === 'join')
-      joined.add(message.peerId);
+      joined.add(message.sessionId);
   }
   return joined;
 }
@@ -92,12 +92,12 @@ export function processCommands(
 ): Map<number, Direction> {
   const accepted = new Map<number, Direction>();
   for (const message of messages) {
-    if (accepted.has(message.peerId)) continue;
+    if (accepted.has(message.sessionId)) continue;
     const decoded = decodeDirectionCommand(message.data);
-    const current = currentDirections.get(message.peerId);
+    const current = currentDirections.get(message.sessionId);
     if (!decoded.ok || current === undefined || isOpposite(current, decoded.value.direction))
       continue;
-    accepted.set(message.peerId, decoded.value.direction);
+    accepted.set(message.sessionId, decoded.value.direction);
   }
   return accepted;
 }

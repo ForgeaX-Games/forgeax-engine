@@ -3,9 +3,9 @@
 // M2 bug-20260624: B2 fail-fast convergence —
 // getTape() dangling detection mirrors deserializeTape's findDanglingHandleId.
 //
-// AC-04: producer-side fail-fast — getTape() returns tape-handle-graph-broken
+// AC-04: producer-side fail-fast — getTape() returns tape-invalid
 //        for any handle that findDanglingHandleId would reject.
-// AC-23: reuses existing tape-handle-graph-broken code, no new member.
+// AC-23: reuses the closed v7 tape error, no new member.
 // R-3:   in-frame transient handles (passHandleId, cmdHandleId) not
 //        falsely flagged when legitimately declared.
 
@@ -13,7 +13,7 @@
 // biome-ignore-all lint/style/noNonNullAssertion: test assertions on mock stubs guarded by expect
 
 import { describe, expect, it, vi } from 'vitest';
-import { DebugError } from '../errors';
+import type { RhiDebugError } from '../errors';
 import { type DebugRhiInstance, wrap } from '../recorder';
 import type { HandleId } from '../types';
 
@@ -169,7 +169,7 @@ async function bootstrapWithRealDevice(): Promise<{
 // ================================================================
 
 describe('B2: getTape dangling handle fail-fast (AC-04)', () => {
-  it('returns tape-handle-graph-broken for orphan passHandleId in endRenderPass', async () => {
+  it('returns tape-invalid for orphan passHandleId in endRenderPass', async () => {
     const { debugInst } = await bootstrapWithRealDevice();
 
     // Inject an endRenderPass event with a passHandleId that was
@@ -183,9 +183,9 @@ describe('B2: getTape dangling handle fail-fast (AC-04)', () => {
     debugInst.arm(1);
 
     // Inject endRenderPass with an undeclared passHandleId directly
-    // into the event stream via _pushExternalEvent.
+    // into the event stream via pushExternalEvent.
     const orphanPassId = 'renderPass:orphan' as HandleId;
-    debugInst._pushExternalEvent({
+    debugInst.pushExternalEvent({
       kind: 'endRenderPass',
       passHandleId: orphanPassId,
     } as any);
@@ -193,20 +193,20 @@ describe('B2: getTape dangling handle fail-fast (AC-04)', () => {
     debugInst.onFrameEnd();
 
     const tape = debugInst.getTape();
-    expect(tape).toBeInstanceOf(DebugError);
+    expect(tape).toHaveProperty('code', 'tape-invalid');
 
-    const err = tape as DebugError;
-    expect(err.code).toBe('tape-handle-graph-broken');
-    expect((err.detail as any)?.danglingHandleId).toBe(orphanPassId);
+    const error = tape as RhiDebugError;
+    expect(error.code).toBe('tape-invalid');
+    expect(error.detail).toMatchObject({ handleId: orphanPassId });
   });
 
-  it('returns tape-handle-graph-broken for orphan passHandleId in draw', async () => {
+  it('returns tape-invalid for orphan passHandleId in draw', async () => {
     const { debugInst } = await bootstrapWithRealDevice();
 
     debugInst.arm(1);
 
     const orphanPassId = 'renderPass:orphan' as HandleId;
-    debugInst._pushExternalEvent({
+    debugInst.pushExternalEvent({
       kind: 'draw',
       passHandleId: orphanPassId,
       vertexCount: 3,
@@ -218,19 +218,19 @@ describe('B2: getTape dangling handle fail-fast (AC-04)', () => {
     debugInst.onFrameEnd();
 
     const tape = debugInst.getTape();
-    expect(tape).toBeInstanceOf(DebugError);
-    const err = tape as DebugError;
-    expect(err.code).toBe('tape-handle-graph-broken');
-    expect((err.detail as any)?.danglingHandleId).toBe(orphanPassId);
+    expect(tape).toHaveProperty('code', 'tape-invalid');
+    const error = tape as RhiDebugError;
+    expect(error.code).toBe('tape-invalid');
+    expect(error.detail).toMatchObject({ handleId: orphanPassId });
   });
 
-  it('returns tape-handle-graph-broken for orphan cmdHandleId in finish', async () => {
+  it('returns tape-invalid for orphan cmdHandleId in finish', async () => {
     const { debugInst } = await bootstrapWithRealDevice();
 
     debugInst.arm(1);
 
     const orphanCmdId = 'commandEncoder:orphan' as HandleId;
-    debugInst._pushExternalEvent({
+    debugInst.pushExternalEvent({
       kind: 'finish',
       cmdHandleId: orphanCmdId,
     } as any);
@@ -238,19 +238,19 @@ describe('B2: getTape dangling handle fail-fast (AC-04)', () => {
     debugInst.onFrameEnd();
 
     const tape = debugInst.getTape();
-    expect(tape).toBeInstanceOf(DebugError);
-    const err = tape as DebugError;
-    expect(err.code).toBe('tape-handle-graph-broken');
-    expect((err.detail as any)?.danglingHandleId).toBe(orphanCmdId);
+    expect(tape).toHaveProperty('code', 'tape-invalid');
+    const error = tape as RhiDebugError;
+    expect(error.code).toBe('tape-invalid');
+    expect(error.detail).toMatchObject({ handleId: orphanCmdId });
   });
 
-  it('returns tape-handle-graph-broken for orphan cmdHandleId in submit', async () => {
+  it('returns tape-invalid for orphan cmdHandleId in submit', async () => {
     const { debugInst } = await bootstrapWithRealDevice();
 
     debugInst.arm(1);
 
     const orphanCmdId = 'commandEncoder:orphan' as HandleId;
-    debugInst._pushExternalEvent({
+    debugInst.pushExternalEvent({
       kind: 'submit',
       cmdHandleIds: [orphanCmdId],
     } as any);
@@ -258,19 +258,19 @@ describe('B2: getTape dangling handle fail-fast (AC-04)', () => {
     debugInst.onFrameEnd();
 
     const tape = debugInst.getTape();
-    expect(tape).toBeInstanceOf(DebugError);
-    const err = tape as DebugError;
-    expect(err.code).toBe('tape-handle-graph-broken');
-    expect((err.detail as any)?.danglingHandleId).toBe(orphanCmdId);
+    expect(tape).toHaveProperty('code', 'tape-invalid');
+    const error = tape as RhiDebugError;
+    expect(error.code).toBe('tape-invalid');
+    expect(error.detail).toMatchObject({ handleId: orphanCmdId });
   });
 
-  it('returns tape-handle-graph-broken for orphan cmdHandleId in beginRenderPass', async () => {
+  it('returns tape-invalid for orphan cmdHandleId in beginRenderPass', async () => {
     const { debugInst } = await bootstrapWithRealDevice();
 
     debugInst.arm(1);
 
     const orphanCmdId = 'commandEncoder:orphan' as HandleId;
-    debugInst._pushExternalEvent({
+    debugInst.pushExternalEvent({
       kind: 'beginRenderPass',
       cmdHandleId: orphanCmdId,
       passHandleId: 'renderPass:valid' as HandleId,
@@ -281,20 +281,20 @@ describe('B2: getTape dangling handle fail-fast (AC-04)', () => {
     debugInst.onFrameEnd();
 
     const tape = debugInst.getTape();
-    expect(tape).toBeInstanceOf(DebugError);
-    const err = tape as DebugError;
-    expect(err.code).toBe('tape-handle-graph-broken');
-    expect((err.detail as any)?.danglingHandleId).toBe(orphanCmdId);
+    expect(tape).toHaveProperty('code', 'tape-invalid');
+    const error = tape as RhiDebugError;
+    expect(error.code).toBe('tape-invalid');
+    expect(error.detail).toMatchObject({ handleId: orphanCmdId });
   });
 
-  it('returns tape-handle-graph-broken for orphan handle in setPipeline', async () => {
+  it('returns tape-invalid for orphan handle in setPipeline', async () => {
     const { debugInst } = await bootstrapWithRealDevice();
 
     debugInst.arm(1);
 
     // passHandleId + pipelineHandleId both undeclared.
     const orphanPassId = 'renderPass:orphan' as HandleId;
-    debugInst._pushExternalEvent({
+    debugInst.pushExternalEvent({
       kind: 'setPipeline',
       passHandleId: orphanPassId,
       pipelineHandleId: 'renderPipeline:ghost' as HandleId,
@@ -303,18 +303,18 @@ describe('B2: getTape dangling handle fail-fast (AC-04)', () => {
     debugInst.onFrameEnd();
 
     const tape = debugInst.getTape();
-    expect(tape).toBeInstanceOf(DebugError);
-    const err = tape as DebugError;
-    expect(err.code).toBe('tape-handle-graph-broken');
+    expect(tape).toHaveProperty('code', 'tape-invalid');
+    const error = tape as RhiDebugError;
+    expect(error.code).toBe('tape-invalid');
   });
 
-  it('returns tape-handle-graph-broken for orphan handle in pushDebugGroup', async () => {
+  it('returns tape-invalid for orphan handle in pushDebugGroup', async () => {
     const { debugInst } = await bootstrapWithRealDevice();
 
     debugInst.arm(1);
 
     const orphanCmdId = 'commandEncoder:orphan' as HandleId;
-    debugInst._pushExternalEvent({
+    debugInst.pushExternalEvent({
       kind: 'pushDebugGroup',
       cmdHandleId: orphanCmdId,
       groupLabel: 'test',
@@ -323,10 +323,10 @@ describe('B2: getTape dangling handle fail-fast (AC-04)', () => {
     debugInst.onFrameEnd();
 
     const tape = debugInst.getTape();
-    expect(tape).toBeInstanceOf(DebugError);
-    const err = tape as DebugError;
-    expect(err.code).toBe('tape-handle-graph-broken');
-    expect((err.detail as any)?.danglingHandleId).toBe(orphanCmdId);
+    expect(tape).toHaveProperty('code', 'tape-invalid');
+    const error = tape as RhiDebugError;
+    expect(error.code).toBe('tape-invalid');
+    expect(error.detail).toMatchObject({ handleId: orphanCmdId });
   });
 });
 
@@ -348,7 +348,7 @@ describe('B2: legitimate tape production (known-good paths)', () => {
     debugInst.onFrameEnd();
 
     const tape = debugInst.getTape();
-    expect(tape).not.toBeInstanceOf(DebugError);
+    expect(tape).not.toHaveProperty('code');
     expect(tape).toHaveProperty('events');
   });
 
@@ -364,7 +364,7 @@ describe('B2: legitimate tape production (known-good paths)', () => {
     debugInst.onFrameEnd();
 
     const tape = debugInst.getTape();
-    expect(tape).not.toBeInstanceOf(DebugError);
+    expect(tape).not.toHaveProperty('code');
     expect(tape).toHaveProperty('events');
   });
 });
@@ -402,7 +402,7 @@ describe('B2: R-3 in-frame transient handle exemption (anti-regression)', () => 
     debugInst.onFrameEnd();
 
     const tape = debugInst.getTape();
-    expect(tape).not.toBeInstanceOf(DebugError);
+    expect(tape).not.toHaveProperty('code');
     expect(tape).toHaveProperty('events');
   });
 
@@ -428,7 +428,7 @@ describe('B2: R-3 in-frame transient handle exemption (anti-regression)', () => 
     debugInst.onFrameEnd();
 
     const tape = debugInst.getTape();
-    expect(tape).not.toBeInstanceOf(DebugError);
+    expect(tape).not.toHaveProperty('code');
     expect(tape).toHaveProperty('events');
   });
 });

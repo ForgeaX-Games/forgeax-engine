@@ -16,7 +16,13 @@
 // contract test.
 
 import { describe, expectTypeOf, it } from 'vitest';
-import type { defineComponent, FieldValueType, SchemaVocabKeyword, ShapeOf } from '../component';
+import type {
+  defineComponent,
+  FieldValueType,
+  SchemaOf,
+  SchemaVocabKeyword,
+  ShapeOf,
+} from '../component';
 
 describe('w12 --- "string" remains a SchemaVocabKeyword member (closed-union invariant)', () => {
   it("'string' extends SchemaVocabKeyword", () => {
@@ -37,7 +43,7 @@ describe('w12 --- FieldValueType<"string"> = string (post-collapse)', () => {
 
   it('three application points all infer the value field as string', () => {
     type Foo = ReturnType<typeof defineComponent<'Foo', { value: 'string' }>>;
-    type FooShape = ShapeOf<Foo['schema']>;
+    type FooShape = ShapeOf<SchemaOf<Foo>>;
     expectTypeOf<FooShape['value']>().toEqualTypeOf<string>();
   });
 });

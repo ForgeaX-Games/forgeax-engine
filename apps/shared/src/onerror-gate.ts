@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import {
+  beginLearnRenderTestLifecycle,
+  disposeLearnRenderTestApp,
+  waitForLearnRenderTestBootstrap,
+} from './learn-render-test-lifecycle';
 
 export const SUT_ATTRIBUTABLE_CODES: ReadonlySet<string> = new Set([
   // Renderer.ready failure surface (renderer.ts).
@@ -48,51 +53,66 @@ export const SUT_ATTRIBUTABLE_CODES: ReadonlySet<string> = new Set([
   'loader-not-registered',
 ]);
 
-export function onerrorGate(sectionName: string, importSut: () => Promise<unknown>): void {
+export function onerrorGate(
+  sectionName: string,
+  importSut: () => Promise<unknown>,
+  timeoutMs = 30_000,
+): void {
   describe(`${sectionName} onerror-gate`, () => {
     let canvas: HTMLCanvasElement | undefined;
 
-    afterEach(() => {
-      if (canvas !== undefined && canvas.parentNode !== null) {
-        canvas.parentNode.removeChild(canvas);
+    afterEach(async () => {
+      try {
+        if (canvas !== undefined) await disposeLearnRenderTestApp(canvas);
+      } finally {
+        if (canvas !== undefined && canvas.parentNode !== null) {
+          canvas.parentNode.removeChild(canvas);
+        }
+        canvas = undefined;
+        delete (globalThis as unknown as { __learnRenderErrors?: unknown }).__learnRenderErrors;
       }
-      canvas = undefined;
-      delete (globalThis as unknown as { __learnRenderErrors?: unknown }).__learnRenderErrors;
     });
 
     // Headed Chrome Beta on lavapipe can spend several seconds creating the
-    // first WebGPU device after neighboring browser groups close. Keep the
-    // gate's assertion budget above that cold-start cost while retaining a
-    // bounded failure rather than inheriting Vitest's 15s default.
-    it('SUT bootstrap fires no SUT-attributable renderer.onError', async () => {
-      if (typeof navigator.gpu === 'undefined') {
-        throw new Error(
-          `[${sectionName}.onerror-gate] code: 'webgpu-unavailable'; vitest.config.ts launches chrome-beta with WebGPU flags`,
-        );
-      }
-      canvas = document.createElement('canvas');
-      canvas.id = 'app';
-      canvas.width = 256;
-      canvas.height = 256;
-      document.body.appendChild(canvas);
-
-      const errors: Array<{ code: string; hint?: string }> = [];
-      (globalThis as unknown as { __learnRenderErrors: typeof errors }).__learnRenderErrors =
-        errors;
-
-      await importSut();
-      let prev = -1;
-      for (let elapsed = 0; elapsed < 5000; elapsed += 50) {
-        await new Promise((r) => setTimeout(r, 50));
-        if (errors.length === prev) {
-          if (elapsed >= 500) break;
-        } else {
-          prev = errors.length;
+    // first WebGPU device after neighboring browser groups close. The ordinary
+    // gate stays at 30s; multi-pass callers can pass a larger explicit budget
+    // for an isolated cold process while retaining a bounded failure rather
+    // than inheriting Vitest's 15s default.
+    it(
+      'SUT bootstrap fires no SUT-attributable renderer.onError',
+      async () => {
+        if (typeof navigator.gpu === 'undefined') {
+          throw new Error(
+            `[${sectionName}.onerror-gate] code: 'webgpu-unavailable'; vitest.config.ts launches chrome-beta with WebGPU flags`,
+          );
         }
-      }
+        canvas = document.createElement('canvas');
+        canvas.id = 'app';
+        canvas.width = 256;
+        canvas.height = 256;
+        document.body.appendChild(canvas);
+        await beginLearnRenderTestLifecycle(canvas);
 
-      const sutErrors = errors.filter((e) => SUT_ATTRIBUTABLE_CODES.has(e.code));
-      expect(sutErrors).toEqual([]);
-    }, 30_000);
+        const errors: Array<{ code: string; hint?: string }> = [];
+        (globalThis as unknown as { __learnRenderErrors: typeof errors }).__learnRenderErrors =
+          errors;
+
+        await importSut();
+        await waitForLearnRenderTestBootstrap(canvas);
+        let prev = -1;
+        for (let elapsed = 0; elapsed < 5000; elapsed += 50) {
+          await new Promise((r) => setTimeout(r, 50));
+          if (errors.length === prev) {
+            if (elapsed >= 500) break;
+          } else {
+            prev = errors.length;
+          }
+        }
+
+        const sutErrors = errors.filter((e) => SUT_ATTRIBUTABLE_CODES.has(e.code));
+        expect(sutErrors).toEqual([]);
+      },
+      timeoutMs,
+    );
   });
 }

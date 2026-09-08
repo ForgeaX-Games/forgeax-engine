@@ -16,7 +16,7 @@ import { Update } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
 import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { World } from '@forgeax/engine-ecs';
-import type { InputBackend } from '@forgeax/engine-input';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputBackend, type InputSnapshot } from '@forgeax/engine-input';
 import { vec3 } from '@forgeax/engine-math';
 import { HANDLE_CUBE, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
@@ -31,6 +31,7 @@ import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import {
   addFirstPersonSystem,
   CAMERA_FOV_RADIANS,
+  captureCanvasPixels,
   createFirstPersonControls,
   createScrollFovAccumulator,
 } from '../../../../shared/src/learn-render-first-person';
@@ -272,9 +273,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;
     if (bus !== undefined) bus.push({ code: e.code, hint: e.hint });
   });
-
-  const assets = renderer.assets;
-  assets.configurePackIndex('/pack-index.json');
 
   // The engine ships HANDLE_CUBE as the procedural cube; MeshFilter uses it
   // directly below (no per-demo GUID round-trip needed).
@@ -1492,20 +1490,20 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
   ).unwrap();
 
-  addFirstPersonSystem(world, renderer, {
+  addFirstPersonSystem(world, {
     name: 'learn-render-colors-first-person',
     overrideBackend,
   });
-  addScrollFovSystem(world, renderer);
+  addScrollFovSystem(world);
 
-  installCaptureHook(target, app, world);
+  installCaptureHook(target, world);
 
   const startRes = app.start();
   if (!startRes.ok) {
     console.error('[learn-render 2.lighting 1.colors] app.start failed:', startRes.error);
     return;
   }
-  console.warn(`[learn-render 2.lighting 1.colors] backend=${renderer.backend}`);
+  console.warn(`[learn-render 2.lighting 1.colors] backend=${renderer.inspect().capabilities.backendKind}`);
   if (USE_BASE_COLOR_TEXTURE_SAMPLER_MAX_ANISOTROPY) {
     console.warn(
       `[learn-render 2.lighting 1.colors] sampler maxAnisotropy=${FALSIFY_BASE_COLOR_TEXTURE_SAMPLER_MAX_ANISOTROPY === '1' ? 16 : 1}`,
@@ -1514,34 +1512,31 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 }
 
 function installCaptureHook(
-  _target: HTMLCanvasElement,
-  app: App,
+  target: HTMLCanvasElement,
   world: World,
 ): void {
   type CaptureHook = () => Promise<Uint8Array>;
   const win = window as unknown as { __captureColors?: CaptureHook };
-  const renderer = app.renderer;
   win.__captureColors = async (): Promise<Uint8Array> => {
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    const r = await renderer.readPixels();
+    const r = await captureCanvasPixels(target);
     if (!r.ok) {
       throw new Error(
-        `[learn-render 2.lighting 1.colors] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
+        `[learn-render 2.lighting 1.colors] canvas capture failed: ${r.error.hint}`,
       );
     }
     return r.value;
   };
 }
 
-function addScrollFovSystem(world: App['world'], renderer: App['renderer']): void {
+function addScrollFovSystem(world: App['world']): void {
   const scrollFov = createScrollFovAccumulator();
   world.addSystem(Update, {
     name: 'learn-render-colors-scroll-fov',
     after: ['input-frame-start-scan'],
     queries: [{ write: [Camera] }],
     fn: (world, queryResults) => {
-      const snapshot = renderer.input.snapshot(world);
+      const snapshot = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (snapshot === undefined) return;
       scrollFov.apply(snapshot.mouse.wheelDelta);
       for (const row of queryResults[0]) row.mut(Camera).fov = scrollFov.fovRad;

@@ -29,10 +29,55 @@ This package consumes:
 
 - `scenes` + `nodes` (TRS or matrix decomposed via `mat4.decompose` wrapper)
 - `meshes` with **multiple primitives** -- each primitive produces an independent `MeshIr` with UUIDv7 GUID; `SceneAsset` nodes reference individual primitive-level mesh sub-assets
-- Vertex attributes: `POSITION` (VEC3, mandatory), `NORMAL` (VEC3), `TEXCOORD_0` (VEC2), `TANGENT` (VEC4, optional) -- decoded via `decodeAccessor` SoA path; `INDICES` (U8/U16/U32 scalar — U8 widens to U16; U32 preserved, narrowed to U16 by bridge when maxIndex < 65536)
+- Vertex attributes: `POSITION` (VEC3, mandatory), `NORMAL` (VEC3), `TEXCOORD_0` (VEC2), `TANGENT` (VEC4, optional), and `COLOR_0` (see the support matrix below) -- decoded via the accessor SoA path; `INDICES` (U8/U16/U32 scalar — U8 widens to U16; U32 preserved, narrowed to U16 by bridge when maxIndex < 65536)
 - `materials` with metallic-roughness PBR mapping to pass-based `MaterialAsset` (see MaterialIr table below)
 - `textures` / `images` / `samplers` top-level arrays parsed into `GltfDoc` IR; texture index -> image index -> URI two-hop resolution via `externalLoader`
 - `cameras` of `type: 'perspective'`
+
+## COLOR_0 importer contract
+
+`COLOR_0` is interpreted only at the glTF importer boundary. The accessor
+decoder in [`src/accessor/`](src/accessor/index.ts) returns a fresh, linear
+RGBA `Float32Array`; the parser carries it as `GltfMeshIr.colors0`, and the
+bridge projects it to the canonical `MeshAsset.attributes.color` path. No
+shader location, material flag, or runtime `colors0` identity is introduced
+here.
+
+| Source accessor | Result |
+|:--|:--|
+| `VEC3` / `VEC4` + `FLOAT` | Direct finite values; `VEC3` receives alpha `1` |
+| `VEC3` / `VEC4` + normalized `UNSIGNED_BYTE` | Values divided by `255` |
+| `VEC3` / `VEC4` + normalized `UNSIGNED_SHORT` | Values divided by `65535` |
+| Valid dense interleaved `byteStride` | Decoded per vertex, including padding |
+
+Values stay in the linear `[0, 1]` range. The importer does not perform an
+sRGB conversion. An absent optional `COLOR_0` is a valid plain primitive;
+when a mesh also has colored primitives, the bridge writes explicit white
+`(1, 1, 1, 1)` values for each absent primitive vertex. A declared but
+unsupported or malformed accessor is a structured failure and is never
+treated as absent. Sparse accessors and morph-target `COLOR_0` are explicit
+deferred/unsupported branches in the first version.
+
+The public `meshIrToMeshAsset` bridge returns `Result<MeshAsset, GltfError>`.
+Its `gltf-mesh-bridge-invalid` detail is a closed reason union: empty input,
+morph-target count mismatch, `COLOR_0` cardinality mismatch, or a typed
+geometry-layout cause. Importer and smoke callers branch on `ok` before
+publishing a mesh; they do not unwrap or parse human-facing error text.
+
+For recovery, consume `Result` fields rather than parsing error text:
+
+```ts
+const parsed = await parseGltf(source, externalLoader, sourceKey);
+if (!parsed.ok) {
+  const { code, expected, detail, hint } = parsed.error;
+  // Branch on code/detail, repair source + Meta, then re-import.
+  reportImportFailure({ code, expected, detail, hint });
+}
+```
+
+The complete closed error/detail union remains owned by
+[`src/errors.ts`](src/errors.ts); `detail.semantic` and
+`detail.accessorIndex` identify a failing `COLOR_0` accessor.
 
 ### MaterialIr (standard PBR)
 
@@ -58,9 +103,14 @@ This package consumes:
 
 ### Multi-primitive mesh handling
 
-A single `mesh` with N primitives produces N `MeshIr` entries in `GltfDoc.meshes[]`, each with an independent UUIDv7 GUID. `SceneAsset` entity-prototype nodes carry `MeshFilter` and `MeshRenderer` referencing primitive-level mesh and material sub-assets. This aligns with the ECS single-entity-per-draw-call model (AGENTS.md Component naming).
+A single glTF `mesh` with N primitives produces N `GltfMeshIr` entries, then
+the bridge merges them into one `MeshAsset` with N submeshes. Source material
+indices are deduplicated into `MeshAsset.materialSlots[]`; each submesh stores
+only its slot index. Canonical `SceneAsset` nodes carry `MeshFilter` plus an
+empty `MeshRenderer.materials` override vector, so imported defaults remain
+mesh-owned and reimport-safe.
 
-Out of scope (each routed to its own `feat-future-*` anchor in `requirements.md` OOS-1 .. OOS-15): KHR extensions (note: `EXT_mesh_gpu_instancing` happy-path is supported, see feat-20260518-gltf-instancing-and-name-component) / morph targets / orthographic camera / sparse and interleaved accessors / inspector future fields / pixel-parity vs three.js. v1.1 OOS additions (locked by feat-20260518-gltf-instancing-and-name-component): multi-primitive instancing / mesh-level + material-level + scene-level Name (only node.name lands as ECS `Name`) / instancing hard cap / SoA TRS direct-to-GPU pipe / IR-to-GPU direct path / ROTATION BYTE/SHORT normalized encoding / Babylon thin-instances style SoA channel / Bevy multi-tier Name propagation.
+Out of scope (each routed to its own `feat-future-*` anchor in `requirements.md` OOS-1 .. OOS-15): KHR extensions other than the supported `EXT_mesh_gpu_instancing` and `KHR_texture_transform` paths / morph targets other than the explicit `COLOR_0` deferred signal / orthographic camera / sparse accessors / inspector future fields / pixel-parity vs three.js. Dense interleaved `COLOR_0` is supported; other interleaved accessor consumers retain their existing scope. v1.1 OOS additions (locked by feat-20260518-gltf-instancing-and-name-component): multi-primitive instancing / mesh-level + material-level + scene-level Name (only node.name lands as ECS `Name`) / instancing hard cap / SoA TRS direct-to-GPU pipe / IR-to-GPU direct path / ROTATION BYTE/SHORT normalized encoding / Babylon thin-instances style SoA channel / Bevy multi-tier Name propagation.
 
 ## Importer sub-asset PODs (7 kinds)
 
@@ -68,7 +118,7 @@ Out of scope (each routed to its own `feat-future-*` anchor in `requirements.md`
 
 | Kind | POD type (`@forgeax/engine-types`) | refs[] cross-edge |
 |:--|:--|:--|
-| `mesh` | `MeshAsset` | -- |
+| `mesh` | `MeshAsset` | default material GUIDs from `materialSlots[]` |
 | `material` | `MaterialAsset` | texture GUIDs (slot bindings) |
 | `scene` | `SceneAsset` | mesh + material + texture + skeleton GUIDs |
 | `texture` | `TextureAsset` | -- |
@@ -76,11 +126,11 @@ Out of scope (each routed to its own `feat-future-*` anchor in `requirements.md`
 | `skin` | `SkinAsset` | skeleton GUID |
 | `animation-clip` | `AnimationClip` | -- |
 
-Skinned glTFs (e.g. Khronos `Fox.glb` with 24 joints + 3 clips) flow through the same `loadByGuid<SceneAsset>` + `assets.instantiate` spine as static glTFs. The bridge (`gltfDocToSceneAsset`) auto-emits `Skin { skeleton: <skeleton-guid-string> }` on every node with `NodeIr.skinIndex !== null` when the caller passes `skeletonGuidBySkinIndex`; `AssetRegistry._resolveSceneGuids` resolves the GUID to a runtime Handle at instantiate time, mirroring the `MeshFilter` + `MeshRenderer.materials[]` protocol. `postSpawnResolveJoints` (`@forgeax/engine-runtime`) fills `Skin.joints[]` by walking `SkinAsset.jointPaths` against the spawn root's `ChildOf`-descendant subtree, so multiple `instantiate()` calls on the same skinned `SceneAsset` produce independently-posed instances (no cross-spawn joint sharing).
+Skinned glTFs (e.g. Khronos `Fox.glb` with 24 joints + 3 clips) flow through the same `loadByGuid<SceneAsset>` + `assets.instantiate` spine as static glTFs. The bridge (`gltfDocToSceneAsset`) auto-emits `Skin { skeleton: <skeleton-guid-string> }` on every node with `NodeIr.skinIndex !== null` when the caller passes `skeletonGuidBySkinIndex`; `AssetRegistry._resolveSceneGuids` resolves the GUID to a runtime Handle at instantiate time, while mesh material dependencies load recursively from `MeshAsset.materialSlots[]`. `postSpawnResolveJoints` (`@forgeax/engine-runtime`) fills `Skin.joints[]` by walking `SkinAsset.jointPaths` against the spawn root's `ChildOf`-descendant subtree, so multiple `instantiate()` calls on the same skinned `SceneAsset` produce independently-posed instances (no cross-spawn joint sharing).
 
 Sample reference: `apps/hello/skin` -- 3 Khronos Fox foxes side-by-side, each running a different clip (Survey / Walk / Run). Asset source under `forgeax-engine-assets/khronos-gltf-samples/Fox/` (CC BY 4.0; ATTRIBUTION.md alongside).
 
-## Error surface (13-member closed union, plan-strategy section 2.3 + section 8 + feat-20260518 +1 + feat-20260522 +2 + feat-20260523 +4)
+## Error surface (closed union, plan-strategy section 2.3 + section 8)
 
 `GltfErrorCode` is the SSOT in `@forgeax/engine-gltf` (4-field surface `.code` / `.expected` / `.hint` / `.detail`; `GltfErrorDetail` discriminated per `.code`). Exhaustive `switch (err.code)` without `default` is the AI-user pattern.
 
@@ -91,7 +141,7 @@ Sample reference: `apps/hello/skin` -- 3 Khronos Fox foxes side-by-side, each ru
 | `gltf-malformed-header` | GLB magic / version / length header rejection or missing JSON chunk |
 | `gltf-version-unsupported` | `asset.version` is not `'2.0'` |
 | `gltf-buffer-out-of-bounds` | accessor reads past `bufferView.byteLength` |
-| `gltf-extension-unsupported` | `extensionsRequired[]` lists an extension outside the v1 allowlist (`['EXT_mesh_gpu_instancing']`) |
+| `gltf-extension-unsupported` | `extensionsRequired[]` lists an extension outside the supported allowlist (`EXT_mesh_gpu_instancing`, `KHR_texture_transform`) |
 | `gltf-accessor-type-mismatch` | sparse / morph / interleaved / unknown componentType accessor (4 reasons) |
 | `gltf-texture-load-failed` | `externalLoader` rejected for a texture `uri`; `detail.uri` carries the failing URI; hint: `'check sidecar meta.json + textures/ directory + vite-plugin-pack /__pack/lookup'` |
 | `gltf-meta-missing` | sidecar `<source>.meta.json` is absent next to the `.gltf` / `.glb` source file |
@@ -101,6 +151,15 @@ Sample reference: `apps/hello/skin` -- 3 Khronos Fox foxes side-by-side, each ru
 | `gltf-skin-joint-name-missing` | glTF node referenced by a skin joint has no `name` field; hint contains skinIndex + jointPathIndex |
 | `gltf-animation-cubicspline-unsupported` | animation sampler uses `CUBICSPLINE` interpolation (OOS-skin-cubicspline) |
 | `gltf-morph-unsupported` | animation channel targets morph weights (`path==='weights'`, OOS-skin-morph-anim) |
+| `gltf-color-accessor-unsupported` | `COLOR_0` type/component/normalized combination, sparse input, or morph-target input is deferred |
+| `gltf-color-accessor-malformed` | `COLOR_0` count, finite/range, buffer bounds, or reference validation failed |
+
+Source-key conflicts are producer failures, not automatic renames. A
+`duplicate-source-key` or `ambiguous-source-key` detail includes the semantic
+`key` and the smallest conflicting `entries` (`kind`, `name`, and
+`sourceIndex`); repair the source or its metadata and retry the same GUID.
+
+When `ImporterRegistry` + `runImport` consumes a glTF source, malformed base64 in a buffer data URI is returned as the existing `ImportError` `source-validation-failed` with `detail.diagnostics[].code === 'gltf-buffer-data-uri-invalid'`. The failed attempt publishes no Pack; after repairing the same source, Meta, and GUID declarations, the same registry/process can retry normally.
 
 ## Skin & Animation importer (feat-20260523)
 

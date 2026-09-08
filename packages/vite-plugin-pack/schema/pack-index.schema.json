@@ -3,6 +3,7 @@
   "$id": "https://github.com/ForgeaX-Games/forgeax-engine/packages/vite-plugin-pack/schema/pack-index.schema.json",
   "title": "PackIndex",
   "description": "Schema for pack-index.json — the catalog mapping GUIDs to Pack v2 package locators.",
+  "$comment": "The 16 ordinary durable kinds and host capability boundary are published by SCRIPTABLE_PACK_CAPABILITY_MANIFEST from @forgeax/engine-vite-plugin-pack; catalog kind remains open for producer extensions.",
   "type": "array",
   "items": {
     "$ref": "#/$defs/packIndexEntry"
@@ -32,6 +33,31 @@
           "type": "string",
           "minLength": 1,
           "description": "Relative path to the source .pack.json or .meta.json file from the project root."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional producer-owned display name; it never replaces GUID identity."
+        },
+        "scopeId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Producer runtime scope for the current publication tuple."
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Monotonic publication generation within the runtime scope."
+        },
+        "digest": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Digest of the published asset output."
+        },
+        "outputSetDigest": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Digest of the complete producer output set."
         },
         "sourceIndex": {
           "type": "integer",

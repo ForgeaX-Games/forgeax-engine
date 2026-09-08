@@ -6,12 +6,6 @@ import type {
   AudioState,
   BusName,
 } from './audio-backend';
-import {
-  recordAudioBusMute,
-  recordAudioBusVolume,
-  recordAudioIntent,
-  recordAudioListenerPose,
-} from './audio-tick-system';
 
 export type AudioIntent =
   | {
@@ -28,6 +22,14 @@ export type AudioIntent =
   | { readonly kind: 'set-listener-pose'; readonly pose: AudioListenerPose }
   | { readonly kind: 'destroy' };
 
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.byteLength !== right.byteLength) return false;
+  for (let index = 0; index < left.byteLength; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
 export interface AudioIntentBackendOptions {
   readonly emit: (intent: AudioIntent) => void;
   readonly state?: () => AudioState;
@@ -40,20 +42,21 @@ const DISCONNECTED_AUDIO_STATE: AudioState = {
 };
 
 export function createAudioIntentBackend(options: AudioIntentBackendOptions): AudioBackend {
-  const publishedSources = new Set<string>();
+  const publishedSources = new Map<string, Uint8Array>();
   let destroyed = false;
   const emit = (intent: AudioIntent): void => {
     if (!destroyed || intent.kind === 'destroy') options.emit(intent);
   };
   const backend: AudioBackend = {
     play(entityId: number, clip: AudioClipAsset, playOptions: AudioPlayOptions): void {
-      const firstPublish = !publishedSources.has(clip.sourceKey);
-      publishedSources.add(clip.sourceKey);
+      const publishedBytes = publishedSources.get(clip.sourceKey);
+      const publishBytes = publishedBytes === undefined || !sameBytes(publishedBytes, clip.bytes);
+      if (publishBytes) publishedSources.set(clip.sourceKey, clip.bytes.slice());
       emit({
         kind: 'play',
         entityId,
         sourceKey: clip.sourceKey,
-        ...(firstPublish ? { bytes: clip.bytes } : {}),
+        ...(publishBytes ? { bytes: clip.bytes } : {}),
         options: playOptions,
       });
     },
@@ -62,17 +65,14 @@ export function createAudioIntentBackend(options: AudioIntentBackendOptions): Au
     setBusVolume: (bus, volume) => {
       const intent = { kind: 'set-bus-volume', bus, volume } as const;
       emit(intent);
-      recordAudioBusVolume(backend, bus, volume);
     },
     setBusMute: (bus, muted) => {
       const intent = { kind: 'set-bus-mute', bus, muted } as const;
       emit(intent);
-      recordAudioBusMute(backend, bus, muted);
     },
     setListenerPose: (pose) => {
       const intent = { kind: 'set-listener-pose', pose } as const;
       emit(intent);
-      recordAudioListenerPose(backend, pose);
     },
     getState: () => options.state?.() ?? DISCONNECTED_AUDIO_STATE,
     getActiveSourceCount: () => (options.state?.() ?? DISCONNECTED_AUDIO_STATE).activeSourceCount,
@@ -80,7 +80,6 @@ export function createAudioIntentBackend(options: AudioIntentBackendOptions): Au
       if (destroyed) return;
       const intent = { kind: 'destroy' } as const;
       emit(intent);
-      recordAudioIntent(backend, intent);
       destroyed = true;
       publishedSources.clear();
     },

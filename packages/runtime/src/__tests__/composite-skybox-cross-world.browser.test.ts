@@ -8,7 +8,7 @@
 // world it resolves against, so both defects are invisible there).
 //
 // The editor drives:
-//   renderer.draw([editorWorld, sceneWorld], { cameraOwner: 0, resourceOwner: 1 })
+//   renderer.draw({ leases, camera: { lease: editorLease }, environment: { lease: sceneLease } })
 // - camera + gizmo (user-tier) meshes live in editorWorld (index 0)
 // - skybox (equirect->cube) + geometry live in sceneWorld  (index 1)
 //
@@ -41,14 +41,14 @@ import {
   SkyboxBackground,
   Skylight,
   TONEMAP_REINHARD_EXTENDED,
-} from '@forgeax/engine-render/internal';
+} from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import type { EquirectAsset, Handle, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it } from 'vitest';
 import { page } from 'vitest/browser';
-import { Engine } from '../index';
+import { constructRuntimeRendererHost } from '../renderer-host';
 
-type EngineRenderer = Awaited<ReturnType<typeof Engine.create>>;
+type EngineRenderer = import('@forgeax/engine-render').Renderer;
 
 // Suppress the known chromium teardown race (device GC'd while a shader
 // getCompilationInfo is in flight) — same guard the 9-light browser test uses.
@@ -87,12 +87,20 @@ function brightEquirect(width = 8, height = 4): EquirectAsset {
 // the CAMERA-owner world, not the resource-owner world.
 function gizmoMesh(): MeshAsset {
   const v = (x: number, y: number, z: number): number[] => [x, y, z, 0, 0, 1, 0, 0, 0, 0, 1, 1];
+  const positions = new Float32Array([-0.3, -0.3, 0, 0.3, -0.3, 0, 0, 0.4, 0]);
+  const normals = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]);
+  const uvs = new Float32Array([0, 0, 1, 0, 0.5, 1]);
+  const tangents = new Float32Array([0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1]);
   return {
     kind: 'mesh',
     vertices: new Float32Array([...v(-0.3, -0.3, 0), ...v(0.3, -0.3, 0), ...v(0, 0.4, 0)]),
     indices: new Uint16Array([0, 1, 2]),
-    attributes: {},
-    submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+    attributes: { position: positions, normal: normals, uv: uvs, tangent: tangents },
+    submeshes: [
+      { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list', materialSlot: 0 },
+    ],
+
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 
@@ -150,7 +158,7 @@ async function decodePngBase64(b64: string): Promise<Uint8Array> {
 
 // Compositor-independent readback: drive N frames, then capture the actual
 // presented canvas via the CDP-backed page.screenshot (locator scoped to the
-// canvas). The createImageBitmap(canvas) path (renderer.readPixels) depends on
+// canvas). The createImageBitmap(canvas) path is owned by this test harness and depends on
 // the chromium compositor having consumed the WebGPU swap-chain before the
 // bounce, which is unreliable headless/local (documented in
 // light-casters-9-light.browser.test.ts). The screenshot path reads the
@@ -158,15 +166,26 @@ async function decodePngBase64(b64: string): Promise<Uint8Array> {
 async function readbackAfterComposite(
   renderer: EngineRenderer,
   worlds: World[],
+  canvas: HTMLCanvasElement,
   canvasId: string,
 ): Promise<Uint8Array> {
-  for (const world of worlds) {
-    const attached = renderer.attachWorld(world);
+  const leases = worlds.map((world) => {
+    const attached = renderer.attach(world);
     if (!attached.ok) throw attached.error;
-  }
+    return attached.value;
+  });
   for (let i = 0; i < FRAMES; i++) {
     for (const world of worlds) world.update(1 / 60).unwrap();
-    const r = renderer.draw(worlds, { cameraOwner: 0, resourceOwner: 1 });
+    const cameraLease = leases[0];
+    const environmentLease = leases[1];
+    if (cameraLease === undefined || environmentLease === undefined) {
+      throw new Error('composite frame requires camera and environment leases');
+    }
+    const r = renderer.draw({
+      leases,
+      camera: { lease: cameraLease },
+      environment: { lease: environmentLease },
+    });
     if (!r.ok) throw new Error(`renderer.draw frame ${i} failed: ${r.error.code}`);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   }
@@ -185,9 +204,17 @@ async function readbackAfterComposite(
   } catch {
     // Fallback: createImageBitmap(canvas) bounce (may read all-zero if the
     // compositor has not consumed the swap-chain — handled by the alpha gate).
-    const r = await renderer.readPixels();
-    if (!r.ok) throw new Error(`readPixels fallback failed: ${r.error.code}`);
-    return r.value;
+    const bitmap = await createImageBitmap(canvas);
+    const offscreen = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const context = offscreen.getContext('2d', { willReadFrequently: true });
+    if (context === null) {
+      bitmap.close();
+      throw new Error('OffscreenCanvas 2D context unavailable for canvas readback');
+    }
+    context.drawImage(bitmap, 0, 0);
+    const image = context.getImageData(0, 0, bitmap.width, bitmap.height);
+    bitmap.close();
+    return new Uint8Array(image.data.buffer, image.data.byteOffset, image.data.byteLength);
   }
 }
 
@@ -240,19 +267,28 @@ describe.skipIf(!browserReady)('composite + skybox + cross-world mesh (ENGINE-fi
     canvas.style.display = 'block';
     document.body.appendChild(canvas);
 
-    renderer = await Engine.create(canvas, {}, { shaderManifestUrl: '/shaders/manifest.json' });
-    expect(renderer.backend).toBe('webgpu');
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
+    const host = await constructRuntimeRendererHost(
+      canvas,
+      {},
+      {
+        shaderManifestUrl: '/shaders/manifest.json',
+      },
+    );
+    expect(host.ok).toBe(true);
+    if (!host.ok) throw host.error;
+    renderer = host.value.renderer;
+    expect(renderer.inspect().state).toBe('alive');
 
     const diagnostics: Diag[] = [];
-    renderer.onError((e) =>
+    renderer.subscribe((event) => {
+      if (event.kind !== 'error') return;
+      const error = event.error;
       diagnostics.push({
-        code: e.code,
-        hint: e.hint,
-        detail: (e as unknown as { detail?: unknown }).detail,
-      }),
-    );
+        code: error.code,
+        hint: error.hint,
+        detail: (error as unknown as { detail?: unknown }).detail,
+      });
+    });
 
     // editorWorld (cameraOwner, index 0): camera + directional light + one
     // user-tier gizmo mesh. NO skybox, NO scene geometry.
@@ -320,7 +356,12 @@ describe.skipIf(!browserReady)('composite + skybox + cross-world mesh (ENGINE-fi
     litBox(sceneWorld, [0.15, 0.8, 0.2, 1], 0, 0);
     litBox(sceneWorld, [0.85, 0.15, 0.15, 1], 1.8, 0);
 
-    const pixels = await readbackAfterComposite(renderer, [editorWorld, sceneWorld], canvas.id);
+    const pixels = await readbackAfterComposite(
+      renderer,
+      [editorWorld, sceneWorld],
+      canvas,
+      canvas.id,
+    );
     // The screenshot path returns the canvas element's composited surface
     // (clipped to its layout box, so its size is source-dependent); the
     // fallback createImageBitmap path returns exactly CANVAS_W*CANVAS_H*4.

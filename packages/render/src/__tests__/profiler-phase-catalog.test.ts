@@ -6,7 +6,7 @@ import {
   RENDER_PHASE_CATALOG,
   RENDER_RECORD_PHASE_CATALOG,
   RENDER_SCENE_STATE_PHASE_CATALOG,
-} from '../renderer';
+} from '../render-contract';
 
 describe('Render profiler phase catalog ownership', () => {
   it('matches the profiler receiver set and includes nested record owners', () => {
@@ -58,7 +58,7 @@ describe('Render profiler phase catalog ownership', () => {
   });
 
   it('keeps the phase declaration in the Render owner module', () => {
-    const source = readFileSync(new URL('../renderer.ts', import.meta.url), 'utf8');
+    const source = readFileSync(new URL('../render-contract.ts', import.meta.url), 'utf8');
     expect(source).toContain('RENDER_PHASE_CATALOG');
     expect(source).not.toContain('RenderPhaseObserver');
     expect(source).not.toContain('renderFrameSeq');

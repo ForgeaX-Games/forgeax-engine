@@ -1,546 +1,239 @@
-/**
- * E2E browser tests: chromium + WebGPU full-loop. (Tree-shake grep gate
- * lives in tree-shake.unit.test.ts — the browser env cannot run node:fs.)
- *
- * Round 1 fix-up (issue I-5): the prior placeholder shape was
- * `describe.skip` + 7 occurrences of `expect(true).toBe(true)` which gave
- * AC-28 zero evidence. This round wires real WebGPU-vs-no-WebGPU branching
- * via per-test `it.skipIf(typeof navigator === 'undefined' || navigator.gpu == null)`,
- * so each test fires assertions when the browser binding is present and
- * skips with a logged reason otherwise. AC-28 (browser e2e) is split:
- *
- *   (a) record-on-browser shape: builds a 1-frame RHI sequence on the
- *       browser GPU surface (when available), records via wrap(rhi)
- *       proxy + onFrameEnd, asserts tape event count > 0 + structural
- *       shape (createTexture/View/beginRenderPass/finish/submit kinds).
- *   (b) tree-shake grep gate: AC-17 / AC-03 — when no built dist exists
- *       the test skips with `it.skipIf(distFiles.length === 0)`; when
- *       dist exists it greps for the @forgeax/engine-rhi-debug import
- *       string and asserts zero hits in any FORGEAX_ENGINE_RHI_DEBUG=0 bundle.
- *
- * The full RPC + dev-server + chromium fixture loop (captureFrame +
- * inspectAt over WS:5732) lives in step-verify because (i) it requires
- * a separate dev server lifecycle, (ii) `pnpm test:browser` runs under
- * chromium-headless via vitest-browser which does not (yet) expose the
- * WS:5732 inspector — that lives in `pnpm dev` only. Step-verify's
- * sandbox AI-user simulator covers that path with playwright.
- *
- * I-5 contract: this file no longer carries `describe.skip` or
- * `expect(true).toBe(true)` placeholders. Every `it` block either runs
- * a real assertion or skips with a structural reason.
- */
+/// <reference types="@webgpu/types" />
 
-// biome-ignore-all lint/suspicious/noExplicitAny: browser e2e tests construct RHI mock surfaces
-// (GPU device/buffer/texture brands, WebGPU descriptor types) whose structural shapes require
-// any casts at the test boundary; browser WebGPU opaque types cannot be imported at the type level.
-
-import type { RhiDevice, RhiInstance } from '@forgeax/engine-rhi';
+import type { RhiDevice } from '@forgeax/engine-rhi';
 import { describe, expect, it } from 'vitest';
-import { inspectDrawJson } from '../inspect-core';
-import { type CreateShaderModuleFn, wrap, wrapCreateShaderModule } from '../recorder';
-import { createReplay } from '../replayer';
-import { renderRtToCanvas } from '../rt-to-canvas';
-import { deserializeTape, serializeTape } from '../tape-format';
+import { buildFrameModel } from '../frame-model';
+import { decodeTape } from '../protocol/codec';
+import type { Tape } from '../protocol/types';
+import { attachRecorder, type RecordableBackend } from '../recorder/session';
+import { openReplay } from '../replay/session';
 
-// ============================================================================
-// Browser GPU + workspace dist helpers
-// ============================================================================
+const GPU_AVAILABLE = typeof navigator !== 'undefined' && navigator.gpu !== undefined;
+const SIZE = 64;
 
-interface BrowserPack {
-  readonly rhi: RhiInstance;
-  readonly createShaderModule: CreateShaderModuleFn;
-}
-
-async function loadBrowserRhi(): Promise<BrowserPack | undefined> {
-  // The same @forgeax/engine-rhi-webgpu package serves both dawn-node and
-  // chromium WebGPU; the runtime adapter is whatever the host exposes
-  // via `globalThis.navigator.gpu`. In a vitest-browser context this is
-  // the chromium WebGPU implementation; in a headless / no-GPU context
-  // requestAdapter() returns Result.err and the test skips.
-  try {
-    const mod = (await import('@forgeax/engine-rhi-webgpu')) as unknown as BrowserPack;
-    return mod;
-  } catch {
-    return undefined;
-  }
-}
-
-const BROWSER_GPU_AVAILABLE = typeof navigator !== 'undefined' && (navigator as any).gpu != null;
-
-// ============================================================================
-// Tests
-// ============================================================================
-//
-// Tree-shake grep gate (AC-17 / AC-03) lives in tree-shake.unit.test.ts
-// (node:fs scan of demo /dist/*.mjs). The browser project runs in
-// chromium where node:fs is unavailable; this file focuses on the
-// browser GPU surface only.
-
-describe('e2e.browser — record on browser GPU (AC-28)', () => {
-  // ------------------------------------------------------------------
-  // (a) record-on-browser: 1-frame RHI sequence on chromium WebGPU.
-  // ------------------------------------------------------------------
-
-  it.skipIf(!BROWSER_GPU_AVAILABLE)(
-    'record-on-browser: 1 frame -> tape.events > 0 + structural kinds present',
-    async () => {
-      const pack = await loadBrowserRhi();
-      if (pack === undefined) return;
-      const debugInst = wrap(pack.rhi);
-      const adapterRes = await debugInst.requestAdapter();
-      if (!adapterRes.ok) return;
-      const devRes = await adapterRes.value.requestDevice();
-      if (!devRes.ok) return;
-      const dev = devRes.value;
-
-      const armRes = debugInst.arm(1);
-      expect(armRes.ok).toBe(true);
-      if (!armRes.ok) return;
-
-      const W = 64;
-      const H = 64;
-      const texRes = dev.createTexture({
-        size: { width: W, height: H, depthOrArrayLayers: 1 },
-        format: 'rgba8unorm',
-        usage: 0x11,
-        label: undefined,
-        mipLevelCount: undefined,
-        sampleCount: undefined,
-        dimension: undefined,
-        viewFormats: undefined,
-        textureBindingViewDimension: undefined,
-      });
-      if (!texRes.ok) return;
-      const viewRes = dev.createTextureView(texRes.value, {
-        label: undefined,
-        format: undefined,
-        dimension: undefined,
-        usage: undefined,
-        aspect: undefined,
-        baseMipLevel: undefined,
-        mipLevelCount: undefined,
-        baseArrayLayer: undefined,
-        arrayLayerCount: undefined,
-      });
-      if (!viewRes.ok) return;
-      const encRes = dev.createCommandEncoder({ label: undefined });
-      if (!encRes.ok) return;
-      const enc = encRes.value;
-      const pass = enc.beginRenderPass({
-        colorAttachments: [
-          {
-            view: viewRes.value as any,
-            clearValue: { r: 0.2, g: 0.6, b: 1.0, a: 1 },
-            loadOp: 'clear',
-            storeOp: 'store',
-          },
-        ],
-      } as any);
-      pass.end();
-      const finishRes = enc.finish();
-      if (!finishRes.ok) return;
-      dev.queue.submit([finishRes.value] as unknown as readonly never[]);
-      await dev.queue.onSubmittedWorkDone();
-      debugInst.onFrameEnd();
-
-      const tape = debugInst.getTape() as any;
-      expect(tape).toBeTruthy();
-      if (!tape) return;
-      expect(tape.events.length).toBeGreaterThan(0);
-      const kinds = new Set(tape.events.map((e: any) => e.kind));
-      expect(kinds.has('createTexture')).toBe(true);
-      expect(kinds.has('createTextureView')).toBe(true);
-      expect(kinds.has('beginRenderPass')).toBe(true);
-      expect(kinds.has('finish')).toBe(true);
-      expect(kinds.has('submit')).toBe(true);
-    },
-    30_000,
-  );
-
-  it.skipIf(!BROWSER_GPU_AVAILABLE)(
-    'record-on-browser: tape includes onFrameEnd marker + frameIdx=0',
-    async () => {
-      const pack = await loadBrowserRhi();
-      if (pack === undefined) return;
-      const debugInst = wrap(pack.rhi);
-      const adapterRes = await debugInst.requestAdapter();
-      if (!adapterRes.ok) return;
-      const devRes = await adapterRes.value.requestDevice();
-      if (!devRes.ok) return;
-      const dev = devRes.value;
-      const armRes = debugInst.arm(1);
-      if (!armRes.ok) return;
-      // No-op frame: just trigger onSubmittedWorkDone + onFrameEnd.
-      // The bootstrap-to-frame-0 contract guarantees frameMark events
-      // get pushed even when the frame body did no work.
-      await dev.queue.onSubmittedWorkDone();
-      debugInst.onFrameEnd();
-      const tape = debugInst.getTape() as any;
-      expect(tape).toBeTruthy();
-      if (!tape) return;
-      // Last event must be a frameMark for frameIdx 0.
-      const last = tape.events.at(-1);
-      expect(last?.kind).toBe('frameMark');
-      if (last?.kind !== 'frameMark') return;
-      expect(last.frameIdx).toBe(0);
-    },
-    30_000,
-  );
-
-  // Tree-shake grep gate (AC-17 / AC-03) lives in tree-shake.unit.test.ts
-  // — the browser env cannot run node:fs scans.
-});
-
-// ============================================================================
-// L3b + L3c: browser inspect (inspectDrawJson + renderRtToCanvas)
-// ============================================================================
-//
-// Acceptance criteria:
-//   L3b: inspectDrawJson on browser-replayed tape -- assert bindings
-//        non-empty, drawCall fields populated.
-//   L3c: renderRtToCanvas -- render RT onto a canvas element; verify
-//        ImageData/putImageData round-trip works in browser env;
-//        verify error propagation on empty tape.
-//   Falsification: empty tape -> renderRtToCanvas must report error,
-//        and canvas pixels must be all-zero.
-//   AC-16: both L3b JSON + L3c canvas covered; it.skipIf guard.
-
-describe('e2e.browser — L3b inspectDrawJson + L3c renderRtToCanvas (AC-16)', () => {
-  // ------------------------------------------------------------------
-  // Shared WGSL (same shape as e2e.dawn.test.ts triangle)
-  // ------------------------------------------------------------------
-  const TRI_VS = /* wgsl */ `
+const VERTEX_SHADER = /* wgsl */ `
 @vertex
-fn main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
-  var pos = array<vec2<f32>, 3>(
-    vec2( 0.0,  0.5),
-    vec2(-0.5, -0.5),
-    vec2( 0.5, -0.5),
+fn main(@builtin(vertex_index) vertexIndex: u32) -> @builtin(position) vec4<f32> {
+  var positions = array<vec2<f32>, 3>(
+    vec2<f32>(-0.8, -0.8),
+    vec2<f32>(0.8, -0.8),
+    vec2<f32>(0.0, 0.8),
   );
-  return vec4(pos[vi], 0.0, 1.0);
+  return vec4<f32>(positions[vertexIndex], 0.0, 1.0);
 }`;
-  const TRI_FS = /* wgsl */ `
+
+const FRAGMENT_SHADER = /* wgsl */ `
+@group(0) @binding(0) var sourceTexture: texture_2d<f32>;
+@group(0) @binding(1) var sourceSampler: sampler;
+
 @fragment
 fn main() -> @location(0) vec4<f32> {
-  return vec4(1.0, 0.0, 0.0, 1.0);
+  return textureSample(sourceTexture, sourceSampler, vec2<f32>(0.5, 0.5));
 }`;
 
-  const RT_W = 64;
-  const RT_H = 64;
+interface CapturedBrowserTape {
+  readonly backend: RecordableBackend;
+  readonly device: RhiDevice;
+  readonly tape: Tape;
+}
 
-  // ------------------------------------------------------------------
+function must<T>(
+  result:
+    | { readonly ok: true; readonly value: T }
+    | { readonly ok: false; readonly error: unknown },
+  label: string,
+): T {
+  if (result.ok) return result.value;
+  const error = result.error as {
+    readonly code?: unknown;
+    readonly hint?: unknown;
+    readonly detail?: unknown;
+  };
+  throw new Error(
+    `${label}: ${String(error.code ?? 'unknown')} ${String(error.hint ?? '')} ${JSON.stringify(error.detail ?? null)}`,
+  );
+}
 
-  it.skipIf(!BROWSER_GPU_AVAILABLE)(
-    'L3b: inspectDrawJson — bindings non-empty + drawCall fields populated',
-    async () => {
-      const pack = await loadBrowserRhi();
-      if (pack === undefined) return;
+async function loadBackend(): Promise<RecordableBackend> {
+  const backend = await import('@forgeax/engine-rhi-webgpu');
+  return backend as unknown as RecordableBackend;
+}
 
-      const debugInst = wrap(pack.rhi);
-      const wrappedCreateShader = wrapCreateShaderModule(pack.createShaderModule, debugInst);
-      const adapterRes = await debugInst.requestAdapter();
-      if (!adapterRes.ok) return;
-      const devRes = await adapterRes.value.requestDevice();
-      if (!devRes.ok) return;
-      const wrappedDevice = devRes.value;
-      const rawDevice: RhiDevice = (wrappedDevice as any)._realDevice;
+async function captureBrowserTape(): Promise<CapturedBrowserTape> {
+  const backend = await loadBackend();
+  const attachment = must(attachRecorder(backend), 'attachRecorder');
+  const adapter = must(await attachment.backend.rhi.requestAdapter(), 'requestAdapter');
+  const device = must(await adapter.requestDevice(), 'requestDevice');
+  const capture = attachment.captureFrame();
+  must(await attachment.frameBoundary(), 'capture snapshot boundary');
 
-      const armRes = debugInst.arm(1);
-      if (!armRes.ok) return;
-
-      // Record: triangle draw (drawcount=1 -> passIdx=0).
-      const texRes = wrappedDevice.createTexture({
-        size: { width: RT_W, height: RT_H, depthOrArrayLayers: 1 },
-        format: 'rgba8unorm',
-        usage: 0x11,
-      } as never);
-      if (!texRes.ok) return;
-      const viewRes = wrappedDevice.createTextureView(texRes.value, {});
-      if (!viewRes.ok) return;
-
-      const vs = await wrappedCreateShader(rawDevice, { code: TRI_VS });
-      if (!vs.ok) return;
-      const fs = await wrappedCreateShader(rawDevice, { code: TRI_FS });
-      if (!fs.ok) return;
-
-      const bglRes = wrappedDevice.createBindGroupLayout({ entries: [] });
-      if (!bglRes.ok) return;
-      const plRes = wrappedDevice.createPipelineLayout({ bindGroupLayouts: [bglRes.value] });
-      if (!plRes.ok) return;
-      const pipeRes = wrappedDevice.createRenderPipeline({
-        layout: plRes.value,
-        vertex: { module: vs.value as never, entryPoint: 'main', buffers: [] },
-        fragment: {
-          module: fs.value as never,
-          entryPoint: 'main',
-          targets: [{ format: 'rgba8unorm' }],
-        },
-        primitive: { topology: 'triangle-list' },
-      } as never);
-      if (!pipeRes.ok) return;
-
-      const encRes = wrappedDevice.createCommandEncoder({});
-      if (!encRes.ok) return;
-      const enc = encRes.value;
-      const pass = enc.beginRenderPass({
-        colorAttachments: [
-          {
-            view: viewRes.value as never,
-            clearValue: { r: 0, g: 0, b: 0, a: 1 },
-            loadOp: 'clear',
-            storeOp: 'store',
-          },
-        ],
-      } as never);
-      pass.setPipeline(pipeRes.value as never);
-      pass.draw(3, 1, 0, 0);
-      pass.end();
-      const fin = enc.finish();
-      if (!fin.ok) return;
-      wrappedDevice.queue.submit([fin.value] as never);
-      await wrappedDevice.queue.onSubmittedWorkDone();
-      debugInst.onFrameEnd();
-
-      const tape = debugInst.getTape() as any;
-      if (!tape) return;
-
-      // Round-trip serialize
-      const { json, blob } = serializeTape(tape);
-      const dtRes = deserializeTape(json, blob);
-      if (!dtRes.ok) return;
-
-      // Replay and step to cover all events.
-      const replayRes = createReplay(dtRes.value, rawDevice, pack.createShaderModule);
-      if (!replayRes.ok) return;
-      const replay = replayRes.value;
-      const stepRes = await replay.stepTo(dtRes.value.events.length - 1);
-      if (!stepRes.ok) return;
-
-      // L3b: inspectDrawJson at drawIdx=0
-      const events = dtRes.value.events;
-      const inspectRes = await inspectDrawJson(replay, 0, events, rawDevice);
-      if (!inspectRes.ok) return;
-      const report = inspectRes.value;
-
-      // Basic coordinate fields
-      expect(report.frameIdx).toBeGreaterThanOrEqual(0);
-      expect(report.drawIdx).toBe(0);
-      expect(report.passIdx).toBeGreaterThanOrEqual(0);
-
-      // L3b key assertions: bindings present and drawCall populated
-      expect(report.bindings).toBeDefined();
-      expect(Array.isArray(report.bindings)).toBe(true);
-      expect(report.drawCall).toBeDefined();
-      expect(report.drawCall?.pipelineKind).toBe('render');
-      expect(typeof report.drawCall?.pipelineHandleId).toBe('string');
-      expect(report.drawCall?.pipelineHandleId.length).toBeGreaterThan(0);
-    },
-    60_000,
+  const renderTarget = must(
+    device.createTexture({
+      size: { width: SIZE, height: SIZE, depthOrArrayLayers: 1 },
+      format: 'rgba8unorm',
+      usage: 0x11,
+    }),
+    'create render target',
+  );
+  const renderTargetView = must(
+    device.createTextureView(renderTarget, {}),
+    'create render target view',
+  );
+  const sourceTexture = must(
+    device.createTexture({
+      size: { width: 1, height: 1, depthOrArrayLayers: 1 },
+      format: 'rgba8unorm',
+      usage: 0x06,
+    }),
+    'create source texture',
+  );
+  const sourceView = must(device.createTextureView(sourceTexture, {}), 'create source view');
+  const sampler = must(device.createSampler({}), 'create sampler');
+  const vertex = must(
+    await attachment.backend.createShaderModule(device, { code: VERTEX_SHADER }),
+    'create vertex shader',
+  );
+  const fragment = must(
+    await attachment.backend.createShaderModule(device, { code: FRAGMENT_SHADER }),
+    'create fragment shader',
+  );
+  const bindGroupLayout = must(
+    device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: 0x02, texture: { sampleType: 'float', viewDimension: '2d' } },
+        { binding: 1, visibility: 0x02, sampler: { type: 'filtering' } },
+      ],
+    }),
+    'create bind group layout',
+  );
+  const bindGroup = must(
+    device.createBindGroup({
+      layout: bindGroupLayout,
+      entries: [
+        { binding: 0, resource: { kind: 'textureView', value: sourceView } },
+        { binding: 1, resource: { kind: 'sampler', value: sampler } },
+      ],
+    } as never),
+    'create bind group',
+  );
+  const pipelineLayout = must(
+    device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] }),
+    'create pipeline layout',
+  );
+  const pipeline = must(
+    device.createRenderPipeline({
+      layout: pipelineLayout,
+      vertex: { module: vertex, entryPoint: 'main', buffers: [] },
+      fragment: { module: fragment, entryPoint: 'main', targets: [{ format: 'rgba8unorm' }] },
+      primitive: { topology: 'triangle-list' },
+    } as never),
+    'create render pipeline',
   );
 
-  it.skipIf(!BROWSER_GPU_AVAILABLE)(
-    'L3c: renderRtToCanvas — canvas ImageData round-trip valid + error on empty tape',
-    async () => {
-      const pack = await loadBrowserRhi();
-      if (pack === undefined) return;
-
-      const debugInst = wrap(pack.rhi);
-      const wrappedCreateShader = wrapCreateShaderModule(pack.createShaderModule, debugInst);
-      const adapterRes = await debugInst.requestAdapter();
-      if (!adapterRes.ok) return;
-      const devRes = await adapterRes.value.requestDevice();
-      if (!devRes.ok) return;
-      const wrappedDevice = devRes.value;
-      const rawDevice: RhiDevice = (wrappedDevice as any)._realDevice;
-
-      const armRes = debugInst.arm(1);
-      if (!armRes.ok) return;
-
-      const texRes = wrappedDevice.createTexture({
-        size: { width: RT_W, height: RT_H, depthOrArrayLayers: 1 },
-        format: 'rgba8unorm',
-        usage: 0x11,
-      } as never);
-      if (!texRes.ok) return;
-      const viewRes = wrappedDevice.createTextureView(texRes.value, {});
-      if (!viewRes.ok) return;
-
-      const vs = await wrappedCreateShader(rawDevice, { code: TRI_VS });
-      if (!vs.ok) return;
-      const fs = await wrappedCreateShader(rawDevice, { code: TRI_FS });
-      if (!fs.ok) return;
-
-      const bglRes = wrappedDevice.createBindGroupLayout({ entries: [] });
-      if (!bglRes.ok) return;
-      const plRes = wrappedDevice.createPipelineLayout({ bindGroupLayouts: [bglRes.value] });
-      if (!plRes.ok) return;
-      const pipeRes = wrappedDevice.createRenderPipeline({
-        layout: plRes.value,
-        vertex: { module: vs.value as never, entryPoint: 'main', buffers: [] },
-        fragment: {
-          module: fs.value as never,
-          entryPoint: 'main',
-          targets: [{ format: 'rgba8unorm' }],
-        },
-        primitive: { topology: 'triangle-list' },
-      } as never);
-      if (!pipeRes.ok) return;
-
-      const encRes = wrappedDevice.createCommandEncoder({});
-      if (!encRes.ok) return;
-      const enc = encRes.value;
-      const pass = enc.beginRenderPass({
-        colorAttachments: [
-          {
-            view: viewRes.value as never,
-            clearValue: { r: 0, g: 0, b: 0, a: 1 },
-            loadOp: 'clear',
-            storeOp: 'store',
-          },
-        ],
-      } as never);
-      pass.setPipeline(pipeRes.value as never);
-      pass.draw(3, 1, 0, 0);
-      pass.end();
-      const fin = enc.finish();
-      if (!fin.ok) return;
-      wrappedDevice.queue.submit([fin.value] as never);
-      await wrappedDevice.queue.onSubmittedWorkDone();
-      debugInst.onFrameEnd();
-
-      const tape = debugInst.getTape() as any;
-      if (!tape) return;
-
-      const { json, blob } = serializeTape(tape);
-      const dtRes = deserializeTape(json, blob);
-      if (!dtRes.ok) return;
-
-      // Replay and step.
-      const replayRes = createReplay(dtRes.value, rawDevice, pack.createShaderModule);
-      if (!replayRes.ok) return;
-      const replay = replayRes.value;
-      const stepRes = await replay.stepTo(dtRes.value.events.length - 1);
-      if (!stepRes.ok) return;
-
-      // Verify that renderRtToCanvas can read back from a replay with a
-      // color attachment (the triangle draw above) and produce valid pixels.
-      // Note: browser SwiftShader may produce all-zero replay readback;
-      // the structural contract (function does not throw, returns Result)
-      // is the primary gate. The dawn-node e2e smoke (e2e.dawn.test.ts)
-      // covers the full pixel-readback parity path with real GPU readback.
-      //
-      // Regression lock: the canvas is created at its DEFAULT size (300x150) and
-      // deliberately NOT pre-sized. renderRtToCanvas must resize the drawing
-      // buffer to the RT dimensions itself — pre-sizing here previously masked a
-      // bug where a larger RT rendered into a 300x150 buffer showed only its
-      // top-left corner (content-in-a-corner symptom).
-      const canvas = document.createElement('canvas');
-      expect(canvas.width).toBe(300); // default, unset
-      expect(canvas.height).toBe(150);
-
-      const renderRes = await renderRtToCanvas(replay, 0, rawDevice, canvas);
-      // The renderRtToCanvas call must either succeed (if readback worked)
-      // or return err (if no color attachment or GPU readback failure).
-      // Both are valid outcomes in this environment; the contract test
-      // verifies the import path works and the function does not throw.
-      expect(renderRes).toBeDefined();
-      if (renderRes.ok) {
-        // On success, the canvas drawing buffer must have been resized to the
-        // RT dimensions by renderRtToCanvas (not left at the 300x150 default).
-        expect(canvas.width).toBe(RT_W);
-        expect(canvas.height).toBe(RT_H);
-        const ctx = canvas.getContext('2d');
-        expect(ctx).toBeTruthy();
-        if (ctx) {
-          const imageData = ctx.getImageData(0, 0, RT_W, RT_H);
-          expect(imageData).toBeTruthy();
-          // ImageData must have correct dimensions regardless of pixel content.
-          expect(imageData.width).toBe(RT_W);
-          expect(imageData.height).toBe(RT_H);
-        }
-      }
-    },
-    60_000,
+  const textureData = new Uint8Array([255, 32, 16, 255]);
+  must(
+    device.queue.writeTexture(
+      { texture: sourceTexture, mipLevel: 0, origin: { x: 0, y: 0, z: 0 } } as never,
+      textureData,
+      { offset: 0, bytesPerRow: 4, rowsPerImage: 1 },
+      { width: 1, height: 1, depthOrArrayLayers: 1 },
+    ),
+    'write source texture',
   );
+  const encoder = must(device.createCommandEncoder({}), 'create command encoder');
+  const pass = encoder.beginRenderPass({
+    colorAttachments: [
+      {
+        view: renderTargetView,
+        clearValue: { r: 0, g: 0, b: 0, a: 1 },
+        loadOp: 'clear',
+        storeOp: 'store',
+      },
+    ],
+  } as never);
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, bindGroup, []);
+  pass.draw(3, 1, 0, 0);
+  pass.end();
+  const command = must(encoder.finish(), 'finish command encoder');
+  must(device.queue.submit([command]), 'submit command buffer');
+  await device.queue.onSubmittedWorkDone();
+  must(await attachment.frameBoundary(), 'capture recording boundary');
+  const encoded = must(await capture, 'capture frame');
+  const decoded = must(decodeTape(encoded.bytes), 'strict v7 decode');
+  await attachment.dispose();
+  return { backend, device, tape: decoded };
+}
 
-  // Verify canvas 2d ImageData round-trip works in the browser environment.
-  it('canvas 2d: ImageData putImageData + getImageData round-trips', () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = RT_W;
-    canvas.height = RT_H;
-    const ctx = canvas.getContext('2d');
-    expect(ctx).toBeTruthy();
-    if (!ctx) return;
-    const redData = new Uint8ClampedArray(RT_W * RT_H * 4);
-    for (let i = 0; i < redData.length; i += 4) {
-      redData[i] = 255;
-      redData[i + 1] = 0;
-      redData[i + 2] = 0;
-      redData[i + 3] = 255;
+function hasVisibleRgb(pixels: Uint8Array): boolean {
+  for (let index = 0; index < pixels.length; index += 4) {
+    if ((pixels[index] ?? 0) > 4 || (pixels[index + 1] ?? 0) > 4 || (pixels[index + 2] ?? 0) > 4) {
+      return true;
     }
-    const imageData = new ImageData(redData, RT_W, RT_H);
-    ctx.putImageData(imageData, 0, 0);
-    const readback = ctx.getImageData(0, 0, RT_W, RT_H);
-    expect(readback.data[0]).toBe(255);
-    expect(readback.data[1]).toBe(0);
-    expect(readback.data[2]).toBe(0);
-    expect(readback.data[3]).toBe(255);
-  });
+  }
+  return false;
+}
 
-  it.skipIf(!BROWSER_GPU_AVAILABLE)(
-    'falsification: empty tape -> renderRtToCanvas reports error + canvas stays blank',
-    async () => {
-      const pack = await loadBrowserRhi();
-      if (pack === undefined) return;
+describe.skipIf(!GPU_AVAILABLE)('M4 browser capture and replay gate', () => {
+  it('captures one raw v7 tape, indexes binding/work state, replays it on a fresh device, and reads a lit RT', async () => {
+    const captured = await captureBrowserTape();
+    const model = buildFrameModel(captured.tape);
+    expect(captured.tape.header.formatVersion).toBe(7);
+    expect(captured.tape.events.length).toBeGreaterThan(0);
+    expect(model.works.some((work) => work.kind === 'draw' || work.kind === 'drawIndexed')).toBe(
+      true,
+    );
+    expect(captured.tape.events.some((event) => event.kind === 'setBindGroup')).toBe(true);
+    expect(model.works.length).toBeGreaterThan(0);
 
-      const debugInst = wrap(pack.rhi);
-      const adapterRes = await debugInst.requestAdapter();
-      if (!adapterRes.ok) return;
-      const devRes = await adapterRes.value.requestDevice();
-      if (!devRes.ok) return;
-      const wrappedDevice = devRes.value;
-      const rawDevice: RhiDevice = (wrappedDevice as any)._realDevice;
+    const adapter = must(await captured.backend.rhi.requestAdapter(), 'fresh requestAdapter');
+    const freshDevice = must(await adapter.requestDevice(), 'fresh requestDevice');
+    const session = must(
+      await openReplay(captured.tape, {
+        device: freshDevice,
+        createShaderModule: captured.backend.createShaderModule,
+      }),
+      'open fresh replay session',
+    );
+    const work = must(await session.inspectWork(0, ['bindings', 'pixels']), 'inspect work index 0');
+    expect(work.workIndex).toBe(0);
+    expect(work.passIndex).toBeGreaterThanOrEqual(0);
+    expect(work.attachment?.kind).toBe('texture');
+    expect(work.attachment?.width).toBe(SIZE);
+    expect(work.attachment?.height).toBe(SIZE);
+    expect(work.attachment?.provenance.selectedWorkIndex).toBe(0);
+    expect(work.attachment?.provenance.resourceId).toBeDefined();
+    expect(work.attachment?.provenance.subresource).toBeNull();
+    expect(hasVisibleRgb(work.attachment?.bytes ?? new Uint8Array())).toBe(true);
+    await session.dispose();
+  }, 60_000);
 
-      // Record an empty frame (no draws at all)
-      const armRes = debugInst.arm(1);
-      if (!armRes.ok) return;
-      await wrappedDevice.queue.onSubmittedWorkDone();
-      debugInst.onFrameEnd();
-
-      const tape = debugInst.getTape() as any;
-      if (!tape) return;
-
-      const { json, blob } = serializeTape(tape);
-      const dtRes = deserializeTape(json, blob);
-      if (!dtRes.ok) return;
-
-      const replayRes = createReplay(dtRes.value, rawDevice, pack.createShaderModule);
-      if (!replayRes.ok) return;
-      const replay = replayRes.value;
-      const stepRes = await replay.stepTo(dtRes.value.events.length - 1);
-      if (!stepRes.ok) return;
-
-      const canvas = document.createElement('canvas');
-      canvas.width = RT_W;
-      canvas.height = RT_H;
-
-      const renderRes = await renderRtToCanvas(replay, 0, rawDevice, canvas);
-      // Must fail because no draw/dispatch events exist in a no-op tape.
-      expect(renderRes.ok).toBe(false);
-
-      // Falsification: canvas pixels should be all-zero.
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      const imageData = ctx.getImageData(0, 0, RT_W, RT_H);
-      let hasNonZero = false;
-      for (let i = 0; i < imageData.data.length; i++) {
-        if (imageData.data[i] !== 0) {
-          hasNonZero = true;
-          break;
-        }
-      }
-      expect(hasNonZero).toBe(false);
-    },
-    60_000,
-  );
+  it('makes a missing texture binding fail the fresh replay path', async () => {
+    const captured = await captureBrowserTape();
+    const falsifiedEvents = captured.tape.events.map((event) =>
+      event.kind === 'setBindGroup'
+        ? { ...event, bindGroupHandleId: 'binding:falsified-texture' }
+        : event,
+    );
+    expect(falsifiedEvents.some((event) => event.kind === 'setBindGroup')).toBe(true);
+    const falsifiedTape: Tape = {
+      ...captured.tape,
+      header: { ...captured.tape.header, eventCount: falsifiedEvents.length },
+      events: falsifiedEvents,
+    };
+    const adapter = must(await captured.backend.rhi.requestAdapter(), 'falsifier requestAdapter');
+    const device = must(await adapter.requestDevice(), 'falsifier requestDevice');
+    const replay = await openReplay(falsifiedTape, {
+      device,
+      createShaderModule: captured.backend.createShaderModule,
+    });
+    if (replay.ok) {
+      const result = await replay.value.inspectWork(0, ['pixels']);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBeDefined();
+      await replay.value.dispose();
+    } else {
+      expect(replay.error.code).toBeDefined();
+    }
+  }, 60_000);
 });

@@ -22,7 +22,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = appResult.value;
-  console.warn(`[bevy-move-sprite] backend=${app.renderer.backend}`);
+  console.warn(`[bevy-move-sprite] state=${app.renderer.inspect().state}`);
   const pixels = makeSpritePixels();
   const texture = {
     kind: 'texture' as const,
@@ -34,13 +34,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     mipmap: false,
   };
   const handle = app.world.allocSharedRef('TextureAsset', texture);
-  const upload = await app.renderer.store.uploadTexture(handle, texture, {
-    bytes: pixels, width: SPRITE_SIZE, height: SPRITE_SIZE, mime: 'image/png', colorSpace: 'srgb', mipmap: false,
-  });
-  if (!upload.ok) {
-    console.error('[bevy-move-sprite] texture upload failed:', upload.error.code, upload.error.hint);
-    return;
-  }
   buildMoveSpriteWorld(app.world, unwrapHandle(handle));
   app.world.addSystem(Update, {
     name: 'move-sprite',

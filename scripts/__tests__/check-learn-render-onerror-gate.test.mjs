@@ -78,7 +78,7 @@ function makeFixture(opts = {}) {
     if (withDevImport) {
       content += 'const runtimeBinding = createStandaloneRuntimeAssetBinding("fixture");\n';
       content += withScopedTransport
-        ? 'createDevImportTransport(runtimeBinding);\nassets.configureRuntimeBinding(runtimeBinding);\n'
+        ? 'createDevImportTransport(runtimeBinding);\nconfigureRuntimeAssetCatalog(assets, runtimeBinding);\n'
         : 'createDevImportTransport();\n';
     }
     writeFileSync(join(srcDir, 'index.ts'), content, 'utf8');

@@ -12,6 +12,7 @@
   "references": [
     { "path": "../ecs" },
     { "path": "../math" },
-    { "path": "../types" }
+    { "path": "../types" },
+    { "path": "../pack" }
   ]
 }

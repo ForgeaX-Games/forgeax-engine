@@ -21,6 +21,7 @@ import { setNextState, setNextStateForce, getState, getPreviousState } from '../
 import type { Result } from '@forgeax/engine-types';
 
 const MyState = defineState('MyState', ['idle', 'running', 'paused'] as const);
+const AtomicOtherState = defineState('AtomicOtherState', ['cold', 'warm'] as const);
 
 function makeWorldWithPlugin(): World {
   const world = new World();
@@ -34,6 +35,7 @@ describe('setNextState', () => {
     const result = setNextState(world, MyState, 'running');
 
     expect(result.ok).toBe(true);
+    expect(result.unwrap()).toBeUndefined();
 
     const nsKey = nextStateResourceKey(MyState);
     const ns = world.getResource<{ value: number; force: boolean }>(nsKey);
@@ -41,21 +43,41 @@ describe('setNextState', () => {
     expect(ns.force).toBe(false);
   });
 
-  it('returns Result.err with code=invalid-variant when variant does not exist in token', () => {
+  it('refuses a runtime invalid variant without changing any state or pending request', () => {
     const world = makeWorldWithPlugin();
+    const invalid = String('nonexistent');
 
-    // @ts-expect-error - 'invalid-variant' is not a valid MyState variant
-    const result = setNextState(world, MyState, 'nonexistent');
+    const result = setNextState(world, MyState, invalid as never);
 
     expect(result.ok).toBe(false);
     const err = result.error as StateError;
     expect(err.code).toBe('invalid-variant');
-    expect(err.detail).toHaveProperty('name', 'MyState');
-    expect(err.detail).toHaveProperty('got', 'nonexistent');
-    expect(err.detail).toHaveProperty('valid');
-    expect((err.detail as Record<string, unknown>).valid).toContain('idle');
-    expect((err.detail as Record<string, unknown>).valid).toContain('running');
-    expect((err.detail as Record<string, unknown>).valid).toContain('paused');
+    expect(err.detail).toEqual({
+      code: 'invalid-variant',
+      name: 'MyState',
+      got: invalid,
+      valid: ['idle', 'running', 'paused'],
+    });
+
+    expect(world.getResource<{ value: number; force: boolean } | undefined>(nextStateResourceKey(MyState))).toBeUndefined();
+    expect(getState(world, MyState)).toMatchObject({ ok: true, value: 'idle' });
+    expect(getPreviousState(world, MyState)).toMatchObject({ ok: true, value: 'idle' });
+    expect(getState(world, AtomicOtherState)).toMatchObject({ ok: true, value: 'cold' });
+    expect(getPreviousState(world, AtomicOtherState)).toMatchObject({ ok: true, value: 'cold' });
+  });
+
+  it('does not overwrite an existing valid request when a runtime invalid variant is refused', () => {
+    const world = makeWorldWithPlugin();
+    setNextState(world, MyState, 'running');
+
+    const result = setNextState(world, MyState, String('nonexistent') as never);
+
+    expect(result.ok).toBe(false);
+    expect((result.error as StateError).code).toBe('invalid-variant');
+    expect(world.getResource<{ value: number; force: boolean }>(nextStateResourceKey(MyState))).toEqual({
+      value: 1,
+      force: false,
+    });
   });
 
   it('returns Result.err with code=state-not-registered when plug-in not called', () => {
@@ -68,6 +90,8 @@ describe('setNextState', () => {
     const err = result.error as StateError;
     expect(err.code).toBe('state-not-registered');
     expect(err.detail).toHaveProperty('name', 'MyState');
+    expect(result.unwrapOr(undefined)).toBeUndefined();
+    expect(() => result.unwrap()).toThrow(err);
   });
 
   it('last write wins on multiple consecutive setNextState calls', () => {
@@ -97,15 +121,24 @@ describe('setNextStateForce', () => {
     expect(ns.force).toBe(true);
   });
 
-  it('returns Result.err with code=invalid-variant for bad variant', () => {
+  it('refuses a runtime invalid variant atomically with force=true', () => {
     const world = makeWorldWithPlugin();
+    const invalid = String('nonexistent');
 
-    // @ts-expect-error - 'nonexistent' is not a valid variant
-    const result = setNextStateForce(world, MyState, 'nonexistent');
+    const result = setNextStateForce(world, MyState, invalid as never);
 
     expect(result.ok).toBe(false);
     const err = result.error as StateError;
     expect(err.code).toBe('invalid-variant');
+    expect(err.detail).toEqual({
+      code: 'invalid-variant',
+      name: 'MyState',
+      got: invalid,
+      valid: ['idle', 'running', 'paused'],
+    });
+    expect(world.getResource<{ value: number; force: boolean } | undefined>(nextStateResourceKey(MyState))).toBeUndefined();
+    expect(getState(world, MyState)).toMatchObject({ ok: true, value: 'idle' });
+    expect(getPreviousState(world, MyState)).toMatchObject({ ok: true, value: 'idle' });
   });
 });
 
@@ -118,6 +151,7 @@ describe('getState', () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value).toBe('idle');
+      expect(result.unwrap()).toBe('idle');
     }
   });
 

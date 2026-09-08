@@ -8,7 +8,8 @@ import type {
   RenderFeaturePreparedStateMismatchError,
   RenderFeatureRegistrationConflictError,
   RenderFeatureStageFailedError,
-} from '../errors';
+  VertexColorVariantConflictError,
+} from '../errors/render';
 import type { RenderFeatureErrorCode } from '../features/types';
 
 function renderFeatureCodeLabel(code: RenderFeatureErrorCode): string {
@@ -40,6 +41,20 @@ function renderCodeLabel(code: RenderErrorCode): string {
       return renderFeatureCodeLabel(code);
     case 'render-feature-pass-order-conflict':
       return renderFeatureCodeLabel(code);
+    case 'vertex-color-variant-conflict':
+      return code;
+    case 'points-lines-invalid-style':
+      return code;
+    case 'points-lines-topology-mismatch':
+      return code;
+    case 'points-lines-style-unsupported':
+      return code;
+    case 'points-lines-material-unsupported':
+      return code;
+    case 'points-lines-budget-exceeded':
+      return code;
+    case 'points-lines-prepare-failed':
+      return code;
     default:
       return code;
   }
@@ -75,6 +90,17 @@ function renderFeatureErrorLabel(error: RenderError): string {
       const typed: RenderFeaturePassOrderConflictError = error;
       return `${typed.detail.featureIdentity}:${typed.detail.passIdentity}`;
     }
+    case 'vertex-color-variant-conflict': {
+      const typed: VertexColorVariantConflictError = error;
+      return `${typed.detail.authoredValue}:${typed.detail.projected}`;
+    }
+    case 'points-lines-invalid-style':
+    case 'points-lines-topology-mismatch':
+    case 'points-lines-style-unsupported':
+    case 'points-lines-material-unsupported':
+    case 'points-lines-budget-exceeded':
+    case 'points-lines-prepare-failed':
+      return error.expected;
     default:
       return error.expected;
   }

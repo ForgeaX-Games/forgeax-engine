@@ -9,9 +9,11 @@
 //     are unchanged (AC-03 regression gate — pin the entry counts so a future
 //     change to those kinds breaks this test).
 
-import type { PipelineSpec } from '@forgeax/engine-render/internal';
-import { buildBindGroupLayoutDescriptor } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
+import {
+  buildBindGroupLayoutDescriptor,
+  type PipelineSpec,
+} from '../../../render/src/pipeline-spec';
 
 function makeSpec(colorFormats: GPUTextureFormat[] = ['rgba16float']): PipelineSpec {
   return {

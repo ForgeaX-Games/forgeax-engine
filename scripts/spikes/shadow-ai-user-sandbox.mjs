@@ -223,8 +223,9 @@ async function createRendererWithManifest() {
     clearColor: [0.2, 0.3, 0.3, 1],
     shaderManifestUrl: manifestUrl,
   });
-  const ready = await renderer.ready;
-  if (!ready.ok) throw new Error(`renderer.ready failed: ${JSON.stringify(ready.error)}`);
+  const ready = await renderer.initialization;
+  if (!ready.ok)
+    throw new Error(`render host initialization failed: ${JSON.stringify(ready.error)}`);
   return renderer;
 }
 
@@ -248,7 +249,7 @@ async function task1_renderAndReadback() {
   console.log('\n── T1: Same-entity light+shadow, render, debugReadback ──');
   const renderer = await createRendererWithManifest();
   const world = buildFixtureWorld(true);
-  renderer.attachWorld(world).unwrap();
+  renderer.attach(world).unwrap();
   world.update().unwrap();
   const drawResult = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!drawResult.ok) {
@@ -283,13 +284,6 @@ async function task1_renderAndReadback() {
   }
   pass(`debugReadback.corners keys: ${JSON.stringify(cornerKeys)}`);
 
-  // Sample shadow factor at lit position
-  const litResults = await renderer.debugSampleShadowFactor?.([[-3, 0, 0]]);
-  if (!litResults || litResults.length !== 1) {
-    return fail('debugSampleShadowFactor returned unexpected result shape');
-  }
-  pass(`debugSampleShadowFactor: factor=${litResults[0].shadowFactor.toFixed(4)}`);
-
   renderer.dispose();
 }
 
@@ -302,7 +296,7 @@ async function task2_separateEntities() {
   const errors = [];
   renderer.onError((err) => errors.push(err));
 
-  renderer.attachWorld(world).unwrap();
+  renderer.attach(world).unwrap();
   world.update().unwrap();
   const drawResult = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!drawResult.ok) {
@@ -425,7 +419,7 @@ async function task5_inspectorApi() {
   console.log('\n── T5: Inspector API (directionalShadow + runtime.shadow.*) ──');
   const renderer = await createRendererWithManifest();
   const world = buildFixtureWorld(true);
-  renderer.attachWorld(world).unwrap();
+  renderer.attach(world).unwrap();
   world.update().unwrap();
   const drawResult = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
   if (!drawResult.ok) return fail('draw(world) failed', drawResult.error);
@@ -462,24 +456,6 @@ async function task5_inspectorApi() {
     pass('debugReadback returns { center, corners, mapSize } POD shape');
   } else {
     fail('debugReadback returned null');
-  }
-
-  // debugSampleShadowFactor
-  const sf = await renderer.debugSampleShadowFactor?.([
-    [-3, 0, 0],
-    [0.2, 0, 0],
-  ]);
-  if (sf && sf.length === 2) {
-    const shapes = sf.map((s) => typeof s.shadowFactor === 'number');
-    if (shapes.every(Boolean)) {
-      pass(
-        `debugSampleShadowFactor returns ReadonlyArray<{ shadowFactor: number }>: lit=${sf[0].shadowFactor.toFixed(4)}, occ=${sf[1].shadowFactor.toFixed(4)}`,
-      );
-    } else {
-      fail('debugSampleShadowFactor entries missing shadowFactor number');
-    }
-  } else {
-    fail(`debugSampleShadowFactor returned ${sf?.length ?? 'null'} results`);
   }
 
   renderer.dispose();

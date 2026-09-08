@@ -7,15 +7,15 @@ import { Materials } from '@forgeax/engine-render';
 import type { MaterialAsset } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
-export type Bounding2dTest = 'aabb' | 'circle' | 'ray' | 'aabbCast' | 'circleCast';
-
-export const BOUNDING_2D_TESTS: readonly Bounding2dTest[] = [
+export const BOUNDING_2D_TESTS = [
   'aabb',
   'circle',
   'ray',
   'aabbCast',
   'circleCast',
-];
+] as const;
+
+export type Bounding2dTest = (typeof BOUNDING_2D_TESTS)[number];
 
 type Volume = {
   readonly box: box2.Box2;

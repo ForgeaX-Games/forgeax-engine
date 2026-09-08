@@ -260,10 +260,11 @@ describe('pcfKernelSize tail-pad slot wiring (M0, AC-14)', () => {
     );
   });
 
-  it('record grows VIEW_PAYLOAD_FLOATS to 196 to carry the folded spot matrices (w25)', () => {
+  it('record carries the folded spot matrices in the complete View UBO payload (w25)', () => {
     // feat-20260625 w25: the per-spot fragment-read lightViewProj matrices fold
-    // into the View UBO tail, so VIEW_PAYLOAD_FLOATS grew 148 -> 196.
-    expect(recordSrc).toMatch(/VIEW_PAYLOAD_FLOATS\s*=\s*196/);
+    // into the View UBO tail. The current View struct also carries temporal and
+    // fog fields, so the complete payload is 240 floats.
+    expect(recordSrc).toMatch(/VIEW_PAYLOAD_FLOATS\s*=\s*240/);
     // The spot matrix array is written at base float 132.
     expect(recordSrc).toMatch(/SPOT_LVP_BASE_FLOAT\s*=\s*132/);
   });

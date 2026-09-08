@@ -6,10 +6,18 @@
  */
 
 export type {
+  BasisSourceInspection,
+  BasisSourceMeta,
+  TranscodedBasisTexture,
   TranscodedMip,
   TranscodedTexture,
 } from './basis-transcoder.js';
-export { initBasisTranscoder, transcodeKtx2 } from './basis-transcoder.js';
+export {
+  initBasisTranscoder,
+  inspectBasisSource,
+  transcodeBasis,
+  transcodeKtx2,
+} from './basis-transcoder.js';
 export type { BlockParams } from './block-format.js';
 export {
   blockParamsForFormat,
@@ -19,7 +27,7 @@ export {
 } from './block-format.js';
 export type { CodecError, CodecErrorCode, CodecOk, CodecResult } from './errors.js';
 export { codecError } from './errors.js';
-export { KTX2_IDENTIFIER, ktx2LevelsToRGBA, parseKtx2 } from './ktx2.js';
+export { KTX2_IDENTIFIER, ktx2ColorSpace, ktx2LevelsToRGBA, parseKtx2 } from './ktx2.js';
 export type {
   TranscodeCaps,
   TranscodeChannels,

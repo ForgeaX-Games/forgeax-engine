@@ -1,3 +1,4 @@
+import type { ParticleEffectAsset } from '@forgeax/engine-types';
 import { PARTICLE_CODE_DEFAULT_MODULE_ID } from '@forgeax/engine-vfx';
 import { describe, expect, it } from 'vitest';
 import { cookParticleCodeProgram } from '../code-program.js';
@@ -59,6 +60,23 @@ describe('code-first VFX program cook', () => {
     expect(emitter.wgsl).toContain('fn forgeax_vfx_sort_main');
     expect(emitter.wgsl).toContain('fn forgeax_vfx_trail_history_main');
     expect(emitter.wgsl).toContain('forgeax_vfx_runtime.topology');
+    expect(result.value.fingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const asset: ParticleEffectAsset = {
+      kind: 'particle-effect',
+      schemaVersion: 2,
+      programFingerprint: result.value.fingerprint,
+      emitters: result.value.program.emitters.map(({ id, capacity }) => ({ id, capacity })),
+      program: {
+        format: 'forgeax-vfx-program-2',
+        fingerprint: result.value.fingerprint,
+        emitters: result.value.program.emitters,
+      },
+    };
+    expect(asset.program).toMatchObject({
+      format: 'forgeax-vfx-program-2',
+      fingerprint: result.value.fingerprint,
+    });
+    expect(asset.program.emitters).toEqual(result.value.program.emitters);
   });
 
   it('carries explicit data imports into the cooked reflection', async () => {

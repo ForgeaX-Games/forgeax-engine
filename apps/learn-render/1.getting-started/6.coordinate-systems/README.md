@@ -103,7 +103,7 @@ const renderer = app.renderer;
 const world = app.world;
 
 const assets = renderer.assets;
-assets.configurePackIndex('/pack-index.json');
+configureRuntimeAssetCatalog(assets, runtimeBinding);
 
 // pre-register cube + material via GUID; loadByGuid resolves on Map fast path
 const woodHandleRes = await assets.loadByGuid<TextureAsset>(woodGuid);

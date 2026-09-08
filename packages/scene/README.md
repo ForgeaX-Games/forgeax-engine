@@ -7,16 +7,24 @@
 
 ```ts
 import { scenePlugin, Transform } from '@forgeax/engine-scene';
-import { World } from '@forgeax/engine-ecs';
+import { createWorldContext, World } from '@forgeax/engine-ecs';
 
 const world = new World();
-const plugin = scenePlugin();
-await plugin.build(world);
+const context = await createWorldContext(world, [scenePlugin()]);
 const entity = world.spawn({ component: Transform, data: {} }).unwrap();
 void entity;
+await context.fiber.restart();
 ```
 
-`scenePlugin()` registers hierarchy propagation. Read failures as `SceneError` and branch on `error.code`; do not parse messages.
+`scenePlugin()` is a native Cordis plugin. Its Fiber installs hierarchy
+propagation and removes it when the realm unloads. Read failures as
+`SceneError` and branch on `error.code`; do not parse messages.
+
+Transform propagation publishes the exact recomputed frontier to the World's
+engine-owned change journal after a successful pass. A no-change pass publishes
+nothing. Persistent consumers can therefore update a moved subtree without
+rescanning unrelated transforms, while `Transform.world` remains the sole
+resolved world-space authority.
 
 The authority also applies to dynamic loading: import `Transform`, `ChildOf`, and `scenePlugin` from `@forgeax/engine-scene` when a host resolves packages at runtime.
 

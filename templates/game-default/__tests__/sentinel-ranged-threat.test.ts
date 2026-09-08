@@ -1,9 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { FixedUpdate, World, type EntityHandle } from '@forgeax/engine-ecs';
+import { Context } from '@forgeax/engine-plugin';
 import { Collider, ColliderShapeValue, CollidingEntities, RigidBody, RigidBodyTypeValue, type PhysicsWorld } from '@forgeax/engine-physics';
 import { MeshRenderer } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
+import { registerStatesPlugin } from '@forgeax/engine-state';
 import {
   projectSentinelAvailability,
   readSentinelEncounterReadiness,
@@ -63,7 +65,8 @@ describe('sentinel ranged threat owner', () => {
 
   it('refuses player impacts on dormant Sentinel and admits them after awakening', () => {
     const world = new World();
-    installGameplayState({ world, reset: () => {} });
+    registerStatesPlugin(world);
+    installGameplayState({ context: new Context(), world, reset: () => {} });
     for (const [name, after] of [
       ['physicsCollisionSync', []],
       ['game-projectile-simulation', ['physicsCollisionSync']],
@@ -214,7 +217,8 @@ describe('sentinel ranged threat owner', () => {
 
   it('holds the installed cadence on the same Sentinel-plus-two-cover readiness projected to inspection', () => {
     const world = new World({ time: { fixedDeltaSeconds: 1 / 60, maxStepsPerUpdate: 1 } });
-    installGameplayState({ world, reset: () => {} });
+    registerStatesPlugin(world);
+    installGameplayState({ context: new Context(), world, reset: () => {} });
     installDefaultGameplayConfig(world, {
       playerY: 0.75,
       topQuaternion: [0, 0, 0, 1],

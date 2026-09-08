@@ -1,18 +1,12 @@
 ---
 name: forgeax-engine-state
 description: >-
-  forgeax-engine typed state-machine: defineState creates a StateToken, setNextState requests
-  a transition, state-scoped entities auto-despawn via despawnOnExit/despawnOnEnter,
-  OnEnter/OnExit schedule labels for transition hooks, inState condition factory for
-  state-gated systems. Zero-intrusion on ECS -- consumes existing primitives only.
-  Use when defining game states, switching levels/modes, scoping entity lifetimes to
-  state variants, wiring transition callbacks, or gating systems by game state.
+  ForgeaX typed state transitions and state-scoped ECS lifetimes. Use when defining game
+  modes, switching levels, gating systems, or spawning and removing state-owned entities.
 ---
 
 # forgeax-engine-state
 
-> Baseline: feat-20260616-engine-state-and-state-scoped-entities (2026-06-16)
->
 > Single-world typed-state machine: `defineState` + `setNextState` + state-scoped entity lifecycle (`despawnOnExit`/`despawnOnEnter`) + `OnEnter`/`OnExit` user schedule labels. It consumes existing component, resource, Query, and despawn primitives. Aggregates `@forgeax/engine-state`.
 
 ## Mental model
@@ -148,7 +142,7 @@ const Gameplay = defineSystem({
 **Implementation**: `inState` reuses `stateResourceKey(token)` (from `packages/state/src/resources.ts`) to derive the per-token Resource key, then reads the current state index via `world.getResource<number>(key)` and compares against `token.nameToIdx.get(variant)`. Zero new primitives -- consumes ECS Resource CRUD only.
 
 > [!IMPORTANT]
-> `inState` is the sole condition factory in the current feature (OOS-7: no `and`/`or`/`not` combiners). Future loops may add combinators.
+> `inState` is the condition factory. Compose additional predicates in the calling system; the state package does not provide boolean combinators.
 
 ## Pitfalls
 

@@ -1,17 +1,24 @@
 import { describe, expectTypeOf, it } from 'vitest';
 import {
+  type AliasSourceDetail,
+  type CapabilityDetail,
   type CapMissingDetail,
   type ColorDomainDetail,
-  type CyclicDependencyDetail,
   type DanglingReadDetail,
+  type DeclarationDetail,
+  type DescriptorDetail,
   type DuplicateResourceDetail,
   type InvalidFormatDetail,
+  type LifecycleDetail,
   type ObservationDetail,
+  type PassFailureDetail,
   RenderGraphError,
   type RenderGraphErrorCode,
   type RenderGraphErrorDetail,
+  type ResourceAccessDetail,
   type ResourceAllocFailedDetail,
 } from '../errors.js';
+import type { GraphPassKind, GraphResourceKind } from '../types.js';
 
 describe('RenderGraphError code/detail correlation', () => {
   it('accepts every existing code with its matching detail interface', () => {
@@ -28,16 +35,16 @@ describe('RenderGraphError code/detail correlation', () => {
       detail: { cap: 'compute', passName: 'pass' } satisfies CapMissingDetail,
     });
     new RenderGraphError({
-      code: 'cyclic-dependency',
-      expected: '',
-      hint: '',
-      detail: { cycle: ['a', 'b'] } satisfies CyclicDependencyDetail,
-    });
-    new RenderGraphError({
       code: 'duplicate-resource',
       expected: '',
       hint: '',
       detail: { resourceKey: 'resource' } satisfies DuplicateResourceDetail,
+    });
+    new RenderGraphError({
+      code: 'alias-source-missing',
+      expected: '',
+      hint: '',
+      detail: { aliasKey: 'alias', sourceKey: 'source' } satisfies AliasSourceDetail,
     });
     new RenderGraphError({
       code: 'unknown-resource',
@@ -109,12 +116,12 @@ describe('RenderGraphError code/detail correlation', () => {
     });
   });
 
-  it('preserves the closed sixteen-code and eight-shape public unions', () => {
+  it('preserves the closed code and detail-shape public unions', () => {
     expectTypeOf<RenderGraphErrorCode>().toEqualTypeOf<
       | 'dangling-read'
       | 'cap-missing'
-      | 'cyclic-dependency'
       | 'duplicate-resource'
+      | 'alias-source-missing'
       | 'unknown-resource'
       | 'resource-alloc-failed'
       | 'invalid-format'
@@ -127,16 +134,74 @@ describe('RenderGraphError code/detail correlation', () => {
       | 'invalid-color-domain'
       | 'missing-color-domain'
       | 'color-domain-mismatch'
+      | 'duplicate-pass-name'
+      | 'duplicate-resource-label'
+      | 'builder-sealed'
+      | 'foreign-resource-handle'
+      | 'resource-not-declared-by-pass'
+      | 'uninitialized-read'
+      | 'access-conflict'
+      | 'capability-missing'
+      | 'resource-descriptor-invalid'
+      | 'import-usage-mismatch'
+      | 'resource-allocation-failed'
+      | 'resource-resolution-failed'
+      | 'pass-encode-failed'
+      | 'compiled-graph-retired'
+      | 'resource-retire-failed'
     >();
     expectTypeOf<RenderGraphErrorDetail>().toEqualTypeOf<
       | DanglingReadDetail
       | CapMissingDetail
-      | CyclicDependencyDetail
       | DuplicateResourceDetail
+      | AliasSourceDetail
       | ResourceAllocFailedDetail
       | InvalidFormatDetail
       | ObservationDetail
       | ColorDomainDetail
+      | DeclarationDetail
+      | ResourceAccessDetail
+      | CapabilityDetail
+      | DescriptorDetail
+      | PassFailureDetail
+      | LifecycleDetail
     >();
+  });
+});
+
+function assertNever(value: never): never {
+  throw new Error(String(value));
+}
+
+function exhaustivePass(kind: GraphPassKind): string {
+  switch (kind) {
+    case 'raster':
+      return kind;
+    case 'compute':
+      return kind;
+    case 'copy':
+      return kind;
+  }
+  return assertNever(kind);
+}
+
+function exhaustiveResource(kind: GraphResourceKind): string {
+  switch (kind) {
+    case 'texture':
+      return kind;
+    case 'buffer':
+      return kind;
+  }
+  return assertNever(kind);
+}
+
+describe('M4 render graph closed unions', () => {
+  it('keeps pass and resource variants exhaustively handled without a default branch', () => {
+    expectTypeOf(exhaustivePass).returns.toEqualTypeOf<string>();
+    expectTypeOf(exhaustiveResource).returns.toEqualTypeOf<string>();
+  });
+
+  it('keeps RenderGraphErrorCode closed', () => {
+    expectTypeOf<RenderGraphErrorCode>().not.toEqualTypeOf<string>();
   });
 });

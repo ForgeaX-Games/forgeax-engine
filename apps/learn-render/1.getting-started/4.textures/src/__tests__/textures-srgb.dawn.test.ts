@@ -35,7 +35,7 @@ import type { DecodedImage, TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
 
-import { GpuResourceStore } from '@forgeax/engine-render/internal';
+import { GpuResidencyCache } from '../../../../../../packages/render/src/device/gpu-residency';
 import { toShared } from '@forgeax/engine-types';
 
 function makeWoodTexture(format: GPUTextureFormat, colorSpace: 'srgb' | 'linear'): TextureAsset {
@@ -68,10 +68,10 @@ function makeDecodedWood(colorSpace: 'srgb' | 'linear'): DecodedImage {
 
 describe('learn-render section 1.4 textures sRGB / linear consistency (AC-08 + AC-17 (a))', () => {
   it('AC-08 reverse: format=rgba8unorm-srgb + decoded colorSpace=linear emits image-format-unsupported', async () => {
-    // feat-20260601-gpu-resource-store-extraction M1: the format <-> colorSpace
-    // consistency assertion lives in GpuResourceStore.uploadTexture; the POD
+    // feat-20260601-gpu-residency-extraction M1: the format <-> colorSpace
+    // consistency assertion lives in GpuResidencyCache.uploadTexture; the POD
     // carries the format, the decoded image carries colorSpace (D-2).
-    const store = new GpuResourceStore();
+    const store = new GpuResidencyCache();
     const pod = makeWoodTexture('rgba8unorm-srgb', 'srgb');
     const handle = toShared<'TextureAsset'>(1);
     const decoded = makeDecodedWood('linear');
@@ -88,7 +88,7 @@ describe('learn-render section 1.4 textures sRGB / linear consistency (AC-08 + A
   });
 
   it('AC-08 reverse mirror: format=rgba8unorm + decoded colorSpace=srgb emits image-format-unsupported', async () => {
-    const store = new GpuResourceStore();
+    const store = new GpuResidencyCache();
     const pod = makeWoodTexture('rgba8unorm', 'linear');
     const handle = toShared<'TextureAsset'>(1);
     const decoded = makeDecodedWood('srgb');
@@ -104,7 +104,7 @@ describe('learn-render section 1.4 textures sRGB / linear consistency (AC-08 + A
   });
 
   it('AC-08 happy: format=rgba8unorm-srgb + decoded colorSpace=srgb passes the assertion', async () => {
-    const store = new GpuResourceStore();
+    const store = new GpuResidencyCache();
     const pod = makeWoodTexture('rgba8unorm-srgb', 'srgb');
     const handle = toShared<'TextureAsset'>(1);
     const decoded = makeDecodedWood('srgb');

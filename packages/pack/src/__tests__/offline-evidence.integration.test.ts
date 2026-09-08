@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import { buildOfflineAssetEvidence } from '../evidence/offline-evidence.js';
 
@@ -36,8 +37,20 @@ describe('offline evidence adapter', () => {
   });
 
   it('keeps runtime and WS outside the offline adapter boundary', () => {
-    expect(buildOfflineAssetEvidence.toString()).not.toContain('loadByGuid');
+    expect(buildOfflineAssetEvidence.toString()).not.toContain('assets.load');
     expect(buildOfflineAssetEvidence.toString()).not.toContain('WebSocket');
+    expect(buildOfflineAssetEvidence.toString()).not.toContain('AssetRegistry');
+  });
+
+  it('keeps the static Pack boundary gate live for runtime package imports', async () => {
+    const gate = await readFile(
+      new URL('../../../../packages/pack/scripts/check-no-assets-load.mjs', import.meta.url),
+      'utf8',
+    );
+
+    expect(gate).toContain('@forgeax/engine-(assets-runtime|runtime)');
+    expect(gate).toContain(String.raw`engine\\.assets\\.load(`);
+    expect(gate).not.toContain("registry.load('");
   });
 
   it('projects a verified cook product without requiring DDC storage', async () => {
@@ -65,5 +78,29 @@ describe('offline evidence adapter', () => {
     if (!result.ok) return;
     expect(result.value.cook.freshness).toBe('notApplicable');
     expect(result.value.package?.status).toBe('passed');
+  });
+
+  it('keeps a failed artifact in the offline evidence boundary', async () => {
+    const result = await buildOfflineAssetEvidence({
+      guid,
+      source: { origin: 'sourceMeta', inputFingerprint: 'fp-failed' },
+      locator: { packageUrl: '/assets/failed.pack.json' },
+      package: {
+        guid,
+        digest: 'digest-failed',
+        artifacts: {
+          data: {
+            path: 'assets/data.bin',
+            mediaType: 'application/octet-stream',
+            verification: 'failed',
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.package?.status).toBe('failed');
+    expect(result.value.cook.freshness).toBe('unknown');
   });
 });

@@ -2,7 +2,7 @@ import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { quat } from '@forgeax/engine-math';
 import type { MaterialAsset } from '@forgeax/engine-types';
-import { Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer, perspective, Skylight, TONEMAP_ACES_FILMIC } from '@forgeax/engine-render';
+import { Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer, perspective, PointLight, Skylight, TONEMAP_ACES_FILMIC } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 
 export interface SsaoScene {
@@ -11,11 +11,14 @@ export interface SsaoScene {
 }
 
 export function buildSsaoWorld(world: World, aspect: number): SsaoScene {
-  const material = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({
-    baseColor: [0.48, 0.52, 0.62, 1],
-    metallic: 0,
-    roughness: 0.78,
-  }));
+  const material = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
+    'MaterialAsset',
+    Materials.standard({
+      baseColor: [0.48, 0.52, 0.62, 1],
+      metallic: 0,
+      roughness: 0.78,
+    }),
+  );
   const floor = world.spawn(
     { component: Transform, data: { pos: [0, -1.1, 0], quat: [0, 0, 0, 1], scale: [5, 0.12, 4] } },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -33,8 +36,12 @@ export function buildSsaoWorld(world: World, aspect: number): SsaoScene {
       { component: MeshRenderer, data: { materials: [material] } },
     );
   }
-  world.spawn({ component: DirectionalLight, data: { direction: [-0.45, -0.85, -0.35], color: [1, 0.94, 0.82], intensity: 3, castShadow: true } });
-  world.spawn({ component: Skylight, data: { color: [0.22, 0.25, 0.32], intensity: 0.8 } });
+  world.spawn({ component: DirectionalLight, data: { direction: [-0.45, -0.85, -0.35], color: [1, 0.94, 0.82], intensity: 0, castShadow: true } });
+  world.spawn(
+    { component: Transform, data: { pos: [0, 2.2, 2.2], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
+    { component: PointLight, data: { color: [1, 0.72, 0.48], intensity: 0, range: 8 } },
+  );
+  world.spawn({ component: Skylight, data: { color: [0.85, 0.85, 0.9], intensity: 2 } });
   const eye: [number, number, number] = [0, 2.8, 8];
   const camera = world.spawn(
     { component: Transform, data: { pos: eye, quat: quat.fromLookAt(quat.create(), eye, [0, 0.1, 0], [0, 1, 0]), scale: [1, 1, 1] } },

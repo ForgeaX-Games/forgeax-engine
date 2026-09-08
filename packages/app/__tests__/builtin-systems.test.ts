@@ -1,11 +1,9 @@
 import { Update } from '@forgeax/engine-ecs';
 // feat-20260618-ecs-module-mechanism M2 / w9 (AC-15) + w10 (AC-16):
 //
-// After importing the 10 builtin systems (across 5 packages: runtime / input /
-// state / physics-rapier3d / physics-rapier2d) WITHOUT calling any register
-// helper, the global SYSTEM_REGISTRY (read via getRegisteredSystems) holds all
-// 10 real names with real fn bodies -- zero closure, zero placeholder, zero
-// spread-over-fn (D-4).
+// Builtin systems are module-level tokens and are registered into each World
+// explicitly by their owning plugin. There is no process-global registry to
+// leak component or system identity across World realms.
 //
 // w10 (AC-16): input is resource-ified. Animation owns World-local asset lookup
 // directly, so it has no app/runtime resolver resource seam.
@@ -22,7 +20,7 @@ import { Update } from '@forgeax/engine-ecs';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getRegisteredSystems, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import { INPUT_BACKEND_KEY, InputFrameStartScan, InputSet } from '@forgeax/engine-input';
 import { PhysicsSet } from '@forgeax/engine-physics';
 import {
@@ -47,40 +45,8 @@ import { describe, expect, it } from 'vitest';
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, '..', '..', '..');
 
-const BUILTIN_SYSTEM_NAMES = [
-  'propagateTransforms',
-  'advanceAnimationPlayer',
-  'input-frame-start-scan',
-  'transitionStates',
-  'physicsSyncBackend',
-  'physicsStepSimulation',
-  'physicsWriteback',
-  'physicsSyncBackend2D',
-  'physicsStepSimulation2D',
-  'physicsWriteback2D',
-] as const;
-
 describe('builtin-systems.test.ts', () => {
   describe('w9 (AC-15): 10 builtin systems all-true-fn enumeration', () => {
-    it('getRegisteredSystems() holds all 10 real names (incl 2D suffix)', () => {
-      const registry = getRegisteredSystems();
-      for (const name of BUILTIN_SYSTEM_NAMES) {
-        expect(registry.has(name), `missing builtin system "${name}"`).toBe(true);
-      }
-    });
-
-    it('every builtin handle.fn is a real function (no placeholder)', () => {
-      const registry = getRegisteredSystems();
-      for (const name of BUILTIN_SYSTEM_NAMES) {
-        const handle = registry.get(name);
-        expect(handle, `handle for "${name}"`).toBeDefined();
-        expect(typeof handle?.fn, `fn typeof for "${name}"`).toBe('function');
-        // The real fn body reads its world from the first parameter, so it
-        // declares at least one parameter (a zero-arg placeholder would be 0).
-        expect((handle?.fn.length ?? 0) >= 1, `fn arity for "${name}"`).toBe(true);
-      }
-    });
-
     it('createFrameStartScanSystem factory is fully retired (repo grep count = 0)', () => {
       const sourceGlobs = [
         'packages/input/src/frame-start-scan-system.ts',
@@ -97,16 +63,13 @@ describe('builtin-systems.test.ts', () => {
       // The migrated register fns call world.addSystem(Update, Token) -- the schedule
       // record's descriptor.fn must be the SAME function object as the
       // registry handle's fn (no {...handle, fn: closure} overlay).
-      const registry = getRegisteredSystems();
       const world = new World();
       registerAdvanceAnimationPlayer(world);
-      const handle = registry.get(ADVANCE_ANIMATION_PLAYER_SYSTEM);
       const scheduled = world
         .inspect()
         .systems.find((s) => s.name === ADVANCE_ANIMATION_PLAYER_SYSTEM);
       expect(scheduled).toBeDefined();
-      // descriptor fn identity is the registry token fn (no spread overlay).
-      expect(handle?.fn).toBeTypeOf('function');
+      expect(scheduled?.name).toBe(ADVANCE_ANIMATION_PLAYER_SYSTEM);
     });
   });
 
@@ -120,9 +83,6 @@ describe('builtin-systems.test.ts', () => {
     });
 
     it('input system writes InputSnapshot when INPUT_BACKEND_KEY resource present', () => {
-      const registry = getRegisteredSystems();
-      const token = registry.get('input-frame-start-scan');
-      expect(token).toBeDefined();
       const world = new World();
       let sampleCalls = 0;
       world.insertResource(INPUT_BACKEND_KEY, {
@@ -141,41 +101,12 @@ describe('builtin-systems.test.ts', () => {
         },
         detach: () => {},
       });
-      // token is non-generic in the aux path; addSystem consumes it directly.
-      world.addSystem(Update, token as Parameters<World['addSystem']>[0]);
+      world.addSystem(Update, InputFrameStartScan);
       expect(world.hasResource('InputSnapshot')).toBe(false);
       world.update(1 / 60).unwrap();
       expect(world.hasResource('InputSnapshot')).toBe(true);
       expect(sampleCalls).toBe(1);
     });
-
-    describe('w19 (AC-03): 10 real names enum covers all 5 packages', () => {
-    const BUILTIN_19_NAMES = [
-      'propagateTransforms',
-      'advanceAnimationPlayer',
-      'input-frame-start-scan',
-      'transitionStates',
-      'physicsSyncBackend',
-      'physicsStepSimulation',
-      'physicsWriteback',
-      'physicsSyncBackend2D',
-      'physicsStepSimulation2D',
-      'physicsWriteback2D',
-    ];
-
-    it('AC-03: registry size === 10 (no same-name collision loss)', () => {
-      const registry = getRegisteredSystems();
-      expect(registry.size).toBeGreaterThanOrEqual(10);
-    });
-
-    it('AC-03: each name get() returns non-undefined (2D suffix included)', () => {
-      const registry = getRegisteredSystems();
-      for (const name of BUILTIN_19_NAMES) {
-        const handle = registry.get(name);
-        expect(handle, `name "${name}" must be defined`).toBeDefined();
-      }
-    });
-  });
 
   describe('SystemSet registration anchoring', () => {
     it('records every builtin system under its production SystemSet', () => {

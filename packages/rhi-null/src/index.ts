@@ -4,7 +4,7 @@
 // exported `rhi` singleton has the RhiBackendPack-mandated shape
 // `RhiInstance & { acquireCanvasContext }` (research Finding A4 — Channel 1
 // injects this verbatim and calls acquireCanvasContext on the facade, so the
-// method MUST exist on the singleton even though the public RendererOptions.rhi
+// method MUST exist on the singleton even though the public renderer options.rhi
 // type does not require it). createShaderModule is exposed at the top level
 // (R-2) for symmetry with rhi-webgpu: createRenderer's ready chain resolves the
 // shader step through `RhiBackendPack.createShaderModule`, otherwise it rejects

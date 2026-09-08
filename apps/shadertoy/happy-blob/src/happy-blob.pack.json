@@ -5,6 +5,7 @@
     {
       "guid": "4c5b8451-d0c5-5afe-ba38-12009e00334e",
       "kind": "material",
+      "execution": "cooked",
       "sourceKey": "happy-blob.wgsl",
       "payload": {
         "kind": "material",

@@ -11,6 +11,7 @@
 // Note: merged from __tests__/ into src/__tests__/; import paths adjusted (../src/index → ../index).
 
 import { World } from '@forgeax/engine-ecs';
+import { componentDefinition, componentSchema } from '@forgeax/engine-ecs/internal';
 import { describe, expect, it } from 'vitest';
 import type { PhysicsErrorCode } from '../index';
 import {
@@ -40,7 +41,7 @@ import {
       it('RigidBody is a valid Component token with expected fields', () => {
         expect(RigidBody).toBeDefined();
         expect(RigidBody.name).toBe('RigidBody');
-        const schema = RigidBody.schema;
+        const schema = componentSchema(RigidBody);
         expect(schema).toHaveProperty('type');
         expect(schema).toHaveProperty('mass');
         expect(schema).toHaveProperty('linearDamping');
@@ -52,7 +53,7 @@ import {
       it('Collider is a valid Component token with expected fields', () => {
         expect(Collider).toBeDefined();
         expect(Collider.name).toBe('Collider');
-        const schema = Collider.schema;
+        const schema = componentSchema(Collider);
         expect(schema).toHaveProperty('shape');
         // feat-20260709 M4: cuboid half-extents collapsed from 3 per-axis
         // scalar columns into one inline array<f32,3> column (halfExtents).
@@ -76,7 +77,7 @@ import {
       it('CollidingEntities is a valid Component token with entities field', () => {
         expect(CollidingEntities).toBeDefined();
         expect(CollidingEntities.name).toBe('CollidingEntities');
-        const schema = CollidingEntities.schema;
+        const schema = componentSchema(CollidingEntities);
         expect(schema).toHaveProperty('entities');
       });
 
@@ -253,10 +254,8 @@ import {
 
     describe('layer-2 defaults (m3-1e regression)', () => {
       it('RigidBody defaults include gravityScale=1', () => {
-        expect(RigidBody.schema).toHaveProperty('gravityScale');
-        const defaults = (
-          RigidBody as { schema: Record<string, unknown>; defaults?: Record<string, unknown> }
-        ).defaults;
+        expect(componentSchema(RigidBody)).toHaveProperty('gravityScale');
+        const defaults = componentDefinition(RigidBody).defaults;
         expect(defaults).toBeDefined();
         if (defaults) {
           expect(defaults.gravityScale).toBe(1);
@@ -264,9 +263,7 @@ import {
       });
 
       it('RigidBody defaults include mass=1', () => {
-        const defaults = (
-          RigidBody as { schema: Record<string, unknown>; defaults?: Record<string, unknown> }
-        ).defaults;
+        const defaults = componentDefinition(RigidBody).defaults;
         expect(defaults).toBeDefined();
         if (defaults) {
           expect(defaults.mass).toBe(1);
@@ -274,9 +271,7 @@ import {
       });
 
       it('RigidBody defaults include type=dynamic (1)', () => {
-        const defaults = (
-          RigidBody as { schema: Record<string, unknown>; defaults?: Record<string, unknown> }
-        ).defaults;
+        const defaults = componentDefinition(RigidBody).defaults;
         expect(defaults).toBeDefined();
         if (defaults) {
           expect(defaults.type).toBe(1);
@@ -284,10 +279,8 @@ import {
       });
 
       it('Collider defaults include density=1', () => {
-        expect(Collider.schema).toHaveProperty('density');
-        const defaults = (
-          Collider as { schema: Record<string, unknown>; defaults?: Record<string, unknown> }
-        ).defaults;
+        expect(componentSchema(Collider)).toHaveProperty('density');
+        const defaults = componentDefinition(Collider).defaults;
         expect(defaults).toBeDefined();
         if (defaults) {
           expect(defaults.density).toBe(1);
@@ -295,9 +288,7 @@ import {
       });
 
       it('Collider defaults include friction=0.5', () => {
-        const defaults = (
-          Collider as { schema: Record<string, unknown>; defaults?: Record<string, unknown> }
-        ).defaults;
+        const defaults = componentDefinition(Collider).defaults;
         expect(defaults).toBeDefined();
         if (defaults) {
           expect(defaults.friction).toBe(0.5);
@@ -305,9 +296,7 @@ import {
       });
 
       it('Collider defaults include restitution=0', () => {
-        const defaults = (
-          Collider as { schema: Record<string, unknown>; defaults?: Record<string, unknown> }
-        ).defaults;
+        const defaults = componentDefinition(Collider).defaults;
         expect(defaults).toBeDefined();
         if (defaults) {
           expect(defaults.restitution).toBe(0);
@@ -328,18 +317,18 @@ import {
 
   describe('collider-halfextents-vec.test.ts', () => {
     it('Collider.halfExtents is array<f32,3> with explicit layer-2 default [0.5,0.5,0.5]', () => {
-      expect(Collider.schema.halfExtents).toBe('array<f32, 3>');
+      expect(componentSchema(Collider).halfExtents).toBe('array<f32, 3>');
       expect(Array.from(Collider.fields.halfExtents.default as Float32Array)).toEqual([
         0.5, 0.5, 0.5,
       ]);
     });
 
     it('Collider per-axis scalar keys are gone; radius/halfHeight stay scalar (OOS-1)', () => {
-      expect('halfExtentsX' in Collider.schema).toBe(false);
-      expect('halfExtentsY' in Collider.schema).toBe(false);
-      expect('halfExtentsZ' in Collider.schema).toBe(false);
-      expect(Collider.schema.radius).toBe('f32');
-      expect(Collider.schema.halfHeight).toBe('f32');
+      expect('halfExtentsX' in componentSchema(Collider)).toBe(false);
+      expect('halfExtentsY' in componentSchema(Collider)).toBe(false);
+      expect('halfExtentsZ' in componentSchema(Collider)).toBe(false);
+      expect(componentSchema(Collider).radius).toBe('f32');
+      expect(componentSchema(Collider).halfHeight).toBe('f32');
     });
 
     it('E1: Collider spawned with halfExtents omitted resolves to [0.5,0.5,0.5]', () => {

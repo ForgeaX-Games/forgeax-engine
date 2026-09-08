@@ -1,3 +1,4 @@
+import { REMOTE_ERROR_MESSAGES } from './error-messages';
 import { REMOTE_ERROR_CODE_TO_JSONRPC, type RemoteErrorCode } from './errors';
 
 export interface ComponentIntrospectionDescriptor {
@@ -11,7 +12,7 @@ export interface RemoteRootValues {
   readonly world: unknown;
   readonly renderer: unknown;
   readonly assets: unknown;
-  readonly debugAdapter?: unknown;
+  readonly rhiCapture?: unknown;
   readonly profiler?: unknown;
   readonly execution?: unknown;
   /** Read-only World-owned simulation summary; no restore/replay operation. */
@@ -66,9 +67,9 @@ function projectRoot(name: string, value: unknown): RootProjection {
     world: { type: 'World', description: 'The host World instance.' },
     renderer: { type: 'Renderer', description: 'The host Renderer instance.' },
     assets: { type: 'AssetRegistry', description: 'The host AssetRegistry instance.' },
-    debugAdapter: {
-      type: 'DebugRhiAdapter',
-      description: 'The opt-in RHI debug adapter for frame and draw inspection.',
+    rhiCapture: {
+      type: 'RhiCapture',
+      description: 'The opt-in RHI frame capture capability.',
     },
     profiler: {
       type: 'Profiler',
@@ -103,7 +104,11 @@ function projectRoot(name: string, value: unknown): RootProjection {
         ? {
             capability: 'execution-report-v1',
           }
-        : {}),
+        : name === 'rhiCapture'
+          ? {
+              capability: 'rhi-capture-v1',
+            }
+          : {}),
   };
 }
 
@@ -146,17 +151,11 @@ function profilerCapability(roots: Record<string, RootProjection>): Record<strin
 }
 
 function buildErrorProjection(): Record<string, { code: number; message: string }> {
-  const messages: Record<RemoteErrorCode, string> = {
-    'script-syntax-error': 'Script syntax error',
-    'script-runtime-error': 'Script runtime error',
-    'server-startup-failed': 'Server startup failed',
-    'server-not-running': 'Server not reachable',
-  };
   const errors: Record<string, { code: number; message: string }> = {};
   for (const [code, numericCode] of Object.entries(REMOTE_ERROR_CODE_TO_JSONRPC) as Array<
     [RemoteErrorCode, number]
   >) {
-    errors[code] = { code: numericCode, message: messages[code] };
+    errors[code] = { code: numericCode, message: REMOTE_ERROR_MESSAGES[code] };
   }
   return errors;
 }

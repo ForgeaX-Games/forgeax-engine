@@ -2,8 +2,8 @@
 //
 // End-to-end declare-import-load via fbxImporter through the build-time
 // vite-plugin-pack pipeline:
-//   (1) configurePackIndex('/pack-index.json')      — declared in vite.config.ts
-//   (2) createDevImportTransport()                  — dev-server POST /__import/:guid
+//   (1) configureRuntimeAssetCatalog(assets, runtimeBinding) — scoped dev or static build catalog
+//   (2) createRuntimeAssetImportTransport(runtimeBinding)             — dev-server POST /__import/:guid
 //                                                     dispatches to fbxImporter
 //   (3) loadByGuid<SceneAsset>(sceneGuid)           — runtime resolves the GUID
 //                                                     and instantiates
@@ -14,6 +14,7 @@
 //
 // AC-15: this is the full declare-import-load (no registerWithGuid shortcut).
 
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
 import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
@@ -21,12 +22,11 @@ import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, DirectionalLight } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 
-import type { SceneAsset } from '@forgeax/engine-types';
+import { type SceneAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
-const PACK_INDEX_URL = '/pack-index.json';
 // Scene GUID from forgeax-engine-assets/vendor/fbx-test/cube.fbx.meta.json.
 const SCENE_GUID = '019ecd87-179b-773b-8679-4ee436fdd878';
 
@@ -47,7 +47,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[fbx-cube] createApp failed:', appRes.error);
@@ -55,15 +55,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
   const app = appRes.value;
   const world: World = app.world;
-  const renderer = app.renderer;
-  console.warn(`[fbx-cube] backend=${renderer.backend}`);
+  console.warn('[fbx-cube] Standard pipeline active');
 
-  const assets = renderer.assets;
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[hello-fbx-cube] asset owner unavailable');
+    return;
+  }
   if (assets === null) {
     console.error('[fbx-cube] AssetRegistry is null');
     return;
   }
-  assets.configurePackIndex(PACK_INDEX_URL);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   const sceneGuidRes = AssetGuid.parse(SCENE_GUID);
   if (!sceneGuidRes.ok) {

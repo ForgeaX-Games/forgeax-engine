@@ -1,9 +1,10 @@
 // @forgeax/engine-assets-runtime -- LoaderRegistry coverage (fix issue #709).
-// register/get/registeredKinds with fail-fast + last-write-wins semantics.
+// register/get/registeredKinds with fail-fast duplicate ownership semantics.
 
 import type { Loader } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { LoaderRegistry } from '../loader-registry';
+import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 
 function loader(kind: string): Loader<unknown> {
   return { kind, load: async () => ({ ok: true, value: undefined }) } as unknown as Loader<unknown>;
@@ -13,8 +14,11 @@ describe('LoaderRegistry', () => {
   it('registers and looks up a loader by kind', () => {
     const reg = new LoaderRegistry();
     const mesh = loader('mesh');
-    reg.register(mesh);
+    const dispose = reg.register(mesh);
     expect(reg.get('mesh')).toBe(mesh);
+    dispose();
+    expect(reg.get('mesh')).toBeUndefined();
+    dispose();
   });
 
   it('get returns undefined for an unregistered kind', () => {
@@ -29,12 +33,12 @@ describe('LoaderRegistry', () => {
     expect(reg.registeredKinds()).toEqual(['mesh', 'material', 'scene']);
   });
 
-  it('is idempotent on a repeated kind (last write wins, no throw)', () => {
+  it('rejects duplicate kinds instead of silently replacing the owner', () => {
     const reg = new LoaderRegistry();
     reg.register(loader('mesh'));
     const second = loader('mesh');
-    reg.register(second);
-    expect(reg.get('mesh')).toBe(second);
+    expect(() => reg.register(second)).toThrow(/duplicate loader kind/);
+    expect(reg.get('mesh')).not.toBe(second);
     expect(reg.registeredKinds()).toEqual(['mesh']);
   });
 
@@ -64,5 +68,34 @@ describe('LoaderRegistry', () => {
       {} as never,
     );
     expect(result.ok).toBe(true);
+  });
+
+  it('wires every ordinary Asset kind into the default loader registry', () => {
+    const expectedKinds = [
+      'mesh',
+      'material',
+      'scene',
+      'texture',
+      'equirect',
+      'sampler',
+      'font',
+      'render-pipeline',
+      'tileset',
+      'video',
+      'skeleton',
+      'skin',
+      'animation-clip',
+      'animation-graph',
+      'audio',
+      'particle-effect',
+    ];
+    const registry = createDefaultLoaderRegistry();
+    expect(
+      registry
+        .registeredKinds()
+        .filter((kind) => kind !== 'ui')
+        .sort(),
+    ).toEqual(expectedKinds.sort());
+    expect(registry.get('ui')).toBeDefined();
   });
 });

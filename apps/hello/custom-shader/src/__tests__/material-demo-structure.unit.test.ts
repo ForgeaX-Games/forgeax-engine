@@ -12,11 +12,11 @@ describe('material-inheritance-demo structure', () => {
   it('loads root and derived MaterialAsset records through the runtime', () => {
     expect(source).toContain('loadByGuid<MaterialAsset>');
     expect(source).toContain('createMaterialLoader');
-    expect(source).toContain('cookedLoader.load');
+    expect(source).toContain('loadCookedMaterial');
     expect(source).toContain('materialFromCookedRecord');
     expect(source).toContain('rootMaterialHandle');
     expect(source).toContain('derivedMaterialHandle');
-    expect(source).toContain('rebindNormalTexture');
+    expect(source).toContain('rebindMaterialTextures');
     expect(source).toContain('world.set(derivedEntity, MeshRenderer');
     expect(source).toContain('liveMutation');
     expect(source).toContain("materials: [rootMaterialHandle]");
@@ -30,7 +30,7 @@ describe('material-inheritance-demo structure', () => {
     expect(rows).toHaveLength(2);
     expect(rows.some((asset: { payload?: { role?: string } }) => asset.payload?.role === 'root')).toBe(true);
     expect(rows.some((asset: { payload?: { role?: string } }) => asset.payload?.role === 'derived')).toBe(true);
-    expect(rows.every((asset: { payload?: { cooked?: { schemaVersion?: string } } }) => asset.payload?.cooked?.schemaVersion === 'material-cook/1')).toBe(true);
+    expect(rows.every((asset: { payload?: { cooked?: { schemaVersion?: string } } }) => asset.payload?.cooked?.schemaVersion === 'material-cook/3')).toBe(true);
     expect(shader).toMatch(/sin\(/);
     expect(shader).toMatch(/time/);
   });
@@ -45,5 +45,30 @@ describe('material-inheritance-demo structure', () => {
     expect(JSON.stringify(fixture)).toContain('baseColorTexture');
     expect(JSON.stringify(fixture)).toContain('normalTexture');
     expect(appRoot.pathname).toContain('custom-shader');
+  });
+
+  it('keeps identity texture coordinates implicit and preserves cooked refs', () => {
+    const root = fixture.assets.find(
+      (asset: { payload?: { role?: string } }) => asset.payload?.role === 'root',
+    );
+    expect(root?.payload?.values?.baseColorTexture).toBe(
+      '01935b00-7d8c-7c4e-9f12-345678abcd11',
+    );
+    expect(root?.payload?.values?.baseColorTexture).not.toEqual(
+      expect.objectContaining({ coordinates: expect.anything() }),
+    );
+    expect(root?.payload?.cooked?.refs?.textures).toEqual([
+      '01935b00-7d8c-7c4e-9f12-345678abcd11',
+      '01935b00-7d8c-7c4e-9f12-345678abcd12',
+    ]);
+    expect(root?.payload?.cooked?.resolved?.values?.baseColorTexture).toBe(
+      '01935b00-7d8c-7c4e-9f12-345678abcd11',
+    );
+    const derived = fixture.assets.find(
+      (asset: { payload?: { role?: string } }) => asset.payload?.role === 'derived',
+    );
+    expect(derived?.payload?.cooked?.authored?.values).toEqual({
+      baseColor: [0.2, 0.55, 0.95, 1],
+    });
   });
 });

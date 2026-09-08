@@ -22,6 +22,7 @@ export interface StartEngineWorkerOptions {
   readonly bootstrapUrl: string;
   readonly bootstrapData?: import('./types').ExecutionBootstrapValue;
   readonly bootstrapPort?: MessagePort;
+  readonly assetCatalog?: import('./types').ExecutionAssetCatalog;
   readonly shaderManifestUrl?: string;
   readonly time?: import('@forgeax/engine-ecs').TimePolicy;
   readonly timeoutMs: number;
@@ -130,6 +131,7 @@ export async function startEngineWorker(
     bootstrapUrl: options.bootstrapUrl,
     ...(options.bootstrapData === undefined ? {} : { bootstrapData: options.bootstrapData }),
     ...(options.bootstrapPort === undefined ? {} : { bootstrapPort: options.bootstrapPort }),
+    ...(options.assetCatalog === undefined ? {} : { assetCatalog: options.assetCatalog }),
     ...(options.shaderManifestUrl !== undefined
       ? { shaderManifestUrl: options.shaderManifestUrl }
       : {}),

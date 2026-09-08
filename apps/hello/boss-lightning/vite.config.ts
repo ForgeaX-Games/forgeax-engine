@@ -1,5 +1,6 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createMaterialPackCooker } from '@forgeax/engine-shader-compiler';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { createParticleCodeNativeCookerFromRoots } from '@forgeax/engine-vfx-compiler';
@@ -21,7 +22,10 @@ export default defineConfig({
     }) as never,
     pluginPack({
       roots: [resolve(here, 'assets')],
-      cookers: [createParticleCodeNativeCookerFromRoots([resolve(here, 'assets')])],
+      cookers: [
+        createMaterialPackCooker([resolve(here, 'assets')]),
+        createParticleCodeNativeCookerFromRoots([resolve(here, 'assets')]),
+      ],
       refresh: reloadAssetHost(),
       runtimeBinding,
     }),

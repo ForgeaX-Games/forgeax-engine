@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defineComponent, FixedUpdate, World } from '@forgeax/engine-ecs';
+import { createWorldContext, defineComponent, FixedUpdate, World } from '@forgeax/engine-ecs';
 import { createMemoryEndpointPair } from '../src/endpoint/memory';
 import type { PeerId } from '../src/endpoint/endpoint';
 import { createAuthorityCoordinator } from '../src/replication/authority';
@@ -46,7 +46,7 @@ describe('NetSession scheduling integration', () => {
     expect(raw[0]!.data).toEqual(new Uint8Array([1, 2, 3]));
   });
 
-  it('applies received replication before fixed simulation and publishes after it via World.update', () => {
+  it('applies received replication before fixed simulation and publishes after it via World.update', async () => {
     const [authorityEndpoint, replicaEndpoint] = createMemoryEndpointPair();
     const profile = scheduledProfile();
     const authorityWorld = new World({ time: { fixedDeltaSeconds: 1, maxDeltaSeconds: 5 } });
@@ -58,8 +58,8 @@ describe('NetSession scheduling integration', () => {
       )
       .unwrap();
 
-    expect(netPlugin({ endpoint: authorityEndpoint }).build(authorityWorld).ok).toBe(true);
-    expect(netPlugin({ endpoint: replicaEndpoint }).build(replicaWorld).ok).toBe(true);
+    await createWorldContext(authorityWorld, [netPlugin({ endpoint: authorityEndpoint })]);
+    await createWorldContext(replicaWorld, [netPlugin({ endpoint: replicaEndpoint })]);
     const authoritySession = authorityWorld.getResource<NetSession>('net-session');
     const replicaSession = replicaWorld.getResource<NetSession>('net-session');
     authoritySession.attachAuthority(createAuthorityCoordinator(authorityWorld, profile));

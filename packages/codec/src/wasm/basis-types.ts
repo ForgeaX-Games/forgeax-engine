@@ -109,6 +109,30 @@ export interface KTX2FileConstructor {
   new (data: Uint8Array): KTX2File;
 }
 
+/** A raw `.basis` source opened by the build-time BasisFile arm. */
+export interface BasisFile {
+  close(): void;
+  getNumImages(): number;
+  getNumLevels(imageIndex: number): number;
+  getImageWidth(imageIndex: number, levelIndex: number): number;
+  getImageHeight(imageIndex: number, levelIndex: number): number;
+  getBasisTexFormat(): number;
+  getHasAlpha(): number;
+  startTranscoding(): number;
+  getImageTranscodedSizeInBytes(imageIndex: number, levelIndex: number, format: number): number;
+  transcodeImage(
+    dst: Uint8Array,
+    imageIndex: number,
+    levelIndex: number,
+    format: number,
+    decodeFlags: number,
+  ): number;
+}
+
+export interface BasisFileConstructor {
+  new (data: Uint8Array): BasisFile;
+}
+
 /**
  * The transcoder WASM module (runtime-safe entry). Slim build: no encoder.
  */
@@ -116,7 +140,9 @@ export interface BasisTranscoderModule {
   /** Global one-time init; must run before constructing any KTX2File. */
   initializeBasis(): void;
   readonly transcoder_texture_format: TranscoderTextureFormatEnum;
+  readonly basis_tex_format: BasisTexFormatEnum;
   readonly KTX2File: KTX2FileConstructor;
+  readonly BasisFile?: BasisFileConstructor;
   /** Bytes per block (compressed) or per pixel (uncompressed) for a format. */
   getBytesPerBlockOrPixel(format: number): number;
 }

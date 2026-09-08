@@ -21,6 +21,9 @@ const expectedCodes = [
   'material-specialization-not-cooked',
   'material-specialization-stale-generation',
   'gltf-material-uv-set-missing',
+  'material-derived-interface-mismatch',
+  'material-texture-coordinate-invalid',
+  'material-payload-bounds',
 ] as const;
 
 declare const error: MaterialError;
@@ -55,6 +58,12 @@ function renderDiagnostic(error: MaterialError): string {
       return error.detail.material;
     case 'gltf-material-uv-set-missing':
       return `${error.detail.material}:${error.detail.slot}`;
+    case 'material-derived-interface-mismatch':
+      return `${error.detail.material}:${error.detail.layoutIdentity}:${error.detail.action}`;
+    case 'material-texture-coordinate-invalid':
+      return `${error.detail.parameter}:${error.detail.slot}:${error.detail.reason}`;
+    case 'material-payload-bounds':
+      return `${error.detail.slot}:${error.detail.byteOffset}:${error.detail.byteLength}`;
   }
 }
 

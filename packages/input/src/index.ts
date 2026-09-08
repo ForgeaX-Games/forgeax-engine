@@ -90,13 +90,7 @@ export {
   INPUT_SNAPSHOT_RESOURCE_KEY,
   snapshotFromSample,
 } from './input-snapshot';
-export {
-  INPUT_SIMULATION_SAMPLE_RESOURCE_KEY,
-  installSimulationInput,
-  projectSimulationInputSample,
-  type SimulationInputController,
-  type SimulationInputSample,
-} from './simulation-input';
+export { inputBackendPlugin, ownedInputBackendPlugin } from './plugin-service';
 export {
   createUiInputResetBoundary,
   isUiOwnedEvent,

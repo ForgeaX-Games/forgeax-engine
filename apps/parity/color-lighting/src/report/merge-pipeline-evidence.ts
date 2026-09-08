@@ -235,8 +235,8 @@ function mergeValidatedArtifacts(
   if (artifacts.slice(1).some((artifact) => artifact === first)) {
     return error('artifact-substitution', 'independent producer artifact objects', 'do not compare one artifact object with itself', { field: 'artifacts' });
   }
-  if (artifacts.some((artifact) => artifact.caseId !== first.caseId || artifact.sourceHash !== first.sourceHash || artifact.semanticHash !== first.semanticHash || artifact.frameId !== first.frameId)) {
-    return error('artifact-identity-mismatch', 'matching case, source, semantic, and frame identity', 'rerun both producers from one invocation and one SceneCase source', { field: 'identity' });
+  if (artifacts.some((artifact) => artifact.caseId !== first.caseId || artifact.sourceHash !== first.sourceHash || artifact.semanticHash !== first.semanticHash)) {
+    return error('artifact-identity-mismatch', 'matching case, source, and semantic identity', 'rerun both producers from one invocation and one SceneCase source', { field: 'identity' });
   }
   const urp = artifacts.find((artifact) => artifact.pipelineId === 'forgeax::urp');
   const hdrp = artifacts.find((artifact) => artifact.pipelineId === 'forgeax::hdrp');

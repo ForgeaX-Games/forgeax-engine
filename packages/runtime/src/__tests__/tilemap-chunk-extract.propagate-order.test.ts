@@ -1,13 +1,27 @@
-import { type EntityHandle, FrameEnd, World } from '@forgeax/engine-ecs';
+import { type EntityHandle, Update, World } from '@forgeax/engine-ecs';
 import { MeshFilter } from '@forgeax/engine-render';
-import { TileLayer, Tilemap, tilemapChunkExtractSystem } from '@forgeax/engine-render/authoring';
+import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
 import { ChildOf, Children, registerPropagateTransforms, Transform } from '@forgeax/engine-scene';
-import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { tilemapChunkExtractSystem } from '../../../render/src/tilemap-chunk-extract-system';
+import { registerRuntimeComponents } from './helpers/register-runtime-components';
+import { makeTilemapAssetLookup } from './helpers/tilemap-assets';
 
 describe('tilemap derivation and Transform publication order', () => {
-  it('materializes in FrameEnd and publishes the new world matrix before update returns', () => {
+  it('materializes in Update and publishes the new world matrix before update returns', () => {
     const world = new World();
+    registerRuntimeComponents(world);
+    const tileset = {
+      kind: 'tileset' as const,
+      atlases: ['test/atlas'],
+      tileWidth: 1,
+      tileHeight: 1,
+      columns: 1,
+      rows: 1,
+      regions: [{ x: 0, y: 0, width: 1, height: 1 }],
+      tiles: [{ regionIndex: 0 }],
+    };
+    const lookup = makeTilemapAssetLookup(tileset);
     registerPropagateTransforms(world);
     const map = world
       .spawn(
@@ -18,17 +32,7 @@ describe('tilemap derivation and Transform publication order', () => {
             rows: 1,
             tileSize: [2, 2],
             chunkSize: 1,
-            tileset: world.allocSharedRef('TilesetAsset', {
-              kind: 'tileset',
-              guid: 'test/frame-publish-order',
-              atlases: [toShared(101)],
-              tileWidth: 1,
-              tileHeight: 1,
-              columns: 1,
-              rows: 1,
-              regions: [{ x: 0, y: 0, width: 1, height: 1 }],
-              tiles: [{ regionIndex: 0 }],
-            }),
+            tileset: 'test/tileset',
           },
         },
         { component: Transform, data: { pos: [4, 0, 0] } },
@@ -45,10 +49,10 @@ describe('tilemap derivation and Transform publication order', () => {
       )
       .unwrap();
     world
-      .addSystem(FrameEnd, {
+      .addSystem(Update, {
         name: 'renderDerivedEntities',
         queries: [],
-        fn: tilemapChunkExtractSystem,
+        fn: (world) => tilemapChunkExtractSystem(world, lookup),
       })
       .unwrap();
 
@@ -67,8 +71,8 @@ describe('tilemap derivation and Transform publication order', () => {
       derived: matrix?.[12],
       layer: world.get(layer, Transform).unwrap().world[12],
       map: world.get(map, Transform).unwrap().world[12],
-      structureEpoch: (world as unknown as { _getStructureEpoch(): number })._getStructureEpoch(),
-    }).toEqual({ derived: 5, layer: 4, map: 4, structureEpoch: expect.any(Number) });
+      entityCount: world.inspect().entityCount,
+    }).toEqual({ derived: 5, layer: 4, map: 4, entityCount: expect.any(Number) });
     expect(matrix?.[13]).toBeCloseTo(1);
     expect(world.inspect().schedules.map((entry) => entry.schedule.name)).not.toContain(
       'FramePublish',

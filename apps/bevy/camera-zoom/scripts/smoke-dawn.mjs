@@ -1,3 +1,4 @@
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // bevy-camera-zoom headless dawn smoke — proves Bevy projection_zoom behavior.
 // Synthetic wheel input zooms the active projection and a synthetic Space edge
 // switches orthographic to perspective; app and smoke share src/camera-zoom.ts.
@@ -99,26 +100,21 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  renderer = await createSmokeRenderer(createRenderer, mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
-console.log(`[bevy-camera-zoom] backend=${renderer.backend}`);
+console.log(`[bevy-camera-zoom] backend=${rendererBackend(renderer)}`);
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+subscribeSmokeErrors(renderer, (err) => errors.push({ code: err.code, hint: err.hint }));
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 buildCameraZoomWorld(world);
 
@@ -153,7 +149,7 @@ const cameraQuery = world.query({ read: [Camera], with: [Transform, ZoomCamera] 
 let framesObserved = 0, earlyFrame, lateFrame, earlyZoom = Number.NaN, finalCamera;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }); if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`); framesObserved++;
+  const r = drawSmokeFrame(renderer, world); if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`); framesObserved++;
   if (i === CAPTURE_EARLY) { earlyFrame = await capture(sharedDevice); earlyZoom = cameraZoomValue(world); }
   if (i === CAPTURE_LATE) lateFrame = await capture(sharedDevice);
   stepCameraZoom(world, { switchProjection: i === Math.floor(SMOKE_MIN_FRAMES * 0.4), wheelDelta: i < Math.floor(SMOKE_MIN_FRAMES * 0.2) || i > Math.floor(SMOKE_MIN_FRAMES * 0.5) ? 1 : 0 });
@@ -180,7 +176,7 @@ const motionMeanDelta = sum / earlyFrame.length / 255;
 console.log(`[smoke] earlyMaxBright=${(earlyMaxBright/255).toFixed(4)} motionMeanDelta=${motionMeanDelta.toFixed(5)} earlyZoom=${earlyZoom.toFixed(4)} finalZoom=${finalZoom.toFixed(4)} finalCamera=${JSON.stringify(finalCamera)}`);
 try { const outDir = process.env.SMOKE_PNG_DIR ?? resolve(here, '..', 'artifacts'); mkdirSync(outDir,{recursive:true}); writeFileSync(resolve(outDir,'frame-early.png'),writeReferencePng(earlyFrame,WIDTH,HEIGHT)); writeFileSync(resolve(outDir,'frame-late.png'),writeReferencePng(lateFrame,WIDTH,HEIGHT)); } catch (err) { console.warn(`[smoke] PNG dump skipped: ${String(err)}`); }
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} expected webgpu`);
+if (rendererBackend(renderer) !== 'webgpu') failures.push(`(a) backend=${rendererBackend(renderer)} expected webgpu`);
 if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserved}`);
 if (earlyMaxBright/255 <= 0.15) failures.push(`(c) earlyMaxBright=${earlyMaxBright/255}`);
 if (motionMeanDelta <= MOTION_THRESHOLD) failures.push(`(d) motion=${motionMeanDelta}`);

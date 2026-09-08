@@ -89,7 +89,7 @@ await verifyDemoCapture({
       `[learn-render 5.9 ssao] tape intermediate=2x640x360 r8unorm pipelines=fs_ssao_calc/fs_ssao_blur aoPasses=${aoPasses.length}`,
     );
   },
-  // SSAO's HDRP pipeline + backpack.gltf load makes app.start()'s renderer.ready
+  // SSAO's HDRP pipeline + backpack.gltf load makes app.start()'s host initialization
   // chain (manifest -> pipeline -> asset upload) slower than the 3s default; a
   // short warmup armed capture before the rAF loop produced its first frame, so
   // onFrameEnd never fired and waitForRecorderIdle hung. Give it more headroom.

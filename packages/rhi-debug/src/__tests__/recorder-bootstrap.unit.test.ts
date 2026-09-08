@@ -139,13 +139,13 @@ describe('B1: _realDevice RAW_DEVICE_MAP contract (M4 fix-up)', () => {
 
     // Create through proxy: enters handleMap + bootstrapCreates.
     proxyDevice.createBuffer({ size: 64, usage: 16 });
-    expect(debugInst._getBootstrapCreatesSize()).toBe(1);
+    expect(debugInst.bootstrapCreatesSize()).toBe(1);
 
     // Create through raw _realDevice (not hooked anymore): bypasses recorder.
     // This is correct — _realDevice is only for RAW_DEVICE_MAP identity lookup.
     const realDevice = proxyDevice._realDevice;
     realDevice.createBuffer({ size: 128, usage: 16 });
-    expect(debugInst._getBootstrapCreatesSize()).toBe(1);
+    expect(debugInst.bootstrapCreatesSize()).toBe(1);
   });
 
   it('proxy-only path produces self-contained tape', async () => {
@@ -173,18 +173,40 @@ describe('B1: _realDevice RAW_DEVICE_MAP contract (M4 fix-up)', () => {
     const { debugInst, proxyDevice } = await bootstrapWithRealDevice();
 
     proxyDevice.createBuffer({ size: 64, usage: 16 });
-    expect(debugInst._getBootstrapCreatesSize()).toBe(1);
+    expect(debugInst.bootstrapCreatesSize()).toBe(1);
 
     // Arm + frameMark preserves bootstrapCreates.
     debugInst.arm(1);
     debugInst.onFrameEnd();
-    expect(debugInst._getBootstrapCreatesSize()).toBe(1);
+    expect(debugInst.bootstrapCreatesSize()).toBe(1);
 
     // Re-arm, create more via proxy.
     debugInst.arm(1);
     proxyDevice.createBuffer({ size: 128, usage: 16 });
     debugInst.onFrameEnd();
-    expect(debugInst._getBootstrapCreatesSize()).toBe(2);
+    expect(debugInst.bootstrapCreatesSize()).toBe(2);
+  });
+
+  it('adds a requested view format to a synthetic swapchain texture event', async () => {
+    const { debugInst, proxyDevice } = await bootstrapWithRealDevice();
+    debugInst.arm(1);
+
+    const swapchainTexture = {
+      width: 1280,
+      height: 720,
+      depthOrArrayLayers: 1,
+      format: 'bgra8unorm',
+      usage: 23,
+    };
+    const view = proxyDevice.createTextureView(swapchainTexture, {
+      format: 'bgra8unorm-srgb',
+    });
+    expect(view.ok).toBe(true);
+
+    const create = debugInst
+      .bootstrapEvents()
+      .find((event: any) => event.kind === 'createTexture' && event.origin === 'swapchain') as any;
+    expect(create?.desc.viewFormats).toEqual(['bgra8unorm-srgb']);
   });
 });
 
@@ -240,7 +262,7 @@ describe('B1: getTape inFrameHandleIds backward-refs (fix 2)', () => {
   // so _collectFrameReferencedHandleIds seeded it via the writeBuffer case. CSM's
   // composite-pass bind group sampled a pre-arm TextureView that no usage event
   // referenced directly, so the closure never seeded it and the tape deserialized
-  // as tape-handle-graph-broken. This case isolates that path: a pre-arm buffer
+  // as tape-invalid. This case isolates that path: a pre-arm buffer
   // bound by an in-frame createBindGroup with NO writeBuffer/setBindGroup usage.
   it('pre-arm resource referenced ONLY by in-frame createBindGroup is prefixed', async () => {
     const { debugInst, proxyDevice } = await bootstrapWithRealDevice();
@@ -271,7 +293,7 @@ describe('B1: getTape inFrameHandleIds backward-refs (fix 2)', () => {
 
     const tape = debugInst.getTape() as any;
     expect(tape).toBeDefined();
-    // Must NOT be a DebugError (tape-handle-graph-broken before the fix).
+    // Must NOT be an unstructured error (tape-invalid before the fix).
     expect(tape).not.toHaveProperty('code');
     // The pre-arm buffer's createBuffer must land in the prefix for self-containment.
     const bufferCreates = tape.events.filter((e: any) => e.kind === 'createBuffer');

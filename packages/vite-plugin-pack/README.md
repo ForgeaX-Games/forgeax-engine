@@ -1,11 +1,77 @@
 // @forgeax/engine-vite-plugin-pack
 // Vite plugin for the forgeax engine asset package system.
-// Dev mode: HMR + /__pack/lookup/:guid + /__pack/index routes.
-// Build mode: generateBundle scans roots, imports each `kind: 'texture'` row
-// (parseImage -> raw RGBA bytes -> emitFile hashed `<guid>-[hash].bin`),
-// rewrites `packageUrl` to the hashed path, and emits `pack-index.json`.
+// Dev mode: one scoped Catalog/asset transport plus an explicit host refresh policy.
+// Build mode: one inventory/producer/publication pass emits Pack v2, artifacts,
+// and the final `pack-index.json` through Rollup.
+
+## Explicit DDC lifecycle contract
+
+The host owns project identity and injects both DDC roots. The plugin does not
+derive a root from the working directory, an asset root, a game basename, or a
+URL:
+
+```ts
+pluginPack({
+  roots: ['assets/scene.pack.json', 'assets/player.pack.ts', 'assets/fire.vfx.wgsl'],
+  ddc: {
+    buildCacheRoot: '/workspace/.forgeax/ddc/build-cache',
+    projectDdcRoot: '/game/.forgeax/ddc/v2',
+  },
+});
+```
+
+`buildCacheRoot` is the optional build producer cache. Build-only consumers may
+omit it; publication remains fail-open and still emits the authoritative Pack
+and Meta outputs. `projectDdcRoot` is required for dev publication, runtime
+scope binding, fixed-root rebinding, and recovery. A missing project root is a
+closed structured error, never a fallback to `cwd` or `roots[0]`.
+
+The project root is the only home for v2 project lifecycle state. The Engine
+DDC lifecycle owns leases, candidate generations, `current`, `lastKnownGood`,
+discard, close, and crash recovery. The plugin remains the single Pack owner:
+Catalog rows, Pack v2 bodies, Meta, receipts, and artifact closure are
+published as one validated producer result. `current` is the active verified
+publication; `lastKnownGood` is read-only recovery evidence and is never
+silently promoted or shipped. `runtimeBinding` carries the active scope and
+generation to the browser consumer. Closing or rebinding a host releases the
+old lease and cannot publish a discarded candidate.
+
+Consumers should pass the same explicit `ddc` object to every plugin entry
+point. Do not add legacy, v1, compatibility, basename, or URL fallback paths.
 
 ## Native authored Pack cookers
+
+### Public ScriptablePack consumer contract
+
+`SCRIPTABLE_PACK_CAPABILITY_MANIFEST` publishes the 16 durable kinds and the
+three Host capability boundaries. Dev and production use the same Pack v2,
+Catalog, payload, `refs`, `artifacts`, receipts, and structured recovery
+fields; only the transport locator changes. Do not add a sidecar fallback for
+a valid ScriptablePack GUID.
+
+The ordered durable matrix is `mesh`, `material`, `scene`, `texture`,
+`equirect`, `sampler`, `font`, `render-pipeline`, `tileset`, `video`,
+`skeleton`, `skin`, `animation-clip`, `animation-graph`, `audio`, and
+`particle-effect`; its SSOT is `SCRIPTABLE_PACK_ASSET_KINDS` in
+`@forgeax/engine-pack`.
+
+### ScriptablePack publication
+
+`pluginPack({ roots })` automatically inventories trusted `*.pack.ts` sources. The production defaults compose the standard output registry and a fixed staged generation; hosts inject only roots, importers, native cookers, runtime binding, refresh, and DDC policy. A bounded authored build timeout is returned as the structured build-phase failure and the generation keeps its previous Catalog/Pack publication until a corrected source succeeds. Scanner/Catalog projection reads only the validated definition; explicit cook calls `build`, finalizes all outputs into one Pack v2 transaction, publishes one receipt per output GUID, and stores canonical Meta as `scriptable-pack.meta.json` in that package.
+
+Dev and build share one scanner inventory and one bounded producer session. The
+inventory contains canonical declaration identity, producer kind, projected
+outputs/external GUIDs, closure digests, and diagnostics; Catalog projection
+and the GUID-to-Meta watcher index consume it without reopening the source. Dev
+registers owners and materializes on demand or before consume; production
+materializes every owner through that same session. Content cycles fail
+structurally. Successful rebuilds replace the complete generation, while a
+failed watch rebuild leaves the previously installed Catalog and Pack bodies
+current. Relative TypeScript, JavaScript, and JSON helpers enter the source
+fingerprint through the Pack inventory. A scene-producing definition must
+declare its `sceneComponents`; the producer binds that schema to the
+definition's output only, so missing fields fail closed without a global ECS
+roster. Runtime consumes only Catalog, Pack v2, and artifacts.
 
 An authored `.pack.json` may be runtime `direct` or `cooked`; the filename does
 not decide this. Register native producers at the app composition root so the
@@ -13,7 +79,7 @@ same producer runs in dev and build mode:
 
 ```ts
 pluginPack({
-  roots: ['assets'],
+  roots: ['assets/effects.pack.json', 'assets/effects.vfx.wgsl'],
   cookers: [particleEffectCooker],
 });
 ```
@@ -49,10 +115,9 @@ fallback provenance version from the producer schema when a sidecar omits one;
 consumers never need to guess importer identity from a URL or file suffix.
 
 > [!IMPORTANT]
-> `buildCatalogResult()` is the canonical builder result. It contains
-> `entries`, `authority`, and structured `diagnostics`. The legacy
-> `buildCatalog()` array is a one-way projection of that result, so old callers
-> remain source-compatible without creating a second catalog truth.
+The producer result contains `entries`, `authority`, and structured
+`diagnostics`. It is the only Catalog truth; a failed or degraded inventory is
+a structured failure and cannot emit a partial build index.
 
 | Result field | Meaning | Safe consumer action |
 |:--|:--|:--|
@@ -74,23 +139,21 @@ When source bytes change, keep the evidence state explicit: `notCooked`, `ready/
 # Catalog transport and host refresh
 
 > [!IMPORTANT]
-> `pluginPack` publishes the neutral `forgeax:catalog-delta` transport. A
-> `CatalogDelta` says which rows were added, changed, or removed; it does not
-> decide whether a host reloads. Hosts that need a reload opt in explicitly.
+`pluginPack` publishes a typed Catalog delta through the scoped Vite channel. A
+`CatalogDelta` says which rows were added, changed, or removed; it does not
+decide whether a host reloads. Hosts that need a reload opt in explicitly.
 
 The browser adapter is `createCatalogClient(enumerate, import.meta.hot)`. It
-provides the browser-side transport pair. Adapt it with `createCatalogSource`
-and give that source to an `AssetRegistry`; subscribe and enumerate through the
-registry, so application code has one catalog owner and the registry never
-imports Vite. Subscribe before requesting the initial snapshot, then merge
-`added`, `changed`, and `removed` by stable GUID. Consult the exported
-`CatalogEntry` and `CatalogDelta` types in `@forgeax/engine-types` for the
-schema rather than reproducing it here.
+provides the browser-side subscription and enumeration pair; the application
+keeps one Catalog owner and does not import Vite into the runtime. Subscribe
+before requesting the initial snapshot, then merge `added`, `changed`, and
+`removed` by stable GUID. Consult the exported `CatalogEntry` and
+`CatalogDelta` types in `@forgeax/engine-types` for the schema rather than
+reproducing it here.
 
 ```ts
 import type { CatalogDelta, CatalogEntry } from '@forgeax/engine-types';
 import { createCatalogClient } from '@forgeax/engine-vite-plugin-pack/catalog-client';
-import { createCatalogSource } from '@forgeax/engine-assets-runtime';
 
 const rowsByGuid = new Map<string, CatalogEntry>();
 
@@ -104,15 +167,9 @@ function mergeDelta(delta: CatalogDelta): void {
   mergeRows(delta.changed);
 }
 
-async function readCatalogRows(): Promise<readonly CatalogEntry[]> {
-  const response = await fetch('/__pack/index');
-  if (!response.ok) throw new Error(`catalog request failed: ${response.status}`);
-  return (await response.json()) as readonly CatalogEntry[];
-}
-
-const client = createCatalogClient(readCatalogRows, import.meta.hot);
-assets.setCatalogSource(
-  createCatalogSource({ url: '/__pack/index', subscribe: client.subscribe }),
+const client = createCatalogClient(
+  () => assets.enumerateCatalog(),
+  import.meta.hot,
 );
 
 const stop = assets.subscribeCatalog(mergeDelta);
@@ -135,14 +192,12 @@ function disposeCatalog(): void {
 }
 ```
 
-`createCatalogSource` owns the registry-facing snapshot and its structured
-failure result. The Vite client contributes the HMR subscription; its
-`enumerate()` helper remains available to Vite-specific hosts. The application
-keeps only its derived `rowsByGuid` view: apply every delta as removals followed
-by complete row replacements, and merge each successful snapshot into that same
-view. On a late subscription or interrupted transport, call `reconcileCatalog()`
-again rather than relying on an event replay guarantee. Keep the subscription
-alive until the host's teardown or unmount path calls `disposeCatalog()`.
+The Vite client contributes the HMR subscription and a structured failure
+result. The application keeps only its derived `rowsByGuid` view: apply every
+delta as removals followed by complete row replacements, and merge each
+successful snapshot into that same view. On a late subscription or interrupted
+transport, call `reconcileCatalog()` again. Keep the subscription alive until
+the host's teardown or unmount path calls `disposeCatalog()`.
 
 Engine app composition roots that require a full refresh for watched asset
 content declare that choice directly:
@@ -161,12 +216,12 @@ inventing a Vite replay guarantee.
 
 # Pack-index entry shape (SSOT: `PackIndexEntry` in `@forgeax/engine-types`)
 
-Each row in `pack-index.json` (build) or `/__pack/index` (dev) carries:
+Each row in `pack-index.json` (build) or the scoped dev Catalog carries:
 
 | Field | Type | Notes |
 |:--|:--|:--|
 | `guid` | `string` (UUIDv5/v7 lowercase) | asset identity |
-| `packageUrl` | `string` | dev: source-relative path (e.g. `/assets/wood-container.jpg`); build: hashed import artefact (e.g. `/assets/<guid>-[hash].bin`) |
+| `packageUrl` | `string` | dev: scoped runtime locator from `runtimeBinding`; build: hashed Rollup artifact |
 | `kind` | `string` (closed disc.) | `'texture'` / `'mesh'` / `'scene'` / `'material'` / future arms |
 | `sourcePath` | `string` | on-disk source path (debugging + grep; build retains source JPG path even though `packageUrl` points to import artefact) |
 | `metadata` | `ImageMetadata \| undefined` | present iff `kind === 'texture'`; sub-structure: `width?` / `height?` / `format: GPUTextureFormat` / `colorSpace: 'srgb' \| 'linear'` / `mipmap: boolean`; `width` / `height` may be absent in dev-mode entries pre-decode (build-mode import fills them) |
@@ -176,43 +231,22 @@ Each row in `pack-index.json` (build) or `/__pack/index` (dev) carries:
 
 `metadata.mipmap` is the boolean form; sidecar `*.meta.json` `importSettings.mipmap` string tokens `'auto'` / `'none'` are mapped at the catalog builder (feat-20260517-vite-plugin-image-build-time-cook D-5; runtime is unaware of the string form). 5-field shape is feat-20260517-vite-plugin-image-build-time-cook D-2 (charter P4 consistent abstraction; metadata field names mirror `TextureAsset` POD byte-for-byte).
 
-# Dev import pairing contract (AC-14)
+## Dev and build semantics
 
-> [!IMPORTANT]
-> Dev-mode lazy import (import-on-demand) needs **two** wirings that come as a pair. Provide one without the other and dev `loadByGuid` of an un-imported texture fails. They live on opposite sides of the dev boundary, so each is easy to forget.
+`producerReadiness: 'before-consume'` materializes every required declaration
+before a consumer can load it. `'on-demand'` keeps the inventory discoverable
+and materializes the owning declaration at the first GUID request. Both modes
+use the same producer and finalizer; an absent importer, cooker, or source
+dependency returns a structured failure and never invents a raw runtime row.
 
-| Side | Wiring | Symptom if omitted |
-|:--|:--|:--|
-| **plugin** (`vite.config.ts`) | `pluginPack({ roots, importers: [imageImporter] })` | dev `POST /__import` has an empty `ImporterRegistry` -> `422 importer-not-registered`; nothing is ever imported |
-| **client** (app host) | inject `createDevImportTransport()` into `createApp` / `createRenderer` | the studio form has no transport, so import-on-demand degrades to the shipped fail-fast: `loadByGuid` returns `asset-not-imported` and the frame stays black |
-
-## Layer 1 -- wire the dev transport in one line each
-
-```ts
-// vite.config.ts (plugin side)
-import { imageImporter } from '@forgeax/engine-image/image-importer';
-import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
-
-export default defineConfig({
-  plugins: [pluginPack({ roots: ['assets'], importers: [imageImporter] })],
-});
-```
-
-```ts
-// app host (client side)
-import { createApp } from '@forgeax/engine-app';
-import { createDevImportTransport } from '@forgeax/engine-runtime';
-
-const app = await createApp(canvas, options, { importTransport: createDevImportTransport() });
-```
-
-## Layer 2 -- what the pair does on a DDC miss
-
-A dev catalog keeps a **discoverable raw-source texture row** for any asset that has only a `*.meta.json` (no build-imported `.bin`). When `loadByGuid` resolves that row, the runtime loader sees a non-`.bin` `packageUrl` and returns the `AssetErrorCode` sentinel `texture-source-not-imported` (an `AssetError`). `loadByGuidProd` treats that sentinel as transport-eligible and calls the injected transport's `fetchPack(guid)`, which `POST`s `/__import/<guid>`. The dev server imports the source to an `rgba16float` / `rgba8` `.bin` via the shared `importTextureEntry` SSOT, rebuilds the catalog so the same-GUID row now ends `.bin`, and returns the fresh `PackIndexEntry[]`; the loader clears its cache and re-enters, reading the imported `.bin`. HDR equirect sources (`*.hdr` declared as a `cube-texture` sub-asset) ride the same path: the dev `POST /__import` tolerates the runner's `import-produced-no-assets` and still imports the `.hdr` to a 2D `rgba16float` `.bin` (the GPU cube-isation stays in `uploadCubemapFromEquirect`).
-
-## Layer 3 -- shipped form fails fast; build is untouched
-
-Without an injected transport (shipped form), the same sentinel surfaces as `asset-not-imported` -- a fail-fast, never a silent lazy import. A genuinely corrupt imported `.bin` is a different signal entirely: it is the `ImageError` `image-decode-failed` and is **never** transport-eligible (the eligibility guard is `instanceof AssetError`), so a real decode failure is never re-fetched. The build path is also unaffected: `generateBundle` pre-imports every texture row (incl. `.hdr`) to a hashed `.bin` ahead of its own pre-import pass, so the shipped bundle carries the `.bin` directly and never exercises the dev `POST /__import` arm.
+The `runtimeBinding` identifies the active scope and generation for dev
+transport. A late request from an old generation is rejected, and a failed
+rebuild serves only the previous accepted publication. `lastKnownGood` remains
+read-only evidence; `preview-LKG` is an explicit inspection action, never a
+build input. Build mode always materializes all required declarations and emits
+only the accepted Pack v2 publication. A host that needs live updates uses
+`createCatalogClient` with the plugin's scoped Catalog stream; runtime asset
+loading stays on the one Catalog/Pack reader path.
 # Static asset evidence
 
 > [!IMPORTANT]
@@ -241,11 +275,12 @@ This is the shortest path from a catalog symptom to a producer repair:
 
 `producerReadiness: 'before-consume'` requires every source-package importer
 or native cooker needed by the scanned Meta declarations before a consumer can
-load the row. `producerReadiness: 'on-demand'` still requires both the Vite
-producer registration and the host's dev import transport. Missing either
-side is a structured producer failure, not permission for runtime compilation.
+load the row. `producerReadiness: 'on-demand'` still requires the `pluginPack`
+producer registration and the host's Catalog client/refresh wiring. Missing
+either side is a structured producer failure, not permission for runtime
+compilation.
 
-The plugin owns Catalog projection and dev/build route wiring. It does not own
+The plugin owns Catalog projection and dev/build transport projection. It does not own
 source authoring, DDC persistence policy, runtime payload semantics, or Editor
 write operations. Those boundaries remain in the source package, producer,
 assets-runtime, and asset-authoring gateway respectively.

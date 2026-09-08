@@ -1,6 +1,9 @@
+// @perf-budget-skip: intentional real Vite UI registry integration gate.
+
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createUiImporter } from '@forgeax/engine-ui/importer';
 import { build as viteBuild } from 'vite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { pluginPack } from '../index.js';
@@ -34,8 +37,8 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-describe('pluginPack UI importer registry', () => {
-  it('registers ui by default and emits finalized build payload', async () => {
+describe('pluginPack UI importer registration', () => {
+  it('emits finalized build payload for an explicitly registered owner importer', async () => {
     const dist = join(root, 'dist');
     await viteBuild({
       root,
@@ -46,7 +49,7 @@ describe('pluginPack UI importer registry', () => {
         emptyOutDir: true,
         rollupOptions: { input: { main: join(root, 'main.js') } },
       },
-      plugins: [pluginPack({ roots: [root] })],
+      plugins: [pluginPack({ roots: [root], importers: [{ key: 'ui', ...createUiImporter() }] })],
     });
 
     const files = await readdir(dist, { recursive: true });

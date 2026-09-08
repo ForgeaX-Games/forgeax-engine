@@ -21,6 +21,7 @@
 //   // 3. bootstrap               -> entry point that wires (1)+(2).
 
 // 1. engine usage
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
 import type { App, CanvasAppError } from '@forgeax/engine-app';
 import type { InputBackend } from '@forgeax/engine-input';
@@ -30,17 +31,21 @@ import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { Materials, Skylight } from '@forgeax/engine-render';
 
 import { createSphereGeometry } from '@forgeax/engine-geometry';
 import type { EquirectAsset, Handle, MaterialAsset } from '@forgeax/engine-types';
-import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
+
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import {
   addFirstPersonSystem,
   createFirstPersonControls,
 } from '../../../../shared/src/learn-render-first-person';
+import {
+  exposeLearnRenderTestApp,
+  trackLearnRenderTestBootstrap,
+} from '../../../../shared/src/learn-render-test-lifecycle';
 
 // 2. example-specific glue
 
@@ -50,10 +55,7 @@ const SPACING = 2.5;
 const SPHERE_SCALE = 0.9;
 
 const NEWPORT_LOFT_GUID = '019e4a26-3c29-7420-af5d-20f2724a16b0';
-const PACK_INDEX_URL = '/pack-index.json';
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-6-2-ibl-irradiance',
-);
+
 
 const CAMERA_FOV = Math.PI / 3;
 const CAMERA_POS_X = 0;
@@ -67,9 +69,12 @@ async function setupIblSkylight(
   app: App,
   world: World,
 ): Promise<Handle<'EquirectAsset', 'shared'> | null> {
-  const assets = app.renderer.assets;
-  assets.configureRuntimeBinding(runtimeBinding);
-  assets.configurePackIndex(PACK_INDEX_URL);
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[ibl-irradiance skylight] App asset owner is unavailable');
+    return null;
+  }
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   const guidRes = AssetGuid.parse(NEWPORT_LOFT_GUID);
   if (!guidRes.ok) {
@@ -100,7 +105,7 @@ if (canvas === null) {
   throw new Error("[learn-render 6.pbr 2.ibl-irradiance] missing <canvas id='app'> in index.html");
 }
 
-void bootstrap(canvas);
+trackLearnRenderTestBootstrap(bootstrap(canvas), canvas);
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const winExt = window as unknown as {
@@ -114,7 +119,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // ternary (feat-20260608 / M3).
   const bundler = {
     ...forgeaxBundlerAdapter(),
-    importTransport: createDevImportTransport(runtimeBinding),
+    importTransport: createRuntimeAssetImportTransport(runtimeBinding),
   };
   const appRes: { ok: true; value: App } | { ok: false; error: CanvasAppError } =
     overrideBackend === undefined
@@ -125,6 +130,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = appRes.value;
+  exposeLearnRenderTestApp(app, target);
   const renderer = app.renderer;
   const world = app.world;
 
@@ -199,7 +205,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
   ).unwrap();
 
-  addFirstPersonSystem(world, renderer, {
+  addFirstPersonSystem(world, {
     name: 'learn-render-ibl-irradiance-first-person',
     overrideBackend,
   });
@@ -211,7 +217,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[learn-render 6.pbr 2.ibl-irradiance] app.start failed:', startRes.error);
     return;
   }
-  console.warn(`[learn-render 6.pbr 2.ibl-irradiance] backend=${renderer.backend}`);
+  console.warn(`[learn-render 6.pbr 2.ibl-irradiance] backend=${renderer.inspect().capabilities.backendKind}`);
 }
 
 function installCaptureHook(
@@ -222,16 +228,24 @@ function installCaptureHook(
   type CaptureHook = () => Promise<Uint8Array>;
   const win = window as unknown as { __captureIblIrradiance?: CaptureHook };
   const renderer = app.renderer;
+  const attached = renderer.attach(world);
+  if (!attached.ok) throw attached.error;
+  const lease = attached.value;
   win.__captureIblIrradiance = async (): Promise<Uint8Array> => {
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    const r = await renderer.readPixels();
-    if (!r.ok) {
-      throw new Error(
-        `[learn-render 6.pbr 2.ibl-irradiance] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
-      );
-    }
-    return r.value;
+    const drawn = renderer.draw({
+      leases: [lease],
+      camera: { lease },
+      environment: { lease },
+    });
+    if (!drawn.ok) throw drawn.error;
+    const bitmap = await createImageBitmap(_target);
+    const captureCanvas = new OffscreenCanvas(_target.width, _target.height);
+    const captureContext = captureCanvas.getContext('2d');
+    if (captureContext === null) throw new Error('[learn-render 6.pbr 2.ibl-irradiance] capture context missing');
+    captureContext.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    return new Uint8Array(captureContext.getImageData(0, 0, _target.width, _target.height).data);
   };
 }
 

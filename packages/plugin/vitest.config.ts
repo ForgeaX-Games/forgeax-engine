@@ -4,7 +4,7 @@ export default defineProject({
   test: {
     environment: 'node',
     name: '@forgeax/engine-plugin',
-    include: ['__tests__/**/*.test.ts'],
+    include: ['__tests__/**/*.test.ts', 'src/__tests__/**/*.test.ts'],
     typecheck: {
       enabled: true,
       tsconfig: './tsconfig.json',

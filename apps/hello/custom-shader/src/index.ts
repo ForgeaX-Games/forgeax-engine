@@ -4,31 +4,32 @@
 // cooked material records are produced by the Vite build; the app only loads
 // them through the runtime catalog and readiness validator.
 
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { World } from '@forgeax/engine-ecs';
 import { Name, Transform } from '@forgeax/engine-scene';
 
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import {
-  acquireCanvasContext,
-  createDevImportTransport,
-  createRenderer,
-  EngineEnvironmentError,
-} from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
 
 import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { toMaterialAsset, type GltfMaterialIr } from '@forgeax/engine-gltf';
-import { createMaterialLoader } from '@forgeax/engine-assets-runtime';
+import {
+  createMaterialLoader,
+  MaterialGenerationCache,
+} from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { CookedMaterialRecord } from '@forgeax/engine-pack';
 import type {
   Handle,
   MaterialAsset,
+  MaterialGenerationVector,
   MaterialTextureValue,
   MaterialValue,
   TextureAsset,
 } from '@forgeax/engine-types';
-import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
+
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 import './pulse-material.wgsl';
@@ -80,8 +81,12 @@ declare global {
       };
       rendererErrorCodes: readonly string[];
       drawErrorCodes: readonly string[];
-      bindGroupCreateCounts: readonly number[];
+      frameObservationCount: number;
       frameCount: number;
+      materialGeneration?: {
+        runStale: () => Promise<unknown>;
+        publishRecooked: () => Promise<unknown>;
+      };
     }
     | undefined;
 }
@@ -89,6 +94,10 @@ declare global {
 const PULSE_MATERIAL_SHADER_PATH = 'my-game::pulse-material';
 const ROOT_MATERIAL_GUID = '01935b00-7d8c-7c4e-9f12-345678abcd02';
 const DERIVED_MATERIAL_GUID = '01935b00-7d8c-7c4e-9f12-345678abcd03';
+const MATERIAL_GENERATION_DEPENDENCIES = [
+  PULSE_MATERIAL_SHADER_PATH,
+  'pack:pulse-material',
+] as const;
 const RESOLVED_SAMPLING_INPUT = {
   baseColorUvTransform: [0, 0, 1, 1],
   normalUvTransform: [0.125, 0.25, 2, 2],
@@ -97,7 +106,6 @@ const UV0_SAMPLING_INPUT = {
   baseColorUvTransform: [0, 0, 1, 1],
   normalUvTransform: [0, 0, 1, 1],
 } as const;
-const runtimeBinding = createStandaloneRuntimeAssetBinding('hello-custom-shader');
 
 function materialFromCookedRecord(
   record: CookedMaterialRecord,
@@ -167,6 +175,8 @@ const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('hello-custom-shader: missing <canvas id="app"> in index.html');
 
 const liveMode = new URLSearchParams(globalThis.location?.search ?? '').get('live');
+const materialGenerationMode =
+  new URLSearchParams(globalThis.location?.search ?? '').get('m36') === 'stale-recook';
 const liveNormalSlotSwap = liveMode === 'normal-slot-swap' || liveMode === 'normal-slot-swap-resize';
 const liveResizeRebuild = liveMode === 'normal-slot-resize' || liveMode === 'normal-slot-swap-resize';
 const liveTwoSlotSwap = liveMode === 'two-slot-swap' || liveMode === 'two-slot-swap-resize';
@@ -184,45 +194,21 @@ bootstrap(canvas).catch((err: unknown) => {
 });
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
-  const renderer = await createRenderer(target, {}, {
+  const constructed = await constructRuntimeRendererHost(target, {}, {
     ...forgeaxBundlerAdapter(),
-    importTransport: createDevImportTransport(runtimeBinding),
+    importTransport: createRuntimeAssetImportTransport(runtimeBinding),
   });
+  if (!constructed.ok) throw constructed.error;
+  const { renderer, assets } = constructed.value;
   const rendererErrorCodes: string[] = [];
   const drawErrorCodes: string[] = [];
-  const bindGroupCreateCounts: number[] = [];
-  renderer.onError((error) => rendererErrorCodes.push(error.code));
-  // Configure canvas context (mirrors hello-cube; canvas-context migration
-  // bridge from the M4 RHI rework).
-  const ctxResult = acquireCanvasContext(target);
-  if (ctxResult.ok) {
-    const cfgResult = ctxResult.value.configure({
-      device: renderer.device,
-      format: 'rgba8unorm',
-      usage: 0x10 | 0x01,
-    });
-    if (!cfgResult.ok) {
-      console.error('[custom-shader] canvasContext.configure failed:', cfgResult.error);
-    }
-  } else {
-    console.warn('[custom-shader] acquireCanvasContext failed:', ctxResult.error);
-  }
-  console.warn(`[custom-shader] backend=${renderer.backend}`);
+  let frameObservationCount = 0;
+  renderer.subscribe((event) => {
+    if (event.kind === 'error') rendererErrorCodes.push(event.error.code);
+  });
+  console.warn('[custom-shader] Standard pipeline active');
 
-  const ready = await renderer.ready;
-  if (!ready.ok) {
-    console.error('[custom-shader] renderer.ready failed:', ready.error);
-    return;
-  }
-
-  const shader = renderer.shader;
-  const assets = renderer.assets;
-  if (shader === null || assets === null) {
-    console.error('[custom-shader] renderer shader or asset catalog is unavailable');
-    return;
-  }
-
-  assets.configureRuntimeBinding(runtimeBinding);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
   const rootGuid = AssetGuid.parse(ROOT_MATERIAL_GUID);
   const derivedGuid = AssetGuid.parse(DERIVED_MATERIAL_GUID);
   if (!rootGuid.ok || !derivedGuid.ok) throw new Error('[custom-shader] material GUID is malformed');
@@ -242,29 +228,74 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     throw new Error('[custom-shader] runtime catalog did not load the material inheritance pair');
   }
 
-  const packResponse = await fetch(pulsePackUrl);
-  if (!packResponse.ok) throw new Error('[custom-shader] authored pack fetch failed');
-  const pack = (await packResponse.json()) as {
-    assets?: readonly { guid?: unknown; payload?: { cooked?: unknown } }[];
+  const materialCache = new MaterialGenerationCache();
+  let packRead = 0;
+  let lastMaterialGeneration: MaterialGenerationVector | undefined;
+  const loadCookedMaterial = async (guid: string) => {
+    const packUrl = new URL(pulsePackUrl, globalThis.location.href);
+    packUrl.searchParams.set('forgeax-material-generation', String(++packRead));
+    const packResponse = await fetch(packUrl, { cache: 'no-store' });
+    if (!packResponse.ok) throw new Error('[custom-shader] authored pack fetch failed');
+    const pack = (await packResponse.json()) as {
+      assets?: readonly { guid?: unknown; payload?: { cooked?: unknown } }[];
+    };
+    const cookedByGuid = new Map<string, CookedMaterialRecord | undefined>();
+    for (const entry of pack.assets ?? []) {
+      if (typeof entry.guid === 'string' && entry.payload?.cooked !== undefined) {
+        cookedByGuid.set(entry.guid.toLowerCase(), entry.payload.cooked as CookedMaterialRecord);
+      }
+    }
+    const requestedRecord = cookedByGuid.get(guid.toLowerCase());
+    if (requestedRecord === undefined || typeof requestedRecord.specializationKey !== 'string') {
+      throw new Error(`[custom-shader] cooked publication missing specializationKey: ${guid}`);
+    }
+    const loaded = await createMaterialLoader({
+      loadPublication: async (recordGuid) => {
+        const record = cookedByGuid.get(recordGuid.toLowerCase());
+        if (record === undefined) return undefined;
+        return {
+          guid: recordGuid,
+          record,
+          artifact: { bytes: record.artifact.bytes },
+        };
+      },
+      loadReference: async () => true,
+    }).load({ guid, specializationKey: requestedRecord.specializationKey });
+    if (loaded.status !== 'Ready') {
+      throw new Error(`[custom-shader] cooked material load failed: ${loaded.error.code}`);
+    }
+    return loaded;
   };
-  const cookedByGuid = new Map<string, unknown>();
-  for (const entry of pack.assets ?? []) {
-    if (typeof entry.guid === 'string') cookedByGuid.set(entry.guid.toLowerCase(), entry.payload?.cooked);
-  }
-  const cookedLoader = createMaterialLoader({
-    loadRecord: async (guid) => cookedByGuid.get(guid.toLowerCase()),
-    loadReference: async () => true,
-  });
-  const [rootReady, derivedReady] = await Promise.all([
-    cookedLoader.load({ guid: ROOT_MATERIAL_GUID, specializationKey: PULSE_MATERIAL_SHADER_PATH }),
-    cookedLoader.load({ guid: DERIVED_MATERIAL_GUID, specializationKey: PULSE_MATERIAL_SHADER_PATH }),
+  const loadCachedMaterial = (guid: string, destabilize = false) =>
+    materialCache.resolve(guid, PULSE_MATERIAL_SHADER_PATH, () =>
+      materialCache.loadWithGeneration(
+        guid,
+        MATERIAL_GENERATION_DEPENDENCIES,
+        async (generation) => {
+          lastMaterialGeneration = generation;
+          const loaded = await loadCookedMaterial(guid);
+          if (destabilize) materialCache.bump(MATERIAL_GENERATION_DEPENDENCIES[0]);
+          return { generation, value: loaded };
+        },
+      ),
+    );
+  const [rootResult, derivedResult] = await Promise.all([
+    loadCachedMaterial(ROOT_MATERIAL_GUID),
+    loadCachedMaterial(DERIVED_MATERIAL_GUID),
   ]);
-  if (rootReady.status !== 'Ready' || derivedReady.status !== 'Ready') {
-    throw new Error('[custom-shader] cooked material record is not runtime-ready');
+  if (!rootResult.ok) {
+    throw new Error(`[custom-shader] cooked material generation failed: ${rootResult.error.code}`);
   }
+  if (!derivedResult.ok) {
+    throw new Error(
+      `[custom-shader] cooked material generation failed: ${derivedResult.error.code}`,
+    );
+  }
+  const rootReady = rootResult.value;
+  const derivedReady = derivedResult.value;
   if (
     rootReady.artifact.digest !== derivedReady.artifact.digest ||
-    rootReady.record.receipt.inputDigest !== derivedReady.record.receipt.inputDigest ||
+    rootReady.record.receipt.identity.cookIdentity !== derivedReady.record.receipt.identity.cookIdentity ||
     JSON.stringify(rootReady.record.resolved.values) !== JSON.stringify(derivedReady.record.resolved.values)
   ) {
     throw new Error('[custom-shader] inherited materials do not share the cooked specialization');
@@ -274,10 +305,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   if (falsify === 'missing-normal-resource') throw new Error('FALSIFY_EXPECTED_FAILURE:missing-normal-resource');
 
   const world = new World();
-  const worldAttachment1 = renderer.attachWorld(world);
+  const worldAttachment1 = renderer.attach(world);
   if (!worldAttachment1.ok) throw worldAttachment1.error;
+  const frameRequest = {
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  };
 
-  const materialArtifact = shader.findMaterialArtifact(PULSE_MATERIAL_SHADER_PATH);
+  const materialArtifact = assets.shaderRegistry.findMaterialArtifact(PULSE_MATERIAL_SHADER_PATH);
   if (!materialArtifact.ok) {
     throw new Error('[custom-shader] cooked shader module is absent from the build manifest');
   }
@@ -327,25 +363,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const normalTextureHandle = world.allocSharedRef('TextureAsset', normalTexturePayload);
   const liveSwapNormalTextureHandle = world.allocSharedRef('TextureAsset', liveSwapNormalTexturePayload);
   const liveSwapBaseColorTextureHandle = world.allocSharedRef('TextureAsset', liveSwapBaseColorTexturePayload);
-  for (const [label, handle, payload] of [
-    ['base-color', baseColorTextureHandle, baseColorTexturePayload],
-    ['normal', normalTextureHandle, normalTexturePayload],
-    ['live-swap-normal', liveSwapNormalTextureHandle, liveSwapNormalTexturePayload],
-    ['live-swap-base-color', liveSwapBaseColorTextureHandle, liveSwapBaseColorTexturePayload],
-  ] as const) {
-    const uploadResult = await renderer.store.uploadTexture(handle, payload, {
-      bytes: payload.data,
-      width: payload.width,
-      height: payload.height,
-      mime: 'image/png',
-      colorSpace: payload.colorSpace,
-      mipmap: payload.mipmap,
-    });
-    if (!uploadResult.ok) {
-      console.error(`[custom-shader] ${label} texture upload failed:`, uploadResult.error);
-      return;
-    }
-  }
   const resolvedTextureHandles = {
     baseColor: baseColorTextureHandle,
     normal: normalTextureHandle,
@@ -444,13 +461,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   globalThis.__forgeaxMaterialEvidence = {
     ready: true,
     browserPath: true,
-    webgpu: renderer.backend === 'webgpu',
+    webgpu: typeof navigator !== 'undefined' && navigator.gpu !== undefined,
     rootGuid: ROOT_MATERIAL_GUID,
     derivedGuid: DERIVED_MATERIAL_GUID,
     rootArtifactDigest: rootReady.artifact.digest,
     derivedArtifactDigest: derivedReady.artifact.digest,
-    rootCookInputDigest: rootReady.record.receipt.inputDigest,
-    derivedCookInputDigest: derivedReady.record.receipt.inputDigest,
+    rootCookInputDigest: rootReady.record.receipt.identity.cookIdentity,
+    derivedCookInputDigest: derivedReady.record.receipt.identity.cookIdentity,
     renderedMaterialGuids: [rootReady.record.guid, derivedReady.record.guid],
     renderedTextureHandles: [renderedTextureHandles.baseColor, renderedTextureHandles.normal],
     resolvedTextureHandles: [resolvedTextureHandles.baseColor, resolvedTextureHandles.normal],
@@ -472,7 +489,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       afterComponentMaterialHandle: null,
       sourceDerivedGuid: derivedReady.record.guid,
       sourceArtifactDigest: derivedReady.artifact.digest,
-      sourceCookInputDigest: derivedReady.record.receipt.inputDigest,
+      sourceCookInputDigest: derivedReady.record.receipt.identity.cookIdentity,
     },
     resizeRebuild: {
       enabled: liveResizeEnabled,
@@ -485,7 +502,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
     rendererErrorCodes,
     drawErrorCodes,
-    bindGroupCreateCounts,
+    frameObservationCount,
     frameCount: 0,
   };
 
@@ -534,20 +551,123 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       direction: [-0.5, -1, -0.3],
       color: [1, 0.95, 0.9],
       intensity: 1.0,
-  },
+    },
   }).unwrap();
+
+  let renderedFrameCount = 0;
+  let currentDerivedHandle = derivedMaterialHandle;
+  let staleEvidence: unknown;
+  let freshEvidence: unknown;
+  const stableWorld = world;
+  const stableRenderer = renderer;
+
+  const runStaleGenerationProbe = async (): Promise<unknown> => {
+    if (staleEvidence !== undefined) return staleEvidence;
+    materialCache.bump(MATERIAL_GENERATION_DEPENDENCIES[1]);
+    const stale = await loadCachedMaterial(DERIVED_MATERIAL_GUID, true);
+    staleEvidence = stale.ok
+      ? {
+          status: 'unexpected-fresh',
+          published: false,
+          sameWorld: world === stableWorld,
+          sameRenderer: renderer === stableRenderer,
+        }
+      : {
+          status: 'stale',
+          published: false,
+          error: { code: stale.error.code, detail: stale.error.detail },
+          diagnostic: materialCache.generationError(DERIVED_MATERIAL_GUID)?.detail,
+          staleArtifactDigest: derivedReady.artifact.digest,
+          siblingArtifactDigest: rootReady.artifact.digest,
+          currentMaterialHandle: currentDerivedHandle,
+          sameWorld: world === stableWorld,
+          sameRenderer: renderer === stableRenderer,
+        };
+    return staleEvidence;
+  };
+
+  const publishRecookedMaterial = async (): Promise<unknown> => {
+    if (freshEvidence !== undefined) return freshEvidence;
+    materialCache.bump(MATERIAL_GENERATION_DEPENDENCIES[1]);
+    const fresh = await loadCachedMaterial(DERIVED_MATERIAL_GUID);
+    if (!fresh.ok) {
+      freshEvidence = {
+        status: 'error',
+        error: { code: fresh.error.code, detail: fresh.error.detail },
+      };
+      return freshEvidence;
+    }
+    const freshMaterialBase = materialFromCookedRecord(
+      fresh.value.record,
+      renderedTextureHandles,
+      renderedSamplingInput,
+    );
+    const freshMaterial: MaterialAsset = {
+      ...freshMaterialBase,
+      values: { ...freshMaterialBase.values, ...gltfTextureValues },
+    };
+    const freshHandle = world.allocSharedRef('MaterialAsset', freshMaterial);
+    const mutation = world.set(derivedEntity, MeshRenderer, { materials: [freshHandle] });
+    if (!mutation.ok) {
+      world.sharedRefs.release(freshHandle);
+      freshEvidence = { status: 'error', error: { code: mutation.error.code } };
+      return freshEvidence;
+    }
+    const allocationRelease = world.sharedRefs.release(freshHandle);
+    if (!allocationRelease.ok) {
+      freshEvidence = {
+        status: 'error',
+        error: { code: allocationRelease.error.code },
+      };
+      return freshEvidence;
+    }
+    currentDerivedHandle = freshHandle;
+    freshEvidence = {
+      status: 'fresh',
+      published: true,
+      artifactDigest: fresh.value.artifact.digest,
+      inputDigest: fresh.value.record.receipt.identity.cookIdentity,
+      generation: lastMaterialGeneration,
+      diagnostic: materialCache.generationError(DERIVED_MATERIAL_GUID),
+      oldArtifactDigest: derivedReady.artifact.digest,
+      siblingArtifactDigest: rootReady.artifact.digest,
+      currentMaterialHandle: currentDerivedHandle,
+      allocationRelease: { ok: allocationRelease.ok },
+      materialRefcount: world.sharedRefs.refcount(currentDerivedHandle),
+      sameWorld: world === stableWorld,
+      sameRenderer: renderer === stableRenderer,
+    };
+    return freshEvidence;
+  };
+  if (materialGenerationMode && globalThis.__forgeaxMaterialEvidence !== undefined) {
+    globalThis.__forgeaxMaterialEvidence.materialGeneration = {
+      runStale: runStaleGenerationProbe,
+      publishRecooked: publishRecookedMaterial,
+    };
+  }
 
   // Animate the runtime material values to exercise the cooked shader path.
   const startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
-  let renderedFrameCount = 0;
   const frame = (): void => {
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    derivedValues.time = liveResizeEnabled || liveMutationEnabled ? 0 : (now - startTime) / 1000;
+    derivedValues.time =
+      materialGenerationMode || liveResizeEnabled || liveMutationEnabled
+        ? 0
+        : (now - startTime) / 1000;
     world.update().unwrap();
-    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const r = renderer.draw(frameRequest);
     if (!r.ok) {
       drawErrorCodes.push(r.error.code);
       console.error('[custom-shader] draw error:', r.error);
+    } else {
+      void renderer.observe(r.value, { include: ['draws', 'bindings'] }).then((observed) => {
+        if (observed.ok) {
+          frameObservationCount += 1;
+          if (globalThis.__forgeaxMaterialEvidence !== undefined) {
+            globalThis.__forgeaxMaterialEvidence.frameObservationCount = frameObservationCount;
+          }
+        }
+      });
     }
     renderedFrameCount += 1;
     if (globalThis.__forgeaxMaterialEvidence !== undefined) {
@@ -587,11 +707,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           globalThis.__forgeaxMaterialEvidence.resizeRebuild.afterCanvas = [target.width, target.height];
           globalThis.__forgeaxMaterialEvidence.resizeRebuild.postResizeMaterialHandle = materials[0] ?? null;
           globalThis.__forgeaxMaterialEvidence.resizeRebuild.postResizeBindGroupCreateCount =
-            renderer.bindGroupCounts.createBindGroup;
+            frameObservationCount;
         }
-      }
-      if (liveMutationEnabled && globalThis.__forgeaxMaterialEvidence.liveMutation.applied) {
-        bindGroupCreateCounts.push(renderer.bindGroupCounts.createBindGroup);
       }
     }
     requestAnimationFrame(frame);

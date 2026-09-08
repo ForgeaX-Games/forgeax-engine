@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // bevy-delayed-commands headless dawn smoke (structural-only).
 // Verify: backend=webgpu, 300 frames no crash, 0 RhiError
 
@@ -55,17 +56,15 @@ const here = dirname(fileURLToPath(import.meta.url));
 const MANIFEST = `data:application/json,${encodeURIComponent(readFileSync(resolve(here, '..', 'dist', 'shaders', 'manifest.json'), 'utf8'))}`;
 
 let renderer;
-try { renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST }); }
+try { renderer = await createSmokeRenderer(createRenderer, mockCanvas, {}, { shaderManifestUrl: MANIFEST }); }
 finally { globalThis.navigator.gpu.requestAdapter = origReqAdapter; }
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 
-console.log(`[delayed-commands] backend=${renderer.backend}`);
+console.log(`[delayed-commands] backend=${rendererBackend(renderer)}`);
 const errors = [];
-renderer.onError((err) => errors.push(err));
+subscribeSmokeErrors(renderer, (err) => errors.push(err));
 
-const ready = await renderer.ready;
-if (!ready.ok) { console.error(`FAIL: ${ready.error.code}`); process.exit(1); }
 
 const boxGeom = createBoxGeometry(0.5, 0.5, 0.5, 1, 1, 1);
 if (!boxGeom.ok) { console.error('FAIL: box'); process.exit(1); }
@@ -85,7 +84,7 @@ world.spawn({ component: Transform, data: { pos: [0, 0, 6], quat: [0, 0, 0, 1], 
 let frames = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update().unwrap();
-  const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const result = drawSmokeFrame(renderer, world);
   if (!result.ok) console.error(`draw ${i}: ${result.error.code}`);
   frames++;
 }
@@ -94,7 +93,7 @@ const device = sharedDevice;
 if (device) await device.queue.onSubmittedWorkDone();
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`backend=${renderer.backend}`);
+if (rendererBackend(renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(renderer)}`);
 if (frames < TARGET_FRAMES) failures.push(`frames=${frames}`);
 if (errors.length > 0) failures.push(`errors=${errors.length}: [${errors.map(e => e.code).join(',')}]`);
 

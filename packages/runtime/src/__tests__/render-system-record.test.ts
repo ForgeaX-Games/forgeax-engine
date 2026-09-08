@@ -8,23 +8,11 @@
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import {
   SPRITE_PREMULTIPLIED_ALPHA_BLEND,
   SpriteRegionOverride,
 } from '@forgeax/engine-render/authoring';
-import type { DispatchEntry } from '@forgeax/engine-render/internal';
-import * as recordModule from '@forgeax/engine-render/internal';
-import {
-  Camera,
-  createEngineMetrics,
-  detectNineSliceScaleTooSmall,
-  extractFrame,
-  isLitMaterialSnapshot,
-  type MaterialSnapshot,
-  MeshFilter,
-  MeshRenderer,
-  prepareExtractContext,
-} from '@forgeax/engine-render/internal';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
 import type {
@@ -33,10 +21,17 @@ import type {
   MaterialPass,
   MeshAsset,
   ParamSchemaEntry,
-  PassSelector,
 } from '@forgeax/engine-types';
 import { derive } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { createEngineMetrics } from '../../../render/src/engine-metrics';
+import { isLitMaterialSnapshot } from '../../../render/src/record/helpers';
+import * as recordModule from '../../../render/src/record/main-pass-material';
+import { detectNineSliceScaleTooSmall } from '../../../render/src/record/main-pass-material';
+import * as spriteRecordModule from '../../../render/src/record/main-pass-sprite-draws';
+import { filterDispatchBySelector } from '../../../render/src/record/shadow-pass';
+import type { DispatchEntry, MaterialSnapshot } from '../../../render/src/render-system-extract';
+import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
 
 // ─── from render-system-record-pbr-ubo-stable.test.ts ───
 {
@@ -202,9 +197,7 @@ import { describe, expect, it } from 'vitest';
         world,
       );
       const spriteF32 = new Float32Array(spritePayload);
-      expect(spriteF32[20]).toBe(1);
-      expect(spriteF32[28]).toBe(1);
-      expect(spriteF32[30]).toBe(0);
+      expect(Array.from(spriteF32.slice(16, 24))).toEqual([0, 0, 1, 1, 0, 0, 1, 1]);
     });
 
     it('byte-stable across two equivalent PBR snapshots (idempotent write)', () => {
@@ -229,7 +222,7 @@ import { describe, expect, it } from 'vitest';
   //
   // AC-16 end-to-end: when a 9-slice sprite entity carries a Transform.scale
   // below the four corner anchors, the detection path bumps
-  // `renderer.metrics.snapshot()['nineslice.scale-too-small']` once per offending
+  // the owner metrics snapshot's `nineslice.scale-too-small` key once per offending
   // renderableIndex per RenderSystem lifetime. AI users observe the breach
   // through the EngineMetrics counter rather than parsing console.warn text
   // (charter P3 machine-readable signals).
@@ -412,8 +405,11 @@ import { describe, expect, it } from 'vitest';
           indexCount: 3,
           vertexCount: 36,
           topology: 'triangle-list',
+          materialSlot: 0,
         },
       ],
+
+      materialSlots: [{ slotName: 'Default' }],
     });
   }
 
@@ -734,15 +730,6 @@ import { describe, expect, it } from 'vitest';
   // AC-18: multiple ShadowCaster passes per entity -> filtered count = N.
   //
   // Anchors: plan-strategy section 5.3 key tests; requirements AC-03/AC-04/AC-18.
-
-  const filterDispatchBySelector = (
-    recordModule as unknown as {
-      filterDispatchBySelector?: (
-        dispatch: readonly DispatchEntry[],
-        selector: PassSelector,
-      ) => readonly DispatchEntry[];
-    }
-  ).filterDispatchBySelector;
 
   function makeDispatchEntry(
     renderableIndex: number,
@@ -1264,11 +1251,13 @@ import { describe, expect, it } from 'vitest';
     };
   };
 
-  const mod = recordModule as unknown as {
+  const spriteMod = spriteRecordModule as unknown as {
     computeSplitLdrSprite?: (
       validatedOrdered: readonly (DispatchEntryLike | undefined)[],
       tonemapActive: boolean,
     ) => boolean;
+  };
+  const mod = recordModule as unknown as {
     isEntityFullyTransparent?: (source: {
       material: MaterialSnapshot;
       materials?: readonly MaterialSnapshot[];
@@ -1299,11 +1288,11 @@ import { describe, expect, it } from 'vitest';
 
   describe('transparent decouples from sprite shader (M2 / w4, AC-05)', () => {
     it('export: computeSplitLdrSprite helper is exported from render-system-record', () => {
-      expect(typeof mod.computeSplitLdrSprite).toBe('function');
+      expect(typeof spriteMod.computeSplitLdrSprite).toBe('function');
     });
 
     it('non-sprite shader with transparent:true triggers LDR split', () => {
-      if (typeof mod.computeSplitLdrSprite !== 'function') {
+      if (typeof spriteMod.computeSplitLdrSprite !== 'function') {
         throw new Error('computeSplitLdrSprite helper not exported yet (red phase)');
       }
       const transparentSnap = makeTransparentSnap({
@@ -1317,7 +1306,7 @@ import { describe, expect, it } from 'vitest';
       // tonemapActive=false (LDR path) + a transparent entry in the
       // validated list -- the split decision must trip even though the
       // shader is not forgeax::sprite (AC-05 proves the decoupling).
-      const split = mod.computeSplitLdrSprite(
+      const split = spriteMod.computeSplitLdrSprite(
         [makeValidatedEntry(opaqueSnap), makeValidatedEntry(transparentSnap)],
         false,
       );
@@ -1325,7 +1314,7 @@ import { describe, expect, it } from 'vitest';
     });
 
     it('LDR split stays false on pure-opaque non-sprite list', () => {
-      if (typeof mod.computeSplitLdrSprite !== 'function') {
+      if (typeof spriteMod.computeSplitLdrSprite !== 'function') {
         throw new Error('computeSplitLdrSprite helper not exported yet (red phase)');
       }
       const opaqueA = makeTransparentSnap({
@@ -1336,7 +1325,7 @@ import { describe, expect, it } from 'vitest';
         transparent: false,
         materialShaderId: 'forgeax::default-standard-pbr',
       });
-      const split = mod.computeSplitLdrSprite(
+      const split = spriteMod.computeSplitLdrSprite(
         [makeValidatedEntry(opaqueA), makeValidatedEntry(opaqueB)],
         false,
       );
@@ -1344,19 +1333,19 @@ import { describe, expect, it } from 'vitest';
     });
 
     it('HDR path (tonemapActive=true) suppresses split even with transparent entries', () => {
-      if (typeof mod.computeSplitLdrSprite !== 'function') {
+      if (typeof spriteMod.computeSplitLdrSprite !== 'function') {
         throw new Error('computeSplitLdrSprite helper not exported yet (red phase)');
       }
       const transparentSnap = makeTransparentSnap({
         transparent: true,
         materialShaderId: 'forgeax::unlit-test',
       });
-      const split = mod.computeSplitLdrSprite([makeValidatedEntry(transparentSnap)], true);
+      const split = spriteMod.computeSplitLdrSprite([makeValidatedEntry(transparentSnap)], true);
       expect(split).toBe(false);
     });
 
     it('M3 / w13: legacy sprite material without transparent:true does NOT trigger split (union arm deleted)', () => {
-      if (typeof mod.computeSplitLdrSprite !== 'function') {
+      if (typeof spriteMod.computeSplitLdrSprite !== 'function') {
         throw new Error('computeSplitLdrSprite helper not exported yet (red phase)');
       }
       // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w13 (D-3):
@@ -1372,7 +1361,7 @@ import { describe, expect, it } from 'vitest';
         materialShaderId: 'forgeax::sprite',
         paramSnapshot: {},
       } as unknown as MaterialSnapshot;
-      const splitWithoutTransparent = mod.computeSplitLdrSprite(
+      const splitWithoutTransparent = spriteMod.computeSplitLdrSprite(
         [makeValidatedEntry(legacySpriteNoTransparent)],
         false,
       );
@@ -1384,7 +1373,7 @@ import { describe, expect, it } from 'vitest';
         ...legacySpriteNoTransparent,
         transparent: true,
       } as unknown as MaterialSnapshot;
-      const splitWithTransparent = mod.computeSplitLdrSprite(
+      const splitWithTransparent = spriteMod.computeSplitLdrSprite(
         [makeValidatedEntry(spriteTransparent)],
         false,
       );
@@ -1411,7 +1400,7 @@ import { describe, expect, it } from 'vitest';
     // material[0] is opaque (the crosswalk case: opaque road submesh[0] +
     // BLEND decal submesh[1] on one multi-material mesh).
     it('per-submesh: split trips when only a non-zero submesh is transparent', () => {
-      if (typeof mod.computeSplitLdrSprite !== 'function') {
+      if (typeof spriteMod.computeSplitLdrSprite !== 'function') {
         throw new Error('computeSplitLdrSprite helper not exported yet');
       }
       const opaque0 = makeTransparentSnap({
@@ -1426,11 +1415,11 @@ import { describe, expect, it } from 'vitest';
       const mixedEntry: DispatchEntryLike = {
         source: { material: opaque0, materials: [opaque0, transparent1] },
       };
-      expect(mod.computeSplitLdrSprite([mixedEntry], false)).toBe(true);
+      expect(spriteMod.computeSplitLdrSprite([mixedEntry], false)).toBe(true);
     });
 
     it('per-submesh: split stays false when every submesh material is opaque', () => {
-      if (typeof mod.computeSplitLdrSprite !== 'function') {
+      if (typeof spriteMod.computeSplitLdrSprite !== 'function') {
         throw new Error('computeSplitLdrSprite helper not exported yet');
       }
       const opaque0 = makeTransparentSnap({
@@ -1444,7 +1433,7 @@ import { describe, expect, it } from 'vitest';
       const opaqueMixed: DispatchEntryLike = {
         source: { material: opaque0, materials: [opaque0, opaque1] },
       };
-      expect(mod.computeSplitLdrSprite([opaqueMixed], false)).toBe(false);
+      expect(spriteMod.computeSplitLdrSprite([opaqueMixed], false)).toBe(false);
     });
 
     it('isEntityFullyTransparent / entityHasTransparentSubmesh classify mixed meshes', () => {
@@ -1473,169 +1462,6 @@ import { describe, expect, it } from 'vitest';
   });
 }
 
-// --- from feat-20260625-refactor-sprite-as-transparent-mesh M2 / w5 ---
-{
-  // AC-14: a transparent material whose target shader pipeline is not yet
-  // cached must surface a structured RhiError (.code / .expected / .hint),
-  // NOT silently fall back to the debug-pink placeholder. The generic
-  // materialShaderId path is the only resolver -- post feat-20260625 M3 / w14
-  // the dedicated sprite PSO fields are gone; sprite uses the same generic
-  // getMaterialShaderPipeline path every transparent material consumes.
-  //
-  // The helper signature added by w7:
-  //
-  //   selectMaterialPipelineForRender({
-  //     materialShaderId, isHdr, renderState, topology, indexFormat,
-  //     variantSet, sampleCount,
-  //     getMaterialShaderPipeline, // injected at call site (runtime.getMaterialShaderPipeline)
-  //   }): Result<RenderPipeline, RhiError>
-  //
-  // Plan anchors:
-  //   - requirements AC-14 (structured RhiError, no debug-pink fall-through)
-  //   - plan-strategy section 8.3 (error info AI users consume via property
-  //     access: .code / .expected / .hint; charter P3 explicit failure)
-  //   - plan-strategy section 2 D-3 (transparent flows through the generic
-  //     materialShaderId path; the resolver therefore never branches on
-  //     'forgeax::sprite' to recover)
-
-  type SelectArgs = {
-    readonly materialShaderId: string;
-    readonly isHdr: boolean;
-    readonly renderState: {
-      readonly blend?: {
-        readonly color: { readonly srcFactor: string; readonly dstFactor: string };
-        readonly alpha: { readonly srcFactor: string; readonly dstFactor: string };
-      };
-    };
-    readonly topology: 'triangle-list' | 'triangle-strip';
-    readonly indexFormat: 'uint16' | 'uint32';
-    readonly variantSet: string;
-    readonly sampleCount: number;
-    readonly getMaterialShaderPipeline: (
-      materialShaderId: string,
-      isHdr: boolean,
-    ) => unknown | null;
-  };
-
-  const mod = recordModule as unknown as {
-    selectMaterialPipelineForRender?: (
-      args: SelectArgs,
-    ) =>
-      | { readonly ok: true; readonly value: unknown }
-      | { readonly ok: false; readonly error: { code: string; expected: string; hint: string } };
-  };
-
-  function makeSelectArgs(overrides: {
-    materialShaderId?: string;
-    getter?: SelectArgs['getMaterialShaderPipeline'];
-  }): SelectArgs {
-    const pipelineStub = { __pipeline: true };
-    return {
-      materialShaderId: overrides.materialShaderId ?? 'forgeax::unlit-test',
-      isHdr: false,
-      renderState: {
-        blend: {
-          color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
-          alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
-        },
-      },
-      topology: 'triangle-list',
-      indexFormat: 'uint16',
-      variantSet: '',
-      sampleCount: 1,
-      getMaterialShaderPipeline: overrides.getter ?? (() => pipelineStub),
-    };
-  }
-
-  describe('selectMaterialPipelineForRender pipeline-miss surfaces RhiError (M2 / w5, AC-14)', () => {
-    it('export: selectMaterialPipelineForRender helper is exported from render-system-record', () => {
-      expect(typeof mod.selectMaterialPipelineForRender).toBe('function');
-    });
-
-    it('cache miss returns ok=false with structured RhiError (.code/.expected/.hint)', () => {
-      if (typeof mod.selectMaterialPipelineForRender !== 'function') {
-        throw new Error('selectMaterialPipelineForRender helper not exported yet (red phase)');
-      }
-      const result = mod.selectMaterialPipelineForRender(
-        makeSelectArgs({
-          materialShaderId: 'forgeax::unlit-test',
-          getter: () => null, // simulate cache miss / async build pending
-        }),
-      );
-      expect(result.ok).toBe(false);
-      if (result.ok) throw new Error('unreachable -- result.ok asserted false above');
-      const err = result.error;
-      // charter P3 -- AI users branch on .code (string union member from
-      // RhiErrorCode) and consume .expected / .hint as property reads;
-      // they do NOT parse the human-facing .message string.
-      expect(typeof err.code).toBe('string');
-      expect(err.code.length).toBeGreaterThan(0);
-      expect(typeof err.expected).toBe('string');
-      expect(err.expected.length).toBeGreaterThan(0);
-      expect(typeof err.hint).toBe('string');
-      expect(err.hint.length).toBeGreaterThan(0);
-    });
-
-    it('cache miss .hint references the missing materialShaderId (AI users locate the cache key)', () => {
-      if (typeof mod.selectMaterialPipelineForRender !== 'function') {
-        throw new Error('selectMaterialPipelineForRender helper not exported yet (red phase)');
-      }
-      const result = mod.selectMaterialPipelineForRender(
-        makeSelectArgs({
-          materialShaderId: 'forgeax::missing-shader-id',
-          getter: () => null,
-        }),
-      );
-      expect(result.ok).toBe(false);
-      if (result.ok) throw new Error('unreachable -- result.ok asserted false above');
-      // The shader id must appear in .hint (or .expected) so AI users can
-      // grep the registry / pipeline cache straight from the structured
-      // error -- not from a human-prose substring of .message.
-      const exposed = `${result.error.hint} ${result.error.expected}`;
-      expect(exposed).toContain('forgeax::missing-shader-id');
-    });
-
-    it('cache hit returns ok=true with the pipeline (no error path on success)', () => {
-      if (typeof mod.selectMaterialPipelineForRender !== 'function') {
-        throw new Error('selectMaterialPipelineForRender helper not exported yet (red phase)');
-      }
-      const pipeline = { __pipeline: 'forgeax::unlit-test-pso' };
-      const result = mod.selectMaterialPipelineForRender(
-        makeSelectArgs({
-          materialShaderId: 'forgeax::unlit-test',
-          getter: () => pipeline,
-        }),
-      );
-      expect(result.ok).toBe(true);
-      if (!result.ok) throw new Error('unreachable -- result.ok asserted true above');
-      expect(result.value).toBe(pipeline);
-    });
-
-    it('cache miss does NOT silently substitute a debug-pink fallback pipeline', () => {
-      if (typeof mod.selectMaterialPipelineForRender !== 'function') {
-        throw new Error('selectMaterialPipelineForRender helper not exported yet (red phase)');
-      }
-      // Probe: the only branch the getter ever returns is the one passed in.
-      // A cache miss must surface ok=false, NOT a synthesized pipeline value
-      // that hides the miss (charter P3 -- the pre-M6 silent fallback to
-      // pipelineState.standardPipeline* was exactly this anti-pattern, see
-      // render-system-record.ts:5188-5198 commentary).
-      let getterCallCount = 0;
-      const result = mod.selectMaterialPipelineForRender(
-        makeSelectArgs({
-          materialShaderId: 'forgeax::unlit-test',
-          getter: () => {
-            getterCallCount += 1;
-            return null;
-          },
-        }),
-      );
-      expect(getterCallCount).toBeGreaterThanOrEqual(1);
-      expect(result.ok).toBe(false);
-    });
-  });
-}
-
 // ─── bug-20260622-tilemap-ysort-transparent-sort-modes-followup M2 m2-1 ───
 //
 // AC-04 (error signal SSOT) + AC-05 (LAYER_Y footY ordering) + R-2
@@ -1653,7 +1479,7 @@ import { describe, expect, it } from 'vitest';
   describe('AC-04 setTransparentSortConfig mode=99 returns Result.err (KV untouched)', () => {
     it('Result.err carries code/expected/hint/detail + KV resource is NOT inserted', async () => {
       const { setTransparentSortConfig, TRANSPARENT_SORT_CONFIG_KEY } = await import(
-        '@forgeax/engine-render/internal'
+        '../../../render/src/systems/transparent-sort-config'
       );
       const world = new World();
       // Pre-check: resource MUST be absent before the rejected call.
@@ -1680,7 +1506,7 @@ import { describe, expect, it } from 'vitest';
   describe('AC-05 LAYER_Y footY ordering (same layer, deeper foot draws later)', () => {
     it('footY=10/20/30 same layer -> output order footY=30/20/10 (back-to-front)', async () => {
       const { setTransparentSortConfig, TRANSPARENT_SORT_MODE_LAYER_Y } = await import(
-        '@forgeax/engine-render/internal'
+        '../../../render/src/systems/transparent-sort-config'
       );
       const { transparentSortEntries } = await import('../systems/transparent-sort');
       const world = new World();
@@ -1740,7 +1566,7 @@ import { describe, expect, it } from 'vitest';
   describe('R-2 mode=DISTANCE + cameraPos absent preserves insertion order', () => {
     it('transparentSortEntries(entries, world) with mode=3 + no cameraPos = insertion order', async () => {
       const { setTransparentSortConfig, TRANSPARENT_SORT_MODE_DISTANCE } = await import(
-        '@forgeax/engine-render/internal'
+        '../../../render/src/systems/transparent-sort-config'
       );
       const { transparentSortEntries } = await import('../systems/transparent-sort');
       const world = new World();

@@ -22,20 +22,20 @@ import { Update } from '@forgeax/engine-ecs';
 // tilemap"): one Tilemap parent + N terrain TileLayer (one per height
 // bucket) + 1 object TileLayer with layerOrder above terrain so the
 // per-cell sprite quads paint over the floor. The combined TilesetAsset
-// carries both atlases via `atlases: readonly Handle<TextureAsset>[]`
+// carries both atlases via durable GUIDs in `atlases`.
 // and routes per-region through `regions[i].atlasIndex` (NICE-4).
 
 import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import { World } from '@forgeax/engine-ecs';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { encodeTileBits } from '@forgeax/engine-graphics-extras';
 import { ChildOf, Transform } from '@forgeax/engine-scene';
 
 import { CAMERA_PROJECTION_ORTHOGRAPHIC } from '@forgeax/engine-render';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
-import { setTransparentSortConfig, TRANSPARENT_SORT_MODE_LAYER_Y } from '@forgeax/engine-render/internal';
-import { encodeSortScope, SpriteRegionOverride, SPRITE_PREMULTIPLIED_ALPHA_BLEND, Tilemap, TileLayer } from '@forgeax/engine-render/authoring';
+import { TransparentSort, TilemapSort, SpriteRegionOverride, SPRITE_PREMULTIPLIED_ALPHA_BLEND, Tilemap, TileLayer } from '@forgeax/engine-render/authoring';
 import { Layer } from '@forgeax/engine-render';
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 
@@ -61,6 +61,8 @@ import { buildWorld, pickFloorSpawnCell, type BuiltWorld } from './world-build';
 
 const WORLD = '/world';
 const CHARACTER = '/character';
+const TERRAIN_ATLAS_GUID = 'asi-world/terrain-atlas';
+const OBJECT_ATLAS_GUID = 'asi-world/object-atlas';
 
 const PLAYER_SPEED = 6;
 
@@ -121,22 +123,16 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app: App = appRes.value;
-  const ready = await app.renderer.ready;
-  if (!ready.ok) {
-    console.error('[asi-world] renderer.ready failed:', ready.error.code, ready.error.hint);
-    setHud(`renderer.ready failed: ${ready.error.code}`);
-    return;
-  }
-  const assets = app.renderer.assets;
-  if (assets === null) {
+  const assets = app.assets;
+  if (assets === undefined) {
     setHud('AssetRegistry null');
     return;
   }
 
   const world = app.world;
 
-  const sortRes = setTransparentSortConfig(world, {
-    mode: TRANSPARENT_SORT_MODE_LAYER_Y,
+  const sortRes = TransparentSort.configure(world, {
+    mode: TransparentSort.layerY,
     yzAlpha: 1,
   });
   if (!sortRes.ok) {
@@ -169,8 +165,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     fetchPngAsRgba(`${CHARACTER}/move.png`),
   ]);
 
-  const terrainAtlas = registerTexture(world, terrainPng);
-  const objectAtlas = registerTexture(world, objectPng);
+  const terrainPayload = makeTextureAsset(terrainPng);
+  const objectPayload = makeTextureAsset(objectPng);
+  registerTexture(world, terrainPng);
+  registerTexture(world, objectPng);
   const idleTex = registerTexture(world, idlePng);
   const moveTex = registerTexture(world, movePng);
 
@@ -179,14 +177,19 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // object id N as (OBJECT_TILE_OFFSET + N + 1), which engine resolves
   // via `tileset.tiles[(value) - 1] = tileset.tiles[OBJECT_TILE_OFFSET + N]`.
   const combined = composeTilesetAsset({
-    terrain: { atlas: terrainAtlas, atlasPng: terrainPng, tsj: terrainTsj },
-    object: { atlas: objectAtlas, atlasPng: objectPng, tsj: objectTsj },
+    terrain: { atlas: TERRAIN_ATLAS_GUID, atlasPng: terrainPng, tsj: terrainTsj },
+    object: { atlas: OBJECT_ATLAS_GUID, atlasPng: objectPng, tsj: objectTsj },
   });
   const objectTileOffset = terrainTsj.tiles.length;
-  const tilesetHandle = world.allocSharedRef<'TilesetAsset', TilesetAsset>(
-    'TilesetAsset',
-    combined,
-  );
+  const catalogResults = [
+    assets.catalog(TERRAIN_ATLAS_GUID, terrainPayload),
+    assets.catalog(OBJECT_ATLAS_GUID, objectPayload),
+    assets.catalog('asi-world/tileset', combined),
+  ];
+  if (catalogResults.some((result) => !result.ok)) {
+    setHud('asset catalog failed');
+    return;
+  }
 
   const playerIdleMaterial = registerCharacterMaterial({ world, texture: idleTex });
   const playerMoveMaterial = registerCharacterMaterial({ world, texture: moveTex });
@@ -241,7 +244,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         cols: built.cols,
         rows: built.rows,
         tileSize: [1, 1],
-        tileset: tilesetHandle,
+        tileset: 'asi-world/tileset',
       },
     },
   );
@@ -271,7 +274,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       data: {
         tiles: objectTiles,
         layerOrder: OBJECT_LAYER_ORDER,
-        sortScope: encodeSortScope('per-cell'),
+        sortScope: TilemapSort.perCell,
       },
     },
     { component: ChildOf, data: { parent: tilemapEntity } },
@@ -315,8 +318,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     after: ['input-frame-start-scan'],
     queries: [],
     fn: () => {
-      const snap = app.renderer.input.snapshot(world);
-      if (snap === undefined) return;
+      const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       const dt = readDeltaSeconds(world);
 
       let dx = 0;
@@ -395,32 +397,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  // bug-20260709-builtin-quad-withoutaabb M3 / m3-1: expose a read-only
-  // view of renderer.frustumStats on globalThis.__forgeax.renderer so the
-  // Playwright probe (scripts/smoke-browser.mjs) can assert AC-04
-  // (total > 0 AND culled > 0) via page.evaluate. Extends the __forgeax
-  // namespace instead of overwriting it -- packages/app/create-app.ts
-  // mounts { captureFrame } on the same key under FORGEAX_ENGINE_RHI_DEBUG=1,
-  // and neither field should clobber the other. Getter form keeps the
-  // mount read-only: smoke code reads live stats, cannot mutate.
-  const forgeaxGlobal = globalThis as {
-    __forgeax?: {
-      renderer?: {
-        readonly frustumStats: { readonly culled: number; readonly total: number };
-      };
-    };
-  };
-  forgeaxGlobal.__forgeax = {
-    ...(forgeaxGlobal.__forgeax ?? {}),
-    renderer: {
-      get frustumStats() {
-        return app.renderer.frustumStats;
-      },
-    },
-  };
-
   console.warn(
-    `[asi-world] running. backend=${app.renderer.backend} ` +
+    `[asi-world] running. backend=${app.renderer.inspect().capabilities.backendKind} ` +
       `world=${built.cols}x${built.rows} layers=${built.layers.length} objects=${built.objects.length}`,
   );
 }
@@ -456,7 +434,13 @@ function registerTexture(
   world: World,
   png: { width: number; height: number; rgba: Uint8Array },
 ): Handle<'TextureAsset', 'shared'> {
-  return world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', {
+  return world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', makeTextureAsset(png));
+}
+
+function makeTextureAsset(
+  png: { width: number; height: number; rgba: Uint8Array },
+): TextureAsset {
+  return {
     kind: 'texture',
     width: png.width,
     height: png.height,
@@ -465,17 +449,17 @@ function registerTexture(
     colorSpace: 'srgb',
     mipmap: false,
     mipLevelCount: 1,
-  });
+  };
 }
 
 interface ComposeTilesetArgs {
   readonly terrain: {
-    readonly atlas: Handle<'TextureAsset', 'shared'>;
+    readonly atlas: string;
     readonly atlasPng: { readonly width: number; readonly height: number };
     readonly tsj: TsjFile;
   };
   readonly object: {
-    readonly atlas: Handle<'TextureAsset', 'shared'>;
+    readonly atlas: string;
     readonly atlasPng: { readonly width: number; readonly height: number };
     readonly tsj: TsjFile;
   };
@@ -487,7 +471,6 @@ interface ComposeTilesetArgs {
 // Engine resolves a TileLayer cell value N via `tiles[N - 1]`, then
 // `regions[entry.regionIndex].atlasIndex ?? 0` picks the atlas.
 function composeTilesetAsset(args: ComposeTilesetArgs): TilesetAsset {
-  const numTerrain = args.terrain.tsj.tiles.length;
   const regions: TilesetRegion[] = [];
   const tiles: TilesetTileEntry[] = [];
 
@@ -530,7 +513,6 @@ function composeTilesetAsset(args: ComposeTilesetArgs): TilesetAsset {
   const objectPxH = args.object.tsj.imageheight;
   return {
     kind: 'tileset',
-    guid: `asi-world-tileset-${numTerrain}-${args.object.tsj.tiles.length}`,
     atlases: [args.terrain.atlas, args.object.atlas],
     tileWidth: 16,
     tileHeight: 16,

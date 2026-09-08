@@ -16,7 +16,6 @@ import {
   TONEMAP_ACES_FILMIC,
   perspective,
 } from '@forgeax/engine-render';
-import { HDRP_PIPELINE_ID } from '@forgeax/engine-render/internal';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import {
   PERF_WORKLOAD_SEED,
@@ -32,7 +31,6 @@ import {
 const PROFILE_FRAME_LIMIT = 180;
 const PROFILE_EVENT_LIMIT = 8192;
 const CUBE_SCALE = [0.32, 0.32, 0.32] as const;
-const CLUSTER_GRID = { x: 16, y: 9, z: 24 } as const;
 
 function errorText(error: unknown): string {
   if (typeof error !== 'object' || error === null) return String(error);
@@ -103,21 +101,6 @@ async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): P
     errors.push(record);
     console.error(`[perf-10k-cubes-lights] engine error ${record.code}: ${record.hint}`);
   });
-  const ready = await app.renderer.ready;
-  if (!ready.ok) {
-    console.error(`[perf-10k-cubes-lights] renderer.ready ${ready.error.code}: ${ready.error.hint}`);
-    return;
-  }
-  const installed = app.renderer.installPipeline({
-    kind: 'render-pipeline',
-    pipelineId: HDRP_PIPELINE_ID,
-    config: { clusterGrid: CLUSTER_GRID },
-  });
-  if (!installed.ok) {
-    console.error(`[perf-10k-cubes-lights] HDRP install ${errorText(installed.error)}`);
-    return;
-  }
-
   const materialHandle = app.world.allocSharedRef('MaterialAsset', {
     kind: 'material',
     passes: [
@@ -270,7 +253,7 @@ async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): P
     return;
   }
   console.warn(
-    `[perf-10k-cubes-lights] running fingerprint=${evidence.workloadFingerprint} HDRP cubes=${options.cubeCount} pointLights=${options.pointLightCount} spotLights=${options.spotLightCount}`,
+    `[perf-10k-cubes-lights] running fingerprint=${evidence.workloadFingerprint} Standard cubes=${options.cubeCount} pointLights=${options.pointLightCount} spotLights=${options.spotLightCount}`,
   );
 }
 

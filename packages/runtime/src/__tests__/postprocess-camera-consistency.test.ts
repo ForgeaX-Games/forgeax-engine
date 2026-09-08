@@ -18,15 +18,12 @@
 //   requirements AC-05/06
 
 import { World } from '@forgeax/engine-ecs';
-import type { CameraSnapshot, ExtractedFrame } from '@forgeax/engine-render/internal';
-import {
-  Camera,
-  extractFrame,
-  PostProcessParams,
-  prepareExtractContext,
-} from '@forgeax/engine-render/internal';
+import { Camera, PostProcessParams } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
+import type { CameraSnapshot } from '../../../render/src/render-contract';
+import type { ExtractedFrame } from '../../../render/src/render-system-extract';
+import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 

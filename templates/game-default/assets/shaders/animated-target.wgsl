@@ -1,13 +1,7 @@
 #define_import_path game_default::animated_target
 
 #import forgeax_view::common::{view, meshes}
-
-struct AnimatedTargetUniforms {
-  baseColor : vec4<f32>,
-  time : f32,
-}
-
-@group(1) @binding(0) var<uniform> animated : AnimatedTargetUniforms;
+#import forgeax_material::parameters::{material}
 
 struct VsIn {
   @location(0) pos : vec3<f32>,
@@ -38,8 +32,8 @@ fn hue_shift(color : vec3<f32>, phase : f32) -> vec3<f32> {
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   let radial = 1.0 - min(distance(in.uv, vec2<f32>(0.5)) * 1.8, 1.0);
-  let phase = animated.time * 2.0 + (in.uv.x - in.uv.y) * 3.14159;
-  let shifted = hue_shift(animated.baseColor.rgb, phase);
+  let phase = material.time * 2.0 + (in.uv.x - in.uv.y) * 3.14159;
+  let shifted = hue_shift(material.baseColor.rgb, phase);
   let glow = 0.72 + radial * 0.28;
-  return vec4<f32>(max(shifted * glow, vec3<f32>(0.0)), animated.baseColor.a);
+  return vec4<f32>(max(shifted * glow, vec3<f32>(0.0)), material.baseColor.a);
 }

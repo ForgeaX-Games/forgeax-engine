@@ -193,13 +193,57 @@ export function isLocalSharedProvenanceDownload(command) {
   );
 }
 
+/**
+ * The remote app-shard job downloads the catalog-only projection into the
+ * consumer-owned `shared-app-inputs/` root. The local producer writes that
+ * same catalog-only root directly, so the local download projection only
+ * verifies that no serialized payload was left behind.
+ */
+export function isLocalSharedInputsDownload(command) {
+  return (
+    /^node scripts\/ci\/download-artifact-with-retry\.mjs\b/.test(command.trim()) &&
+    /needs\.shared-app-inputs\.outputs\.shared_artifact_id/.test(command) &&
+    /--path shared-app-inputs\b/.test(command)
+  );
+}
+
 export function isLocalShardReportsDownload(command) {
   return (
     /^node scripts\/ci\/download-artifact-with-retry\.mjs\b/.test(command.trim()) &&
+    /needs\.app-shard-0\.outputs\.app_report_artifact_id/.test(command) &&
+    /needs\.app-shard-1\.outputs\.app_report_artifact_id/.test(command) &&
+    /needs\.app-shard-2\.outputs\.app_report_artifact_id/.test(command) &&
+    /--path shard-reports\b/.test(command)
+  );
+}
+
+export function isLocalShardDdcDownload(command) {
+  return (
+    /^node scripts\/ci\/download-artifact-with-retry\.mjs\b/.test(command.trim()) &&
+    /needs\.app-shard-0\.outputs\.app_ddc_artifact_id/.test(command) &&
+    /needs\.app-shard-1\.outputs\.app_ddc_artifact_id/.test(command) &&
+    /needs\.app-shard-2\.outputs\.app_ddc_artifact_id/.test(command) &&
+    /--path ddc-snapshots\b/.test(command)
+  );
+}
+
+export function isLocalShardArtifactsDownload(command) {
+  const namesAllShards =
     /needs\.app-shard-0\.outputs\.app_dist_artifact_id/.test(command) &&
     /needs\.app-shard-1\.outputs\.app_dist_artifact_id/.test(command) &&
-    /needs\.app-shard-2\.outputs\.app_dist_artifact_id/.test(command) &&
-    /--path shard-reports\b/.test(command)
+    /needs\.app-shard-2\.outputs\.app_dist_artifact_id/.test(command);
+  return (
+    /^node scripts\/ci\/download-artifact-with-retry\.mjs\b/.test(command.trim()) &&
+    (namesAllShards ||
+      /needs\.build-artifacts\.outputs\.artifact_ids(?:_[a-zA-Z0-9_]+)?/.test(command)) &&
+    /--path \.\s*$/.test(command.trim())
+  );
+}
+
+export function isLocalWebkitStatusDownload(command) {
+  return (
+    /needs\.webkit-fallback\.outputs\.webkit_status_artifact_id/.test(command) &&
+    /--path report\/color-lighting-parity\b/.test(command)
   );
 }
 
@@ -213,9 +257,13 @@ export function localSharedProvenancePaths(root, attempt) {
 
 export function localShardReportPaths(root) {
   return {
-    source: resolve(root, 'shard-transfer', 'report'),
+    source: resolve(root, 'shard-report-transfer', 'report'),
     destination: resolve(root, 'shard-reports', 'report'),
   };
+}
+
+export function localShardArtifactPath(directory, shard) {
+  return resolve(directory, `app-shard-${shard}`);
 }
 
 function provideLocalSharedProvenance(attempt) {
@@ -227,13 +275,68 @@ function provideLocalSharedProvenance(attempt) {
   copyFileSync(source, destination);
 }
 
-function provideLocalShardReports() {
-  const { source, destination } = localShardReportPaths(ROOT);
-  if (!existsSync(source)) {
-    throw new Error(`ci-local-verify-shard-reports-missing: ${source}`);
+function provideLocalSharedInputsProjection() {
+  const destination = resolve(ROOT, 'shared-app-inputs');
+  if (!existsSync(resolve(destination, 'manifest.json'))) {
+    throw new Error(`ci-local-verify-shared-input-projection-missing: ${destination}`);
   }
-  mkdirSync(resolve(ROOT, 'shard-reports'), { recursive: true });
-  cpSync(source, destination, { recursive: true, force: true });
+  if (existsSync(resolve(destination, 'assets', 'payload'))) {
+    throw new Error(`ci-local-verify-shared-input-payload-present: ${destination}`);
+  }
+}
+
+function preserveLocalShardArtifact(directory, shard) {
+  const source = resolve(ROOT, 'shard-transfer');
+  const destination = localShardArtifactPath(directory, shard);
+  if (!existsSync(source)) {
+    throw new Error(`ci-local-verify-shard-artifact-missing: ${source}`);
+  }
+  rmSync(destination, { recursive: true, force: true });
+  cpSync(source, destination, { recursive: true });
+}
+
+function preserveLocalShardTransfer(directory, sourceName, destinationName) {
+  const source = resolve(ROOT, sourceName);
+  const destination = resolve(directory, destinationName);
+  if (!existsSync(source)) {
+    throw new Error(`ci-local-verify-shard-artifact-missing: ${source}`);
+  }
+  rmSync(destination, { recursive: true, force: true });
+  cpSync(source, destination, { recursive: true });
+}
+
+function provideLocalShardArtifacts(directory, destination, reportsOnly = false) {
+  for (let shard = 0; shard < 3; shard += 1) {
+    const source = reportsOnly
+      ? resolve(directory, `app-shard-report-${shard}`)
+      : localShardArtifactPath(directory, shard);
+    if (!existsSync(source)) {
+      throw new Error(`ci-local-verify-shard-artifact-missing: ${source}`);
+    }
+    if (reportsOnly) {
+      cpSync(resolve(source, 'report'), resolve(destination, 'report'), {
+        recursive: true,
+        force: true,
+      });
+      continue;
+    }
+    for (const entry of readdirSync(source, { withFileTypes: true })) {
+      cpSync(resolve(source, entry.name), resolve(destination, entry.name), {
+        recursive: true,
+        force: true,
+      });
+    }
+  }
+}
+
+function provideLocalShardDdcArtifacts(directory, destination) {
+  for (let shard = 0; shard < 3; shard += 1) {
+    const source = resolve(directory, `app-shard-ddc-${shard}`, 'ddc');
+    if (!existsSync(source)) {
+      throw new Error(`ci-local-verify-shard-ddc-missing: ${source}`);
+    }
+    cpSync(source, resolve(destination, 'ddc'), { recursive: true, force: true });
+  }
 }
 
 function outputValue(outputs, owner, name) {
@@ -247,6 +350,12 @@ function staticUploadOutput(step, output, attempt, runtime) {
     'upload-app-dist-0': 'app-dist-0',
     'upload-app-dist-1': 'app-dist-1',
     'upload-app-dist-2': 'app-dist-2',
+    'upload-app-report-0': 'app-shard-report-0',
+    'upload-app-report-1': 'app-shard-report-1',
+    'upload-app-report-2': 'app-shard-report-2',
+    'upload-app-ddc-0': 'app-shard-ddc-0',
+    'upload-app-ddc-1': 'app-shard-ddc-1',
+    'upload-app-ddc-2': 'app-shard-ddc-2',
     'upload-shared-inputs': 'shared-app-inputs',
     'upload-shared-provenance': 'shared-provenance',
     'upload-metrics-report': 'metrics-report',
@@ -278,6 +387,18 @@ export function substituteLocalNeedsOutputs(command, attempt = '1', needsOutputs
     'app-shard-1.app_dist_artifact_id': `local-app-dist-1-a${attempt}`,
     'app-shard-2.app_dist_artifact_name': `app-dist-2-a${attempt}`,
     'app-shard-2.app_dist_artifact_id': `local-app-dist-2-a${attempt}`,
+    'app-shard-0.app_report_artifact_name': `app-shard-report-0-a${attempt}`,
+    'app-shard-0.app_report_artifact_id': `local-app-shard-report-0-a${attempt}`,
+    'app-shard-1.app_report_artifact_name': `app-shard-report-1-a${attempt}`,
+    'app-shard-1.app_report_artifact_id': `local-app-shard-report-1-a${attempt}`,
+    'app-shard-2.app_report_artifact_name': `app-shard-report-2-a${attempt}`,
+    'app-shard-2.app_report_artifact_id': `local-app-shard-report-2-a${attempt}`,
+    'app-shard-0.app_ddc_artifact_name': `app-shard-ddc-0-a${attempt}`,
+    'app-shard-0.app_ddc_artifact_id': `local-app-shard-ddc-0-a${attempt}`,
+    'app-shard-1.app_ddc_artifact_name': `app-shard-ddc-1-a${attempt}`,
+    'app-shard-1.app_ddc_artifact_id': `local-app-shard-ddc-1-a${attempt}`,
+    'app-shard-2.app_ddc_artifact_name': `app-shard-ddc-2-a${attempt}`,
+    'app-shard-2.app_ddc_artifact_id': `local-app-shard-ddc-2-a${attempt}`,
   };
   for (const producer of ['core-build', 'app-shard-0', 'app-shard-1', 'app-shard-2']) {
     const source = resolve(ROOT, `provenance-${producer}-a${attempt}.json`);
@@ -365,26 +486,62 @@ export function codemodIdempotencyDiff(root = ROOT) {
 }
 
 export function isLocalSharedProvenanceOutput(name, record) {
-  const match = name.match(/^provenance-shared-app-inputs-a(\d+|NaN)\.json$/);
+  const match = name.match(/^provenance-shared-app-inputs-a(\d+)\.json$/);
   if (!match || record?.schemaVersion !== 1 || record.producer !== 'shared-app-inputs') {
     return false;
   }
   const attempt = match[1];
-  const artifactName = `shared-app-inputs-a${attempt}`;
   if (!Array.isArray(record.artifacts) || record.artifacts.length === 0) return false;
-  const namesMatch = record.artifacts.every((artifact) => artifact?.artifactName === artifactName);
+  const artifactNames = new Set([`shared-app-inputs-a${attempt}`]);
+  const namesMatch = record.artifacts.every((artifact) =>
+    artifactNames.has(artifact?.artifactName),
+  );
   if (!namesMatch) return false;
-  if (attempt === 'NaN') return record.runAttempt === null;
-  const localArtifactIds = new Set([`local-${artifactName}`, SHARED_ARTIFACT_ID_EXPRESSION]);
+  const localArtifactIds = new Set([
+    `local-shared-app-inputs-a${attempt}`,
+    SHARED_ARTIFACT_ID_EXPRESSION,
+  ]);
   return (
     record.runId === 'local' &&
-    record.runAttempt === Number(attempt) &&
+    record.producerRunAttempt === Number(attempt) &&
     record.artifacts.every((artifact) => localArtifactIds.has(artifact.artifactId))
   );
 }
 
-export function isolateLocalProvenanceForLint(root = ROOT) {
-  const directory = mkdtempSync(resolve(tmpdir(), 'forgeax-ci-provenance-'));
+export function isLocalCiArtifactOutput(name, record) {
+  if (isLocalSharedProvenanceOutput(name, record)) return true;
+
+  const provenance = name.match(/^provenance-(core-build|app-shard-[0-2])-a(\d+)\.json$/);
+  if (provenance) {
+    return (
+      record?.schemaVersion === 1 &&
+      record.producer === provenance[1] &&
+      record.runId === 'local' &&
+      record.producerRunAttempt === Number(provenance[2])
+    );
+  }
+
+  const appFingerprints = name.match(/^app-dist-([0-2])-fingerprints\.json$/);
+  if (appFingerprints) {
+    const key = `app-dist-${appFingerprints[1]}`;
+    return (
+      Object.keys(record ?? {}).length === 1 &&
+      typeof record?.[key] === 'string' &&
+      /^sha256:[0-9a-f]{64}$/.test(record[key])
+    );
+  }
+
+  return (
+    name === 'shared-input-fingerprints.json' &&
+    Object.keys(record ?? {}).length === 2 &&
+    ['shared-asset-pack', 'shared-engine-shaders'].every(
+      (key) => typeof record?.[key] === 'string' && /^sha256:[0-9a-f]{64}$/.test(record[key]),
+    )
+  );
+}
+
+export function isolateLocalCiArtifactsForLint(root = ROOT) {
+  const directory = mkdtempSync(resolve(tmpdir(), 'forgeax-ci-artifacts-'));
   const moved = [];
   try {
     for (const entry of readdirSync(root, { withFileTypes: true })) {
@@ -396,7 +553,7 @@ export function isolateLocalProvenanceForLint(root = ROOT) {
       } catch {
         continue;
       }
-      if (!isLocalSharedProvenanceOutput(entry.name, record)) continue;
+      if (!isLocalCiArtifactOutput(entry.name, record)) continue;
       const destination = resolve(directory, entry.name);
       renameSync(source, destination);
       moved.push({ source, destination });
@@ -412,12 +569,17 @@ export function isolateLocalProvenanceForLint(root = ROOT) {
   };
 }
 
-export function needsLocalProvenanceIsolation(command) {
+export function needsLocalArtifactIsolation(command) {
   return command === 'pnpm run lint' || command === 'bunx biome ci .';
 }
 
 export function isRunnerProvisioning(command) {
-  if (/\$\{?(?:RUNNER_TEMP)\}?\b|\bnproc\b|\/proc\/cpuinfo/.test(command)) return true;
+  if (
+    /\$\{?(?:RUNNER_TEMP)\}?\b|\bnproc\b|\/proc\/cpuinfo|scripts\/ci\/with-apt-ubuntu-sources\.sh/.test(
+      command,
+    )
+  )
+    return true;
   if (!/\$\{?GITHUB_PATH\}?\b/.test(command)) return false;
   return command
     .split(/\r?\n/)
@@ -442,10 +604,17 @@ export function localizeRunnerProvisioning(command) {
  */
 export function localizeDarwinXvfb(command, platform = process.platform) {
   if (platform !== 'darwin') return command;
-  return command.replace(
-    /^([ \t]*)xvfb-run -a env FORGEAX_BROWSER_HEADLESS=0 /gm,
-    '$1env CI=1 FORGEAX_BROWSER_HEADLESS=1 ',
-  );
+  return command
+    .replace(
+      /(--[ \t]+)xvfb-run -a env FORGEAX_BROWSER_HEADLESS=0 /gm,
+      '$1env CI=1 FORGEAX_BROWSER_HEADLESS=1 ',
+    )
+    .replace(/(--[ \t]+)xvfb-run -a /gm, '$1env CI=1 FORGEAX_BROWSER_HEADLESS=1 ')
+    .replace(
+      /^([ \t]*)xvfb-run -a env FORGEAX_BROWSER_HEADLESS=0 /gm,
+      '$1env CI=1 FORGEAX_BROWSER_HEADLESS=1 ',
+    )
+    .replace(/^([ \t]*)xvfb-run -a /gm, '$1env CI=1 FORGEAX_BROWSER_HEADLESS=1 ');
 }
 
 export function requiredContexts() {
@@ -685,8 +854,8 @@ function run(
       ),
       ...githubFiles,
     };
-    const restoreLocalProvenance = needsLocalProvenanceIsolation(localStep.command)
-      ? isolateLocalProvenanceForLint()
+    const restoreLocalArtifacts = needsLocalArtifactIsolation(localStep.command)
+      ? isolateLocalCiArtifactsForLint()
       : undefined;
     const plan = executionPlan(localStep);
     let result;
@@ -697,7 +866,7 @@ function run(
         env,
       });
     } finally {
-      restoreLocalProvenance?.();
+      restoreLocalArtifacts?.();
     }
     if (step.id !== undefined && githubFiles.GITHUB_OUTPUT) {
       stepOutputs.set(step.id, {
@@ -733,74 +902,118 @@ export function main(argv = process.argv.slice(2)) {
   const codemodBaseline = args.list || args.dryRun ? undefined : codemodIdempotencyDiff();
   const needsResults = new Map();
   const needsOutputs = new Map();
-  const githubEnvironment = {};
-  for (const target of targets) {
-    const selectedMatrix = matrixSelection(args.group, target);
-    const plans = plansFor(target, workflow, selectedMatrix);
-    const stepOutputs = new Map();
-    for (const plan of plans) {
-      const matrixLabel = Object.values(plan.matrix).join(',');
-      console.log(`\n[ci] jobs.${plan.job}${matrixLabel ? `-${matrixLabel}` : ''}`);
-      if (plan.requires.length) console.log(`[ci] prerequisites: ${plan.requires.join('; ')}`);
-      for (const step of plan.steps) {
-        const { command } = step;
-        if (isLocalSharedProvenanceDownload(command)) {
-          if (!args.dryRun) {
-            provideLocalSharedProvenance(localGitHubRuntime(process.env).GITHUB_RUN_ATTEMPT);
+  const localArtifacts = mkdtempSync(resolve(tmpdir(), 'forgeax-ci-shards-'));
+  try {
+    for (const target of targets) {
+      const selectedMatrix = matrixSelection(args.group, target);
+      const plans = plansFor(target, workflow, selectedMatrix);
+      const stepOutputs = new Map();
+      for (const plan of plans) {
+        const githubEnvironment = {};
+        const matrixLabel = Object.values(plan.matrix).join(',');
+        console.log(`\n[ci] jobs.${plan.job}${matrixLabel ? `-${matrixLabel}` : ''}`);
+        if (plan.requires.length) console.log(`[ci] prerequisites: ${plan.requires.join('; ')}`);
+        for (const step of plan.steps) {
+          const { command } = step;
+          if (isLocalSharedProvenanceDownload(command)) {
+            if (!args.dryRun) {
+              provideLocalSharedProvenance(localGitHubRuntime(process.env).GITHUB_RUN_ATTEMPT);
+            }
+            console.log(`[ci] local artifact substitute: ${command}`);
+            continue;
           }
-          console.log(`[ci] local artifact substitute: ${command}`);
-          continue;
-        }
-        if (isLocalShardReportsDownload(command)) {
-          if (!args.dryRun) provideLocalShardReports();
-          console.log(`[ci] local artifact substitute: ${command}`);
-          continue;
-        }
-        if (isSetupOnly(command)) {
-          console.log(`[ci] source-checkout substitute: ${command}`);
-          continue;
-        }
-        if (isLocalDependencyAssertion(command)) {
-          console.log(`[ci] local dependency ordering satisfies: ${command}`);
-          continue;
-        }
-        if (isRunnerProvisioning(command)) {
-          console.log(`[ci] runner provisioning omitted (use local toolchain): ${command}`);
-          continue;
-        }
-        if (args.list) {
-          const listedCommand = localizeDarwinXvfb(substituteLocalMatrix(command, plan.matrix));
-          console.log(`[ci] (${step.shell ?? 'default'}) ${listedCommand}`);
-          continue;
-        }
-        const status = run(
-          step,
-          args.dryRun,
-          plan.environment,
-          plan.matrix,
-          needsResults,
-          needsOutputs,
-          githubEnvironment,
-          stepOutputs,
-          codemodBaseline,
-        );
-        if (status !== 0) {
-          needsResults.set(target, 'failure');
-          console.error(`[ci] FAIL ${plan.job}: first failing step exited ${status}`);
-          return status;
+          if (isLocalSharedInputsDownload(command)) {
+            if (!args.dryRun) provideLocalSharedInputsProjection();
+            console.log(`[ci] local artifact substitute: ${command}`);
+            continue;
+          }
+          if (isLocalShardReportsDownload(command)) {
+            if (!args.dryRun) {
+              mkdirSync(resolve(ROOT, 'shard-reports'), { recursive: true });
+              provideLocalShardArtifacts(localArtifacts, resolve(ROOT, 'shard-reports'), true);
+            }
+            console.log(`[ci] local artifact substitute: ${command}`);
+            continue;
+          }
+          if (isLocalShardDdcDownload(command)) {
+            if (!args.dryRun) {
+              mkdirSync(resolve(ROOT, 'ddc-snapshots'), { recursive: true });
+              provideLocalShardDdcArtifacts(localArtifacts, resolve(ROOT, 'ddc-snapshots'));
+            }
+            console.log(`[ci] local artifact substitute: ${command}`);
+            continue;
+          }
+          if (isLocalShardArtifactsDownload(command)) {
+            if (!args.dryRun) provideLocalShardArtifacts(localArtifacts, ROOT);
+            console.log(`[ci] local artifact substitute: ${command}`);
+            continue;
+          }
+          if (isLocalWebkitStatusDownload(command)) {
+            const statusPath = resolve(ROOT, 'report/color-lighting-parity/webkit-status.json');
+            if (!args.dryRun && !existsSync(statusPath)) {
+              throw new Error(`ci-local-verify-webkit-status-missing: ${statusPath}`);
+            }
+            console.log(`[ci] local artifact substitute: ${command}`);
+            continue;
+          }
+          if (isSetupOnly(command)) {
+            console.log(`[ci] source-checkout substitute: ${command}`);
+            continue;
+          }
+          if (isLocalDependencyAssertion(command)) {
+            console.log(`[ci] local dependency ordering satisfies: ${command}`);
+            continue;
+          }
+          if (isRunnerProvisioning(command)) {
+            console.log(`[ci] runner provisioning omitted (use local toolchain): ${command}`);
+            continue;
+          }
+          if (args.list) {
+            const listedCommand = localizeDarwinXvfb(substituteLocalMatrix(command, plan.matrix));
+            console.log(`[ci] (${step.shell ?? 'default'}) ${listedCommand}`);
+            continue;
+          }
+          const status = run(
+            step,
+            args.dryRun,
+            plan.environment,
+            plan.matrix,
+            needsResults,
+            needsOutputs,
+            githubEnvironment,
+            stepOutputs,
+            codemodBaseline,
+          );
+          if (status !== 0) {
+            needsResults.set(target, 'failure');
+            console.error(`[ci] FAIL ${plan.job}: first failing step exited ${status}`);
+            return status;
+          }
         }
       }
+      needsResults.set(target, 'success');
+      needsOutputs.set(
+        target,
+        resolveJobOutputs(jobBlock(workflow, target), stepOutputs, localGitHubRuntime(process.env)),
+      );
+      const shard = target.match(/^app-shard-([0-2])$/)?.[1];
+      if (shard !== undefined && !args.list && !args.dryRun) {
+        preserveLocalShardArtifact(localArtifacts, Number(shard));
+        preserveLocalShardTransfer(
+          localArtifacts,
+          'shard-report-transfer',
+          `app-shard-report-${shard}`,
+        );
+        preserveLocalShardTransfer(localArtifacts, 'shard-ddc-transfer', `app-shard-ddc-${shard}`);
+      }
     }
-    needsResults.set(target, 'success');
-    needsOutputs.set(
-      target,
-      resolveJobOutputs(jobBlock(workflow, target), stepOutputs, localGitHubRuntime(process.env)),
+    console.log(
+      `\n[ci] PASS: ${targets.length} PR CI job${targets.length === 1 ? '' : 's'} projected from ci.yml`,
     );
+    return 0;
+  } finally {
+    rmSync(localArtifacts, { recursive: true, force: true });
   }
-  console.log(
-    `\n[ci] PASS: ${targets.length} PR CI job${targets.length === 1 ? '' : 's'} projected from ci.yml`,
-  );
-  return 0;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === new URL(import.meta.url).pathname) {

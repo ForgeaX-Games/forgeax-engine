@@ -11,12 +11,13 @@
 // Architecture (plan-strategy D-7): epsilon=0.1 permits WebGPU deferred-destroy
 // in-flight double-buffer float, while forbidding monotonic growth.
 
-import { cleanPerEntityCache, GpuResourceStore } from '@forgeax/engine-render/internal';
 import type { Result, RhiCaps, RhiError } from '@forgeax/engine-rhi';
 import { err, ok } from '@forgeax/engine-rhi';
 import type { EquirectAsset, Handle, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { toShared, unwrapHandle } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { GpuResidencyCache } from '../../../render/src/device/gpu-residency';
+import { cleanPerEntityCache } from '../../../render/src/record/mesh-ssbo';
 
 // ── Mock device (same shape as gpu-resource.test.ts makeStoreMockDevice) ──
 
@@ -39,6 +40,7 @@ function makeMockDevice(probe: CowProbe): any {
   const destroyedBufs = new WeakSet<object>();
   const destroyedTexs = new WeakSet<object>();
   return {
+    limits: { maxTextureDimension2D: 16384 },
     createShaderModule: () => okShim({ __mock: 'shader' }),
     createSampler: () => okShim({ __mock: 'sampler' }),
     createBindGroupLayout: () => okShim({ __mock: 'bgl' }),
@@ -126,8 +128,8 @@ function makeRegisterCube(): (
 const shaderFactory = async (_d: any, desc: { code: string; label?: string }) =>
   ok({ __mock: 'shader', label: desc.label ?? '' }) as never;
 
-function configuredStore(probe: CowProbe): GpuResourceStore {
-  const store = new GpuResourceStore();
+function configuredStore(probe: CowProbe): GpuResidencyCache {
+  const store = new GpuResidencyCache();
   store.configureGpuDevice(
     makeMockDevice(probe),
     shaderFactory,
@@ -156,9 +158,18 @@ function meshPod(vertexCount = 4): MeshAsset {
     kind: 'mesh',
     vertices: new Float32Array(vertexCount * 12),
     indices: new Uint16Array([0, 1, 2, 0, 2, 3]),
-    attributes: {},
+    attributes: {
+      position: new Float32Array(vertexCount * 3),
+      normal: new Float32Array(vertexCount * 3),
+      uv: new Float32Array(vertexCount * 2),
+      tangent: new Float32Array(vertexCount * 4),
+    },
     aabb: new Float32Array(6),
-    submeshes: [{ indexOffset: 0, indexCount: 6, vertexCount: 0, topology: 'triangle-list' }],
+    submeshes: [
+      { indexOffset: 0, indexCount: 6, vertexCount: 0, topology: 'triangle-list', materialSlot: 0 },
+    ],
+
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 
@@ -175,7 +186,7 @@ function median(sorted: number[]): number {
   return sorted[mid] ?? 0;
 }
 
-function aFamilyStoreSize(store: GpuResourceStore): number {
+function aFamilyStoreSize(store: GpuResidencyCache): number {
   // biome-ignore lint/suspicious/noExplicitAny: access private store maps for size tracking
   const s = store as any;
   return (

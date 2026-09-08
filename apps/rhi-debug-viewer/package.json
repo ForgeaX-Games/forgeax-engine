@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "RHI debug tape viewer — offline visualizer consuming PR1-PR3 capture/inspect primitives",
+  "description": "AI-readable read-only v7 RHI tape viewer with linked workIndex panels, viewer-private shader preview, and no-WebGPU structural fallback",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -24,7 +24,7 @@
     "metrics": {
       "bundle-size": {
         "enabled": false,
-        "reason": "viewer app bundle shape is downstream of @forgeax/engine-runtime + @forgeax/engine-rhi-webgpu sizes already tracked at the package level"
+        "reason": "viewer app bundle shape is tracked by the application build gate rather than a standalone performance target"
       },
       "fps": {
         "enabled": false,
@@ -46,15 +46,14 @@
   },
   "dependencies": {
     "@codemirror/language": "^6.12.4",
-    "@lezer/highlight": "^1.2.3",
     "@codemirror/lint": "^6.9.7",
     "@codemirror/state": "^6.7.0",
     "@codemirror/view": "^6.43.4",
     "@forgeax/engine-naga": "workspace:*",
     "@forgeax/engine-rhi-debug": "workspace:*",
-    "@forgeax/engine-rhi": "workspace:*",
     "@forgeax/engine-rhi-webgpu": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
+    "@lezer/highlight": "^1.2.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dockview-react": "^7.0.2",

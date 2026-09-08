@@ -76,11 +76,16 @@ const references = new Set((tsconfig.references ?? []).map((reference) => refere
 if (!dependencies['@forgeax/engine-pack']) {
   throw new Error('vite-plugin-pack must depend on @forgeax/engine-pack in production');
 }
-if (!dependencies['@forgeax/engine-shader-compiler']) {
-  throw new Error('vite-plugin-pack must depend on @forgeax/engine-shader-compiler in production');
+const forbiddenProducerDependencies = Object.keys(dependencies).filter((name) =>
+  /^@forgeax\/engine-(animation|material|render|scene|shader|ui|vfx)/.test(name),
+);
+if (forbiddenProducerDependencies.length > 0) {
+  throw new Error(
+    `vite-plugin-pack must receive producer cookers from its Host, found production dependencies: ${forbiddenProducerDependencies.join(', ')}`,
+  );
 }
-if (!references.has('../shader-compiler')) {
-  throw new Error('vite-plugin-pack must reference shader-compiler in tsconfig');
+if (references.has('../shader-compiler')) {
+  throw new Error('vite-plugin-pack must not reference shader-compiler in tsconfig');
 }
 if (
   manifest.peerDependencies?.['@forgeax/engine-pack'] ||

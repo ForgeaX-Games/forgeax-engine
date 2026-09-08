@@ -18,6 +18,7 @@ describe('source-override error-code ownership', () => {
       | 'source-read-failed'
       | 'import-produced-no-assets'
       | 'guid-mismatch'
+      | 'mesh-material-slot-topology-change'
       | 'import-internal-error'
       | 'source-validation-failed'
     >();
@@ -42,6 +43,7 @@ describe('source-override error-code ownership', () => {
         case 'source-read-failed':
         case 'import-produced-no-assets':
         case 'guid-mismatch':
+        case 'mesh-material-slot-topology-change':
         case 'import-internal-error':
         case 'source-validation-failed':
         case 'unknown-source-key':

@@ -36,6 +36,7 @@ import type { Bookkeeper } from './bookkeeping';
  *  per-frame stats for M3 unit-test readback. */
 export interface PassCounter {
   recordDraw(): void;
+  recordDispatch(): void;
   recordBindGroup(): void;
   recordPassName(name: string): void;
 }
@@ -134,10 +135,12 @@ export class RhiNullRenderPassEncoder implements RhiRenderPassEncoder {
 
   drawIndirect(_indirectBuffer: Buffer, _indirectOffset: number): void {
     this.drawCount++;
+    this.counter?.recordDraw();
   }
 
   drawIndexedIndirect(_indirectBuffer: Buffer, _indirectOffset: number): void {
     this.drawCount++;
+    this.counter?.recordDraw();
   }
 
   pushDebugGroup(_groupLabel: string): void {}
@@ -193,11 +196,13 @@ export class RhiNullComputePassEncoder implements RhiComputePassEncoder {
 
   dispatchWorkgroups(_x: number, _y?: number | undefined, _z?: number | undefined): void {
     this.dispatchCount++;
+    this.counter?.recordDispatch();
   }
 
   dispatchWorkgroupsIndirect(indirectBuffer: Buffer, _indirectOffset: number): void {
     this.lastValidation = this.bookkeeper.validateOwnership(indirectBuffer);
     this.dispatchCount++;
+    this.counter?.recordDispatch();
   }
 
   end(): void {

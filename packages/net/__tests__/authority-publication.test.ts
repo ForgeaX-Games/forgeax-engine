@@ -33,9 +33,9 @@ describe('authority canonical publication', () => {
     expect(unchanged.ok).toBe(true);
     if (!baseline.ok || !unchanged.ok) return;
     expect(baseline.value.version).toBe(REPLICATION_PROTOCOL_VERSION);
-    expect(baseline.value.full).toBe(true);
+    expect(baseline.value.kind).toBe('baseline');
     expect(baseline.value.entities[0]!.components).toHaveLength(2);
-    expect(unchanged.value.full).toBe(false);
+    expect(unchanged.value.kind).toBe('delta');
     expect(unchanged.value.entities).toHaveLength(0);
     expect(unchanged.value.tick).toBeGreaterThan(baseline.value.tick);
   });
@@ -53,7 +53,7 @@ describe('authority canonical publication', () => {
     world.set(entity, PositionAuthority, { x: 3, y: 2 }).unwrap();
     const delta = authority.publish().unwrap();
 
-    expect(delta.full).toBe(false);
+    expect(delta.kind).toBe('delta');
     expect(delta.entities).toHaveLength(1);
     expect(delta.entities[0]!.components).toEqual([
       { name: 'PositionAuthority', data: { x: 3, y: 2 } },
@@ -72,7 +72,7 @@ describe('authority canonical publication', () => {
 
     expect(first.entities[0]!.id).toBeGreaterThan(0);
     expect(despawn.entities[0]).toMatchObject({ kind: 'despawn', id: first.entities[0]!.id });
-    expect(lateJoin.full).toBe(true);
+    expect(lateJoin.kind).toBe('baseline');
     expect(lateJoin.entities).toHaveLength(0);
   });
 
@@ -99,7 +99,7 @@ describe('authority canonical publication', () => {
     const retry = authority.publish();
     expect(retry.ok).toBe(true);
     if (!retry.ok) return;
-    expect(retry.value.full).toBe(true);
+    expect(retry.value.kind).toBe('baseline');
     expect(retry.value.entities).toHaveLength(1);
   });
 });

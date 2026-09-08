@@ -39,8 +39,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     for (let frame = 0; frame < 180 && !state.unlocked; frame++) {
       const updated = app.world.update(1 / 60);
       if (!updated.ok) throw updated.error;
-      const drawn = app.renderer.draw([app.world], { cameraOwner: 0, resourceOwner: 0 });
-      if (!drawn.ok) throw drawn.error;
     }
     const after = readRunConditionState(app.world, state);
     if (!after.unlocked || after.gatedRuns === 0 || after.pulseRuns !== 1) {

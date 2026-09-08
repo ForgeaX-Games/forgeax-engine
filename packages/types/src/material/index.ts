@@ -9,9 +9,14 @@ export {
 export {
   createMaterialError,
   type GltfMaterialUvSetMissingDetail,
+  type MaterialDerivedInterfaceMismatchDetail,
   type MaterialError,
   type MaterialErrorCode,
+  type MaterialErrorDetail,
   type MaterialErrorFor,
+  type MaterialGenerationVector,
+  type MaterialPayloadBoundsDetail,
+  type MaterialTextureCoordinateInvalidDetail,
 } from './errors.js';
 export {
   type MaterialTable,

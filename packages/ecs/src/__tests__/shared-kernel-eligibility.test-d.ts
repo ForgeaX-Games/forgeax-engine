@@ -1,6 +1,7 @@
 import { expectTypeOf, it } from 'vitest';
 import { defineComponent } from '../component';
-import { defineSharedKernel, type QuerySpan } from '../index';
+import type { QuerySpan } from '../index';
+import { defineSharedKernel } from '../shared';
 
 const Position = defineComponent('SharedKernelTypesPosition', { x: 'f32' });
 function run(spans: readonly QuerySpan[]): void {

@@ -24,6 +24,9 @@ const expectedCodes = [
   'material-specialization-not-cooked',
   'material-specialization-stale-generation',
   'gltf-material-uv-set-missing',
+  'material-derived-interface-mismatch',
+  'material-texture-coordinate-invalid',
+  'material-payload-bounds',
 ] as const;
 
 const expectedPolicy = {
@@ -82,6 +85,18 @@ const expectedPolicy = {
   'gltf-material-uv-set-missing': {
     expected: 'each texture slot references an available primitive UV set',
     hint: 'add the requested UV set to the primitive and re-import it',
+  },
+  'material-derived-interface-mismatch': {
+    expected: 'the generated material interface matches the derived schema interface',
+    hint: 'repair the schema or WGSL producer and recook the material',
+  },
+  'material-texture-coordinate-invalid': {
+    expected: 'every texture coordinate record is finite and complete',
+    hint: 'repair the texture metadata or coordinates and recook the material',
+  },
+  'material-payload-bounds': {
+    expected: 'every material payload write stays within the derived payload',
+    hint: 'repair the derived payload owner before submitting the draw',
   },
 } satisfies Record<MaterialErrorCode, { expected: string; hint: string }>;
 
@@ -147,5 +162,46 @@ describe('MaterialError policy ownership', () => {
     });
     expect(explicitMessage.message).toBe('custom diagnostic');
     expect(Object.keys(defaultMessage)).toEqual(['code', 'expected', 'hint', 'detail', 'message']);
+  });
+
+  it('constructs derived-interface, coordinate, and payload failures with narrowed details', () => {
+    const mismatch = createMaterialError('material-derived-interface-mismatch', {
+      code: 'material-derived-interface-mismatch',
+      stage: 'compile',
+      material: 'demo',
+      layoutIdentity: 'sha256-expected',
+      expectedIdentity: 'sha256-expected',
+      actualIdentity: 'sha256-actual',
+      parameter: 'roughness',
+      action: 'recook',
+    });
+    const coordinate = createMaterialError('material-texture-coordinate-invalid', {
+      code: 'material-texture-coordinate-invalid',
+      stage: 'record',
+      material: 'demo',
+      layoutIdentity: 'sha256-layout',
+      parameter: 'albedo',
+      slot: 'slot-0',
+      reason: 'non-finite',
+      action: 'recook',
+    });
+    const bounds = createMaterialError('material-payload-bounds', {
+      code: 'material-payload-bounds',
+      stage: 'record',
+      material: 'demo',
+      layoutIdentity: 'sha256-layout',
+      slot: 'slot-0',
+      byteOffset: 80,
+      byteLength: 16,
+      payloadBytes: 96,
+      action: 'stop-draw',
+    });
+
+    expect(mismatch.detail.action).toBe('recook');
+    expect(coordinate.detail.parameter).toBe('albedo');
+    expect(bounds.detail.byteOffset + bounds.detail.byteLength).toBe(96);
+    expect(mismatch.expected).toBe(expectedPolicy[mismatch.code].expected);
+    expect(coordinate.hint).toContain('recook');
+    expect(bounds.hint).toContain('payload');
   });
 });

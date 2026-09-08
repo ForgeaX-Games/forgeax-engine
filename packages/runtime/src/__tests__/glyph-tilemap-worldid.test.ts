@@ -12,8 +12,8 @@
 //   plan-strategy D-1a #6/#7
 //   requirements AC-07
 
-import { worldEntityKey } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
+import { worldEntityKey } from '../../../render/src/record/frame-snapshot';
 
 // ─── Glyph bakeCache: worldEntityKey key compositing ────────────────────────
 

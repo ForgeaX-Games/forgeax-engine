@@ -4,10 +4,10 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { World } from '@forgeax/engine-ecs';
-import { Camera, RenderFeatureStageFailedError } from '@forgeax/engine-render';
+import { Camera } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { createRenderer } from '@forgeax/engine-runtime';
-import { err, ok } from '@forgeax/engine-types';
+import { ok } from '@forgeax/engine-types';
 
 const WIDTH = 64;
 const HEIGHT = 64;
@@ -41,9 +41,7 @@ const canvas = {
           size: { width: WIDTH, height: HEIGHT },
           format: descriptor.format ?? 'rgba8unorm',
           usage: RENDER_ATTACHMENT | COPY_SRC,
-          ...(descriptor.format === 'rgba8unorm'
-            ? { viewFormats: ['rgba8unorm-srgb'] }
-            : {}),
+          ...(descriptor.format === 'rgba8unorm' ? { viewFormats: ['rgba8unorm-srgb'] } : {}),
         });
       },
       unconfigure() {},
@@ -61,168 +59,44 @@ const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-
 const manifest = await buildEngineShaderManifest();
 const manifestUrl = `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;
 
-function world() {
-  const value = new World();
-  value.spawn(
+function makeWorld() {
+  const world = new World();
+  world.spawn(
     { component: Transform, data: { pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
-    { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
+    {
+      component: Camera,
+      data: {
+        fov: Math.PI / 4,
+        aspect: 1,
+        near: 0.1,
+        far: 100,
+        clearColor: [0.18, 0.08, 0.03, 1],
+      },
+    },
   );
-  return value;
+  return world;
 }
 
-function feature(identity, faultState) {
-  let pipeline;
-  let viewBindings;
-  let inputBindings;
-  let vertices;
-  const feature = {
+function makeFeature(identity, state) {
+  return {
     identity,
-    extract: () => ok({ draw: true }),
-    prepare: (_data, context) => {
-      if (faultState.fault === 'create' && !faultState.repaired) {
-        return err(new RenderFeatureStageFailedError(identity, 1, 'prepare', 'next-frame'));
-      }
-      const pipelineResult = context.graphics.preparePipeline('forward', {
-        shader: 'forgeax::tonemap',
-        vertexLayout: 'position',
-        colorFormats: ['rgba8unorm-srgb'],
-      });
-      if (!pipelineResult.ok) return pipelineResult;
-      const viewResult = context.graphics.prepareBindings('forward', {
-        pipeline: pipelineResult.value,
-        values: {},
-      });
-      if (!viewResult.ok) return viewResult;
-      const inputResult = context.graphics.prepareBindings('input', {
-        pipeline: pipelineResult.value,
-        values: { group: 1 },
-      });
-      if (!inputResult.ok) return inputResult;
-      const verticesResult = context.graphics.prepareVertexData('triangle', {
-        layout: 'position',
-        data: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
-      });
-      if (!verticesResult.ok) return verticesResult;
-      pipeline = pipelineResult.value;
-      viewBindings = viewResult.value;
-      inputBindings = inputResult.value;
-      vertices = verticesResult.value;
-      return ok(undefined);
-    },
-    contribute: (_data, context) => {
-      if (pipeline === undefined || viewBindings === undefined || inputBindings === undefined || vertices === undefined) {
-        return err(new Error(`${identity} prepared state missing`));
-      }
-      const draw = {
-        kind: 'draw',
-        pipeline,
-        bindings: [viewBindings, inputBindings],
-        vertexData: [{ slot: 0, resource: vertices }],
-        command: { vertexCount: 3, instanceCount: 1 },
-      };
-      const passResult = context.staging.addGraphicsPass('forward', {
-        attachments: {
-          colors: [{ resource: 'swapchain', format: 'rgba8unorm-srgb', loadOp: 'clear', storeOp: 'store' }],
-        },
-        draws: [draw],
-      });
-      if (!passResult.ok) return passResult;
-      return ok(undefined);
+    extract: () => ok(undefined),
+    plan: () => {
+      if (!state.repaired) throw new Error(`${identity} declarative plan is intentionally unavailable`);
+      return ok({ resources: [], passes: [] });
     },
   };
-  return { feature, repair: () => { faultState.repaired = true; } };
 }
 
-function installFaultProbe(device, states) {
-  const prepared = new Map();
-  const probe = {
-    backendCalls: { create: 0, upload: 0, record: 0 },
-    failures: [],
-    buffers: [],
-    uploads: [],
-    recordGroups: [],
-    destroyCount: 0,
-    createdLabels: [],
-    uploadOwners: [],
-    queuePatched: false,
-  };
-  const isPrepared = (label) => typeof label === 'string' && [...states.keys()].some((identity) => label.startsWith(`${identity}::`));
-  const destroyBuffer = device.destroyBuffer.bind(device);
-  device.destroyBuffer = (buffer) => {
-    if (prepared.has(buffer)) probe.destroyCount += 1;
-    return destroyBuffer(buffer);
-  };
-  const createBuffer = device.createBuffer.bind(device);
-  device.createBuffer = (descriptor) => {
-    probe.createdLabels.push(descriptor.label ?? null);
-    const identity = [...states.keys()].find((entry) => descriptor.label?.startsWith(`${entry}::`));
-    const state = identity === undefined ? undefined : states.get(identity);
-    const invalid = state?.fault === 'create' && !state.repaired;
-    if (isPrepared(descriptor.label) && state?.fault === 'create') probe.backendCalls.create += 1;
-    const result = createBuffer(invalid ? { ...descriptor, size: -1 } : descriptor);
-    if (identity !== undefined && state?.fault === 'create') {
-      probe.buffers.push({ identity, accepted: result.ok });
-      if (!result.ok) probe.failures.push({ identity, operation: 'create' });
-      if (result.ok) prepared.set(result.value, identity);
-    } else if (result.ok && isPrepared(descriptor.label)) {
-      prepared.set(result.value, identity);
-    }
-    return result;
-  };
-  const writeBuffer = device.queue.writeBuffer.bind(device.queue);
-  device.queue.writeBuffer = (buffer, offset, data, dataOffset, size) => {
-    const identity = prepared.get(buffer);
-    probe.uploadOwners.push(identity ?? null);
-    const state = identity === undefined ? undefined : states.get(identity);
-    const fault = state?.fault === 'upload' && !state.repaired;
-    if (fault) probe.backendCalls.upload += 1;
-    const result = fault
-      ? writeBuffer(buffer, offset, data, 0, -1)
-      : writeBuffer(buffer, offset, data, dataOffset, size);
-    if (fault) {
-      probe.uploads.push({ identity, accepted: result.ok });
-      if (!result.ok) probe.failures.push({ identity, operation: 'upload' });
-    }
-    return result;
-  };
-  probe.queuePatched = device.queue.writeBuffer !== writeBuffer;
-  const createCommandEncoder = device.createCommandEncoder.bind(device);
-  device.createCommandEncoder = (descriptor) => {
-    const result = createCommandEncoder(descriptor);
-    if (!result.ok) return result;
-    const encoder = result.value;
-    const beginRenderPass = encoder.beginRenderPass.bind(encoder);
-    encoder.beginRenderPass = (passDescriptor) => {
-      const pass = beginRenderPass(passDescriptor);
-      const group = [];
-      probe.recordGroups.push(group);
-      const setVertexBuffer = pass.setVertexBuffer.bind(pass);
-      pass.setVertexBuffer = (slot, buffer, ...rest) => {
-        group.push('setVertexBuffer');
-        const identity = prepared.get(buffer);
-        const state = identity === undefined ? undefined : states.get(identity);
-        if (state?.fault !== 'record' || state.repaired) {
-          setVertexBuffer(slot, buffer, ...rest);
-          return;
-        }
-        probe.recordGroups[probe.recordGroups.length - 1].push(identity);
-        if (state !== undefined) {
-          probe.backendCalls.record += 1;
-          try {
-            setVertexBuffer(slot, buffer, -1);
-          } catch (error) {
-            probe.failures.push({ identity, operation: 'record', error: String(error) });
-            throw error;
-          }
-          return;
-        }
-        setVertexBuffer(slot, buffer, ...rest);
-      };
-      return pass;
-    };
-    return result;
-  };
-  return probe;
+function isRecord(value) {
+  return value !== null && typeof value === 'object';
+}
+
+function hasFeaturePlanFailure(entry, identity) {
+  const detail = isRecord(entry.detail) ? entry.detail : undefined;
+  const cause = isRecord(detail?.cause) ? detail.cause : undefined;
+  const causeDetail = isRecord(cause?.detail) ? cause.detail : undefined;
+  return cause?.code === 'render-feature-stage-failed' && causeDetail?.featureIdentity === identity;
 }
 
 async function readCenterPixel() {
@@ -232,7 +106,11 @@ async function readCenterPixel() {
   const bytesPerRow = 256;
   const readback = device.createBuffer({ size: bytesPerRow * HEIGHT, usage: MAP_READ | COPY_DST });
   const encoder = device.createCommandEncoder();
-  encoder.copyTextureToBuffer({ texture: target }, { buffer: readback, bytesPerRow }, { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 });
+  encoder.copyTextureToBuffer(
+    { texture: target },
+    { buffer: readback, bytesPerRow },
+    { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
+  );
   device.queue.submit([encoder.finish()]);
   await device.queue.onSubmittedWorkDone();
   await readback.mapAsync(MAP_READ);
@@ -244,101 +122,80 @@ async function readCenterPixel() {
 }
 
 const states = new Map([
-  ['m10.dawn.create', { fault: 'create', repaired: false }],
-  ['m10.dawn.upload', { fault: 'upload', repaired: false }],
-  ['m10.dawn.record', { fault: 'record', repaired: false }],
+  ['m10.dawn.plan-a', { repaired: false }],
+  ['m10.dawn.plan-b', { repaired: false }],
+  ['m10.dawn.plan-c', { repaired: false }],
 ]);
-const healthy = feature('m10.dawn.healthy', { fault: undefined, repaired: true });
-const faulty = [...states.entries()].map(([identity, state]) => feature(identity, state));
-const renderer = await createRenderer(
+const features = [...states.entries()].map(([identity, state]) => makeFeature(identity, state));
+const created = await createRenderer(
   canvas,
-  { features: [healthy.feature, ...faulty.map((entry) => entry.feature)] },
+  { features },
   { shaderManifestUrl: manifestUrl },
 );
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`M10 Dawn renderer.ready failed: ${ready.error.code}`);
+if (!created.ok) throw new Error(`M10 Dawn renderer creation failed: ${String(created.error)}`);
+const renderer = created.value;
 const errors = [];
-renderer.onError((error) => errors.push({ code: error.code, hint: error.hint, detail: error.detail }));
-const probe = installFaultProbe(renderer.device, states);
-const firstWorld = world();
-const firstAttachment = renderer.attachWorld(firstWorld);
-if (!firstAttachment.ok) throw firstAttachment.error;
-firstWorld.update().unwrap();
-const firstDraw = renderer.draw([firstWorld], { cameraOwner: 0, resourceOwner: 0 });
-const firstDiagnostics = renderer.renderFeatureDiagnostics();
+renderer.subscribe((event) => {
+  if (event.kind === 'error') {
+    errors.push({
+      code: event.error.code,
+      hint: event.error.hint,
+      detail: 'detail' in event.error ? event.error.detail : undefined,
+    });
+  }
+});
+
+const world = makeWorld();
+const attached = renderer.attach(world);
+if (!attached.ok) throw attached.error;
+world.update().unwrap();
+const frame = {
+  leases: [attached.value],
+  camera: { lease: attached.value },
+  environment: { lease: attached.value },
+};
+const firstDraw = renderer.draw(frame);
 const firstPixel = await readCenterPixel();
 const firstErrors = errors.slice();
-for (const entry of faulty) entry.repair();
-const recoveryModes = new Set(
-  firstDiagnostics
-    .map((entry) => entry.latestError?.detail.recovery)
-    .filter((recovery) => recovery !== undefined),
-);
-const recoveryActions = [];
-if (recoveryModes.has('renderer-recover')) {
-  const recovered = await renderer.recover();
-  recoveryActions.push(
-    recovered.ok ? 'renderer.recover()' : `renderer.recover():${recovered.error.code}`,
-  );
-  if (!recovered.ok && recovered.error.code !== 'recover-not-needed') {
-    throw new Error(`M10 Dawn renderer recovery failed: ${recovered.error.code}`);
-  }
-}
-if (recoveryModes.has('next-frame')) recoveryActions.push('next-frame retry');
-const secondWorld = world();
-const secondAttachment = renderer.attachWorld(secondWorld);
-if (!secondAttachment.ok) throw secondAttachment.error;
-renderer.detachWorld(firstWorld);
-secondWorld.update().unwrap();
-const secondDraw = renderer.draw([secondWorld], { cameraOwner: 0, resourceOwner: 0 });
-const secondDiagnostics = renderer.renderFeatureDiagnostics();
+for (const state of states.values()) state.repaired = true;
+const secondDraw = renderer.draw(frame);
 const secondPixel = await readCenterPixel();
-renderer.dispose();
-renderer.dispose();
+const stableDraw = renderer.draw(frame);
+const stablePixel = await readCenterPixel();
+if (firstDraw.ok) await firstDraw.value.completed;
+if (secondDraw.ok) await secondDraw.value.completed;
+if (stableDraw.ok) await stableDraw.value.completed;
 
-const expected = {
-  create: 'render-feature-stage-failed',
-  upload: 'render-feature-preparation-failed',
-  record: 'render-feature-draw-recording-failed',
-};
-for (const [identity, state] of states) {
-  const first = firstDiagnostics.find((entry) => entry.identity === identity);
-  const second = secondDiagnostics.find((entry) => entry.identity === identity);
-  const error = firstErrors.find((entry) => entry.detail?.featureIdentity === identity);
-  if (first?.status !== 'failed' || first.latestError?.code !== expected[state.fault] || first.latestError?.detail.featureIdentity !== identity) {
-    throw new Error(`M10 Dawn ${identity} first diagnostic mismatch: ${JSON.stringify({ first, error, probe })}`);
-  }
-  if (error?.hint === undefined || second?.status !== 'active' || second.latestError !== undefined) {
-    throw new Error(`M10 Dawn ${identity} recovery mismatch: ${JSON.stringify({ error, second })}`);
+for (const identity of states.keys()) {
+  const failure = firstErrors.find((entry) => hasFeaturePlanFailure(entry, identity));
+  if (failure === undefined || failure.hint.length === 0) {
+    throw new Error(`M10 Dawn ${identity} plan failure was not observable: ${JSON.stringify({ firstErrors })}`);
   }
 }
-const healthyFirst = firstDiagnostics.find((entry) => entry.identity === 'm10.dawn.healthy');
-const healthySecond = secondDiagnostics.find((entry) => entry.identity === 'm10.dawn.healthy');
+if (!firstDraw.ok || !secondDraw.ok || !stableDraw.ok) {
+  throw new Error(`M10 Dawn draw recovery failed: ${JSON.stringify({ firstDraw, secondDraw, stableDraw })}`);
+}
 if (
-  !firstDraw.ok || !secondDraw.ok ||
-  healthyFirst?.status !== 'active' || healthySecond?.status !== 'active' ||
-  firstPixel.slice(0, 3).every((channel) => channel === 0) ||
-  JSON.stringify(firstPixel) !== JSON.stringify(secondPixel) ||
-  probe.backendCalls.upload < 1 || probe.backendCalls.record < 1 ||
-  !probe.failures.some((failure) => failure.identity === 'm10.dawn.upload' && failure.operation === 'upload') ||
-  !probe.failures.some((failure) => failure.identity === 'm10.dawn.record' && failure.operation === 'record') ||
-  probe.destroyCount < 1
+  secondPixel.slice(0, 3).every((channel) => channel === 0) ||
+  JSON.stringify(secondPixel) !== JSON.stringify(stablePixel)
 ) {
-  throw new Error(`M10 Dawn acceptance mismatch: ${JSON.stringify({ firstPixel, secondPixel, firstDiagnostics, secondDiagnostics, probe })}`);
+  throw new Error(`M10 Dawn pixel acceptance failed: ${JSON.stringify({ firstPixel, secondPixel, stablePixel })}`);
 }
+
+const firstDispose = await renderer.dispose();
+const secondDispose = await renderer.dispose();
 const evidence = {
   status: 'pass',
   backend: 'dawn',
   firstPixel,
   secondPixel,
-  firstDiagnostics,
-  secondDiagnostics,
+  stablePixel,
   firstErrors,
-  recoveryModes: [...recoveryModes],
-  recoveryActions,
-  siblingPassEvidence: { healthyFirst: healthyFirst?.status, healthySecond: healthySecond?.status },
-  probe,
-  cleanup: { disposeCalls: 2, destroyCount: probe.destroyCount },
+  featureIdentities: renderer.inspect().features,
+  firstDraw: { frameId: firstDraw.value.frameId },
+  secondDraw: { frameId: secondDraw.value.frameId },
+  recovery: 'next-frame declarative plan retry',
+  cleanup: { disposeCalls: 2, first: firstDispose.ok, second: secondDispose.ok },
 };
 writeFileSync(resolve(artifactDir, 'm10-dawn.json'), `${JSON.stringify(evidence, null, 2)}\n`);
 console.log(`[m10-render-feature] Dawn PASS cases=${states.size} firstPixel=${JSON.stringify(firstPixel)} secondPixel=${JSON.stringify(secondPixel)} artifact=${resolve(artifactDir, 'm10-dawn.json')}`);

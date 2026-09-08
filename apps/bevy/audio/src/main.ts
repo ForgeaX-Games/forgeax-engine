@@ -1,11 +1,14 @@
 // Reproduce Bevy's `audio` example.
 
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
 import { AudioSource, type AudioBackend, audioPlugin } from '@forgeax/engine-audio';
+import { webAudioPlugin } from '@forgeax/engine-audio-webaudio';
 import { Update } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { AudioClipAsset, Handle } from '@forgeax/engine-types';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { buildAudioWorld, HANDLE_NONE } from './audio';
 
@@ -14,7 +17,7 @@ const canvas = document.querySelector<HTMLCanvasElement>('#app');
 const audioStatus = document.querySelector<HTMLSpanElement>('#audio-status');
 if (!canvas || !audioStatus) throw new Error('bevy-audio: missing canvas or overlay');
 
-const appResult = await createApp(canvas, { plugins: [audioPlugin()], pointerLockAllowed: () => false }, { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() });
+const appResult = await createApp(canvas, { plugins: [webAudioPlugin(), audioPlugin()], pointerLockAllowed: () => false }, { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) });
 if (!appResult.ok) {
   if (appResult.error instanceof EngineEnvironmentError) console.error('[bevy-audio] EngineEnvironmentError creating renderer');
   else console.error(`[bevy-audio] ${appResult.error.code}: ${appResult.error.hint}`);
@@ -22,13 +25,12 @@ if (!appResult.ok) {
 }
 const app = appResult.value;
 app.onError((error) => console.error(`[bevy-audio] app-error ${error.code}`));
-const ready = await app.renderer.ready;
-if (!ready.ok) throw new Error(`bevy-audio: renderer.ready failed: ${ready.error.code}`);
 
 const world = app.world;
 const scene = buildAudioWorld(world, canvas.width / Math.max(canvas.height, 1));
-const assets = app.renderer.assets;
-assets.configurePackIndex('/pack-index.json');
+const assets = app.assets;
+if (assets === undefined) throw new Error('bevy-audio: assets unavailable');
+configureRuntimeAssetCatalog(assets, runtimeBinding);
 const audio = world.getResource<AudioBackend>('AudioEngine');
 if (!audio) throw new Error('bevy-audio: AudioEngine resource missing');
 

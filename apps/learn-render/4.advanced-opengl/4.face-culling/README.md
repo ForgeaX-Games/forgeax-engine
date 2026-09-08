@@ -3,7 +3,7 @@
 > [!NOTE]
 > **LO original chapter**: [LearnOpenGL 4.4 Face Culling](https://learnopengl.com/Advanced-OpenGL/Face-culling)
 >
-> **Engine surface**: `createApp` + `MeshRenderer` with `frontFace` + `cullMode` in `MaterialRenderState` + `loadByGuid<TextureAsset>` texture loading + `configurePackIndex`.
+> **Engine surface**: `createApp` + `MeshRenderer` with `frontFace` + `cullMode` in `MaterialRenderState` + `loadByGuid<TextureAsset>` texture loading + `configureRuntimeAssetCatalog`.
 
 ## Hit-rate index (AI user fast-locate)
 
@@ -12,7 +12,7 @@
 | `frontFace` winding flip | `frontFace:` | `src/index.ts` (cube MaterialAsset renderState) |
 | `cullMode` face culling | `cullMode:` | `src/index.ts` (cube MaterialAsset renderState) |
 | `loadByGuid<TextureAsset>` GUID texture loading | `loadByGuid<TextureAsset>` | `src/index.ts` (bootstrap section) |
-| `configurePackIndex` texture catalog wiring | `configurePackIndex` | `src/index.ts` (bootstrap section) |
+| Runtime catalog wiring | `configureRuntimeAssetCatalog` | `src/index.ts` (bootstrap section) |
 
 ## What this example shows
 
@@ -28,7 +28,7 @@ In forgeax, this example expresses the same culling semantics without manual ver
 
 4. **AC-09 verification**: Changing `cullMode` to `'front'` culls front-facing triangles -- the inner faces (CW-appearing from inside, front-facing with `frontFace='cw'`) are discarded, and the camera inside the cube sees only clear-color. Changing `frontFace` to `'ccw'` restores the default: CCW outer faces are front-facing and only the outer faces render (invisible from inside because they face outward).
 
-The scene uses a single `marble.jpg` textured cube. Texture is loaded through the GUID asset pipeline (`configurePackIndex('/pack-index.json')` + `loadByGuid<TextureAsset>`) from the `forgeax-engine-assets/learn-opengl/textures/` submodule. The cube uses **unlit** shading (forgeax `default-unlit` material shader) -- LO 4.4 teaches face culling, not lighting, so the full-brightness texture sample matches the tutorial's intent and keeps the interior walls evenly visible (a single directional light would darken inward-facing walls). The `default-unlit` shader honors the per-material `renderState` (`frontFace` / `cullMode`) on the same renderState-aware pipeline path that `standard` uses.
+The scene uses a single `marble.jpg` textured cube. Texture is loaded through the GUID asset pipeline (`configureRuntimeAssetCatalog(assets, runtimeBinding)` + `loadByGuid<TextureAsset>`), selecting the scoped dev catalog or emitted production catalog as appropriate. The cube uses **unlit** shading (forgeax `default-unlit` material shader) -- LO 4.4 teaches face culling, not lighting, so the full-brightness texture sample matches the tutorial's intent and keeps the interior walls evenly visible (a single directional light would darken inward-facing walls). The `default-unlit` shader honors the per-material `renderState` (`frontFace` / `cullMode`) on the same renderState-aware pipeline path that `standard` uses.
 
 ## Run
 
@@ -91,4 +91,4 @@ pnpm --filter "@forgeax/app-learn-render-4-advanced-opengl-4-face-culling" typec
 - Package name: `@forgeax/app-learn-render-4-advanced-opengl-4-face-culling` is grep-able by chapter prefix
 - Three-section source markers (`// 1. engine usage` / `// 2. example glue` / `// 3. bootstrap`) serve as grep anchors
 - `frontFace: 'cw'` is a top-level literal in `MaterialRenderState.renderState` -- AI users see it alongside `cullMode` at the same nesting level, no `as` casts needed
-- `loadByGuid<TextureAsset>` + `configurePackIndex` pattern is shared with all other learn-render 4.x demos (4.1, 4.2, 4.3), making it a consistent discoverable texture-loading idiom
+- `loadByGuid<TextureAsset>` + `configureRuntimeAssetCatalog` pattern is shared with all other learn-render 4.x demos (4.1, 4.2, 4.3), making it a consistent discoverable texture-loading idiom

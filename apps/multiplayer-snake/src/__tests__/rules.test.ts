@@ -5,7 +5,7 @@ const state = (): SnakeGameState => ({
   tick: 0,
   nextId: 3,
   snakes: new Map([
-    [1, { peerId: 1, direction: 'right', score: 0, cells: [{ x: 1, y: 1 }], respawnAt: null }],
+    [1, { sessionId: 1, direction: 'right', score: 0, cells: [{ x: 1, y: 1 }], respawnAt: null }],
   ]),
   food: { x: 2, y: 1 },
   width: 8,
@@ -55,7 +55,7 @@ describe('Snake deterministic rules', () => {
   it('kills both snakes that enter the same cell', () => {
     const game = state();
     game.snakes.set(2, {
-      peerId: 2,
+      sessionId: 2,
       direction: 'left',
       score: 0,
       cells: [{ x: 3, y: 1 }],
@@ -76,7 +76,7 @@ describe('Snake deterministic rules', () => {
     ];
     snake.direction = 'left';
     game.snakes.set(2, {
-      peerId: 2,
+      sessionId: 2,
       direction: 'right',
       score: 0,
       cells: [
@@ -114,7 +114,7 @@ describe('Snake deterministic rules', () => {
   it('kills both snakes on a head swap', () => {
     const game = state();
     game.snakes.set(2, {
-      peerId: 2,
+      sessionId: 2,
       direction: 'left',
       score: 0,
       cells: [{ x: 2, y: 1 }],

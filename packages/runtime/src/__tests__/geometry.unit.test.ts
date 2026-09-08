@@ -27,15 +27,7 @@ import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { World as WorldType } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { Renderer as RendererType } from '@forgeax/engine-render';
-import type { RenderError, SkinError } from '@forgeax/engine-render/internal';
-import {
-  Camera,
-  createMeshSsboGrowController,
-  Instances,
-  MeshFilter,
-  MeshRenderer,
-} from '@forgeax/engine-render/internal';
+import type { RenderError, Renderer as RendererType, SkinError } from '@forgeax/engine-render';
 import type { PipelineLayout, RenderPipeline, RhiDevice, ShaderModule } from '@forgeax/engine-rhi';
 import { Transform } from '@forgeax/engine-scene';
 import type { AssetErrorDetail, Handle, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
@@ -49,24 +41,73 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
 
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
+import { propagateTransforms } from '@forgeax/engine-scene';
+import { buildMeshAttributeMapForUvSets } from '../../../geometry/src/vertex-attribute-layout';
+import { createMeshSsboGrowController } from '../../../render/src/assembly/factory';
+import { Camera } from '../../../render/src/components/camera';
+import { Instances } from '../../../render/src/components/instances';
+import { MeshFilter } from '../../../render/src/components/mesh-filter';
+import { MeshRenderer } from '../../../render/src/components/mesh-renderer';
+import type { MeshGpuHandles } from '../../../render/src/device/gpu-residency';
+import { GpuResidencyCache } from '../../../render/src/device/gpu-residency';
+import type { GpuBuffer } from '../../../render/src/gpu-resource';
 import type {
-  ExtractedFrame,
-  GpuBuffer,
-  MeshGpuHandles,
   PipelineBuilderContext,
   PipelineBuilderShaderModuleFactory,
-} from '@forgeax/engine-render/internal';
+} from '../../../render/src/pipeline-builder';
+import { buildPipelineForMaterialShader } from '../../../render/src/pipeline-builder';
 import {
-  buildPipelineForMaterialShader,
   ensureMeshSsboCapacity,
-  extractFrame,
-  GpuResourceStore,
   isMeshSsboDevMode,
-  prepareExtractContext,
   setMeshSsboDevModeProbeForTests,
-} from '@forgeax/engine-render/internal';
-import { propagateTransforms } from '@forgeax/engine-scene';
+} from '../../../render/src/record/mesh-ssbo';
+import type { ExtractedFrame } from '../../../render/src/render-system-extract';
+import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+import { drawWithOwners } from './renderer-test-utils';
+
+type RendererErrorObservation = {
+  readonly code: string;
+  readonly detail?: unknown;
+  readonly hint?: string;
+};
+
+function unwrapRendererError(value: unknown): RendererErrorObservation {
+  let current = value as RendererErrorObservation;
+  while (
+    current.detail !== undefined &&
+    typeof current.detail === 'object' &&
+    current.detail !== null
+  ) {
+    const cause = (current.detail as { cause?: unknown }).cause;
+    if (
+      cause === undefined ||
+      typeof cause !== 'object' ||
+      cause === null ||
+      typeof (cause as { code?: unknown }).code !== 'string'
+    ) {
+      break;
+    }
+    current = cause as RendererErrorObservation;
+  }
+  return current;
+}
+
+function subscribeRendererErrors(
+  renderer: RendererType,
+  listener: (error: RendererErrorObservation) => void,
+): () => void {
+  return renderer.subscribe((event) => {
+    if (event.kind === 'error') listener(unwrapRendererError(event.error));
+  });
+}
+
+function drawPublished(renderer: RendererType, world: WorldType) {
+  const attached = renderer.attach(world);
+  if (!attached.ok) throw attached.error;
+  world.update().unwrap();
+  return drawWithOwners(renderer, world);
+}
 
 {
   // --- from builder-topology-stripIndexFormat.test.ts ---
@@ -340,11 +381,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       indices: new Uint16Array([0, 1, 2]),
       attributes: { position: positions },
       aabb,
+      materialSlots: [{ slotName: 'Default' }],
       submeshes: [
         {
           indexOffset: 0,
           indexCount: 3,
           vertexCount: vertices.length,
+          materialSlot: 0,
           topology: 'triangle-list',
         },
       ],
@@ -486,11 +529,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         vertices,
         indices: new Uint16Array([0, 1, 2]),
         attributes: {},
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 3,
             vertexCount: vertices.length,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -527,11 +572,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         vertices,
         indices: new Uint16Array([0, 1, 2]),
         attributes: {},
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 3,
             vertexCount: vertices.length,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -664,23 +711,17 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   function makeHarness(): { world: World; collected: CollectedError[] } {
     const collected: CollectedError[] = [];
     const world = new World();
-    world.setErrorHandler((err) => {
-      const e = err as { code?: string; detail?: unknown };
-      if (typeof e.code === 'string') {
-        collected.push({ code: e.code, detail: e.detail });
-      }
-    });
     return { world, collected };
   }
 
   describe('w14 - Instances { transforms: array<f32> } schema (AC-06)', () => {
     it('Instances.schema.transforms is the array<f32> keyword (no legacy buffer/count fields)', () => {
       expect(Instances.name).toBe('Instances');
-      expect(Object.keys(Instances.schema).length).toBe(1);
-      expect((Instances.schema as Record<string, unknown>).transforms).toBe('array<f32>');
+      expect(Object.keys(Instances.fields).length).toBe(1);
+      expect(Instances.fields.transforms?.type).toBe('array<f32>');
       // Legacy fields retired in M3.
-      expect((Instances.schema as Record<string, unknown>).buffer).toBeUndefined();
-      expect((Instances.schema as Record<string, unknown>).count).toBeUndefined();
+      expect(Instances.fields.buffer).toBeUndefined();
+      expect(Instances.fields.count).toBeUndefined();
     });
 
     it('Instances component carries no per-component stride option (decision §2.3 migration)', () => {
@@ -729,7 +770,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // --- from mesh-gpu-handles-vertex-only.test.ts ---
   // mesh-gpu-handles-vertex-only.test - M2 / w3 (TDD).
   //
-  // Coverage (vertex-only mesh upload chain through GpuResourceStore):
+  // Coverage (vertex-only mesh upload chain through GpuResidencyCache):
   //   (a) MeshGpuHandles type carries `vertexCount: number` + `indexed: boolean`
   //       and `indexBuffer: Buffer | null` (type-level via a const-assigned literal
   //       that must compile).
@@ -795,7 +836,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       kind: 'mesh',
       vertices,
       indices: new Uint16Array([0, 1, 2, 0, 2, 3]),
-      attributes: {},
+      attributes: buildMeshAttributeMapForUvSets(1),
       submeshes: [
         {
           indexOffset: 0,
@@ -812,7 +853,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     return {
       kind: 'mesh',
       vertices,
-      attributes: {},
+      attributes: buildMeshAttributeMapForUvSets(1),
       submeshes: [
         {
           indexOffset: 0,
@@ -852,7 +893,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const probe: BufferProbe = { createdLabels: [] };
       const device = makeMockDevice(probe);
       const world = new World();
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
       store.configureGpuDevice(
         device,
         undefined,
@@ -883,7 +924,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const probe: BufferProbe = { createdLabels: [] };
       const device = makeMockDevice(probe);
       const world = new World();
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
       store.configureGpuDevice(
         device,
         undefined,
@@ -1650,7 +1691,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   //   (c) updateMesh on non-existent handle is a silent no-op (guards check
   //       meshGpuHandles.has + device existence).
 
-  // feat-20260601-gpu-resource-store-extraction M1: updateMesh moved to the GPU
+  // feat-20260601-device/gpu-residency-extraction M1: updateMesh moved to the GPU
   // store. The no-leak invariant is now structural-by-construction (the store
   // holds no registry reference, D-2), but the test still asserts that driving
   // updateMesh never grows the registry. Without a wired device the store
@@ -1664,7 +1705,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       kind: 'mesh',
       vertices,
       indices,
-      attributes: {},
+      attributes: buildMeshAttributeMapForUvSets(1),
       aabb: new Float32Array(6),
       submeshes: [
         {
@@ -1703,7 +1744,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const world = new World();
       const mesh = makeQuadMesh();
       const handle = world.allocSharedRef('MeshAsset', mesh);
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
       void unwrapHandle(handle);
 
       // Save the initial live shared-ref slot count.
@@ -1726,7 +1767,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const world = new World();
       const mesh = makeQuadMesh();
       const handle = world.allocSharedRef('MeshAsset', mesh);
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
 
       const before = world.sharedRefs._liveCount();
       if (!(mesh.indices instanceof Uint16Array)) return;
@@ -1739,7 +1780,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const world = new World();
       const mesh = makeQuadMesh();
       const handle = world.allocSharedRef('MeshAsset', mesh);
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
       const id = unwrapHandle(handle);
 
       // updateMesh with larger data (expansion path)
@@ -1789,11 +1830,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         kind: 'mesh',
         vertices: new Float32Array(2 * 12),
         attributes: {},
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 0,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'line-strip',
           },
         ],
@@ -1813,11 +1856,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         kind: 'mesh',
         vertices: new Float32Array(3 * 12),
         attributes: {},
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 0,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'triangle-strip',
           },
         ],
@@ -1837,11 +1882,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         kind: 'mesh',
         vertices: new Float32Array(0),
         attributes: {},
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 0,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'line-list',
           },
         ],
@@ -1861,11 +1908,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         kind: 'mesh',
         vertices: new Float32Array(0),
         attributes: {},
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 0,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -1879,11 +1928,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         vertices: new Float32Array(3 * 12),
         indices: new Uint16Array([0, 1, 2]),
         attributes: {},
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 3,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'point-list',
           },
         ],
@@ -1897,11 +1948,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         vertices: new Float32Array(2 * 12),
         indices: new Uint16Array([0, 1]),
         attributes: {},
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 2,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'line-list',
           },
         ],
@@ -1914,11 +1967,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         kind: 'mesh',
         vertices: new Float32Array(2 * 12),
         attributes: {},
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 0,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'line-list',
           },
         ],
@@ -1933,11 +1988,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         vertices: new Float32Array(4 * 12),
         indices: new Uint32Array([0, 1, 2, 3]),
         attributes: {},
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 4,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'triangle-strip',
           },
         ],
@@ -1951,11 +2008,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         kind: 'mesh',
         vertices: new Float32Array(3 * 12),
         attributes: {},
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 0,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -2023,6 +2082,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       limits: {},
       queue: {
         submit: () => undefined,
+        onSubmittedWorkDone: () => Promise.resolve(undefined),
         writeBuffer: () => undefined,
         writeTexture: () => undefined,
       },
@@ -2106,15 +2166,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     };
   }
 
-  interface RendererLike {
-    ready: Promise<void>;
-    draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
-    onError: (cb: (err: { code: string }) => void) => () => void;
-    assets: { register: (asset: unknown) => { ok: boolean; value: unknown } };
-  }
+  type RendererLike = RendererType;
 
   async function importEngine(): Promise<{
-    createRenderer: (canvas: unknown, opts?: unknown) => Promise<RendererLike>;
+    createRenderer: (...args: unknown[]) => Promise<{ unwrap(): RendererLike }>;
   }> {
     return (await import(ENGINE)) as never;
   }
@@ -2137,7 +2192,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     Instances: unknown;
   }> {
     return {
-      ...(await import('@forgeax/engine-render/internal')),
+      ...(await import('@forgeax/engine-render')),
       ...(await import('@forgeax/engine-scene')),
     } as never;
   }
@@ -2177,10 +2232,23 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       kind: 'mesh',
       vertices: new Float32Array(6 * 12),
       indices: new Uint16Array([0, 1, 2, 3, 4, 5]),
-      attributes: {},
+      attributes: buildMeshAttributeMapForUvSets(1),
+      materialSlots: [{ slotName: 'First' }, { slotName: 'Second' }],
       submeshes: [
-        { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' as const },
-        { indexOffset: 3, indexCount: 3, vertexCount: 3, topology: 'triangle-list' as const },
+        {
+          indexOffset: 0,
+          indexCount: 3,
+          vertexCount: 3,
+          materialSlot: 0,
+          topology: 'triangle-list' as const,
+        },
+        {
+          indexOffset: 3,
+          indexCount: 3,
+          vertexCount: 3,
+          materialSlot: 1,
+          topology: 'triangle-list' as const,
+        },
       ],
     };
   }
@@ -2202,14 +2270,15 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     const { device } = makeMockGPUDevice(spies);
     vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
     const { createRenderer } = await importEngine();
-    const renderer = await createRenderer(
-      makeMockCanvas(),
-      {},
-      {
-        shaderManifestUrl: buildManifestDataUrl(),
-      },
-    );
-    await renderer.ready;
+    const renderer = (
+      await createRenderer(
+        makeMockCanvas(),
+        {},
+        {
+          shaderManifestUrl: buildManifestDataUrl(),
+        },
+      )
+    ).unwrap();
     return { renderer };
   }
 
@@ -2288,14 +2357,14 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const spies = makePassSpies();
       const { renderer } = await setupRenderer(spies);
       const errors: string[] = [];
-      renderer.onError((e) => errors.push(e.code));
+      subscribeRendererErrors(renderer, (e) => errors.push(e.code));
 
       const world = await spawnInstancedScene(renderer, twoSubmeshMesh(), 2, 4);
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      drawPublished(renderer, world as WorldType);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      spies.draw.mockClear();
+      spies.drawIndexed.mockClear();
+      drawPublished(renderer, world as WorldType);
 
       // Each submesh draws M times (4 instances each, shared instanceCount).
       // N=2 submeshes * M=1 draw each = 2 drawIndexed calls.
@@ -2310,14 +2379,14 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const spies = makePassSpies();
       const { renderer } = await setupRenderer(spies);
       const errors: string[] = [];
-      renderer.onError((e) => errors.push(e.code));
+      subscribeRendererErrors(renderer, (e) => errors.push(e.code));
 
       const world = await spawnInstancedScene(renderer, twoSubmeshMesh(), 2, 4);
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      drawPublished(renderer, world as WorldType);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      spies.draw.mockClear();
+      spies.drawIndexed.mockClear();
+      drawPublished(renderer, world as WorldType);
 
       // All submesh draws share the same instanceCount (D-8).
       // Verify drawIndexed calls carry instanceCount parameter at index 1.
@@ -2340,7 +2409,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const spies = makePassSpies();
       const { renderer } = await setupRenderer(spies);
       const errors: string[] = [];
-      renderer.onError((e) => errors.push(e.code));
+      subscribeRendererErrors(renderer, (e) => errors.push(e.code));
 
       // Spawn without Instances component.
       const { World } = await importEcs();
@@ -2388,13 +2457,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         { component: C.Transform, data: originTransform() },
       );
 
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-
-      (world as WorldType).update().unwrap();
-
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      drawPublished(renderer, world as WorldType);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      spies.draw.mockClear();
+      spies.drawIndexed.mockClear();
+      drawPublished(renderer, world as WorldType);
 
       // Without Instances, instanceCount defaults to 1.
       const indexedCalls = spies.drawIndexed.mock.calls as Array<
@@ -2439,6 +2506,14 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     indices?: Uint16Array;
   }) {
     const indices = overrides.indices ?? new Uint16Array([0, 1, 2, 0, 2, 3]);
+    const submeshes = overrides.submeshes ?? [
+      {
+        indexOffset: 0,
+        indexCount: 6,
+        vertexCount: 4,
+        topology: 'triangle-list' as const,
+      },
+    ];
     return {
       kind: 'mesh' as const,
       vertices: new Float32Array(4 * 12), // 4 verts x 12 floats
@@ -2446,14 +2521,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       attributes: {
         position: new Float32Array(4 * 3),
       },
-      submeshes: overrides.submeshes ?? [
-        {
-          indexOffset: 0,
-          indexCount: 6,
-          vertexCount: 4,
-          topology: 'triangle-list' as const,
-        },
-      ],
+      materialSlots: [{ slotName: 'Default' }],
+      submeshes: submeshes.map((submesh) => ({ ...submesh, materialSlot: 0 })),
     };
   }
 
@@ -2537,12 +2606,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
   });
 
-  // ── read-side: material-count-mismatch ───────────────────────────────────────
+  // ── read-side: renderer override diagnostics ─────────────────────────────────
 
-  describe('read-side: mesh-renderer-material-count-mismatch (AC-05 a)', () => {
-    it('ASSET_ERROR_HINTS contains material-count-mismatch hint', () => {
-      // The ASSET_ERROR_HINTS map is imported above — it contains all 19 codes.
-      expect(ASSET_ERROR_HINTS['mesh-renderer-material-count-mismatch']).toBeTruthy();
+  describe('read-side: MeshRenderer override diagnostics', () => {
+    it('ASSET_ERROR_HINTS contains invalid and overflow override hints', () => {
+      expect(ASSET_ERROR_HINTS['mesh-renderer-material-override-invalid']).toBeTruthy();
+      expect(ASSET_ERROR_HINTS['mesh-renderer-material-override-overflow']).toBeTruthy();
     });
 
     it('AssetErrorDetail accepts expectedCount / actualCount / meshAssetGuid shape', () => {

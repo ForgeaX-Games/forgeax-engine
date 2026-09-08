@@ -86,19 +86,18 @@ describe('shadow M1a dawn (w2 RED)', () => {
       // lightSpaceMatrix is a 16-element f32 array, col-major mat4.
       // With non-degenerate direction, element-wise epsilon <= 1e-5.
       expect(refMat.length).toBe(16);
-      // AC-11 lightSpaceMatrix shape verified: the host-side reference
-      // computation produces a 16-element mat4. Real GPU verification
-      // of the matrix contents is covered by shadow-m2.dawn.test.ts
-      // (AC-10/11 canonical coverage via debugReadback + debugSampleShadowFactor).
+      // AC-11 lightSpaceMatrix shape is verified by the host-side reference
+      // computation; the real GPU shadow graph is covered by the current
+      // Standard Dawn shadow suites.
     });
   });
 
-  // ── AC-10: debugReadback shape ────────────────────────────────────────
-  describe('AC-10 debugReadback shape', () => {
-    it('debugReadback returns { center, corners: {tl,tr,bl,br}, mapSize } POD', () => {
+  // ── AC-10: shadow fixture shape ───────────────────────────────────────
+  describe('AC-10 shadow fixture shape', () => {
+    it('keeps the canonical shadow map size for Standard graph coverage', () => {
       // M1 scope: verify the fixture constant matches expected value.
-      // Real GPU readback assertions are in shadow-m2.dawn.test.ts
-      // (AC-10/11 canonical coverage via debugReadback GPU probe).
+      // Real GPU behavior is covered by the current Standard Dawn shadow
+      // graph and pixel-observation suites.
       expect(FIXTURE_MAP_SIZE).toBe(1024);
     });
   });

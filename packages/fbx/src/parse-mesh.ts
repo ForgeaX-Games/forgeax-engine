@@ -1,6 +1,9 @@
 // parse-mesh.ts — FBX JSON POD to MeshPod bridge (t28).
 
-import type { MeshPod } from '@forgeax/engine-types';
+import type { MeshPod, MorphTarget } from '@forgeax/engine-types';
+
+const MORPH_MAX_TARGETS = 8;
+const MORPH_MAX_ATTRIBUTES = 8;
 
 export interface FbxRawMesh {
   readonly name?: string;
@@ -10,6 +13,12 @@ export interface FbxRawMesh {
   readonly polygonCount: number;
   readonly sourceIndex: number;
   readonly materialIndex: number;
+  readonly morphTargets?: readonly {
+    readonly position?: number[];
+    readonly normal?: number[];
+    readonly tangent?: number[];
+  }[];
+  readonly morphWeights?: number[];
 }
 
 export interface FbxRawDocument {
@@ -41,6 +50,47 @@ export function parseMesh(raw: FbxRawMesh, sourceIndex: number): MeshPod {
   const posCount = raw.vertices.length / 3;
   const idxCount = rawIndices?.length ?? 0;
   const normal = raw.attributes.NORMAL;
+  const rawMorphTargets = raw.morphTargets ?? [];
+  const morphAttributeCount = rawMorphTargets.reduce(
+    (count, target) =>
+      count + (target.position ? 1 : 0) + (target.normal ? 1 : 0) + (target.tangent ? 1 : 0),
+    0,
+  );
+  if (rawMorphTargets.length > MORPH_MAX_TARGETS || morphAttributeCount > MORPH_MAX_ATTRIBUTES) {
+    throw new Error('fbx-morph-invalid: morph target or attribute limit exceeded');
+  }
+  if (
+    rawMorphTargets.some(
+      (target) =>
+        target.position === undefined &&
+        target.normal === undefined &&
+        target.tangent === undefined,
+    )
+  ) {
+    throw new Error('fbx-morph-invalid: every target must contain POSITION, NORMAL, or TANGENT');
+  }
+  const morphTargets = rawMorphTargets.map((target): MorphTarget => {
+    const out: {
+      position?: Float32Array;
+      normal?: Float32Array;
+      tangent?: Float32Array;
+    } = {};
+    for (const [key, values, components] of [
+      ['position', target.position, 3],
+      ['normal', target.normal, 3],
+      ['tangent', target.tangent, 4],
+    ] as const) {
+      if (values === undefined) continue;
+      if (values.length !== posCount * components) {
+        throw new Error(`fbx-morph-invalid: ${key} length does not match vertex count`);
+      }
+      out[key] = new Float32Array(values);
+    }
+    return out;
+  });
+  if (raw.morphWeights !== undefined && raw.morphWeights.length !== morphTargets.length) {
+    throw new Error('fbx-morph-invalid: default weight count does not match target count');
+  }
 
   // Determine if any attribute is corner-mapped (NORMAL or any TEXCOORD_n).
   const normalCorner = normal !== undefined && isCornerMapped(normal.length, 3, posCount, idxCount);
@@ -68,6 +118,29 @@ export function parseMesh(raw: FbxRawMesh, sourceIndex: number): MeshPod {
         expandedUvs.set(key, new Float32Array(idxCount * 2));
       }
     }
+    const expandedMorphTargets = morphTargets.map((target) => {
+      const expanded: {
+        position?: Float32Array;
+        normal?: Float32Array;
+        tangent?: Float32Array;
+      } = {};
+      for (const [key, values, components] of [
+        ['position', target.position, 3],
+        ['normal', target.normal, 3],
+        ['tangent', target.tangent, 4],
+      ] as const) {
+        if (values === undefined) continue;
+        const output = new Float32Array(idxCount * components);
+        for (let corner = 0; corner < idxCount; corner++) {
+          const vi = rawIndices[corner] ?? 0;
+          for (let component = 0; component < components; component++) {
+            output[corner * components + component] = values[vi * components + component] ?? 0;
+          }
+        }
+        expanded[key] = output;
+      }
+      return expanded;
+    });
     for (let corner = 0; corner < idxCount; corner++) {
       const vi = rawIndices[corner] ?? 0;
       expandedPos[corner * 3 + 0] = raw.vertices[vi * 3 + 0] ?? 0;
@@ -110,6 +183,10 @@ export function parseMesh(raw: FbxRawMesh, sourceIndex: number): MeshPod {
         },
       ],
       sourceIndex,
+      ...(expandedMorphTargets.length === 0 ? {} : { morphTargets: expandedMorphTargets }),
+      ...(raw.morphWeights === undefined
+        ? {}
+        : { morphWeights: new Float32Array(raw.morphWeights) }),
     };
   }
 
@@ -140,5 +217,7 @@ export function parseMesh(raw: FbxRawMesh, sourceIndex: number): MeshPod {
     attributes,
     submeshes,
     sourceIndex,
+    ...(morphTargets.length === 0 ? {} : { morphTargets }),
+    ...(raw.morphWeights === undefined ? {} : { morphWeights: new Float32Array(raw.morphWeights) }),
   };
 }

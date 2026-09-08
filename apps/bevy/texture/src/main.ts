@@ -27,7 +27,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = appResult.value;
-  console.warn(`[bevy-texture] backend=${app.renderer.backend}`);
+  console.warn(`[bevy-texture] state=${app.renderer.inspect().state}`);
 
   const checkerPixels = makeCheckerboardPixels();
   const texPod = {
@@ -42,17 +42,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const texHandle = app.world.allocSharedRef('TextureAsset', texPod);
   const texId = unwrapHandle(texHandle);
 
-  const uploadRes = await app.renderer.store.uploadTexture(texHandle, texPod, {
-    bytes: checkerPixels,
-    width: CHECKER_SIZE,
-    height: CHECKER_SIZE,
-    mime: 'image/png',
-    colorSpace: 'srgb',
-    mipmap: false,
-  });
-  if (!uploadRes.ok) {
-    console.error('[bevy-texture] texture upload failed:', uploadRes.error.code, uploadRes.error.hint);
-  }
 
   buildTextureWorld(app.world, texId);
 

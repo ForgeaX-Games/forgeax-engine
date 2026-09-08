@@ -4,22 +4,26 @@
 // migration, and the relationship callbacks that mutate component storage. World
 // remains the typed facade and supplies one narrow per-World state capability.
 
-import { err, ok, type Result, unwrapHandle } from '@forgeax/engine-types';
+import { err, isRetiredSlot, ok, type Result, unwrapHandle } from '@forgeax/engine-types';
 import type { BufferPool } from './buffer-pool';
 import {
   bufferFieldByteLength,
   type Component,
   type ComponentSchema,
+  componentId,
+  componentSchema,
   type InputShapeOf,
   isEntityField,
   isManagedBufferField,
   isManagedField,
-  resolveComponent,
+  type ManagedArrayElementType,
+  type ManagedArrayElementValue,
   type ShapeOf,
   TYPE_METADATA,
 } from './component';
 import { fillComponentDefaults, validateComponentDataKeys } from './component-default-fallback';
-import { validateSharedFieldValues } from './component-value-validate';
+import { componentDefinition } from './component-schema';
+import { validateManagedArrayValues, validateSharedFieldValues } from './component-value-validate';
 import { Entity as EntityComponent } from './entity';
 import {
   ENTITY_MAX_INDEX,
@@ -30,20 +34,24 @@ import {
   entityIndex,
 } from './entity-handle';
 import {
-  ArrayPopEmptyError,
-  CardinalityExceededError,
   ComponentAlreadyPresentError,
   ComponentNotPresentError,
   EntityIndexOverflowError,
-  FixedArrayOverflowError,
   FixedSizeMismatchError,
   ManagedBufferOutOfBoundsError,
+  RelationshipSelfCycleError,
+  RelationshipTargetReadonlyError,
   RemoveEssentialComponentError,
   StaleEntityError,
   validateEnumFieldValues,
+  validateNumericFieldValues,
 } from './errors';
-import type { ErrorContext } from './schedule';
-import { Severity } from './schedule';
+import {
+  isRelationshipTarget,
+  RelationshipIndex,
+  relationshipMirror,
+  relationshipRole,
+} from './relationship-index';
 import type { SharedRefStore } from './shared-ref-store';
 import { type Archetype, appendArchetypeRow } from './storage/archetype';
 import {
@@ -53,18 +61,39 @@ import {
   getRemoveEdge,
   getTable,
 } from './storage/archetype-graph';
+import { removeSparseTag } from './storage/change-detection';
 import { arrayCountColumnName, type FieldView, normalizeBufferWrite } from './storage/column';
-import { removeSparseTag } from './storage/sparse-tag-set';
 import { appendTableRow, type Table } from './storage/table';
 import type { UniqueRefStore } from './unique-ref-store';
-import type {
-  ArrayFieldElementValue,
-  ArrayFieldsOf,
-  ComponentData,
-  EcsError,
-  EntityRecord,
-} from './world';
+import type { ComponentData, EcsError, EntityRecord } from './world';
 import { ComponentStorage } from './world-component-storage';
+
+type ErrorContext = { readonly systemName: string };
+
+type ArrayFieldsOf<S extends ComponentSchema> = {
+  [K in keyof S]: S[K] extends
+    | `array<${ManagedArrayElementType}>`
+    | `array<${ManagedArrayElementType}, ${number}>`
+    ? K
+    : never;
+}[keyof S];
+
+type ArrayFieldElementValue<
+  S extends ComponentSchema,
+  K extends keyof S,
+> = S[K] extends `array<${infer Elem extends ManagedArrayElementType}>`
+  ? ManagedArrayElementValue<Elem>
+  : S[K] extends `array<${infer Elem extends ManagedArrayElementType}, ${number}>`
+    ? ManagedArrayElementValue<Elem>
+    : never;
+
+function relationshipPayloadWrites(data: Readonly<Record<string, unknown>>): boolean {
+  return Object.values(data).some((value) => {
+    if (Array.isArray(value)) return value.length > 0;
+    if (ArrayBuffer.isView(value)) return value.byteLength > 0;
+    return true;
+  });
+}
 
 export interface ComponentAccessState {
   readonly graph: ArchetypeGraph;
@@ -73,6 +102,7 @@ export interface ComponentAccessState {
   readonly bufferPool: BufferPool;
   readonly uniqueRefs: UniqueRefStore;
   readonly sharedRefs: SharedRefStore;
+  readonly relationshipIndexes: Map<number, RelationshipIndex>;
   readonly markComponentAdded: (entity: EntityHandle, componentId: number) => void;
   readonly markComponentsAdded: (entity: EntityHandle, componentIds: readonly number[]) => void;
   readonly markComponentChanged: (entity: EntityHandle, componentId: number) => void;
@@ -120,42 +150,45 @@ export class WorldComponentAccess {
     this.state.routeError(err, ctx);
   }
 
+  private relationshipIndex(component: Component): RelationshipIndex | undefined {
+    if (relationshipRole(component)?.kind !== 'source') return undefined;
+    let index = this.state.relationshipIndexes.get(componentId(component));
+    if (index === undefined) {
+      index = new RelationshipIndex();
+      this.state.relationshipIndexes.set(componentId(component), index);
+    }
+    return index;
+  }
+
+  /** Read the World-owned materialized target array; never consults a shadow list. */
+  relationshipTargetEntries(source: Component, target: EntityHandle): readonly EntityHandle[] {
+    const role = relationshipRole(source);
+    if (role?.kind !== 'source') return [];
+    const mirror = relationshipMirror(source);
+    if (mirror === undefined) return [];
+    const result = this.get(target, mirror);
+    if (!result.ok) return [];
+    const entries = (result.value as Record<string, unknown>)[role.targetField];
+    return entries !== undefined && typeof entries === 'object' ? (entries as EntityHandle[]) : [];
+  }
+
   private markComponentAdded(entity: EntityHandle, component: Component): void {
-    this.state.markComponentAdded(entity, component.id);
+    this.state.markComponentAdded(entity, componentId(component));
   }
 
   private markComponentChanged(entity: EntityHandle, component: Component): void {
-    this.state.markComponentChanged(entity, component.id);
+    this.state.markComponentChanged(entity, componentId(component));
   }
 
   private markStructureChanged(): void {
     this.state.markStructureChanged();
   }
 
-  checkCardinality(component: Component, extraCount: number): CardinalityExceededError | null {
-    const max = component.cardinality;
-    if (max === undefined || max <= 0) return null;
-
-    const localId = component.id;
-    // Count existing entities carrying this component across all archetypes.
-    let existingCount = 0;
-    for (const arch of this.graph.archetypes) {
-      if (arch.components.some((component) => component.id === localId)) {
-        existingCount += arch.size;
-      }
-    }
-
-    if (existingCount + extraCount > max) {
-      return new CardinalityExceededError(component.name, existingCount, max);
-    }
-    return null;
-  }
-
   relationshipTargetEntity(
     component: Component,
     value: Record<string, unknown>,
   ): EntityHandle | null {
-    for (const [fieldName, fieldType] of Object.entries(component.schema)) {
+    for (const [fieldName, fieldType] of Object.entries(componentSchema(component))) {
       if (isEntityField(fieldType)) {
         const raw = value[fieldName];
         if (raw === null || raw === undefined) return null;
@@ -167,37 +200,224 @@ export class WorldComponentAccess {
     return null;
   }
 
+  private preflightComponentFieldValues(
+    holder: EntityHandle | null,
+    componentData: ComponentData,
+  ): Result<void, EcsError> {
+    const data = componentData.data as Record<string, unknown>;
+    const arrayError = validateManagedArrayValues(componentData.component, data);
+    if (arrayError !== null) return err(arrayError as unknown as EcsError);
+    const sharedError = validateSharedFieldValues(componentData.component, data);
+    if (sharedError !== null) return err(sharedError as unknown as EcsError);
+    const numericError = validateNumericFieldValues(
+      componentData.component,
+      data,
+      holder === null ? undefined : (holder as number),
+    );
+    if (numericError !== null) return err(numericError as unknown as EcsError);
+    return ok(undefined);
+  }
+
   /**
-   * onInsert arm: append `holder` to the mirror list on the relationship
-   * target. Lazily creates the mirror component on the target when absent
-   * (D-3c). When the relationship is `exclusive` and `holder` already carried
-   * the component pointing at a different target, the caller (addComponent)
-   * has already pruned the old side; here we only append the new side.
-   * All mirror mutations run under the reentry guard.
+   * Validate one structural component payload without touching archetypes,
+   * columns, relationship mirrors, epochs, or managed-reference stores.
+   * CommandBuffer uses this same owner-level gate as the direct World facade;
+   * the optional pending set lets a batch refer to an entity reserved earlier
+   * in that batch without mistaking it for a stale live handle.
    */
+  preflightComponentData(
+    holder: EntityHandle | null,
+    componentData: ComponentData,
+    pendingEntities?: ReadonlySet<number>,
+    unavailableEntities?: ReadonlySet<number>,
+  ): Result<void, EcsError> {
+    const data = componentData.data as Record<string, unknown>;
+    const keyError = validateComponentDataKeys(componentData.component, data);
+    if (keyError !== null) return err(keyError as unknown as EcsError);
+    const valuePreflight = this.preflightComponentFieldValues(holder, componentData);
+    if (!valuePreflight.ok) return valuePreflight;
+    if (isRelationshipTarget(componentData.component) && relationshipPayloadWrites(data)) {
+      return err(new RelationshipTargetReadonlyError(componentData.component.name, 'command'));
+    }
+
+    const filled = fillComponentDefaults(componentData.component, data);
+    const enumError = validateEnumFieldValues(
+      componentData.component,
+      filled,
+      holder === null ? undefined : (holder as number),
+    );
+    if (enumError !== null) return err(enumError as unknown as EcsError);
+
+    const role = relationshipRole(componentData.component as Component);
+    if (role?.kind !== 'source') return ok(undefined);
+    const target = this.relationshipTargetEntity(componentData.component as Component, filled);
+    if (target === null) return ok(undefined);
+
+    const targetRaw = target as unknown as number;
+    if (unavailableEntities?.has(targetRaw) === true) {
+      const targetRecord = this.records[entityIndex(target)];
+      return err(
+        new StaleEntityError(target as number, entityIndex(target), entityGeneration(target), {
+          operation: 'relationship-insert',
+          component: componentData.component.name,
+          expectedGeneration: entityGeneration(target),
+          actualGeneration: targetRecord?.generation ?? -1,
+        }),
+      );
+    }
+    const targetIsPending = pendingEntities?.has(targetRaw) === true;
+    const targetRecord = this.records[entityIndex(target)];
+    const actualGeneration = targetRecord?.generation ?? -1;
+    const targetLive = this.recordIsLive(targetRecord, entityGeneration(target));
+    const holderIsPending =
+      holder === null || pendingEntities?.has(holder as unknown as number) === true;
+    if (!targetIsPending && !targetLive && !holderIsPending) {
+      return err(
+        new StaleEntityError(target as number, entityIndex(target), entityGeneration(target), {
+          operation: 'relationship-insert',
+          component: componentData.component.name,
+          expectedGeneration: entityGeneration(target),
+          actualGeneration,
+        }),
+      );
+    }
+
+    // A pending holder has no row to walk yet. Once materialized, its target
+    // is still checked by the same source-side relationship callback.
+    if (holder === null || pendingEntities?.has(holder as unknown as number) === true) {
+      return ok(undefined);
+    }
+    const roleAllowsSelf = role?.kind === 'source' && role.allowSelf;
+    if (holder === target && !roleAllowsSelf) {
+      return err(
+        new RelationshipSelfCycleError(
+          componentData.component.name,
+          holder as number,
+          target as number,
+        ),
+      );
+    }
+
+    const cycleHit =
+      holder === target && roleAllowsSelf
+        ? null
+        : this.relationshipCycleHit(componentData.component as Component, target, holder);
+    if (cycleHit !== null) {
+      return err(
+        new RelationshipSelfCycleError(
+          componentData.component.name,
+          holder as number,
+          cycleHit as number,
+        ),
+      );
+    }
+    return ok(undefined);
+  }
+
+  private relationshipCycleHit(
+    holderComponent: Component,
+    start: EntityHandle,
+    holder: EntityHandle,
+  ): EntityHandle | null {
+    const visited = new Set<number>();
+    let current = start;
+    while (true) {
+      if (current === holder) return current;
+      const raw = current as unknown as number;
+      if (visited.has(raw)) return null;
+      visited.add(raw);
+      const record = this.records[entityIndex(current)];
+      if (!this.recordIsLive(record, entityGeneration(current))) return null;
+      const archetype = this.graph.archetypes[record.archetypeId];
+      if (
+        !archetype?.components.some(
+          (candidate) => componentId(candidate) === componentId(holderComponent),
+        )
+      ) {
+        return null;
+      }
+      const value = this.readRow(archetype, holderComponent, this.tableRow(record)) as Record<
+        string,
+        unknown
+      >;
+      const next = this.relationshipTargetEntity(holderComponent, value);
+      if (next === null) return null;
+      current = next;
+    }
+  }
+
+  /** Prepare the target side before a source archetype mutation commits. */
+  private prepareRelationshipInsert(
+    component: Component,
+    value: Record<string, unknown>,
+  ): Result<void, EcsError> {
+    const role = relationshipRole(component);
+    if (role?.kind !== 'source') return ok(undefined);
+    const target = this.relationshipTargetEntity(component, value);
+    if (target === null) return ok(undefined);
+    const mirror = relationshipMirror(component);
+    if (mirror === undefined) return ok(undefined);
+    const targetRec = this.records[entityIndex(target)];
+    const actualGeneration = targetRec?.generation ?? -1;
+    if (!this.recordIsLive(targetRec, entityGeneration(target))) {
+      return err(
+        new StaleEntityError(target as number, entityIndex(target), entityGeneration(target), {
+          operation: 'relationship-insert',
+          component: component.name,
+          expectedGeneration: entityGeneration(target),
+          actualGeneration,
+        }),
+      );
+    }
+    const targetArch = this.graph.archetypes[targetRec.archetypeId];
+    const hasMirror =
+      targetArch?.components.some((candidate) => componentId(candidate) === componentId(mirror)) ??
+      false;
+    if (!hasMirror) {
+      const added = this._addComponentCore(
+        target,
+        { component: mirror, data: {} as Partial<ShapeOf<ComponentSchema>> },
+        true,
+      );
+      if (!added.ok) return added;
+    }
+    const length = this.relationshipTargetEntries(component, target).length;
+    return this.ensureArrayCapacity(target, mirror, role.targetField as never, length + 1);
+  }
+
+  /** Append `holder` to the materialized target list. */
   relationshipOnInsert(
     holder: EntityHandle,
     component: Component,
     value: Record<string, unknown>,
-  ): void {
-    const rel = component.relationship;
-    if (rel === undefined) return;
+  ): Result<void, EcsError> {
+    const role = relationshipRole(component);
+    if (role?.kind !== 'source') return ok(undefined);
     const target = this.relationshipTargetEntity(component, value);
-    if (target === null) return;
-    const mirror = resolveComponent(rel.mirror);
+    if (target === null) return ok(undefined);
+    const mirror = relationshipMirror(component);
     /* istanbul ignore next -- defineComponent relationship validation guarantees mirror exists */
-    if (mirror === undefined) return;
+    if (mirror === undefined) return ok(undefined);
+
+    const prepared = this.prepareRelationshipInsert(component, value);
+    if (!prepared.ok) {
+      // A dangling source edge is still useful state: hierarchy/animation
+      // projections report the missing target. The target mirror cannot be
+      // updated, but insertion itself remains atomic and successful.
+      if (prepared.error.code === 'stale-entity') return ok(undefined);
+      return prepared;
+    }
 
     // Lazy-create the mirror component on the target when absent (D-3c).
     const targetSlot = entityIndex(target);
     const targetRec = this.records[targetSlot];
-    if (!this.recordIsLive(targetRec, entityGeneration(target))) return;
+    if (!this.recordIsLive(targetRec, entityGeneration(target))) return ok(undefined);
     const targetArch = this.graph.archetypes[targetRec.archetypeId];
-    const mirrorLocalId = mirror.id;
+    const mirrorLocalId = componentId(mirror);
     const hasMirror =
-      targetArch?.components.some((component) => component.id === mirrorLocalId) ?? false;
+      targetArch?.components.some((component) => componentId(component) === mirrorLocalId) ?? false;
     if (!hasMirror) {
-      this._addComponentCore(
+      const added = this._addComponentCore(
         target,
         {
           component: mirror,
@@ -205,43 +425,52 @@ export class WorldComponentAccess {
         },
         true,
       );
+      if (!added.ok) return added;
     }
-    this.push(
+    const targetEntries = this.relationshipTargetEntries(component, target);
+    const slot = targetEntries.length;
+    const mirrored = this.appendArrayElement(
       target,
       mirror as Component<string, ComponentSchema>,
-      rel.field as never,
+      role.targetField as never,
       holder as never,
     );
+    if (!mirrored.ok) return mirrored;
+    this.relationshipIndex(component)?.attach(holder, target, slot);
+    return ok(undefined);
   }
 
-  /**
-   * onRemove arm: prune `holder` from the relationship target's mirror list
-   * (AC-08 removeComponent / AC-09 despawn). Reads the old value snapshot to
-   * locate the target. No-op when the target is already gone. All mirror
-   * mutations run under the reentry guard.
-   */
+  /** Remove `holder` from the materialized target list. */
   relationshipOnRemove(
     holder: EntityHandle,
     component: Component,
     oldValue: Record<string, unknown>,
-  ): void {
-    const rel = component.relationship;
-    if (rel === undefined) return;
+  ): Result<void, EcsError> {
+    const role = relationshipRole(component);
+    if (role?.kind !== 'source') return ok(undefined);
     const target = this.relationshipTargetEntity(component, oldValue);
-    if (target === null) return;
-    const mirror = resolveComponent(rel.mirror);
+    if (target === null) return ok(undefined);
+    const mirror = relationshipMirror(component);
     /* istanbul ignore next -- defineComponent relationship validation guarantees mirror exists */
-    if (mirror === undefined) return;
+    if (mirror === undefined) return ok(undefined);
     const targetSlot = entityIndex(target);
     const targetRec = this.records[targetSlot];
-    if (!this.recordIsLive(targetRec, entityGeneration(target))) return;
+    if (!this.recordIsLive(targetRec, entityGeneration(target))) return ok(undefined);
 
-    this._removeArrayElementByValue(
+    const index = this.relationshipIndex(component);
+    if (index === undefined) return ok(undefined);
+    const slot = index.slotOf(holder);
+    if (slot === undefined || index.targetOf(holder) !== target) return ok(undefined);
+    const mirrored = this.removeArrayElementAt(
       target,
       mirror as Component<string, ComponentSchema>,
-      rel.field as never,
-      holder as never,
+      role.targetField as never,
+      slot,
     );
+    if (!mirrored.ok) return mirrored;
+    index.detach(holder);
+    if (mirrored.value !== undefined) index.updateSlot(mirrored.value, target, slot);
+    return ok(undefined);
   }
 
   /**
@@ -298,8 +527,8 @@ export class WorldComponentAccess {
     }
 
     // Check if this archetype has the component (using World-local ID).
-    const localId = component.id;
-    if (!arch.components.some((candidate) => candidate.id === localId)) {
+    const localId = componentId(component);
+    if (!arch.components.some((candidate) => componentId(candidate) === localId)) {
       return err(new ComponentNotPresentError(entity as number, component.name));
     }
 
@@ -312,7 +541,7 @@ export class WorldComponentAccess {
    * Resolves the live byte region for `(entity, component, fieldName)`
    * directly at the column level and returns the element-typed TypedArray
    * aliasing it (`view.buffer` is the SSOT byte region; mutations route
-   * through `world.set` / `world.push`). Unlike `get`, this does NOT build the
+   * through `world.set`). Unlike `get`, this does NOT build the
    * `{}` whole-component object nor walk every schema field. Per-frame
    * consumers that need one column (the resolved world mat4) take this path to
    * avoid the `get` overhead (1 `{}` alloc + N-field readRow walk).
@@ -397,34 +626,27 @@ export class WorldComponentAccess {
         }),
       );
     }
-    const localId = component.id;
-    if (!arch.components.some((candidate) => candidate.id === localId)) {
+    const localId = componentId(component);
+    if (!arch.components.some((candidate) => componentId(candidate) === localId)) {
       // F-02: set on missing component returns err instead of silent ignore
       return err(new ComponentNotPresentError(entity as number, component.name));
     }
-    // feat-20260713 M2 / w9: P3 shared-field value gate (see _spawnCore). Runs
-    // before any column write so a mis-bound GUID aborts before the scalar /
-    // array packer would zero the field — the set never partially lands.
-    const sharedErr = validateSharedFieldValues(component, value as Record<string, unknown>);
-    if (sharedErr !== null) {
-      return err(sharedErr as unknown as EcsError);
-    }
+    const valuePreflight = this.preflightComponentFieldValues(entity, {
+      component,
+      data: value,
+    });
+    if (!valuePreflight.ok) return valuePreflight;
     const currentValue = this.storage.readRow(arch, component, this.tableRow(rec)) as Record<
       string,
       unknown
     >;
-    const enumErr = validateEnumFieldValues(
+    const enumError = validateEnumFieldValues(
       component,
       { ...currentValue, ...(value as Record<string, unknown>) },
       entity as number,
     );
-    if (enumErr !== null) {
-      return err(enumErr as unknown as EcsError);
-    }
+    if (enumError !== null) return err(enumError as unknown as EcsError);
     if (component.storage === 'sparse') {
-      const empty = {} as ShapeOf<S>;
-      if (component.onDiscard) component.onDiscard(entity, empty);
-      if (component.onInsert) component.onInsert(entity, empty);
       if (markChanged) this.markComponentChanged(entity, component);
       return ok(undefined);
     }
@@ -432,19 +654,12 @@ export class WorldComponentAccess {
     if (fieldCols === undefined) {
       throw new Error(`Table storage for ${component.name} does not exist.`);
     }
-    const onDiscard = (component as Component).onDiscard;
-    const onInsert = (component as Component).onInsert;
-    const oldValue =
-      onDiscard !== undefined
-        ? (this.storage.readRow(arch, component, this.tableRow(rec)) as Record<string, unknown>)
-        : undefined;
-    if (onDiscard && oldValue !== undefined) onDiscard(entity, oldValue);
     for (const fieldName of Object.keys(value)) {
       const col = fieldCols.get(fieldName);
       if (!col) {
         continue;
       }
-      const fieldType = (component.schema as Record<string, string>)[fieldName] ?? '';
+      const fieldType = (componentSchema(component) as Record<string, string>)[fieldName] ?? '';
       // M1/M2 release loop (set path): release the prior managed value
       // BEFORE writing the new one. Single SSOT helper `releaseManagedFieldOnRow`
       // (feat-20260614 D-2) covers every managed-field family (`ref<T>` /
@@ -499,7 +714,6 @@ export class WorldComponentAccess {
             const allocR = this.bufferPool.alloc(bytes.byteLength);
             if (!allocR.ok) {
               const ctx: ErrorContext = {
-                severity: Severity.Error,
                 systemName: `World.set (${component.name}.${fieldName})`,
               };
               this.routeError(allocR.error, ctx);
@@ -523,7 +737,7 @@ export class WorldComponentAccess {
         const handle = this.uniqueRefs.alloc<'String'>('String', text);
         col.view[this.tableRow(rec)] = unwrapHandle(handle);
       } else {
-        const arrayMeta = component.fields[fieldName]?.arrayMeta;
+        const arrayMeta = componentDefinition(component).fields[fieldName]?.arrayMeta;
         if (arrayMeta !== undefined) {
           // M1 set path for array<T> / array<T,N> fields (feat-20260614 D-3
           // calling convention). The set semantics mirror spawn: release the
@@ -554,34 +768,16 @@ export class WorldComponentAccess {
         }
       }
     }
-    if (onInsert) {
-      onInsert(
-        entity,
-        this.storage.readRow(arch, component, this.tableRow(rec)) as Record<string, unknown>,
-      );
-    }
     if (markChanged) this.markComponentChanged(entity, component);
     return ok(undefined);
   }
 
   // ──────────────────────────────────────────────────────────────────────────
-  // push / pop / capacity (array<T> / array<T,N> element-granular ops, w8)
+  // Internal relationship array maintenance. Public array mutation is always
+  // expressed as one `world.set` payload; these helpers only implement the
+  // engine-owned target projection and backpointer swap-remove path.
   //
-  // The three commands form the array-only mutation surface introduced by
-  // feat-20260515-buffer-array-vocab-collapse plan-strategy §2.1 + §2.3:
-  //   - `push`     append one element to a variable `array<T>`; on a fixed
-  //                `array<T, N>` returns `fixed-array-overflow` when
-  //                count == N (capacity == N == N).
-  //   - `pop`      remove and return the last element from a variable
-  //                `array<T>`; returns `array-pop-empty` when count == 0.
-  //                Calling on a fixed `array<T, N>` is a TS compile-time
-  //                error (the `fieldName: ArrayFieldsOf<S>` filter still
-  //                accepts it but the contract treats fixed arrays as
-  //                non-shrinkable; pop on fixed routes pop-empty when the
-  //                fixed length itself is 0).
-  //   - `capacity` query the live byte capacity expressed in elements.
-  //                Variable -> `pool.view(slotId).byteLength / elementBytes`;
-  //                fixed -> the schema-declared `N` literal.
+  // Append/remove are engine-owned relationship maintenance only.
   //
   // The `fieldName` parameter is typed `ArrayFieldsOf<S>` so cross-shape
   // access (entity / buffer / string / scalar field names) is rejected at
@@ -592,30 +788,19 @@ export class WorldComponentAccess {
    * Append `value` to the variable `array<T>` field `fieldName` on `entity`.
    *
    * BufferPool grow is amortized O(1) via the size-class freelist (research
-   * Finding 5). Variable arrays grow byte-wise; fixed arrays return
-   * `fixed-array-overflow` when count has reached the schema-declared `N`.
+   * Finding 5). Relationship target arrays grow byte-wise.
    *
-   * @returns `Result<void, EcsError>` —
-   *   `ok(void)` on success;
-   *   `err(StaleEntityError)` (`.code = 'stale-entity'`) for dead handles;
-   *   `err(ComponentNotPresentError)` (`.code = 'component-not-present'`)
-   *   when the entity does not carry `component`;
-   *   `err(FixedArrayOverflowError)` (`.code = 'fixed-array-overflow'`) for
-   *   `array<T, N>` push at count == N.
+   * @returns `Result<void, EcsError>` with the normal stale/component errors.
    *
-   * @example
-   * ```ts
-   * const Children = defineComponent('Children', { entities: 'array<entity>' });
-   * world.push(parent, Children, 'entities', child).unwrap();
-   * ```
+   * The helper is called only by relationship synchronization.
    */
-  push<S extends ComponentSchema, K extends ArrayFieldsOf<S>>(
+  private appendArrayElement<S extends ComponentSchema, K extends ArrayFieldsOf<S>>(
     entity: EntityHandle,
     component: Component<string, S>,
     fieldName: K,
     value: ArrayFieldElementValue<S, K>,
   ): Result<void, EcsError> {
-    const record = this.lookupAlive(entity, 'push', component.name);
+    const record = this.lookupAlive(entity, 'relationship-append', component.name);
     if (!record.ok) return record;
     const rec = record.value;
     const arch = this.graph.archetypes[rec.archetypeId];
@@ -623,14 +808,14 @@ export class WorldComponentAccess {
     if (!arch) {
       return err(
         new StaleEntityError(entity as number, entityIndex(entity), entityGeneration(entity), {
-          operation: 'push',
+          operation: 'relationship-append',
           component: component.name,
           expectedGeneration: entityGeneration(entity),
           actualGeneration: rec.generation,
         }),
       );
     }
-    const localId = component.id;
+    const localId = componentId(component);
     const fieldCols = this.table(arch).storage.get(localId)?.fields;
     if (!fieldCols) {
       return err(new ComponentNotPresentError(entity as number, component.name));
@@ -639,7 +824,7 @@ export class WorldComponentAccess {
     const col = fieldCols.get(fieldNameStr);
     /* istanbul ignore next -- ArrayFieldsOf filter ensures the column exists */
     if (!col) return err(new ComponentNotPresentError(entity as number, component.name));
-    const arrayMeta = component.fields[fieldNameStr]?.arrayMeta;
+    const arrayMeta = componentDefinition(component).fields[fieldNameStr]?.arrayMeta;
     /* istanbul ignore next -- ArrayFieldsOf filter guarantees array<*> */
     if (arrayMeta === undefined) {
       return err(new ComponentNotPresentError(entity as number, component.name));
@@ -649,20 +834,7 @@ export class WorldComponentAccess {
     if (!meta) return err(new ComponentNotPresentError(entity as number, component.name));
     // biome-ignore lint/style/noNonNullAssertion: ManagedArrayElementType always scalar -> byteSize present
     const elementBytes = meta.byteSize!;
-
-    const isVariable = arrayMeta.length === undefined;
     const slotId = col.view[this.tableRow(rec)] as number;
-
-    if (!isVariable) {
-      // Fixed-capacity array: count is anchored at the schema-declared N
-      // (no sidecar count column). Any push overflows by construction --
-      // fixed arrays are written whole-row via `world.set` / spawn, not
-      // grown element-wise.
-      const capacity = arrayMeta.length ?? 0;
-      return err(
-        new FixedArrayOverflowError(fieldNameStr, capacity, capacity, arrayMeta.elementType),
-      );
-    }
 
     const countCol = fieldCols.get(arrayCountColumnName(fieldNameStr));
     /* istanbul ignore next -- variable arrays always allocate the count column */
@@ -702,167 +874,34 @@ export class WorldComponentAccess {
     return ok(undefined);
   }
 
-  /**
-   * Remove and return the last element of the variable `array<T>` field
-   * `fieldName` on `entity`. Empty arrays return `array-pop-empty`. Fixed
-   * `array<T, N>` is non-shrinkable; calling pop on a fixed field returns
-   * `array-pop-empty` regardless of state (the contract is "fixed arrays
-   * never shrink"; AI users use `array<T>` if element-wise removal is
-   * needed).
-   *
-   * @returns `Result<ArrayFieldElementValue<S, K>, EcsError>` —
-   *   `ok(value)` on success;
-   *   `err(StaleEntityError)` for dead handles;
-   *   `err(ComponentNotPresentError)` when entity lacks the component;
-   *   `err(ArrayPopEmptyError)` (`.code = 'array-pop-empty'`) for empty.
-   */
-  pop<S extends ComponentSchema, K extends ArrayFieldsOf<S>>(
-    entity: EntityHandle,
-    component: Component<string, S>,
-    fieldName: K,
-  ): Result<ArrayFieldElementValue<S, K>, EcsError> {
-    const record = this.lookupAlive(entity, 'pop', component.name);
-    if (!record.ok) return record;
-    const rec = record.value;
-    const arch = this.graph.archetypes[rec.archetypeId];
-    /* istanbul ignore next -- alive record always has a valid archetype */
-    if (!arch) {
-      return err(
-        new StaleEntityError(entity as number, entityIndex(entity), entityGeneration(entity), {
-          operation: 'pop',
-          component: component.name,
-          expectedGeneration: entityGeneration(entity),
-          actualGeneration: rec.generation,
-        }),
-      );
-    }
-    const localId = component.id;
-    const fieldCols = this.table(arch).storage.get(localId)?.fields;
-    if (!fieldCols) {
-      return err(new ComponentNotPresentError(entity as number, component.name));
-    }
-    const fieldNameStr = fieldName as string;
-    const col = fieldCols.get(fieldNameStr);
-    /* istanbul ignore next -- ArrayFieldsOf filter ensures the column exists */
-    if (!col) return err(new ComponentNotPresentError(entity as number, component.name));
-    const arrayMeta = component.fields[fieldNameStr]?.arrayMeta;
-    /* istanbul ignore next -- ArrayFieldsOf filter guarantees array<*> */
-    if (arrayMeta === undefined) {
-      return err(new ComponentNotPresentError(entity as number, component.name));
-    }
-    const isVariable = arrayMeta.length === undefined;
-    if (!isVariable) {
-      // Fixed-capacity arrays do not shrink (plan-strategy §2.1 contract).
-      return err(new ArrayPopEmptyError(fieldNameStr));
-    }
-    const countCol = fieldCols.get(arrayCountColumnName(fieldNameStr));
-    /* istanbul ignore next -- variable arrays always allocate the count column */
-    if (countCol === undefined) {
-      return err(new ComponentNotPresentError(entity as number, component.name));
-    }
-    const count = countCol.view[this.tableRow(rec)] as number;
-    if (count === 0) return err(new ArrayPopEmptyError(fieldNameStr));
-    const slotId = col.view[this.tableRow(rec)] as number;
-    const liveBytes = this.bufferPool.view(slotId);
-    const value = this.storage.readArrayElementAt(liveBytes, count - 1, arrayMeta.elementType);
-    countCol.view[this.tableRow(rec)] = count - 1;
-    this.markComponentChanged(entity, component);
-    return ok(value as ArrayFieldElementValue<S, K>);
-  }
-
-  /**
-   * Query the live element capacity of an `array<T>` / `array<T, N>` field.
-   *
-   * - `array<T>`: live capacity = `pool.view(slotId).byteLength / elementBytes`
-   *   (BufferPool size-class bucket capacity, may exceed the live count).
-   * - `array<T, N>`: schema-declared `N` literal (constant for the lifetime
-   *   of the entity).
-   *
-   * @returns `Result<number, EcsError>` —
-   *   `ok(capacity)` on success; element-bytes carved out of the byte
-   *   capacity, never short-changed by the live count.
-   */
-  capacity<S extends ComponentSchema, K extends ArrayFieldsOf<S>>(
-    entity: EntityHandle,
-    component: Component<string, S>,
-    fieldName: K,
-  ): Result<number, EcsError> {
-    const record = this.lookupAlive(entity, 'capacity', component.name);
-    if (!record.ok) return record;
-    const rec = record.value;
-    const arch = this.graph.archetypes[rec.archetypeId];
-    /* istanbul ignore next -- alive record always has a valid archetype */
-    if (!arch) {
-      return err(
-        new StaleEntityError(entity as number, entityIndex(entity), entityGeneration(entity), {
-          operation: 'capacity',
-          component: component.name,
-          expectedGeneration: entityGeneration(entity),
-          actualGeneration: rec.generation,
-        }),
-      );
-    }
-    const localId = component.id;
-    const fieldCols = this.table(arch).storage.get(localId)?.fields;
-    if (!fieldCols) {
-      return err(new ComponentNotPresentError(entity as number, component.name));
-    }
-    const fieldNameStr = fieldName as string;
-    const col = fieldCols.get(fieldNameStr);
-    /* istanbul ignore next -- ArrayFieldsOf filter ensures the column exists */
-    if (!col) return err(new ComponentNotPresentError(entity as number, component.name));
-    const arrayMeta = component.fields[fieldNameStr]?.arrayMeta;
-    /* istanbul ignore next -- ArrayFieldsOf filter guarantees array<*> */
-    if (arrayMeta === undefined) {
-      return err(new ComponentNotPresentError(entity as number, component.name));
-    }
-    if (arrayMeta.length !== undefined) return ok(arrayMeta.length);
-    const meta = TYPE_METADATA[arrayMeta.elementType];
-    /* istanbul ignore next -- arrayMeta.elementType is guaranteed in TYPE_METADATA */
-    if (!meta) return ok(0);
-    // biome-ignore lint/style/noNonNullAssertion: ManagedArrayElementType always scalar -> byteSize present
-    const elementBytes = meta.byteSize!;
-
-    const slotId = col.view[this.tableRow(rec)] as number;
-    if (slotId === 0) return ok(0);
-    const liveBytes = this.bufferPool.view(slotId);
-    return ok(Math.floor(liveBytes.byteLength / elementBytes));
-  }
-
-  reserveArrayCapacity<S extends ComponentSchema, K extends ArrayFieldsOf<S>>(
+  private ensureArrayCapacity<S extends ComponentSchema, K extends ArrayFieldsOf<S>>(
     entity: EntityHandle,
     component: Component<string, S>,
     fieldName: K,
     minimum: number,
   ): Result<void, EcsError> {
-    const record = this.lookupAlive(entity, 'reserveArrayCapacity', component.name);
+    const record = this.lookupAlive(entity, 'relationship-capacity', component.name);
     if (!record.ok) return record;
     const rec = record.value;
     const arch = this.graph.archetypes[rec.archetypeId];
     if (!arch) {
       return err(
         new StaleEntityError(entity as number, entityIndex(entity), entityGeneration(entity), {
-          operation: 'reserveArrayCapacity',
+          operation: 'relationship-capacity',
           component: component.name,
           expectedGeneration: entityGeneration(entity),
           actualGeneration: rec.generation,
         }),
       );
     }
-    const fieldCols = this.table(arch).storage.get(component.id)?.fields;
+    const fieldCols = this.table(arch).storage.get(componentId(component))?.fields;
     if (!fieldCols) return err(new ComponentNotPresentError(entity as number, component.name));
     const fieldNameStr = fieldName as string;
     const col = fieldCols.get(fieldNameStr);
     if (!col) return err(new ComponentNotPresentError(entity as number, component.name));
-    const arrayMeta = component.fields[fieldNameStr]?.arrayMeta;
+    const arrayMeta = componentDefinition(component).fields[fieldNameStr]?.arrayMeta;
     if (arrayMeta === undefined) {
       return err(new ComponentNotPresentError(entity as number, component.name));
-    }
-    if (arrayMeta.length !== undefined) {
-      if (minimum <= arrayMeta.length) return ok(undefined);
-      return err(
-        new FixedArrayOverflowError(fieldNameStr, arrayMeta.length, minimum, arrayMeta.elementType),
-      );
     }
     const meta = TYPE_METADATA[arrayMeta.elementType];
     if (!meta?.byteSize) {
@@ -888,89 +927,46 @@ export class WorldComponentAccess {
   }
 
   /**
-   * Remove the first element equal to `value` from the variable `array<T>`
-   * field `fieldName` on `entity`, by swap-remove (move the tail element into
-   * the vacated slot, then decrement the count). Idempotent: a value that is
-   * absent (or an empty / unallocated list) leaves the array untouched and
-   * returns `ok`. Order is NOT preserved (swap-remove) — relationship mirror
-   * lists are unordered sets, so this is the cheapest correct primitive.
-   *
-   * This is the mid-array counterpart to `pop` (tail-only): the relationship
-   * bidirectional sync (AC-08 / AC-09) needs to prune an arbitrary child from
-   * a parent's mirror list, which `pop` cannot express.
-   *
-   * @internal Engine-internal storage primitive (feat-20260531 M2 /
-   *   plan-strategy D-3b). Not part of the public README surface; the relation-
-   *   ship hook is its only intended caller. Fixed `array<T, N>` fields do not
-   *   shrink, so this is a no-op (returns `ok`) on them.
-   *
-   * @returns `Result<void, EcsError>` —
-   *   `ok(void)` on success or no-op (value absent / fixed array);
-   *   `err(StaleEntityError)` for dead handles;
-   *   `err(ComponentNotPresentError)` when entity lacks the component.
+   * Remove one variable-array element at a known slot. Relationship holders
+   * supply the slot from their backpointer, so this is O(1) and never scans
+   * the materialized target array.
    */
-  _removeArrayElementByValue<S extends ComponentSchema, K extends ArrayFieldsOf<S>>(
+  private removeArrayElementAt(
     entity: EntityHandle,
-    component: Component<string, S>,
-    fieldName: K,
-    value: ArrayFieldElementValue<S, K>,
-  ): Result<void, EcsError> {
-    const record = this.lookupAlive(entity, '_removeArrayElementByValue', component.name);
+    component: Component<string, ComponentSchema>,
+    fieldName: string,
+    slot: number,
+  ): Result<EntityHandle | undefined, EcsError> {
+    const record = this.lookupAlive(entity, 'removeArrayElementAt', component.name);
     if (!record.ok) return record;
     const rec = record.value;
     const arch = this.graph.archetypes[rec.archetypeId];
-    /* istanbul ignore next -- alive record always has a valid archetype */
-    if (!arch) {
-      return err(
-        new StaleEntityError(entity as number, entityIndex(entity), entityGeneration(entity), {
-          operation: 'removeArrayElementByValue',
-          component: component.name,
-          expectedGeneration: entityGeneration(entity),
-          actualGeneration: rec.generation,
-        }),
-      );
-    }
-    const localId = component.id;
-    const fieldCols = this.table(arch).storage.get(localId)?.fields;
-    if (!fieldCols) {
+    if (!arch) return err(new ComponentNotPresentError(entity as number, component.name));
+    const fieldCols = this.table(arch).storage.get(componentId(component))?.fields;
+    if (!fieldCols) return err(new ComponentNotPresentError(entity as number, component.name));
+    const col = fieldCols.get(fieldName);
+    const arrayMeta = componentDefinition(component).fields[fieldName]?.arrayMeta;
+    const countCol = fieldCols.get(arrayCountColumnName(fieldName));
+    if (!col || !arrayMeta || arrayMeta.length !== undefined || !countCol) {
       return err(new ComponentNotPresentError(entity as number, component.name));
     }
-    const fieldNameStr = fieldName as string;
-    const col = fieldCols.get(fieldNameStr);
-    /* istanbul ignore next -- ArrayFieldsOf filter ensures the column exists */
-    if (!col) return err(new ComponentNotPresentError(entity as number, component.name));
-    const arrayMeta = component.fields[fieldNameStr]?.arrayMeta;
-    /* istanbul ignore next -- ArrayFieldsOf filter guarantees array<*> */
-    if (arrayMeta === undefined) {
-      return err(new ComponentNotPresentError(entity as number, component.name));
-    }
-    // Fixed-capacity arrays do not shrink (same contract as `pop`); no-op.
-    if (arrayMeta.length !== undefined) return ok(undefined);
-    const countCol = fieldCols.get(arrayCountColumnName(fieldNameStr));
-    /* istanbul ignore next -- variable arrays always allocate the count column */
-    if (countCol === undefined) {
-      return err(new ComponentNotPresentError(entity as number, component.name));
-    }
-    const count = countCol.view[this.tableRow(rec)] as number;
-    if (count === 0) return ok(undefined);
-    const slotId = col.view[this.tableRow(rec)] as number;
+    const row = this.tableRow(rec);
+    const count = countCol.view[row] as number;
+    if (slot < 0 || slot >= count) return ok(undefined);
+    const slotId = col.view[row] as number;
     if (slotId === 0) return ok(undefined);
     const liveBytes = this.bufferPool.view(slotId);
-    const target = value as number;
-    for (let i = 0; i < count; i++) {
-      if (this.storage.readArrayElementAt(liveBytes, i, arrayMeta.elementType) === target) {
-        const last = count - 1;
-        if (i !== last) {
-          const tail = this.storage.readArrayElementAt(liveBytes, last, arrayMeta.elementType);
-          this.storage.writeArrayElementAt(liveBytes, i, arrayMeta.elementType, tail);
-        }
-        countCol.view[this.tableRow(rec)] = last;
-        this.markComponentChanged(entity, component);
-        return ok(undefined);
-      }
+    const last = count - 1;
+    const moved =
+      slot === last
+        ? undefined
+        : (this.storage.readArrayElementAt(liveBytes, last, arrayMeta.elementType) as EntityHandle);
+    if (slot !== last) {
+      this.storage.writeArrayElementAt(liveBytes, slot, arrayMeta.elementType, moved as number);
     }
-    // Value not present: idempotent no-op.
-    return ok(undefined);
+    countCol.view[row] = last;
+    this.markComponentChanged(entity, component);
+    return ok(moved);
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -1007,9 +1003,8 @@ export class WorldComponentAccess {
   /**
    * Core implementation of `addComponent` with reentry guard.
    *
-   * @param internal — `true` when called from relationship hook machinery
-   *   (lazy mirror create, exclusive reparent). Relationship handling is
-   *   suppressed in this path; user-declared onInsert callbacks still fire.
+   * @param internal — `true` when called from relationship maintenance
+   *   (lazy mirror create or exclusive reparent).
    * @internal
    */
   _addComponentCore<S extends ComponentSchema>(
@@ -1034,6 +1029,9 @@ export class WorldComponentAccess {
       );
     }
 
+    const preflight = this.preflightComponentData(entity, componentData);
+    if (!preflight.ok) return preflight;
+
     // bug-20260615: unknown-key fail-fast BEFORE archetype mutation so a
     // typo aborts cleanly without partial state (mirrors _spawnCore).
     const keyErr = validateComponentDataKeys(
@@ -1042,6 +1040,13 @@ export class WorldComponentAccess {
     );
     if (keyErr !== null) {
       return err(keyErr as unknown as EcsError);
+    }
+    const arrayErr = validateManagedArrayValues(
+      componentData.component,
+      componentData.data as Record<string, unknown>,
+    );
+    if (arrayErr !== null) {
+      return err(arrayErr as unknown as EcsError);
     }
     // feat-20260713 M2 / w9: P3 shared-field value gate (see _spawnCore). Runs
     // before archetype mutation so a mis-bound GUID aborts cleanly.
@@ -1062,20 +1067,25 @@ export class WorldComponentAccess {
     }
 
     // Check if entity already has this component (using World-local ID).
-    const localId = componentData.component.id;
-    if (srcArch.components.some((candidate) => candidate.id === localId)) {
+    const localId = componentId(componentData.component);
+    if (srcArch.components.some((candidate) => componentId(candidate) === localId)) {
       // M2 exclusive relationship: re-adding the holder with a (possibly new)
       // target auto-reparents instead of failing (AC-12). Prune the old side
-      // first (removeComponent fires the onRemove arm -> old mirror pruned),
-      // then fall through to the normal add (onInsert arm -> new mirror
-      // appended). The two steps keep both mirror lists consistent (AC-13);
+      // first (removeComponent prunes the old target), then fall through to
+      // the normal add (which appends the new target). The two steps keep the
+      // materialized target list consistent (AC-13);
       // removeComponent + addComponent each touch the mirror exactly once and
       // the mirror component carries no relationship of its own, so there is
       // no recursion. Reparent only fires for top-level user calls
       // (!internal); engine-internal lazy create / append
       // never re-add an existing relationship component.
-      const rel = (componentData.component as Component).relationship;
-      if (rel?.exclusive && !internal) {
+      const role = relationshipRole(componentData.component as Component);
+      if (role?.kind === 'source' && role.exclusive && !internal) {
+        const prepared = this.prepareRelationshipInsert(
+          componentData.component as Component,
+          filled as Record<string, unknown>,
+        );
+        if (!prepared.ok) return prepared;
         const removeR = this._removeComponentCore(
           entity,
           componentData.component as Component,
@@ -1087,12 +1097,12 @@ export class WorldComponentAccess {
       return err(new ComponentAlreadyPresentError(entity as number, componentData.component.name));
     }
 
-    // Cardinality enforcement (plan-strategy D-3). Check before any
-    // archetype mutation. This entity does not already have the component
-    // (guarded above), so we are adding 1 instance.
-    const cardinalityErr = this.checkCardinality(componentData.component as Component, 1);
-    if (cardinalityErr !== null) {
-      return err(cardinalityErr as unknown as EcsError);
+    if (!internal && relationshipRole(componentData.component as Component)?.kind === 'source') {
+      const prepared = this.prepareRelationshipInsert(
+        componentData.component as Component,
+        filled as Record<string, unknown>,
+      );
+      if (!prepared.ok) return prepared;
     }
 
     // Get target archetype via edge cache.
@@ -1123,22 +1133,14 @@ export class WorldComponentAccess {
       );
     }
     this.markComponentAdded(entity, componentData.component as Component);
-    const onAdd = (componentData.component as Component).onAdd;
-    if (onAdd) onAdd(entity, filled as Record<string, unknown>);
-
-    // M1 hook framework: fire onInsert after writeRow completes (D-6).
-    // onInsert fires with the entity and the written value as context.
-    const onInsert = (componentData.component as Component).onInsert;
-    if (onInsert) {
-      onInsert(entity, filled as Record<string, unknown>);
-    }
-    // M2 relationship sync: append to the mirror list on the target.
-    if (!internal && (componentData.component as Component).relationship) {
-      this.relationshipOnInsert(
+    // Relationship sync: append to the materialized target list.
+    if (!internal && relationshipRole(componentData.component as Component)?.kind === 'source') {
+      const relationshipResult = this.relationshipOnInsert(
         entity,
         componentData.component as Component,
         filled as Record<string, unknown>,
       );
+      if (!relationshipResult.ok) return relationshipResult;
     }
 
     this.markStructureChanged();
@@ -1174,9 +1176,8 @@ export class WorldComponentAccess {
   /**
    * Core implementation of `removeComponent` with reentry guard.
    *
-   * @param internal — `true` when called from relationship hook machinery
-   *   (exclusive reparent). Relationship handling is suppressed in this
-   *   path; user-declared onRemove callbacks still fire.
+   * @param internal — `true` when called from relationship maintenance
+   *   (exclusive reparent).
    * @internal
    */
   _removeComponentCore<S extends ComponentSchema>(
@@ -1188,7 +1189,7 @@ export class WorldComponentAccess {
     // id=0 `Entity` component is carried by every archetype unconditionally (it
     // is the row's own packed handle) and cannot be removed. Reject before any
     // liveness lookup so the rejection is structural, not entity-state-dependent.
-    if (component.id === EntityComponent.id) {
+    if (componentId(component) === componentId(EntityComponent)) {
       return err(new RemoveEssentialComponentError(component.name));
     }
 
@@ -1210,34 +1211,25 @@ export class WorldComponentAccess {
     }
 
     // Check if entity has this component (using World-local ID).
-    const localId = component.id;
-    if (!srcArch.components.some((candidate) => candidate.id === localId)) {
+    const localId = componentId(component);
+    if (!srcArch.components.some((candidate) => componentId(candidate) === localId)) {
       return err(new ComponentNotPresentError(entity as number, component.name));
     }
 
-    // M1 hook framework: fire onRemove before column removal, capturing the
-    // old value snapshot so callbacks can inspect it (D-6, AC-03). M2 reuses
-    // the same snapshot to locate the relationship target for mirror pruning.
-    const onDiscard = (component as Component).onDiscard;
-    const onRemove = (component as Component).onRemove;
-    const rel = (component as Component).relationship;
-    const needsOldValue =
-      onDiscard !== undefined || onRemove !== undefined || (rel !== undefined && !internal);
+    // Capture the old relationship value before column removal so the
+    // materialized target list can be pruned.
+    const role = relationshipRole(component as Component);
+    const needsOldValue = role?.kind === 'source' && !internal;
     if (needsOldValue) {
       const oldValue = this.storage.readRow(
         srcArch,
         component as Component,
         this.tableRow(rec),
       ) as Record<string, unknown>;
-      if (onDiscard) {
-        onDiscard(entity, oldValue);
-      }
-      if (onRemove) {
-        onRemove(entity, oldValue);
-      }
-      // M2 relationship sync: prune the holder from the target's mirror list.
-      if (rel !== undefined && !internal) {
-        this.relationshipOnRemove(entity, component as Component, oldValue);
+      // Relationship sync: prune the holder from the target's materialized list.
+      if (role?.kind === 'source' && !internal) {
+        const relation = this.relationshipOnRemove(entity, component as Component, oldValue);
+        if (!relation.ok) return relation;
       }
     }
 
@@ -1252,12 +1244,12 @@ export class WorldComponentAccess {
 
     if (component.storage === 'sparse') {
       this.storage.moveEntityArchetype(rec, srcArch, targetArch);
-      const set = this.graph.sparseTags.get(component.id);
+      const set = this.graph.sparseTags.get(componentId(component));
       if (set !== undefined) removeSparseTag(set, entity);
     } else {
       this.storage.migrateEntity(rec, srcArch, targetArch);
     }
-    this.state.removeComponentChange(entity, component.id);
+    this.state.removeComponentChange(entity, componentId(component));
     this.markStructureChanged();
     return ok(undefined);
   }
@@ -1278,16 +1270,34 @@ export class WorldComponentAccess {
   }
 
   /**
+   * Return a deferred-spawn reservation to the free-list without publishing a
+   * row or advancing an epoch.  CommandBuffer.abort is the sole caller; a
+   * materialized entity is intentionally left untouched so an unexpected
+   * post-write failure poisons the World instead of attempting an unsafe undo.
+   */
+  _cancelPendingEntity(entity: EntityHandle): void {
+    const slot = entityIndex(entity);
+    const record = this.records[slot];
+    if (record === undefined || record.generation !== entityGeneration(entity)) return;
+    if (record.archetypeId !== -1 || record.archetypeRow !== -1) return;
+    record.generation += 1;
+    if (!isRetiredSlot(record.generation)) this.freeIndices.push(slot);
+  }
+
+  /**
    * @internal Materialize a pending entity: actually place it into an archetype.
    * Idempotent: a record with archetypeId !== -1 is already materialized.
    */
-  _materializePendingEntity(entity: EntityHandle, componentDatas: ComponentData[]): void {
+  _materializePendingEntity(
+    entity: EntityHandle,
+    componentDatas: ComponentData[],
+  ): Result<void, EcsError> {
     const slot = entityIndex(entity);
     const record = this.records[slot];
-    if (!record || record.archetypeId !== -1) return;
+    if (!record || record.archetypeId !== -1) return ok(undefined);
 
     // Find or create target archetype (using World-local IDs).
-    const componentIds = componentDatas.map((cd) => cd.component.id);
+    const componentIds = componentDatas.map((cd) => componentId(cd.component));
     const components = componentDatas.map((cd) => cd.component);
     const arch = getOrCreateArchetype(this.graph, componentIds, components);
 
@@ -1303,8 +1313,8 @@ export class WorldComponentAccess {
     // path as the synchronous `world.spawn` / `addComponent` /
     // SceneAsset.instantiate (feat-20260517 / M2 / AC-04 + AC-09).
     this.state.markComponentsAdded(entity, [
-      EntityComponent.id,
-      ...componentDatas.map((cd) => cd.component.id),
+      componentId(EntityComponent),
+      ...componentDatas.map((cd) => componentId(cd.component)),
     ]);
     for (const cd of componentDatas) {
       const filled = fillComponentDefaults(cd.component, cd.data as Record<string, unknown>);
@@ -1315,33 +1325,23 @@ export class WorldComponentAccess {
     // mirroring the synchronous `spawn` path: the deferred handle was minted at
     // `_allocatePendingEntity` time and is passed in here.
     this.storage.writeEntitySelf(arch, tableRow, entity);
-    for (const cd of componentDatas) {
-      const onAdd = (cd.component as Component).onAdd;
-      if (onAdd) {
-        const filled = fillComponentDefaults(cd.component, cd.data as Record<string, unknown>);
-        onAdd(entity, filled as Record<string, unknown>);
-      }
-    }
 
-    // M1 hook framework: fire onInsert + M2 relationship sync after all
-    // rows are written (mirrors `_spawnCore` hook firing, internal=false
-    // since flush is a public-facing path).
+    // Publish relationship targets after all rows are written.
     for (const cd of componentDatas) {
-      const onInsert = (cd.component as Component).onInsert;
-      if (onInsert) {
+      if (relationshipRole(cd.component as Component)?.kind === 'source') {
         const filled = fillComponentDefaults(cd.component, cd.data as Record<string, unknown>);
-        onInsert(entity, filled as Record<string, unknown>);
-      }
-      if ((cd.component as Component).relationship) {
-        const filled = fillComponentDefaults(cd.component, cd.data as Record<string, unknown>);
-        this.relationshipOnInsert(
+        const relationshipResult = this.relationshipOnInsert(
           entity,
           cd.component as Component,
           filled as Record<string, unknown>,
         );
+        if (!relationshipResult.ok) {
+          return relationshipResult;
+        }
       }
     }
     this.markStructureChanged();
+    return ok(undefined);
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -1417,9 +1417,5 @@ export class WorldComponentAccess {
 
   releaseManagedRefsOnRow(arch: Archetype, component: Component, row: number): void {
     this.storage.releaseManagedRefsOnRow(arch, component, row);
-  }
-
-  expandCoAttach(componentDatas: ComponentData[]): ComponentData[] {
-    return this.storage.expandCoAttach(componentDatas);
   }
 }

@@ -5,7 +5,7 @@
 // OQ-R6 candidate (i) integral delete - cash-out feat-future-hello-triangle-
 // ecs-smoke deferred from feat-20260509-ecs-render-bridge-mvp implement review
 // round 1 issue #1; the previously-inline WGSL + vertex constants are gone).
-// Strategy: world.spawn -> renderer.ready -> renderer.draw(world);
+// Strategy: world.spawn -> runtime Renderer host -> lease-bound renderer.draw(...);
 // copyTextureToBuffer + mapAsync NDC-center sample; verdict via
 // ./smoke-criteria.mjs evaluateSmokeCriteria SSOT (same pure function the
 // unit tests consume). Preserved output literals (ac-08 grep gate (e)/(f)):
@@ -15,10 +15,8 @@
 // since-deleted smoke-wgpu-wasm.mjs; bug-20260610 made the rhi-wgpu dawn-node
 // variant invalid by contract -- rhi-wgpu is browser-only WebGL2 fallback now).
 // (feat-20260514-ci-jscpd-duplication-gate M3 T-012 / clone #1+#3 cash-out). Token
-// preservation contract: this file still hosts the literal `import('@forgeax/engine-ecs')`,
-// `import('@forgeax/engine-runtime')`, `HANDLE_TRIANGLE`, `await renderer.ready`, and
-// `renderer.draw(world)` tokens that smoke-coverage-gate.mjs delta layer (charter
-// proposition 6) requires per smoke variant.
+// preservation contract: this file still hosts the canonical ECS/runtime imports,
+// `HANDLE_TRIANGLE`, and a lease-bound Renderer draw request that the smoke gate checks.
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -48,8 +46,8 @@ const { mockCanvas } = shim;
 
 // Drive engine ECS path. Imports happen AFTER the GPU shim is installed.
 const { World } = await import('@forgeax/engine-ecs');
-const runtime = await import('@forgeax/engine-runtime');
-const { createRenderer } = runtime;
+await import('@forgeax/engine-runtime');
+const { constructRuntimeRendererHost: createRenderer } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const assets = await import('@forgeax/engine-assets-runtime');
 const render = await import('@forgeax/engine-render');
 const scene = await import('@forgeax/engine-scene');
@@ -84,25 +82,21 @@ const { renderer, errors } = await bootRenderer({
   createRenderer,
   mockCanvas,
   shaderManifestUrl: MANIFEST_URL,
-  rawDeviceForContextConfigureFn: () => shim.sharedDevice,
 });
-const attachment = renderer.attachWorld(world);
+const attachment = renderer.attach(world);
 if (!attachment.ok) throw attachment.error;
 
-// w25 — Renderer.ready resolves Result<void, RhiError>; branch on `.ok`.
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
-
 // Frame loop + readback (deterministic; ~60fps * 5000ms = 300 frames default).
-// feat-20260708-composited-multi-world-rendering M3: migrated to the new
-// explicit draw-owner signature (D-8 integration probe). The
-// `renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 })` literal is preserved as the thunk body
-// so charter prop 6 shared-symbol grep (smoke-coverage-gate.mjs) still finds it.
+// Use the lease-bound frame request; the public Renderer returns a FrameReceipt.
 const { framesObserved, pixelSamples, device } = await runFrameLoopAndReadback({
-  draw: () => { world.update().unwrap(); return renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }); },
+  draw: () => {
+    world.update().unwrap();
+    return renderer.draw({
+      leases: [attachment.value],
+      camera: { lease: attachment.value },
+      environment: { lease: attachment.value },
+    });
+  },
   shim,
   width: WIDTH,
   height: HEIGHT,

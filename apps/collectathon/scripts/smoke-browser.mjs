@@ -120,6 +120,7 @@ let browser;
 try {
   const chromeChannel = process.env.FORGEAX_CHROME_CHANNEL || 'chrome';
   const chromeArgs = [
+    '--disable-features=MacAppCodeSignClone',
     '--enable-unsafe-webgpu',
     '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
     '--ignore-gpu-blocklist',

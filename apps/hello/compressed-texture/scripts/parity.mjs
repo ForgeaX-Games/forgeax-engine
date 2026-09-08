@@ -259,8 +259,7 @@ const mockCanvas = {
 };
 
 const { World } = await import('@forgeax/engine-ecs');
-const engine = await import('@forgeax/engine-runtime');
-const { createRenderer } = engine;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Transform } = await import('@forgeax/engine-scene');
 const { MeshFilter, MeshRenderer, DirectionalLight, Camera, perspective } = await import('@forgeax/engine-render');
 const { HANDLE_QUAD } = await import('@forgeax/engine-assets-runtime');
@@ -269,16 +268,14 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(
   readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'shaders', 'manifest.json'), 'utf8'),
 )}`;
 
-const renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
-console.log(`[parity] Leg B: backend=${renderer.backend}`);
-const caps = renderer.device.caps;
+const created = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+if (!created.ok) throw created.error;
+const renderer = created.value.renderer;
+const inspection = renderer.inspect();
+console.log(`[parity] Leg B: backend=${inspection.capabilities.backendKind}`);
+const caps = inspection.capabilities;
 console.log(`[parity] caps: bc=${caps.textureCompressionBc} etc2=${caps.textureCompressionEtc2} astc=${caps.textureCompressionAstc}`);
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[parity] FAIL - renderer.ready failed: ${ready.error.code}`);
-  process.exit(1);
-}
 
 // Real transcode to the platform-native BLOCK format (same selector the runtime
 // basisTextureLoader uses); the block-aware upload path consumes this POD.
@@ -301,13 +298,14 @@ for (const m of blockTranscoded.value.mips) {
 }
 
 const rhiErrors = [];
-if (typeof renderer.onError === 'function') {
-  renderer.onError((e) => rhiErrors.push(e));
-}
+renderer.subscribe((event) => {
+  if (event.kind === 'error') rhiErrors.push(event.error);
+});
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const lease = worldAttachment1.value;
 const texHandle = world.allocSharedRef('TextureAsset', {
   kind: 'texture',
   width: blockTranscoded.value.width,
@@ -350,7 +348,11 @@ const start = performance.now();
 let frames = 0;
 while (true) {
   world.update().unwrap();
-  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  renderer.draw({
+    leases: [lease],
+    camera: { lease },
+    environment: { lease },
+  });
   frames++;
   if (performance.now() - start >= SMOKE_DURATION_MS) break;
   await delay(0);

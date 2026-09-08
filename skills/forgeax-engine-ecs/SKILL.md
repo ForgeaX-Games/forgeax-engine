@@ -1,11 +1,8 @@
 ---
 name: forgeax-engine-ecs
 description: >-
-  ForgeaX archetype ECS: define SoA components and systems, attach systems to the
-  Update or FixedUpdate schedule with token-first World APIs, and advance a World
-  through world.update(deltaSeconds). Use when defining components, queries, systems,
-  schedule ordering, fixed-step simulation, resources, relationships, reflection,
-  shared numeric storage, QuerySpan kernels, or poisoned-World handling.
+  ForgeaX archetype ECS, schedules, resources, and shared numeric kernels. Use when
+  defining components, queries, systems, relationships, fixed-step simulation, or World recovery.
 ---
 
 # forgeax-engine-ecs
@@ -42,6 +39,35 @@ world.update(1 / 60).unwrap();
 ```
 
 `Time` and `FixedTime` are World-owned resources. Systems read them; hosts never write time resources directly.
+
+## Cordis 只管生命周期，ECS 仍跑热路径
+
+`createWorldContext(world, plugins?)` 创建一个原生 DeepSeek Cordis realm，并用
+`worldPlugin(world)` 提供唯一 World 服务。插件通过 `ctx.effect` 安装/撤销 system、resource、
+simulation participant、resource descriptor 或 transform publisher；Context 不复制 component、
+query row 或 frame data。
+
+```ts
+import { Update, createWorldContext } from '@forgeax/engine-ecs';
+import type { Plugin } from '@forgeax/engine-plugin';
+
+const movementPlugin: Plugin = {
+  name: 'movement',
+  inject: ['world'],
+  apply(ctx) {
+    ctx.effect(() => {
+      ctx.world.addSystem(Update, Movement).unwrap();
+      return () => ctx.world.removeSystem(Update, Movement.name).unwrap();
+    });
+  },
+};
+
+const context = await createWorldContext(world, [movementPlugin]);
+await context.fiber.restart();
+```
+
+Fiber 决定一个 ECS 贡献是否存在；`world.update(deltaSeconds)` 仍直接执行 schedule、query、SoA
+访问与 Commands。不要在 system 内查 Context，也不要把每 entity/per frame 数据注册成服务。
 
 ## Shared Kernel
 

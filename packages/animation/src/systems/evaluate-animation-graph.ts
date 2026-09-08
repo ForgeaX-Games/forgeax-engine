@@ -27,6 +27,7 @@
 // the direct-write SSOT (single evaluation path, plan D-3). advance's mixing
 // math never branches on graph mode; it just consumes whatever fills the slots.
 
+import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
 import { defineSystem, Time, Update } from '@forgeax/engine-ecs';
 import type { AnimationClip, AnimationGraph, Handle } from '@forgeax/engine-types';
@@ -40,6 +41,10 @@ import { ADVANCE_ANIMATION_PLAYER_SYSTEM } from './advance-animation-player';
  * graph-evaluation seam.
  */
 export const EVALUATE_ANIMATION_GRAPH_SYSTEM = 'evaluateAnimationGraph' as const;
+
+export type AnimationPayloadLookup = (
+  guid: string,
+) => AnimationClip | { readonly code: 'stale' } | undefined;
 
 /**
  * Resolved per-entity graph-mode columns (a `world.get` snapshot). `graph` is the
@@ -84,14 +89,18 @@ function wrapTime(time: number, duration: number, looping: boolean): number {
  * collecting entity handles first, then resolving + writing each player outside
  * the transient row facade.
  */
-export function evaluateAnimationGraph(world: World, dt: number): void {
+export function evaluateAnimationGraph(
+  world: World,
+  dt: number,
+  lookup: AnimationPayloadLookup = () => undefined,
+): void {
   const query = world.query({ with: [AnimationPlayer] }).unwrap();
 
   const entities: EntityHandle[] = [];
   for (const row of query) entities.push(row.entity);
 
   for (const entityRaw of entities) {
-    evaluateOneEntity(world, entityRaw, dt);
+    evaluateOneEntity(world, entityRaw, dt, lookup);
   }
 }
 
@@ -101,7 +110,12 @@ export function evaluateAnimationGraph(world: World, dt: number): void {
  * resolved through the World-local animation lookup and invalid handles throw
  * a structured animation error before any derived write (AC-04 / AC-11).
  */
-function evaluateOneEntity(world: World, entityRaw: number, dt: number): void {
+function evaluateOneEntity(
+  world: World,
+  entityRaw: number,
+  dt: number,
+  lookup: AnimationPayloadLookup,
+): void {
   const entity = entityRaw as EntityHandle;
   const apRes = world.get(entity, AnimationPlayer);
   if (!apRes.ok) return;
@@ -110,9 +124,11 @@ function evaluateOneEntity(world: World, entityRaw: number, dt: number): void {
   const graphRaw = ap.graph;
   if (graphRaw === 0) return; // no graph -> direct-write path, untouched.
 
-  const graphLookup = resolveAnimationAsset<AnimationGraph>(world, graphRaw, 'animation-graph');
+  const graphLookup = resolveAssetHandle<AnimationGraph>(
+    world,
+    graphRaw as Handle<string, 'shared'>,
+  );
   if (!graphLookup.ok) throw graphLookup.error;
-  if (graphLookup.value === undefined) return;
   const graph = graphLookup.value;
 
   const nodes = graph.nodes;
@@ -126,13 +142,19 @@ function evaluateOneEntity(world: World, entityRaw: number, dt: number): void {
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i];
     if (node === undefined || node.type !== 'clip') continue;
-    const handle = node.clip;
-    const clipLookup = resolveAnimationAsset<AnimationClip>(world, handle, 'animation-clip');
+    const clipLookup = resolveAnimationAsset<AnimationClip>(
+      world,
+      node.clip,
+      'animation-clip',
+      (guid) => {
+        return lookup(guid);
+      },
+    );
     if (!clipLookup.ok) throw clipLookup.error;
-    if (clipLookup.value === undefined) continue;
+    const handle = clipLookup.value.handle;
     clipNodeIndices.push(i);
     clipHandles.push(handle);
-    clipDurations.push(clipLookup.value.duration);
+    clipDurations.push(clipLookup.value.asset.duration);
   }
 
   // Post-order effective-weight evaluation from the root (incoming influence 1).
@@ -221,6 +243,21 @@ export const EvaluateAnimationGraph: SystemHandle<readonly []> = defineSystem({
  * advanceAnimationPlayer). Called by `animationPlugin` so both createApp forms
  * get graph evaluation on the default path for free.
  */
-export function registerEvaluateAnimationGraph(world: World): void {
-  world.addSystem(Update, EvaluateAnimationGraph);
+export function registerEvaluateAnimationGraph(
+  world: World,
+  lookup: AnimationPayloadLookup = () => undefined,
+): () => void {
+  world
+    .addSystem(Update, {
+      name: EVALUATE_ANIMATION_GRAPH_SYSTEM,
+      queries: [],
+      before: [ADVANCE_ANIMATION_PLAYER_SYSTEM],
+      fn: (world) => {
+        evaluateAnimationGraph(world, world.getResource(Time).delta, lookup);
+      },
+    })
+    .unwrap();
+  return () => {
+    world.removeSystem(Update, EVALUATE_ANIMATION_GRAPH_SYSTEM);
+  };
 }

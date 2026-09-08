@@ -55,10 +55,16 @@ export const SPRITE_PLAYBACK_MODE_LOOP = 0 as const;
 /** Numeric encoding of the clamp playback mode (schema value for `playbackMode`). */
 export const SPRITE_PLAYBACK_MODE_CLAMP = 1 as const;
 
+/** Grouped authoring values; the numeric ECS encoding stays owner-local. */
+export const SpritePlayback = Object.freeze({
+  loop: SPRITE_PLAYBACK_MODE_LOOP,
+  clamp: SPRITE_PLAYBACK_MODE_CLAMP,
+} as const);
+
 /**
  * Map a `SpriteAnimation.playbackMode` numeric column value to the closed
  * `SpritePlaybackMode` string-literal union. The defensive fallback mirrors
- * `cameraProjectionFromF32` / `tonemapFromF32` precedent — any value other
+ * `cameraProjectionFromF32` / `tonemapFromF32` precedent — a value other
  * than `SPRITE_PLAYBACK_MODE_CLAMP` (1) maps to `'loop'`, so stale or
  * uninitialised entities surface a predictable playback shape through the
  * tick-system query (rather than throwing or returning `undefined`).

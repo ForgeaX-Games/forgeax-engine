@@ -36,7 +36,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = appResult.value;
-  console.warn(`[bevy-time-elapsed] backend=${app.renderer.backend}`);
+  console.warn(`[bevy-time-elapsed] state=${app.renderer.inspect().state}`);
 
   buildTimeElapsedWorld(app.world);
 

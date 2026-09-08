@@ -20,7 +20,8 @@ import { World } from '@forgeax/engine-ecs';
 import { Name, Transform } from '@forgeax/engine-scene';
 
 import { perspective } from '@forgeax/engine-render';
-import { acquireCanvasContext, createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 
 import { createPlaneGeometry } from '@forgeax/engine-geometry';
@@ -72,36 +73,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   target.width = Math.max(1, Math.floor(cssW * renderScale));
   target.height = Math.max(1, Math.floor(cssH * renderScale));
 
-  const renderer = await createRenderer(target, {}, forgeaxBundlerAdapter());
-  const ctxResult = acquireCanvasContext(target);
-  if (ctxResult.ok) {
-    const cfgResult = ctxResult.value.configure({
-      device: renderer.device,
-      format: 'rgba8unorm',
-      usage: 0x10 | 0x01,
-    });
-    if (!cfgResult.ok) {
-      console.error('[fractal-pyramid] canvasContext.configure failed:', cfgResult.error);
-    }
-  } else {
-    console.warn('[fractal-pyramid] acquireCanvasContext failed:', ctxResult.error);
-  }
-  console.warn(`[fractal-pyramid] backend=${renderer.backend}`);
-
-  const ready = await renderer.ready;
-  if (!ready.ok) {
-    console.error('[fractal-pyramid] renderer.ready failed:', ready.error);
-    return;
-  }
-
-  const assets = renderer.assets;
-  if (assets === null) {
-    console.error('[fractal-pyramid] renderer.assets is null; the fullscreen-effect demo requires a fully initialized WebGPU backend.');
-    return;
-  }
+  const constructed = await constructRuntimeRendererHost(target, {}, forgeaxBundlerAdapter());
+  if (!constructed.ok) throw constructed.error;
+  const { renderer } = constructed.value;
+  console.warn('[fractal-pyramid] Standard pipeline active');
   const world = new World();
-  const worldAttachment1 = renderer.attachWorld(world);
+  const worldAttachment1 = renderer.attach(world);
   if (!worldAttachment1.ok) throw worldAttachment1.error;
+  const frameRequest = {
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  };
 
   const values: Record<string, number | number[]> = {
     iResolution: [target.width, target.height],
@@ -159,7 +142,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
     values.iTime = (now - startTime) / 1000;
     world.update().unwrap();
-    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const r = renderer.draw(frameRequest);
     if (!r.ok) console.error('[fractal-pyramid] draw error:', r.error);
     requestAnimationFrame(frame);
   };

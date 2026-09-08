@@ -72,7 +72,7 @@ The two scenes share the same texture + the same 3 `colorTint` slots (warm red /
 ```
 
 > [!CAUTION]
-> **`sliceMode: 0 | 1` 是数值字面量、不是字符串**——`values` schema-driven UBO 写入只支持 `wgsl f32` 兼容的数值类型；`sliceMode: 'stretch'` 字符串会触发 `MATERIAL_PARAM_TYPES_V1` 校验失败。当 `sliceMode: 1` 但绑定的 `sampler.addressMode` 不是 `'repeat'` 时，引擎**不抛错**，而是经 `renderer.metrics.snapshot()['nineslice.tile-needs-repeat-sampler']` 计数器报告（plan-strategy D-9 register-time soft-warn）；视觉退化为 clamp-stretch。
+> **`sliceMode: 0 | 1` 是数值字面量、不是字符串**——`values` schema-driven UBO 写入只支持 `wgsl f32` 兼容的数值类型；`sliceMode: 'stretch'` 字符串会触发 `MATERIAL_PARAM_TYPES_V1` 校验失败。当 `sliceMode: 1` 但绑定的 `sampler.addressMode` 不是 `'repeat'` 时，引擎**不抛错**，而是由 host-owned `AssetRegistry` metrics 计数器报告（`app.assets?._getMetrics()?.snapshot()['nineslice.tile-needs-repeat-sampler']`，plan-strategy D-9 register-time soft-warn）；视觉退化为 clamp-stretch。
 
 ## FAQ（常见疑问）
 
@@ -91,7 +91,7 @@ The two scenes share the same texture + the same 3 `colorTint` slots (warm red /
 <details>
 <summary>tile 模式没看到重复怎么办？</summary>
 
-最常见的原因是绑定的 `sampler` 没配 `addressMode='repeat'`。本 demo 的共享 sampler 已经配置 `addressModeU/V: 'repeat'`；如果你在自己的项目里 `sliceMode: 1` 看不到瓷砖重复，先 `console.log(renderer.metrics.snapshot()['nineslice.tile-needs-repeat-sampler'])`——计数器 ≥ 1 即说明 register 期发现 sampler 配置不匹配，需要把对应 sampler 改为 `addressMode='repeat'` 后重 register（plan-strategy D-9）。
+最常见的原因是绑定的 `sampler` 没配 `addressMode='repeat'`。本 demo 的共享 sampler 已经配置 `addressModeU/V: 'repeat'`；如果你在自己的项目里 `sliceMode: 1` 看不到瓷砖重复，先读取 host-owned `AssetRegistry` 的 metrics snapshot（`app.assets?._getMetrics()?.snapshot()`）——`nineslice.tile-needs-repeat-sampler >= 1` 即说明 register 期发现 sampler 配置不匹配，需要把对应 sampler 改为 `addressMode='repeat'` 后重 register（plan-strategy D-9）。
 </details>
 
 ## 5-view selection table

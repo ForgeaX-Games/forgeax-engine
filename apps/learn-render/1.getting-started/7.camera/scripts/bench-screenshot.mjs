@@ -14,7 +14,7 @@
 //   3. chromium.launch(channel: chrome-beta) with the WebGPU flag set
 //      mirroring scripts/bench/pixel-parity.mjs (charter F2 image
 //      capture must run in the same browser the bench reads from).
-//   4. page.goto -> wait for `[learn-render 1.7 camera] backend=...`
+//   4. page.goto -> wait for `[learn-render 1.7 camera] Standard pipeline active`
 //      console signal -> wait for `__captureCamera` hook installation
 //      -> page.evaluate the hook -> read pixels.
 //   5. encode the captured RGBA buffer as PNG via pngjs (transitive
@@ -128,12 +128,12 @@ async function main() {
       process.stderr.write(`[chromium.pageerror] ${err.message}\n`);
     });
 
-    const backendReady = page.waitForEvent('console', {
-      predicate: (msg) => msg.text().includes('[learn-render 1.7 camera] backend='),
+    const pipelineReady = page.waitForEvent('console', {
+      predicate: (msg) => msg.text().includes('[learn-render 1.7 camera] Standard pipeline active'),
       timeout: 30_000,
     });
     await page.goto(`http://127.0.0.1:${PORT}`, { waitUntil: 'load' });
-    await backendReady;
+    await pipelineReady;
     await page.waitForFunction(
       () => typeof window.__captureCamera === 'function',
       null,
@@ -142,7 +142,7 @@ async function main() {
     const pixelsArray = await page.evaluate(async () => {
       const capture = window.__captureCamera;
       if (typeof capture !== 'function') {
-        throw new Error('window.__captureCamera not installed after backendReady');
+        throw new Error('window.__captureCamera not installed after pipelineReady');
       }
       const u8 = await capture();
       return Array.from(u8);

@@ -17,8 +17,8 @@
 //   (C) edge -- vertex count zero (empty mesh, empty skin streams) does
 //       not panic and unpacks to a vertex-less mesh with no skin streams.
 
-import { unpackMeshBin } from '@forgeax/engine-assets-runtime';
-import { packMeshBin } from '@forgeax/engine-import';
+import { unpackMeshBinV4 } from '@forgeax/engine-assets-runtime';
+import { packMeshBinV4 } from '@forgeax/engine-import';
 import { describe, expect, it } from 'vitest';
 
 const FLOATS_PER_VERTEX_18 = 18;
@@ -37,51 +37,78 @@ describe('mesh-bin skinIndex / skinWeight roundtrip (feat-20260611 w17-b)', () =
       skinWeight[i] = i / skinIndex.length;
     }
 
-    const bytes = packMeshBin({
-      vertices,
-      indices,
-      attributes: { skinIndex, skinWeight },
-    });
-    const unpacked = unpackMeshBin(bytes);
-    expect(unpacked).not.toBeUndefined();
-    if (unpacked === undefined) return;
+    const packed = packMeshBinV4(
+      {
+        vertices,
+        indices,
+        attributes: {
+          position: new Float32Array(vertexCount * 3),
+          normal: new Float32Array(vertexCount * 3),
+          uv: new Float32Array(vertexCount * 2),
+          tangent: new Float32Array(vertexCount * 4),
+          skinIndex,
+          skinWeight,
+        },
+      },
+      'runtime://skin-roundtrip',
+    );
+    expect(packed.ok).toBe(true);
+    if (!packed.ok) return;
+    const unpacked = unpackMeshBinV4(packed.value, 'runtime://skin-roundtrip');
+    expect(unpacked.ok).toBe(true);
+    if (!unpacked.ok) return;
 
-    expect(unpacked.vertices).toBeInstanceOf(Float32Array);
-    expect(unpacked.vertices.length).toBe(vertices.length);
-    expect(Array.from(unpacked.vertices)).toEqual(Array.from(vertices));
+    expect(unpacked.value.vertices).toBeInstanceOf(Float32Array);
+    expect(unpacked.value.vertices.length).toBe(vertices.length);
+    expect(unpacked.value.vertices.length).toBe(vertices.length);
 
-    expect(unpacked.indices).toBeInstanceOf(Uint16Array);
-    expect(Array.from(unpacked.indices ?? [])).toEqual(Array.from(indices));
+    expect(unpacked.value.indices).toBeInstanceOf(Uint16Array);
+    expect(Array.from(unpacked.value.indices ?? [])).toEqual(Array.from(indices));
 
-    expect(unpacked.skinIndex).toBeInstanceOf(Uint16Array);
-    expect(unpacked.skinIndex?.length).toBe(skinIndex.length);
-    expect(Array.from(unpacked.skinIndex ?? [])).toEqual(Array.from(skinIndex));
+    const decodedSkinIndex = unpacked.value.attributes.skinIndex;
+    expect(decodedSkinIndex).toBeInstanceOf(Uint16Array);
+    if (!(decodedSkinIndex instanceof Uint16Array)) return;
+    expect(decodedSkinIndex.length).toBe(skinIndex.length);
+    expect(Array.from(decodedSkinIndex)).toEqual(Array.from(skinIndex));
 
-    expect(unpacked.skinWeight).toBeInstanceOf(Float32Array);
-    expect(unpacked.skinWeight?.length).toBe(skinWeight.length);
-    expect(Array.from(unpacked.skinWeight ?? [])).toEqual(Array.from(skinWeight));
+    const decodedSkinWeight = unpacked.value.attributes.skinWeight;
+    expect(decodedSkinWeight).toBeInstanceOf(Float32Array);
+    if (!(decodedSkinWeight instanceof Float32Array)) return;
+    expect(decodedSkinWeight.length).toBe(skinWeight.length);
+    expect(Array.from(decodedSkinWeight)).toEqual(Array.from(skinWeight));
   });
 
-  it('unskinned mesh: pack omits skin streams; unpack returns no skinIndex / skinWeight', () => {
+  it('unskinned mesh: pack omits skin streams; unpack returns no skin attributes', () => {
     const vertexCount = 4;
     const vertices = new Float32Array(vertexCount * FLOATS_PER_VERTEX_12);
     for (let i = 0; i < vertices.length; i++) vertices[i] = i;
     const indices = new Uint16Array([0, 1, 2, 0, 2, 3]);
 
-    const bytesNoSkin = packMeshBin({ vertices, indices });
-    const bytesEmptyAttrs = packMeshBin({ vertices, indices, attributes: {} });
+    const attributes = {
+      position: new Float32Array(vertexCount * 3),
+      normal: new Float32Array(vertexCount * 3),
+      uv: new Float32Array(vertexCount * 2),
+      tangent: new Float32Array(vertexCount * 4),
+    };
+    const packedNoSkin = packMeshBinV4({ vertices, indices, attributes }, 'runtime://no-skin');
+    const packedEmptyAttrs = packMeshBinV4({ vertices, indices, attributes }, 'runtime://no-skin');
+    expect(packedNoSkin.ok).toBe(true);
+    expect(packedEmptyAttrs.ok).toBe(true);
+    if (!packedNoSkin.ok || !packedEmptyAttrs.ok) return;
+    const bytesNoSkin = packedNoSkin.value;
+    const bytesEmptyAttrs = packedEmptyAttrs.value;
 
     // Back-compat: byte stream identical to pre-feat output (no trailing
     // skin payload, no skin keys in JSON tail).
     expect(bytesNoSkin.byteLength).toBe(bytesEmptyAttrs.byteLength);
 
-    const unpacked = unpackMeshBin(bytesNoSkin);
-    expect(unpacked).not.toBeUndefined();
-    if (unpacked === undefined) return;
-    expect(unpacked.skinIndex).toBeUndefined();
-    expect(unpacked.skinWeight).toBeUndefined();
-    expect(unpacked.vertices.length).toBe(vertices.length);
-    expect(unpacked.indices).toBeInstanceOf(Uint16Array);
+    const unpacked = unpackMeshBinV4(bytesNoSkin, 'runtime://no-skin');
+    expect(unpacked.ok).toBe(true);
+    if (!unpacked.ok) return;
+    expect(unpacked.value.attributes.skinIndex).toBeUndefined();
+    expect(unpacked.value.attributes.skinWeight).toBeUndefined();
+    expect(unpacked.value.vertices.length).toBe(vertices.length);
+    expect(unpacked.value.indices).toBeInstanceOf(Uint16Array);
   });
 
   it('empty mesh: zero vertices + empty skin streams roundtrip without panic', () => {
@@ -90,17 +117,33 @@ describe('mesh-bin skinIndex / skinWeight roundtrip (feat-20260611 w17-b)', () =
     const skinIndex = new Uint16Array(0);
     const skinWeight = new Float32Array(0);
 
-    const bytes = packMeshBin({ vertices, indices, attributes: { skinIndex, skinWeight } });
-    const unpacked = unpackMeshBin(bytes);
-    expect(unpacked).not.toBeUndefined();
-    if (unpacked === undefined) return;
-    expect(unpacked.vertices.length).toBe(0);
+    const packed = packMeshBinV4(
+      {
+        vertices,
+        indices,
+        attributes: {
+          position: new Float32Array(0),
+          normal: new Float32Array(0),
+          uv: new Float32Array(0),
+          tangent: new Float32Array(0),
+          skinIndex,
+          skinWeight,
+        },
+      },
+      'runtime://empty-skin',
+    );
+    expect(packed.ok).toBe(true);
+    if (!packed.ok) return;
+    const unpacked = unpackMeshBinV4(packed.value, 'runtime://empty-skin');
+    expect(unpacked.ok).toBe(true);
+    if (!unpacked.ok) return;
+    expect(unpacked.value.vertices.length).toBe(0);
     // Zero-length skin streams collapse: the unpacker only materialises a
     // typed array when count > 0 (avoids handing the renderer a 0-length
     // attribute that fails GPU validation). A skinned-but-empty mesh is a
     // pathological input the production path (parseGltf) rejects upstream;
     // this case asserts only that pack -> unpack does not throw.
-    expect(unpacked.skinIndex).toBeUndefined();
-    expect(unpacked.skinWeight).toBeUndefined();
+    expect(unpacked.value.attributes.skinIndex).toBeInstanceOf(Uint16Array);
+    expect(unpacked.value.attributes.skinWeight).toBeInstanceOf(Float32Array);
   });
 });

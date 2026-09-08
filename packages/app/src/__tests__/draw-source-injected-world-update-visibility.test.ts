@@ -34,6 +34,7 @@
 
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
+import { createRenderReadLease } from '@forgeax/engine-ecs/projection';
 import type { Renderer } from '@forgeax/engine-render';
 import { registerPropagateTransforms, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
@@ -123,19 +124,12 @@ describe('drawSource injected worlds are updated same-frame (w9, stale-matrix re
     // stage performs (Transform.world is the extract SSOT).
     const observed: Array<[number, number, number]> = [];
     const renderer = {
-      backend: 'webgpu' as const,
-      ready: Promise.resolve({ ok: true, value: undefined }),
-      attachWorld: () => ({ ok: true, value: undefined }),
-      detachWorld: () => {},
-      draw(worlds: readonly World[]): { ok: true; value: undefined } {
-        // worlds is what drawSource returned; find the injected world in it.
-        const iw = worlds.find((w) => w === injectedWorld);
-        if (iw !== undefined) {
-          const r = iw.get(entity, Transform);
-          if (r.ok) {
-            const m = r.value.world as unknown as ArrayLike<number>;
-            observed.push([m[12] as number, m[13] as number, m[14] as number]);
-          }
+      attach: (world: World) => ({ ok: true, value: createRenderReadLease(world) }),
+      draw(): { ok: true; value: undefined } {
+        const r = injectedWorld.get(entity, Transform);
+        if (r.ok) {
+          const m = r.value.world as unknown as ArrayLike<number>;
+          observed.push([m[12] as number, m[13] as number, m[14] as number]);
         }
         return { ok: true, value: undefined };
       },

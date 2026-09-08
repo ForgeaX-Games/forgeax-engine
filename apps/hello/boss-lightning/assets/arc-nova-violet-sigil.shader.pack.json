@@ -7,6 +7,7 @@
       "kind": "material",
       "name": "Arc Nova Violet Shock",
       "sourceKey": "arc-nova-violet-sigil.wgsl",
+      "execution": "cooked",
       "payload": {
         "kind": "material",
         "passes": [

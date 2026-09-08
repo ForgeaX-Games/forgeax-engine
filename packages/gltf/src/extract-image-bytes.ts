@@ -215,9 +215,15 @@ export async function extractImageBytes(
     }
     const dataPayload = dataUriBase64Payload(bufJson.uri);
     if (dataPayload !== undefined) {
-      const bytes = decodeBase64(dataPayload);
-      buffersCache.set(bufferIndex, bytes);
-      return bytes;
+      try {
+        const bytes = decodeBase64(dataPayload);
+        buffersCache.set(bufferIndex, bytes);
+        return bytes;
+      } catch (e) {
+        const reason = `buffer ${bufferIndex} data URI base64 decode failed: ${e instanceof Error ? e.message : String(e)}`;
+        buffersCache.set(bufferIndex, { error: reason });
+        return { error: reason };
+      }
     }
     const sib = await ctx.readSibling(bufJson.uri);
     if (!sib.ok) {

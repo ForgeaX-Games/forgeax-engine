@@ -1,106 +1,88 @@
-// @forgeax/engine-rhi-debug/src/index.ts — package barrel.
-
-import type { CaptureFramesOptions } from './capture-options';
-
-export type { CaptureFramesOptions } from './capture-options';
+// @forgeax/engine-rhi-debug/src/index.ts -- v7 public contract.
+//
+// AI cold-start path: one .rhitape ArtifactRef, one FrameModel workIndex, and one
+// fresh ReplaySession. Consumers should use structured Result errors and keep
+// browser, Node, and backend ownership at their host boundaries.
 
 export {
-  type CapsMismatchDetail,
-  DebugError,
-  type DebugErrorCode,
-  type DebugErrorDetail,
-  type DeterministicViolationDetail,
-  type RhiCapsRecordedKey,
+  createRhiDebugError,
+  type RhiDebugError,
+  type RhiDebugErrorCode,
+  type RhiDebugErrorDetail,
+  type RhiDebugErrorFor,
 } from './errors';
+export type {
+  CommandEntry,
+  FrameModel,
+  FramePass,
+  JsonValue,
+  ResourceConsumer,
+  ResourceEntry,
+  WorkBinding,
+  WorkEntry,
+  WorkPipeline,
+} from './frame-model';
 export {
-  analyzeMergeability,
-  type MergeabilityGroup,
-  type MergeabilityReport,
-  type MergeabilityRun,
-} from './mergeability';
-export { pixelDeltaAbsMean } from './pixel-diff';
-export {
-  type LiveLinearHdrReadback,
-  type LiveObservationDescriptor,
-  type LiveObservationLease,
-  type LiveObservationSource,
-  type NamedLinearHdrReadback,
-  type NamedLinearHdrReadbackMetadata,
-  type ResolvedTextureDescriptor,
-  readbackDrawRt,
-  readbackLiveLinearHdr,
-  readbackNamedLinearHdr,
-  readbackTexturePixels,
-  resolveAttachmentSize,
-  resolveTextureDescriptor,
-} from './readback';
-export {
-  type CreateShaderModuleFn,
-  type DebugRhiInstance,
-  PER_EVENT_OVERHEAD,
-  TAPE_FORMAT_VERSION,
-  wrap,
-  wrapCreateShaderModule,
-} from './recorder';
-// Node-free capture primitives (recorder-core). assembleReport is the D-3
-// single-writer report helper reused by the vite-plugin-rhi-debug HTTP endpoint
-// so browser-uploaded tapes land byte-identical to the Node finalize() tail.
-export {
-  type AssembledReport,
-  assembleReport,
-  type FinalizeToMemoryValue,
-  finalizeToMemory,
-  generateRunId,
-} from './recorder-core';
-// Inspector exports are NOT re-exported from the barrel to avoid pulling
-// pngjs (Node.js dep) into downstream bundles (e.g., the app package).
-// Import from '@forgeax/engine-rhi-debug/inspector' for inspector APIs.
-export type { Replay } from './replayer';
-export { adaptReplayFormat, createReplay, replayInitialData } from './replayer';
-// w10: DebugRhiAdapter type inlined here (was in rpc-bridge.ts, which is deleted).
-// wireDebugRhiInspector deleted alongside routing layer removal.
-
-/**
- * DebugRhiAdapter shape (w10: inlined from deleted rpc-bridge.ts).
- * Three RPC surfaces: captureFrames / inspectAt / replayDispose.
- */
-export interface DebugRhiAdapter {
-  captureFrames(
-    frames: number,
-    label?: string,
-    options?: CaptureFramesOptions,
-  ): Promise<{
-    readonly tapes: Array<{
-      readonly frameIdx: number;
-      readonly runId: string;
-      readonly tapePath: string;
-      readonly reportPath: string;
-    }>;
-  }>;
-  inspectAt(
-    tapePath: string,
-    drawIdx: number,
-    fields?: readonly ('bindings' | 'drawCall' | 'rt')[],
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ): Promise<Record<string, unknown>>;
-  replayDispose(tapePath: string): Promise<{ readonly ok: boolean }>;
-}
-export {
+  buildFrameModel,
   buildResourceLifecycle,
   type ResourceByteEstimate,
   type ResourceKind,
   type ResourceLifecycleEntry,
   type ResourceLifecycleSummary,
-  type ResourceOrigin,
-} from './resource-lifecycle';
-export type { PassOffset, TapeBlobCompression } from './tape-format';
+} from './frame-model';
+export { decodeTape, encodeTape } from './protocol/codec';
+export type { EventCategory, EventSemantics } from './protocol/event-semantics';
 export {
-  computePassOffsets,
-  DEFAULT_TAPE_BLOB_COMPRESSION,
-  deserializeTape,
-  serializeTape,
-  TAPE_BLOB_COMPRESSION_LEVEL,
-} from './tape-format';
+  EVENT_SEMANTICS,
+  eventKinds,
+  isWorkEvent,
+  resourceKindForEvent,
+  workEventKinds,
+} from './protocol/event-semantics';
+export type {
+  TapeIndex,
+  TapePassEntry,
+  TapeResourceEntry,
+  TapeWorkEntry,
+} from './protocol/tape-index';
+export { buildTapeIndex } from './protocol/tape-index';
+export type {
+  BootstrapResource,
+  InitialDataSlice,
+  RhiCallEvent as V7RhiCallEvent,
+  RhiCapsRecorded as V7RhiCapsRecorded,
+  RhiDebugResult,
+  Tape as V7Tape,
+  TapeBlob as V7TapeBlob,
+  TapeBlobCompression,
+  TapeEncodeOptions,
+} from './protocol/types';
+export {
+  TAPE_FORMAT_VERSION as V7_TAPE_FORMAT_VERSION,
+  TAPE_MAGIC,
+} from './protocol/types';
+export { readbackTexturePixels } from './readback';
+export {
+  attachRecorder,
+  type CaptureFrameOptions,
+  type CreateShaderModuleFn,
+  type EncodedTape,
+  type RecordableBackend,
+  type RecorderAttachment,
+  type RecorderBackend,
+  type RecorderOptions,
+} from './recorder/session';
+export { replayDeviceRequest } from './replay/device-request';
+export {
+  type InspectField,
+  openReplay,
+  type ReadbackSubresource,
+  type ReplayBackend,
+  type ReplayReadbackResult,
+  type ReplaySession,
+  type TextureSubresource,
+  type WorkInspection,
+} from './replay/session';
 export { decodeTexelRaw, decodeToRgba8, halfToFloat } from './texel-decode';
 export {
   bytesPerTexel,
@@ -108,17 +90,3 @@ export {
   type FormatInfo,
   formatInfo,
 } from './texel-layout';
-export type {
-  HandleId,
-  InspectBindingEntry,
-  InspectDrawCall,
-  InspectFields,
-  InspectReport,
-  RhiCallEvent,
-  RhiCallEventInitialData,
-  RhiCapsRecorded,
-  Tape,
-} from './types';
-// CLI subcommands (capture-frame / inspect-at) are NOT re-exported from the barrel:
-// they depend on inspector-client (WS) and are Node.js-only. Import from
-// '@forgeax/engine-rhi-debug/cli' for CLI functions.

@@ -1,7 +1,7 @@
-// texel-decode.ts -- CPU decode of any uncompressed color format to RGBA8 for preview.
+// texel-decode.ts -- CPU decode of each uncompressed color format to RGBA8 for preview.
 //
 // The recorder promotes COPY_SRC onto every createTexture, so the replayer's
-// copyTextureToBuffer reads back any uncompressed color texture's raw bytes
+// copyTextureToBuffer reads back each uncompressed color texture's raw bytes
 // faithfully (no format change -- replay fidelity intact). This module turns
 // those raw bytes into displayable RGBA8 entirely on the host:
 //
@@ -146,21 +146,26 @@ function readTexel(
 }
 
 /**
- * Decode tight raw GPU bytes of an uncompressed color texture into RGBA8 the
- * canvas can paint via putImageData. Returns null when the format has no
- * {@link formatInfo} entry (compressed / depth / unknown -> caller falls back).
+ * Decode tight raw GPU bytes of a supported color or depth/stencil plane into
+ * RGBA8 the canvas can paint via putImageData. Returns null when the format has
+ * no {@link formatInfo} entry or the requested aspect is invalid.
  *
  * @param bytes - Tight readback bytes (no row padding), length = w*h*bytesPerTexel.
  * @param format - The texture's real format string.
  * @param width - Texture width in pixels.
  * @param height - Texture height in pixels.
+ * @param aspect - Explicit plane selected by readback for depth/stencil formats.
  */
 export function decodeToRgba8(
   bytes: Uint8Array,
   format: string,
   width: number,
   height: number,
+  aspect: 'all' | 'depth-only' | 'stencil-only' = 'all',
 ): Uint8ClampedArray<ArrayBuffer> | null {
+  if (format.startsWith('depth')) {
+    return decodeDepthToRgba8(bytes, format, width, height, aspect);
+  }
   const info = formatInfo(format);
   const texBytes = bytesPerTexel(format as never);
   if (!info || texBytes === undefined) return null;
@@ -194,6 +199,35 @@ export function decodeToRgba8(
       out[di + 2] = toByte(b, info.channelType);
       out[di + 3] = info.channels === 4 ? toByte(c3, info.channelType) : 255;
     }
+  }
+  return out;
+}
+
+function decodeDepthToRgba8(
+  bytes: Uint8Array,
+  format: string,
+  width: number,
+  height: number,
+  aspect: 'all' | 'depth-only' | 'stencil-only',
+): Uint8ClampedArray<ArrayBuffer> | null {
+  const combined = format.endsWith('-stencil8');
+  if (combined && aspect === 'all') return null;
+  if (!combined && aspect === 'stencil-only') return null;
+  const stencil = aspect === 'stencil-only';
+  const bytesPerValue = stencil ? 1 : 4;
+  const texelCount = width * height;
+  if (bytes.byteLength < texelCount * bytesPerValue) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const out = new Uint8ClampedArray(new ArrayBuffer(texelCount * 4));
+  for (let index = 0; index < texelCount; index++) {
+    const value = stencil
+      ? view.getUint8(index)
+      : Math.round(clamp01(view.getFloat32(index * 4, true)) * 255);
+    const target = index * 4;
+    out[target] = value;
+    out[target + 1] = value;
+    out[target + 2] = value;
+    out[target + 3] = 255;
   }
   return out;
 }

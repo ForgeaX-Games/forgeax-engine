@@ -19,6 +19,7 @@ const CLIP_DURATION = 6;
 const ROTATION_DURATION = 4;
 const SAMPLE_COUNT = 24;
 const CUBE_ID: AnimationTargetIdValue = deriveAnimationTargetId(['Cube']);
+export const EASED_MOTION_CLIP_GUID = 'demo/eased-motion/clip';
 
 const channel = (
   targetId: AnimationTargetIdValue,
@@ -54,7 +55,27 @@ export interface EasedMotionState {
   readonly cube: EntityHandle;
 }
 
-export function buildEasedMotionWorld(world: World): EasedMotionState {
+export function createEasedMotionClip(): AnimationClip {
+  const times = Array.from({ length: SAMPLE_COUNT + 1 }, (_, i) => (CLIP_DURATION * i) / SAMPLE_COUNT);
+  return {
+    kind: 'animation-clip',
+    duration: CLIP_DURATION,
+    channels: [
+      channel(CUBE_ID, 'translation', times, sampledCurve(times, (t) => easedTranslation(t))),
+      channel(
+        CUBE_ID,
+        'rotation',
+        [0, ROTATION_DURATION, CLIP_DURATION],
+        sampledCurve([0, ROTATION_DURATION, CLIP_DURATION], (t) => easedRotation(t)),
+      ),
+    ],
+  };
+}
+
+export function buildEasedMotionWorld(
+  world: World,
+  clip: AnimationClip = createEasedMotionClip(),
+): EasedMotionState {
   const cubeMaterial = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
     'MaterialAsset',
     Materials.standard({ baseColor: [1, 0.35, 0.08, 1] }),
@@ -69,22 +90,8 @@ export function buildEasedMotionWorld(world: World): EasedMotionState {
     )
     .unwrap() as EntityHandle;
 
-  const times = Array.from({ length: SAMPLE_COUNT + 1 }, (_, i) => (CLIP_DURATION * i) / SAMPLE_COUNT);
-  const clip: AnimationClip = {
-    kind: 'animation-clip',
-    duration: CLIP_DURATION,
-    channels: [
-      channel(CUBE_ID, 'translation', times, sampledCurve(times, (t) => easedTranslation(t))),
-      channel(
-        CUBE_ID,
-        'rotation',
-        [0, ROTATION_DURATION, CLIP_DURATION],
-        sampledCurve([0, ROTATION_DURATION, CLIP_DURATION], (t) => easedRotation(t)),
-      ),
-    ],
-  };
-  const clipHandle = world.allocSharedRef('AnimationClip', clip);
-  const graphResult = defineAnimationGraph((builder) => builder.clip(clipHandle));
+  world.internSharedRef('AnimationClip', clip);
+  const graphResult = defineAnimationGraph((builder) => builder.clip(EASED_MOTION_CLIP_GUID));
   if (!graphResult.ok) throw new Error(`[eased-motion] graph build failed: ${graphResult.error.code}`);
   const graphHandle = world.allocSharedRef('AnimationGraph', graphResult.value);
   world

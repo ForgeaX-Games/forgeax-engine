@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -95,10 +96,8 @@ globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 if (!appResult.ok) { console.error(`[smoke] createApp failed: ${appResult.error.code}`); process.exit(1); }
 const app = appResult.value;
 const errors = [];
-app.renderer.onError((error) => errors.push(error));
+subscribeSmokeErrors(app.renderer, (error) => errors.push(error));
 app.onError((error) => errors.push(error));
-const ready = await app.renderer.ready;
-if (!ready.ok) { console.error(`[smoke] renderer.ready failed: ${ready.error.code}`); process.exit(1); }
 buildKeyboardInputWorld(app.world);
 app.world.addSystem(Update, {
   name: 'bevy-keyboard-input-read',
@@ -139,7 +138,7 @@ let visiblePixels = 0;
 for (let i = 0; i < tight.length; i += 4) if ((tight[i] ?? 0) + (tight[i + 1] ?? 0) + (tight[i + 2] ?? 0) > 30) visiblePixels += 1;
 console.log(`[smoke] frames=${frames} visiblePixels=${visiblePixels} codePresses=${state.justPressedCodeA} codeReleases=${state.releasedCodeA} logicalPresses=${state.justPressedQuestion} logicalReleases=${state.releasedQuestion} snapshotDown=${snapshot.keyboard.down('never')} errors=${errors.length} png=${pngOut}`);
 const failures = [];
-if (app.renderer.backend !== 'webgpu') failures.push(`backend=${app.renderer.backend}`);
+if (rendererBackend(app.renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(app.renderer)}`);
 if (frames < targetFrames) failures.push(`frames=${frames} < ${targetFrames}`);
 if (visiblePixels <= 1000) failures.push(`visiblePixels=${visiblePixels}`);
 if (state.heldCodeA || state.heldQuestion) failures.push(`keys remain held: ${JSON.stringify(state)}`);

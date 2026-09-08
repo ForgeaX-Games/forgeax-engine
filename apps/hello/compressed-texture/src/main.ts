@@ -24,25 +24,58 @@
 // same checkerboard through a different code path (raw RGBA8 upload vs
 // block-compressed upload), serving as the ground truth for w42 pixel parity.
 
-import { createApp } from '@forgeax/engine-app';
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
+import { createApp, type App } from '@forgeax/engine-app';
+import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
+import { decodeImageBytes, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 
-import type { TextureAsset } from '@forgeax/engine-types';
+import { unwrapHandle } from '@forgeax/engine-types';
+import type { Handle, MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
-const PACK_INDEX_URL = '/pack-index.json';
 
 // GUIDs embedded in the demo's .meta.json sidecars (subAssets[0].guid).
 // These are the stable identifiers the pack plugin stamps into pack-index.json
 // at build time; the runtime resolves them via loadByGuid.
 const COMPRESSED_GUID = '8a2b5c3d-4e6f-7a8b-9c0d-1e2f3a4b5c6d';
 const UNCOMPRESSED_GUID = '9b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e';
+const PNG_2X2_SOLID_RED_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAAklEQVR4AewaftIAAAARSURBVGP8z8DwnwEImBigAAAfFwIC5VM8ugAAAABJRU5ErkJggg==';
+
+type RuntimeRecoveryPhase = 'baseline' | 'invalid' | 'repaired' | 'cleaned';
+
+interface RuntimeRecoveryState {
+  readonly phase: RuntimeRecoveryPhase;
+  readonly invalidCode: string | null;
+  readonly textureHandle: number | null;
+  readonly samplerHandle: number | null;
+  readonly textureDimensions: readonly [number, number] | null;
+  readonly materialHasTexture: boolean;
+  readonly textureAllocations: number;
+  readonly samplerAllocations: number;
+  readonly releasedResources: number;
+  readonly cleanupCalls: number;
+  readonly liveSharedRefs: number;
+}
+
+interface RuntimeRecoveryApi {
+  readonly readState: () => RuntimeRecoveryState;
+  readonly injectInvalid: () => Promise<RuntimeRecoveryState>;
+  readonly repair: () => Promise<RuntimeRecoveryState>;
+  readonly cleanup: () => RuntimeRecoveryState;
+}
+
+declare global {
+  interface Window {
+    __forgeaxRuntimeImageRecovery?: RuntimeRecoveryApi;
+  }
+}
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) {
@@ -66,28 +99,33 @@ async function bootstrap(
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    {
+      ...forgeaxBundlerAdapter(),
+      importTransport: createRuntimeAssetImportTransport(runtimeBinding),
+    },
   );
   if (!appRes.ok) {
     console.error('[compressed-texture] createApp failed');
     return;
   }
   const app = appRes.value;
-  console.warn(`[compressed-texture] backend=${app.renderer.backend} mode=${loadMode}`);
+  console.warn(
+    `[compressed-texture] backend=${app.renderer.inspect().capabilities.backendKind} mode=${loadMode}`,
+  );
 
-  const ready = await app.renderer.ready;
-  if (!ready.ok) {
-    console.error('[compressed-texture] renderer.ready failed:', ready.error.code, ready.error.hint);
+
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[compressed-texture] host asset owner is unavailable');
     return;
   }
-
-  const assets = app.renderer.assets;
-  if (assets === null) {
-    console.error('[compressed-texture] AssetRegistry is null');
-    return;
-  }
-  assets.configurePackIndex(PACK_INDEX_URL);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
   const world = app.world;
+
+  if (loadMode === 'runtime-recovery') {
+    await bootstrapRuntimeRecovery(app, world);
+    return;
+  }
 
   // Select the texture GUID based on the query mode.
   const textureGuid = loadMode === 'uncompressed' ? UNCOMPRESSED_GUID : COMPRESSED_GUID;
@@ -194,13 +232,217 @@ async function bootstrap(
   );
 
   // Print caps info on the page HUD.
-  const caps = app.renderer.device.caps;
+  const caps = app.renderer.inspect().capabilities;
   const hud = document.getElementById('texture-hud');
   if (hud) {
     hud.innerHTML =
-      `Backend: ${app.renderer.backend}  Mode: ${loadMode}<br>` +
+      `Backend: ${caps.backendKind}  Mode: ${loadMode}<br>` +
       `BC: ${caps.textureCompressionBc ? 'yes' : 'no'}  ` +
       `ETC2: ${caps.textureCompressionEtc2 ? 'yes' : 'no'}  ` +
       `ASTC: ${caps.textureCompressionAstc ? 'yes' : 'no'}`;
   }
+}
+
+function pngBytes(): Uint8Array {
+  const binary = atob(PNG_2X2_SOLID_RED_BASE64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+async function bootstrapRuntimeRecovery(
+  app: App,
+  world: World,
+): Promise<void> {
+  const materialFor = (
+    baseColor: readonly [number, number, number, number],
+    textureHandle?: number,
+    samplerHandle?: number,
+  ): MaterialAsset => ({
+    kind: 'material',
+    passes: [
+      {
+        name: 'Forward',
+        program: { module: 'forgeax::default-unlit' },
+        renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
+      },
+    ],
+    values: {
+      baseColor,
+      ...(textureHandle === undefined ? {} : { baseColorTexture: textureHandle }),
+      ...(samplerHandle === undefined ? {} : { sampler: samplerHandle }),
+    } as NonNullable<MaterialAsset['values']>,
+  });
+
+  const baselineMaterialHandle = world.allocSharedRef(
+    'MaterialAsset',
+    materialFor([0, 0, 0, 1]),
+  );
+  const meshEntity = spawnRuntimeRecoveryScene(world, baselineMaterialHandle);
+  const releasedBaseline = world.sharedRefs.release(baselineMaterialHandle);
+  if (!releasedBaseline.ok) {
+    throw new Error(`[m27] baseline material release failed: ${releasedBaseline.error.code}`);
+  }
+
+  const installMaterial = (material: MaterialAsset): void => {
+    const nextHandle = world.allocSharedRef('MaterialAsset', material);
+    const setResult = world.set(meshEntity, MeshRenderer, { materials: [nextHandle] });
+    if (!setResult.ok) {
+      world.sharedRefs.release(nextHandle);
+      throw new Error(`[m27] material switch failed: ${setResult.error.code}`);
+    }
+    const releasedOwner = world.sharedRefs.release(nextHandle);
+    if (!releasedOwner.ok) {
+      throw new Error(`[m27] material owner release failed: ${releasedOwner.error.code}`);
+    }
+  };
+
+  let textureHandle: Handle<'TextureAsset', 'shared'> | undefined;
+  let samplerHandle: Handle<'SamplerAsset', 'shared'> | undefined;
+  const state: {
+    phase: RuntimeRecoveryPhase;
+    invalidCode: string | null;
+    textureHandle: number | null;
+    samplerHandle: number | null;
+    textureDimensions: readonly [number, number] | null;
+    materialHasTexture: boolean;
+    textureAllocations: number;
+    samplerAllocations: number;
+    releasedResources: number;
+    cleanupCalls: number;
+    liveSharedRefs: number;
+  } = {
+    phase: 'baseline',
+    invalidCode: null,
+    textureHandle: null,
+    samplerHandle: null,
+    textureDimensions: null,
+    materialHasTexture: false,
+    textureAllocations: 0,
+    samplerAllocations: 0,
+    releasedResources: 0,
+    cleanupCalls: 0,
+    liveSharedRefs: world.sharedRefs._liveCount(),
+  };
+
+  const readState = (): RuntimeRecoveryState => ({ ...state });
+  const publish = (): void => {
+    state.textureHandle = textureHandle === undefined ? null : unwrapHandle(textureHandle);
+    state.samplerHandle = samplerHandle === undefined ? null : unwrapHandle(samplerHandle);
+    state.liveSharedRefs = world.sharedRefs._liveCount();
+    const stateElement = document.getElementById('texture-recovery-state');
+    if (stateElement) stateElement.textContent = JSON.stringify(readState());
+    const hud = document.getElementById('texture-hud');
+    if (hud) {
+      hud.innerHTML =
+        `Backend: ${app.renderer.inspect().capabilities.backendKind}  Mode: runtime-recovery<br>` +
+        `Phase: ${state.phase}  Invalid: ${state.invalidCode ?? 'none'}<br>` +
+        `Texture: ${state.materialHasTexture ? 'bound' : 'none'}`;
+    }
+  };
+
+  const injectInvalid = async (): Promise<RuntimeRecoveryState> => {
+    if (state.invalidCode !== null) return readState();
+    const result = await decodeImageBytes(new Uint8Array([0, 1, 2]), 'image/png', {
+      mipmap: false,
+    });
+    if (result.ok) throw new Error('[m27] invalid PNG unexpectedly decoded');
+    state.invalidCode = result.error.code;
+    state.phase = 'invalid';
+    publish();
+    return readState();
+  };
+
+  const repair = async (): Promise<RuntimeRecoveryState> => {
+    if (textureHandle !== undefined) return readState();
+    const result = await decodeImageBytes(pngBytes(), 'image/png', { mipmap: false });
+    if (!result.ok) throw new Error(`[m27] valid PNG decode failed: ${result.error.code}`);
+
+    textureHandle = world.allocSharedRef('TextureAsset', result.value);
+    samplerHandle = world.allocSharedRef('SamplerAsset', {
+      kind: 'sampler',
+      magFilter: 'linear',
+      minFilter: 'linear',
+      addressModeU: 'clamp-to-edge',
+      addressModeV: 'clamp-to-edge',
+    });
+    installMaterial(
+      materialFor(
+        [1, 1, 1, 1],
+        unwrapHandle(textureHandle),
+        unwrapHandle(samplerHandle),
+      ),
+    );
+    state.phase = 'repaired';
+    state.materialHasTexture = true;
+    state.textureDimensions = [result.value.width, result.value.height];
+    state.textureAllocations += 1;
+    state.samplerAllocations += 1;
+    publish();
+    return readState();
+  };
+
+  const cleanup = (): RuntimeRecoveryState => {
+    state.cleanupCalls += 1;
+    if (state.phase !== 'cleaned') {
+      installMaterial(materialFor([0, 0, 0, 1]));
+      state.materialHasTexture = false;
+      if (textureHandle !== undefined) {
+        const released = world.sharedRefs.release(textureHandle);
+        if (!released.ok) throw new Error(`[m27] texture release failed: ${released.error.code}`);
+        textureHandle = undefined;
+        state.releasedResources += 1;
+      }
+      if (samplerHandle !== undefined) {
+        const released = world.sharedRefs.release(samplerHandle);
+        if (!released.ok) throw new Error(`[m27] sampler release failed: ${released.error.code}`);
+        samplerHandle = undefined;
+        state.releasedResources += 1;
+      }
+      state.phase = 'cleaned';
+    }
+    publish();
+    return readState();
+  };
+
+  window.__forgeaxRuntimeImageRecovery = {
+    readState,
+    injectInvalid,
+    repair,
+    cleanup,
+  };
+  publish();
+}
+
+function spawnRuntimeRecoveryScene(
+  world: World,
+  materialHandle: Handle<'MaterialAsset', 'shared'>,
+): EntityHandle {
+  const meshEntity = world.spawn(
+    { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
+    { component: MeshRenderer, data: { materials: [materialHandle] } },
+    { component: Transform, data: { pos: [0, 0, 0], scale: [2.6, 1.8, 1] } },
+  );
+  if (!meshEntity.ok) throw new Error(`[m27] recovery mesh spawn failed: ${meshEntity.error.code}`);
+  world.spawn({
+    component: DirectionalLight,
+    data: {
+      direction: [-0.1, -0.6, -1.0],
+      color: [1, 1, 1],
+      intensity: 3,
+    },
+  });
+  world.spawn(
+    { component: Transform, data: { pos: [0, 0, 3] } },
+    {
+      component: Camera,
+      data: {
+        ...perspective({ fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 }),
+        clearColor: [0.02, 0.02, 0.05, 1],
+      },
+    },
+  );
+  return meshEntity.value;
 }

@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { defineComponent, World } from '@forgeax/engine-ecs';
 import type { PeerId } from '../src/endpoint/endpoint';
 import { createMemoryEndpointPair } from '../src/endpoint/memory';
-import { encodeReplicationBatch } from '../src/replication/codec';
-import { createReplicaCoordinator } from '../src/replication/replica';
+import { encodeReplicationPacket } from '../src/replication/codec';
+import type { ReplicationPacket } from '../src/replication/protocol';
+import { applyReplicationPacket, createReplicaCoordinator } from '../src/replication/replica';
 import { defineReplication } from '../src/replication/profile';
 import { NetSession } from '../src/session/net-session';
 
@@ -29,12 +30,15 @@ describe('replica fatal apply stop', () => {
     authorityEndpoint.poll();
     session.receiveEvents();
 
-    const invalidWrite = encodeReplicationBatch(
+    const invalidWrite = encodeReplicationPacket(
       {
-        version: 1,
+        version: 2,
+        kind: 'baseline',
+        sessionId: 17 as ReplicationPacket['sessionId'],
+        epoch: 1,
+        sequence: 1,
         fingerprint: replication.fingerprint,
         tick: 1,
-        full: true,
         entities: [{ id: 1, kind: 'upsert', components: [{ name: 'NetworkedFatal', operation: 'remove', data: {} }] }],
       },
       replication.limits,
@@ -46,20 +50,23 @@ describe('replica fatal apply stop', () => {
     expect(replica.stopped).toBe(true);
     expect(replica.snapshot()).toEqual([{ id: 1, components: [] }]);
 
-    const validLater = encodeReplicationBatch(
+    const validLater = encodeReplicationPacket(
       {
-        version: 1,
+        version: 2,
+        kind: 'delta',
+        sessionId: 17 as ReplicationPacket['sessionId'],
+        epoch: 1,
+        sequence: 2,
         fingerprint: replication.fingerprint,
         tick: 2,
-        full: false,
         entities: [{ id: 1, kind: 'upsert', components: [{ name: 'NetworkedFatal', data: { enabled: true } }] }],
       },
       replication.limits,
     ).unwrap();
-    authorityEndpoint.send(2 as PeerId, validLater).unwrap();
-    const stopped = session.receiveEvents();
-    expect(stopped).toHaveLength(1);
-    expect(stopped[0]!.code).toBe('apply-invariant-failed');
+    const stopped = applyReplicationPacket(replica, validLater);
+    expect(stopped.ok).toBe(false);
+    if (stopped.ok) return;
+    expect(stopped.error.code).toBe('apply-invariant-failed');
     expect(replica.snapshot()).toEqual([{ id: 1, components: [] }]);
   });
 });

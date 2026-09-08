@@ -1,3 +1,4 @@
+import * as SceneOwner from '@forgeax/engine-scene';
 // serialize-mounts-roundtrip.test.ts — M3 serialization breakpoint A/B + resolver
 // wiring TDD tests (feat-20260703-collect-nested-sceneinstance-to-mount-roundtrip).
 //
@@ -7,16 +8,16 @@
 //   m3-t3: cyclic mount fail-fast
 
 import type { Asset } from '@forgeax/engine-assets-runtime';
-import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { type EntityHandle, err, ok, World } from '@forgeax/engine-ecs';
+import { AssetRegistry, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
+import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { SceneInstance } from '@forgeax/engine-render';
 import type { Handle, SceneAsset, SceneInstanceMount } from '@forgeax/engine-types';
+import { err, ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { serializeSceneAssetToPack } from '../collect-scene-asset';
-import '@forgeax/engine-render/internal';
-import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
-import { SceneInstance } from '@forgeax/engine-render/internal';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+import { registerSceneComponents } from './helpers/register-scene-components';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Helpers
@@ -37,6 +38,7 @@ function cat(reg: AssetRegistry, g: string, p: SceneAsset): void {
 }
 
 function rs(w: World, a: SceneAsset): Handle<'SceneAsset', 'shared'> {
+  registerSceneComponents(w);
   return w.allocSharedRef('SceneAsset', a);
 }
 
@@ -45,7 +47,7 @@ function swr(
   ph: Handle<'SceneAsset', 'shared'>,
   ch: Handle<'SceneAsset', 'shared'>,
 ): void {
-  w._setSceneAssetResolver?.((_s, pH) =>
+  SceneOwner.worldSetSceneAssetResolver(w, (_s, pH) =>
     (pH as unknown as number) === (ph as unknown as number)
       ? ok(ch)
       : err({ code: 'asset-not-found' }),
@@ -136,7 +138,7 @@ describe('m3-t1 — serialize<->parse mounts symmetry round-trip', () => {
     };
 
     // Serialize.
-    const serRes = serializeSceneAssetToPack(scene, G3);
+    const serRes = serializeSceneAssetToPack(scene, new Map(), G3);
     expect(serRes.ok).toBe(true);
     if (!serRes.ok) return;
 
@@ -215,7 +217,7 @@ describe('m3-t1 — serialize<->parse mounts symmetry round-trip', () => {
       kind: 'scene',
       entities: [{ localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } }],
     };
-    const serResBackcompat = serializeSceneAssetToPack(scene, G3);
+    const serResBackcompat = serializeSceneAssetToPack(scene, new Map(), G3);
     expect(serResBackcompat.ok).toBe(true);
     if (!serResBackcompat.ok) return;
 
@@ -248,7 +250,7 @@ describe('m3-t1 — serialize<->parse mounts symmetry round-trip', () => {
       mounts,
     };
 
-    const serResNum = serializeSceneAssetToPack(sceneNumeric, G3);
+    const serResNum = serializeSceneAssetToPack(sceneNumeric, new Map(), G3);
     expect(serResNum.ok).toBe(true);
     if (!serResNum.ok) return;
 
@@ -274,6 +276,40 @@ describe('m3-t1 — serialize<->parse mounts symmetry round-trip', () => {
     expect(parsedNum.mounts[0].memberFirst).toBe(1000);
     expect(parsedNum.mounts[0].memberCount).toBe(42);
     expect(parsedNum.mounts[0].parent).toBe(500);
+  });
+
+  it('preserves the atomic publication fence on authored mounts', () => {
+    const fence = {
+      schemaVersion: 'scene-publication-fence/1' as const,
+      sourcePath: 'assets/showcase.pack.ts',
+      sourceRevision: 'sha256:source',
+      publicationGeneration: 4,
+      outputDigest: 'sha256:output',
+      outputSetDigest: 'sha256:output-set',
+      receiptIdentity: 'sha256:receipt',
+    };
+    const packed = serializeSceneAssetToPack(
+      {
+        kind: 'scene',
+        entities: [{ localId: 0 as never, components: {} }],
+        mounts: [
+          {
+            localId: 1 as never,
+            source: G1,
+            memberFirst: 2 as never,
+            memberCount: 1,
+            publicationFence: fence,
+          },
+        ],
+      },
+      new Map(),
+      G3,
+    );
+    expect(packed.ok).toBe(true);
+    if (!packed.ok) return;
+    const payload = (packed.value.assets as Array<{ payload: Record<string, unknown> }>)[0]
+      ?.payload;
+    expect((payload?.mounts as Array<Record<string, unknown>>)[0]?.publicationFence).toEqual(fence);
   });
 });
 

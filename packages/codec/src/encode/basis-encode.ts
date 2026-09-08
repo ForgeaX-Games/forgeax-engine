@@ -21,10 +21,11 @@
 
 import type { CodecResult } from '../errors.js';
 import { codecError } from '../errors.js';
-import type { BasisEncoderModule, BasisModuleFactory } from '../wasm/basis-types.js';
+import type { TranscodeModel } from '../transcode.js';
+import type { BasisEncoder, BasisEncoderModule, BasisModuleFactory } from '../wasm/basis-types.js';
 
 /** Which delivery encoding to produce. Mirrors the transcode source models (D-3). */
-export type BasisEncodeMode = 'etc1s' | 'uastc-ldr' | 'uastc-hdr';
+export type BasisEncodeMode = TranscodeModel;
 
 // --- Fast-preset encode-effort constants (R-9) -------------------------------
 // The 'auto' default (M5 w38) sends every existing texture through Basis encode,
@@ -173,67 +174,91 @@ export async function basisEncode(
     });
   }
 
-  const encoder = new mod.BasisEncoder();
+  let encoder: BasisEncoder;
+  try {
+    encoder = new mod.BasisEncoder();
+  } catch {
+    return codecError('ktx2-encode-failed', {
+      mode,
+      reason: 'encoder constructor failed',
+    });
+  }
+  let result: CodecResult<Uint8Array> = codecError('ktx2-encode-failed', {
+    mode,
+    reason: 'encoder returned 0 bytes',
+  });
   try {
     // Single-threaded for deterministic, byte-identical output (AC-02 / R-11).
     encoder.controlThreading(false, 0);
 
+    let sourceAccepted: boolean;
     if (mode === 'uastc-hdr') {
       // img_type 0 = cHITRGBAHalfFloat: the source is rgba16float bytes; no
       // LDR->HDR upconversion (already linear half-float from the image arm).
-      if (!encoder.setSliceSourceImageHDR(0, pixels, width, height, 0, false, 1.0)) {
-        return codecError('ktx2-encode-failed', { mode, reason: 'setSliceSourceImageHDR failed' });
-      }
+      sourceAccepted = encoder.setSliceSourceImageHDR(0, pixels, width, height, 0, false, 1.0);
     } else {
       // img_type 0 = cRGBA32: tight-packed 8-bit RGBA.
-      if (!encoder.setSliceSourceImage(0, pixels, width, height, 0)) {
-        return codecError('ktx2-encode-failed', { mode, reason: 'setSliceSourceImage failed' });
+      sourceAccepted = encoder.setSliceSourceImage(0, pixels, width, height, 0);
+    }
+
+    if (!sourceAccepted) {
+      result = codecError('ktx2-encode-failed', {
+        mode,
+        reason:
+          mode === 'uastc-hdr' ? 'setSliceSourceImageHDR failed' : 'setSliceSourceImage failed',
+      });
+    } else {
+      encoder.setCreateKTX2File(true);
+      encoder.setFormatMode(formatModeValue(mod, mode));
+      encoder.setMipGen(mipGen);
+
+      if (mode === 'etc1s') {
+        encoder.setQualityLevel(128);
+        // Fastest perf tier (R-9): quality stays fixed by setQualityLevel above;
+        // the compression level only trades a marginally larger file for a much
+        // faster encode (the 'auto' default routes every texture through here).
+        encoder.setETC1SCompressionLevel(ETC1S_COMPRESSION_LEVEL_FASTEST);
+        encoder.setPerceptual(perceptual);
+      } else if (mode === 'uastc-ldr') {
+        encoder.setKTX2UASTCSupercompression(uastcSupercompression);
+        // Fastest pack tier (R-9). Unlike ETC1S this lowers quality; per-fixture
+        // opt-out / D-12 upgrade covers any smoke that will not converge.
+        encoder.setPackUASTCFlags(PACK_UASTC_LDR_LEVEL_FASTEST);
+        encoder.setPerceptual(perceptual);
+      } else {
+        // uastc-hdr: fastest HDR search tier (R-9); block bytes unchanged in size.
+        encoder.setUASTCHDRQualityLevel(UASTC_HDR_QUALITY_LEVEL_FASTEST);
+      }
+      // sRGB transfer function into the KTX2 header + DFD (LDR color arm).
+      encoder.setKTX2AndBasisSRGBTransferFunc(srgb);
+
+      // encode() copies into the provided buffer and returns the byte length (0 on
+      // failure). A 4 MiB scratch buffer covers a single-slice mip-0 image at the
+      // sizes this offline arm handles; grow-on-overflow retries once.
+      let capacity = 1 << 22;
+      let out = new Uint8Array(capacity);
+      let n = encoder.encode(out);
+      if (n === 0) {
+        capacity = 1 << 25;
+        out = new Uint8Array(capacity);
+        n = encoder.encode(out);
+      }
+      if (n === 0) {
+        result = codecError('ktx2-encode-failed', { mode, reason: 'encoder returned 0 bytes' });
+      } else {
+        result = { ok: true, value: out.slice(0, n) };
       }
     }
-
-    encoder.setCreateKTX2File(true);
-    encoder.setFormatMode(formatModeValue(mod, mode));
-    encoder.setMipGen(mipGen);
-
-    if (mode === 'etc1s') {
-      encoder.setQualityLevel(128);
-      // Fastest perf tier (R-9): quality stays fixed by setQualityLevel above;
-      // the compression level only trades a marginally larger file for a much
-      // faster encode (the 'auto' default routes every texture through here).
-      encoder.setETC1SCompressionLevel(ETC1S_COMPRESSION_LEVEL_FASTEST);
-      encoder.setPerceptual(perceptual);
-    } else if (mode === 'uastc-ldr') {
-      encoder.setKTX2UASTCSupercompression(uastcSupercompression);
-      // Fastest pack tier (R-9). Unlike ETC1S this lowers quality; per-fixture
-      // opt-out / D-12 upgrade covers any smoke that will not converge.
-      encoder.setPackUASTCFlags(PACK_UASTC_LDR_LEVEL_FASTEST);
-      encoder.setPerceptual(perceptual);
-    } else {
-      // uastc-hdr: fastest HDR search tier (R-9); block bytes unchanged in size.
-      encoder.setUASTCHDRQualityLevel(UASTC_HDR_QUALITY_LEVEL_FASTEST);
-    }
-    // sRGB transfer function into the KTX2 header + DFD (LDR color arm).
-    encoder.setKTX2AndBasisSRGBTransferFunc(srgb);
-
-    // encode() copies into the provided buffer and returns the byte length (0 on
-    // failure). A 4 MiB scratch buffer covers a single-slice mip-0 image at the
-    // sizes this offline arm handles; grow-on-overflow retries once.
-    let capacity = 1 << 22;
-    let out = new Uint8Array(capacity);
-    let n = encoder.encode(out);
-    if (n === 0) {
-      capacity = 1 << 25;
-      out = new Uint8Array(capacity);
-      n = encoder.encode(out);
-    }
-    if (n === 0) {
-      return codecError('ktx2-encode-failed', { mode, reason: 'encoder returned 0 bytes' });
-    }
-    return { ok: true, value: out.slice(0, n) };
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
-    return codecError('ktx2-encode-failed', { mode, reason });
-  } finally {
-    encoder.delete();
+    result = codecError('ktx2-encode-failed', { mode, reason });
   }
+  try {
+    encoder.delete();
+  } catch {
+    if (result.ok) {
+      result = codecError('ktx2-encode-failed', { mode, reason: 'encoder cleanup failed' });
+    }
+  }
+  return result;
 }

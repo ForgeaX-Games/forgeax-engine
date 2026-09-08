@@ -1,13 +1,8 @@
 import { dirname, posix, resolve } from 'node:path';
 import type { Result } from '@forgeax/engine-types';
 import { PACK_ERROR_HINTS, err as resultErr, ok as resultOk } from '@forgeax/engine-types';
+import { deriveAssetName } from './deriveAssetName.js';
 import { PackError } from './errors.js';
-
-function baseName(p: string): string {
-  const trimmed = p.replace(/[/\\]+$/, '');
-  const idx = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
-  return idx === -1 ? trimmed : trimmed.slice(idx + 1);
-}
 
 function deriveSourceName(metaFileName: string): string {
   return metaFileName.replace(/\.meta\.json$/, '');
@@ -27,7 +22,7 @@ export function resolveAssetSource(
 ): Result<string, PackError> {
   if (source === undefined) {
     const metaDir = dirname(metaPath);
-    const metaName = baseName(metaPath);
+    const metaName = deriveAssetName(metaPath, 1);
     const derived = deriveSourceName(metaName);
     return resultOk(resolve(metaDir, derived));
   }

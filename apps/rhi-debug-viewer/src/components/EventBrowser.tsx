@@ -1,424 +1,198 @@
-// EventBrowser.tsx — left panel: pass->draw tree + full command stream (w23).
-//
-// Filters: 'draws only' (default) or 'all commands'. Shows passes as top-level
-// collapsible nodes. Within each pass, commands listed in tape order:
-//   - Draw commands highlighted with draw type badge.
-//   - Non-draw commands dimmed with small icon.
-//   - pushDebugGroup / popDebugGroup form collapsible nested sections.
-//   - insertDebugMarker shown as inline dimmed markers.
-//
-// Selection: clicking a draw row sets selectedDrawIdx in Context;
-// clicking a non-draw command row sets selectedCommandIdx.
-//
-// Related: requirements AC-14; plan-strategy D-5; charter P1 (progressive disclosure).
-
-import type { RhiCallEvent } from '@forgeax/engine-rhi-debug';
-import type { IDockviewPanelProps } from 'dockview-react';
-import {
-  ChevronDown,
-  ChevronRight,
-  Eye,
-  EyeOff,
-  Layers,
-  List,
-  Minus,
-  Play,
-  Tag,
-} from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { ChevronDown, ChevronRight, List, Play } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import { useSelection } from '../selection-context';
-import { commandRowAnchor, drawAnchor, eventBrowserAnchor, selectedAnchor } from '../selectors';
-import { useTape, useViewModel } from '../viewer-context';
-import type { CommandEntry } from '../viewer-model';
+import { commandRowAnchor, eventBrowserAnchor, passAnchor, selectedAnchor } from '../selectors';
+import { useViewModel } from '../viewer-context';
 
-type FilterMode = 'draws-only' | 'all-commands';
-
-/** A segment of consecutive commands within a debug group boundary. */
-interface CommandSegment {
-  type: 'command';
-  command: CommandEntry;
+interface PanelProps {
+  readonly className?: string;
 }
-interface GroupSegment {
-  type: 'group';
-  openLabel: string;
-  children: CommandTreeItem[];
-}
-type CommandTreeItem = CommandSegment | GroupSegment;
 
-/** Build a tree with debug group nesting for a flat command array. */
-function buildCommandTree(commands: readonly CommandEntry[]): CommandTreeItem[] {
-  const result: CommandTreeItem[] = [];
-  const stack: CommandTreeItem[][] = [result];
+export function EventBrowser(_props?: PanelProps) {
+  const model = useViewModel();
+  const { selectedWorkIndex, selectCommand, selectWork } = useSelection();
+  const [collapsed, setCollapsed] = useState<ReadonlySet<number>>(new Set());
+  const [mode, setMode] = useState<'works-only' | 'all-commands'>('works-only');
 
-  for (const cmd of commands) {
-    const current = stack[stack.length - 1];
-    if (!current) continue;
-
-    if (cmd.kind === 'pushDebugGroup' || cmd.kind === 'passPushDebugGroup') {
-      const group: GroupSegment = {
-        type: 'group',
-        openLabel: cmd.groupLabel ?? 'Debug Group',
-        children: [],
-      };
-      current.push(group);
-      stack.push(group.children);
-    } else if (cmd.kind === 'popDebugGroup' || cmd.kind === 'passPopDebugGroup') {
-      if (stack.length > 1) stack.pop();
-    } else {
-      current.push({ type: 'command', command: cmd });
+  const passes = model?.passes ?? [];
+  const works = model?.works ?? [];
+  const commands = model?.commands ?? [];
+  const workByPass = useMemo(() => {
+    const result = new Map<number, (typeof works)[number][]>();
+    for (const work of works) {
+      const list = result.get(work.passIndex) ?? [];
+      list.push(work);
+      result.set(work.passIndex, list);
     }
-  }
+    return result;
+  }, [works]);
+  const commandsByPass = useMemo(() => {
+    const result = new Map<number, (typeof commands)[number][]>();
+    for (const command of commands) {
+      const list = result.get(command.passIndex) ?? [];
+      list.push(command);
+      result.set(command.passIndex, list);
+    }
+    return result;
+  }, [commands]);
 
-  return result;
-}
-
-function drawKindLabel(kind: string): string {
-  switch (kind) {
-    case 'drawIndexed':
-      return 'DrawIndexed';
-    case 'drawIndirect':
-      return 'DrawIndirect';
-    case 'drawIndexedIndirect':
-      return 'DrawIdxIndirect';
-    case 'dispatchWorkgroups':
-      return 'Dispatch';
-    default:
-      return 'Draw';
-  }
-}
-
-function nonDrawIcon(kind: string): string {
-  switch (kind) {
-    case 'setPipeline':
-    case 'setVertexBuffer':
-    case 'setIndexBuffer':
-    case 'setBindGroup':
-      return 'bind';
-    case 'copyBufferToBuffer':
-    case 'copyBufferToTexture':
-    case 'copyTextureToBuffer':
-    case 'copyTextureToTexture':
-    case 'clearBuffer':
-      return 'copy';
-    case 'setViewport':
-    case 'setScissorRect':
-      return 'viewport';
-    case 'setBlendConstant':
-    case 'setStencilReference':
-      return 'state';
-    case 'insertDebugMarker':
-    case 'passInsertDebugMarker':
-      return 'marker';
-    default:
-      return 'cmd';
-  }
-}
-
-/** Format command parameters compact. Switches on event.kind -- TS narrows automatically (AC-12). */
-function formatCommandParam(event: RhiCallEvent): string | null {
-  switch (event.kind) {
-    case 'setPipeline':
-      return `pipe=${event.pipelineHandleId}`;
-    case 'setVertexBuffer':
-      return `slot=${event.slot} buf=${event.bufferHandleId}`;
-    case 'setIndexBuffer':
-      return `fmt=${event.format} buf=${event.bufferHandleId}`;
-    case 'setBindGroup':
-      return `index=${event.index} bg=${event.bindGroupHandleId}`;
-    case 'draw':
-      return `vc=${event.vertexCount} ic=${event.instanceCount}`;
-    case 'drawIndexed':
-      return `idx=${event.indexCount} ic=${event.instanceCount}`;
-    case 'copyBufferToBuffer':
-      return `size=${event.size}`;
-    case 'setViewport':
-      return `${event.x},${event.y} ${event.w}x${event.h}`;
-    case 'setScissorRect':
-      return `${event.x},${event.y} ${event.w}x${event.h}`;
-    default:
-      return null;
-  }
-}
-
-function CommandRow({
-  command,
-  onSelect,
-  events,
-}: {
-  command: CommandEntry;
-  onSelect: (cmd: CommandEntry) => void;
-  events: readonly RhiCallEvent[] | undefined;
-}) {
-  const isDraw = command.isDraw;
-  const event = events?.[command.eventIdx];
-  const paramText = !isDraw && event !== undefined ? (formatCommandParam(event) ?? null) : null;
-
-  return (
-    <button
-      type="button"
-      onClick={() => onSelect(command)}
-      className={`w-full text-left px-2 py-0.5 text-xs flex items-center gap-1.5 rounded transition-colors hover:bg-muted ${
-        isDraw ? 'text-success font-medium' : 'text-muted-foreground'
-      }`}
-      {...{ [commandRowAnchor()]: String(command.eventIdx) }}
-    >
-      {isDraw ? (
-        <Play size={10} className="shrink-0 text-success" />
-      ) : nonDrawIcon(command.kind) === 'marker' ? (
-        <Tag size={10} className="shrink-0 text-warning/80" />
-      ) : nonDrawIcon(command.kind) === 'copy' ? (
-        <Minus size={10} className="shrink-0 text-muted-foreground" />
-      ) : (
-        <Minus size={10} className="shrink-0 text-muted-foreground" />
-      )}
-      <span className="truncate">{isDraw ? drawKindLabel(command.kind) : command.kind}</span>
-      {paramText && <span className="text-muted-foreground/60 truncate">{paramText}</span>}
-      {command.markerLabel && (
-        <span className="text-warning/80 truncate">&quot;{command.markerLabel}&quot;</span>
-      )}
-    </button>
-  );
-}
-
-function TreeNode({
-  item,
-  depth,
-  onSelect,
-  events,
-}: {
-  item: CommandTreeItem;
-  depth: number;
-  onSelect: (cmd: CommandEntry) => void;
-  events: readonly RhiCallEvent[] | undefined;
-}) {
-  if (item.type === 'command') {
+  if (!model) {
     return (
-      <div style={{ paddingLeft: depth * 12 }}>
-        <CommandRow command={item.command} onSelect={onSelect} events={events} />
-      </div>
-    );
-  }
-
-  // GroupSegment — collapsible debug group
-  return <GroupNode group={item} depth={depth} onSelect={onSelect} events={events} />;
-}
-
-function GroupNode({
-  group,
-  depth,
-  onSelect,
-  events,
-}: {
-  group: GroupSegment;
-  depth: number;
-  onSelect: (cmd: CommandEntry) => void;
-  events: readonly RhiCallEvent[] | undefined;
-}) {
-  const [open, setOpen] = useState(true);
-
-  return (
-    <div style={{ paddingLeft: depth * 12 }}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1 text-xs text-warning hover:text-warning py-0.5 w-full text-left"
-      >
-        {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-        <span className="truncate">{group.openLabel}</span>
-      </button>
-      {open && (
-        <div>
-          {group.children.map((child, idx) => {
-            const childKey =
-              child.type === 'command' ? `cmd-${child.command.eventIdx}` : `group-${idx}`;
-            return (
-              <TreeNode key={childKey} item={child} depth={1} onSelect={onSelect} events={events} />
-            );
-          })}
+      <div className="forgeax-panel grid place-items-center text-xs text-muted-foreground">
+        <div className="text-center">
+          <p className="font-medium text-foreground">No tape loaded</p>
+          <p className="mt-1">Import or drop one v7 .rhitape</p>
         </div>
-      )}
-    </div>
-  );
-}
-
-export function EventBrowser(_props: IDockviewPanelProps) {
-  const vm = useViewModel();
-  const tape = useTape();
-  const { selectedDrawIdx, setSelectedDrawIdx, setSelectedCommandIdx } = useSelection();
-  const [filterMode, setFilterMode] = useState<FilterMode>('draws-only');
-  const [collapsedPasses, setCollapsedPasses] = useState<Set<number>>(new Set());
-
-  const tree = vm?.tree ?? [];
-  const commands = vm?.commands ?? [];
-  const events = tape?.events;
-
-  // Auto-select the first draw once a tape loads so the other panels (pipeline
-  // state, texture preview) show data immediately — there is no separate tree
-  // panel to drive the initial selection. Only fires when nothing is selected yet.
-  useEffect(() => {
-    if (selectedDrawIdx < 0 && vm && vm.draws.length > 0) {
-      setSelectedDrawIdx(0);
-    }
-  }, [vm, selectedDrawIdx, setSelectedDrawIdx]);
-
-  // Build per-pass command ranges and trees
-  const passCommandTree = useMemo(() => {
-    const map = new Map<number, CommandTreeItem[]>();
-    if (commands.length === 0) return map;
-
-    for (let pi = 0; pi < tree.length; pi++) {
-      const passNode = tree[pi];
-      if (!passNode) continue;
-      // Gather commands belonging to this pass
-      const passCmds = commands.filter((c) => c.passIdx === passNode.passIdx);
-      map.set(passNode.passIdx, buildCommandTree(passCmds));
-    }
-    return map;
-  }, [commands, tree]);
-
-  const togglePass = (passIdx: number) => {
-    setCollapsedPasses((prev) => {
-      const next = new Set(prev);
-      if (next.has(passIdx)) next.delete(passIdx);
-      else next.add(passIdx);
-      return next;
-    });
-  };
-
-  const handleCommandSelect = (cmd: CommandEntry) => {
-    if (cmd.isDraw) {
-      // Global draw index = this draw's position among all draw commands.
-      // `cmd.eventIdx` indexes the raw events array (incl. meta events), while
-      // `commands` is meta-filtered — so counting by eventIdx over `commands`
-      // overshoots by the number of stripped meta events. Match by eventIdx in
-      // the draw-only subsequence instead (vm.draws is built in this same order).
-      const drawIdx = commands
-        .filter((c) => c.isDraw)
-        .findIndex((c) => c.eventIdx === cmd.eventIdx);
-      if (drawIdx >= 0) setSelectedDrawIdx(drawIdx);
-    } else {
-      setSelectedCommandIdx(cmd.eventIdx);
-    }
-  };
-
-  if (!vm) {
-    return (
-      <div className="p-4 h-full flex items-center justify-center">
-        <p className="text-xs text-muted-foreground">No tape loaded</p>
       </div>
     );
   }
 
-  if (tree.length === 0) {
-    return (
-      <div className="p-4 h-full flex items-center justify-center">
-        <p className="text-xs text-muted-foreground">No events in tape</p>
-      </div>
-    );
-  }
+  const toggle = (passIndex: number) => {
+    const next = new Set(collapsed);
+    if (next.has(passIndex)) next.delete(passIndex);
+    else next.add(passIndex);
+    setCollapsed(next);
+  };
 
   return (
-    <div className="h-full flex flex-col bg-background" {...{ [eventBrowserAnchor()]: filterMode }}>
-      {/* Filter toggle header */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-border shrink-0">
-        <button
-          type="button"
-          onClick={() => setFilterMode(filterMode === 'draws-only' ? 'all-commands' : 'draws-only')}
-          className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded transition-colors ${
-            filterMode === 'draws-only'
-              ? 'bg-success/15 text-success border border-success/30'
-              : 'bg-muted text-muted-foreground border border-border hover:text-foreground'
-          }`}
-        >
-          {filterMode === 'draws-only' ? <Eye size={12} /> : <EyeOff size={12} />}
-          {filterMode === 'draws-only' ? 'Draws Only' : 'All Commands'}
-        </button>
-        <span className="text-xs text-muted-foreground">
-          {vm.meta.totalDraws} draws, {vm.meta.totalPasses} passes
+    <section className="forgeax-panel flex flex-col" {...{ [eventBrowserAnchor()]: mode }}>
+      <header className="forgeax-panel-header">
+        <span>Event Browser</span>
+        <span className="forgeax-segmented">
+          <button
+            type="button"
+            className={mode === 'works-only' ? 'forgeax-segment-active' : 'forgeax-segment'}
+            onClick={() => setMode('works-only')}
+          >
+            Works only
+          </button>
+          <button
+            type="button"
+            className={mode === 'all-commands' ? 'forgeax-segment-active' : 'forgeax-segment'}
+            onClick={() => setMode('all-commands')}
+          >
+            All commands
+          </button>
         </span>
-      </div>
-
-      {/* Command list */}
-      <div className="flex-1 overflow-y-auto p-1">
-        {tree.map((passNode) => {
-          const isCollapsed = collapsedPasses.has(passNode.passIdx);
-          const passTree = passCommandTree.get(passNode.passIdx) ?? [];
-
+      </header>
+      <div className="flex-1 overflow-auto p-1.5">
+        {passes.map((pass) => {
+          const passWorks = workByPass.get(pass.passIndex) ?? [];
+          const isCollapsed = collapsed.has(pass.passIndex);
           return (
-            <div key={passNode.passIdx}>
-              {/* Pass header */}
+            <div key={pass.passIndex}>
               <button
                 type="button"
-                onClick={() => togglePass(passNode.passIdx)}
-                className="flex items-center gap-1.5 w-full text-left px-2 py-1 text-xs font-medium text-brand hover:text-brand transition-colors"
+                className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs font-medium text-brand transition-colors hover:bg-muted/60"
+                onClick={() => toggle(pass.passIndex)}
+                {...{ [passAnchor()]: String(pass.passIndex) }}
               >
                 {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-                {passNode.kind === 'render' ? (
-                  <Layers size={12} className="text-brand" />
-                ) : (
-                  <List size={12} className="text-info" />
-                )}
+                <List size={12} />
                 <span>
-                  Pass #{passNode.passIdx} {passNode.kind === 'render' ? '(Render)' : '(Compute)'}
+                  {pass.kind === 'render' ? 'Render' : 'Compute'} pass #{pass.passIndex}
                 </span>
-                <span className="text-muted-foreground">({passNode.draws.length} draws)</span>
+                <span className="text-muted-foreground">
+                  (
+                  {mode === 'works-only'
+                    ? passWorks.length
+                    : (commandsByPass.get(pass.passIndex)?.length ?? 0)}
+                  )
+                </span>
               </button>
-
-              {/* Pass body */}
               {!isCollapsed && (
-                <div className="ml-2 border-l border-border pl-1">
-                  {filterMode === 'all-commands' ? (
-                    passTree.length > 0 ? (
-                      passTree.map((item, idx) => {
-                        const itemKey =
-                          item.type === 'command' ? `cmd-${item.command.eventIdx}` : `group-${idx}`;
-                        return (
-                          <TreeNode
-                            key={itemKey}
-                            item={item}
-                            depth={0}
-                            onSelect={handleCommandSelect}
-                            events={events}
-                          />
-                        );
-                      })
-                    ) : (
-                      <p className="text-xs text-muted-foreground px-2 py-1">No commands</p>
-                    )
-                  ) : passNode.draws.length > 0 ? (
-                    passNode.draws.map((d) => {
-                      const isSelected = d.drawIdx === selectedDrawIdx;
-                      return (
-                        <div key={d.drawIdx} className="pl-0">
-                          <button
-                            type="button"
-                            onClick={() => setSelectedDrawIdx(d.drawIdx)}
-                            className={`w-full text-left px-2 py-0.5 text-xs flex items-center gap-1.5 rounded transition-colors font-medium ${
-                              isSelected ? 'bg-brand/15 text-brand' : 'hover:bg-muted text-success'
-                            }`}
-                            {...{
-                              [commandRowAnchor()]: `draw-${d.drawIdx}`,
-                              [drawAnchor()]: String(d.drawIdx),
-                              ...(isSelected ? { [selectedAnchor()]: 'true' } : {}),
-                            }}
-                          >
-                            <Play size={10} className="shrink-0 text-success" />
-                            <span>
-                              {drawKindLabel(d.eventKind)} #{d.drawIdx}
-                            </span>
-                          </button>
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <p className="text-xs text-muted-foreground px-2 py-1">No draws</p>
+                <div className="ml-3 border-l border-border/80 pl-1.5">
+                  {(mode === 'works-only'
+                    ? passWorks.map((work) => ({
+                        kind: 'work' as const,
+                        work,
+                        command: commands[work.commandIndex],
+                      }))
+                    : (commandsByPass.get(pass.passIndex) ?? []).map((command) => ({
+                        kind: 'command' as const,
+                        command,
+                        work: works.find(
+                          (candidate) => candidate.eventIndex === command.eventIndex,
+                        ),
+                      }))
+                  ).map((entry) => {
+                    const work = entry.work;
+                    const command = entry.command;
+                    const selected = work !== undefined && selectedWorkIndex === work.workIndex;
+                    return (
+                      <button
+                        type="button"
+                        key={command?.eventIndex ?? work?.workIndex}
+                        className={
+                          selected
+                            ? 'flex w-full min-w-0 items-center gap-1.5 rounded-md border border-brand/20 bg-brand/10 px-2 py-1.5 text-left text-xs text-brand'
+                            : 'flex w-full min-w-0 items-center gap-1.5 rounded-md border border-transparent px-2 py-1.5 text-left text-xs text-success transition-colors hover:border-border/70 hover:bg-muted/60'
+                        }
+                        onClick={() => {
+                          if (work !== undefined)
+                            selectWork(work.workIndex, work.eventIndex, work.passIndex);
+                          else if (command !== undefined)
+                            selectCommand(command.eventIndex, command.passIndex);
+                        }}
+                        {...{
+                          [commandRowAnchor()]: String(
+                            command?.eventIndex ?? work?.eventIndex ?? -1,
+                          ),
+                          ...(work === undefined
+                            ? {}
+                            : {
+                                'data-forgeax-work-index': String(work.workIndex),
+                                ...(selected ? { [selectedAnchor()]: 'true' } : {}),
+                              }),
+                        }}
+                      >
+                        {work === undefined ? <List size={10} /> : <Play size={10} />}
+                        <span className="shrink-0 font-medium">
+                          {work === undefined
+                            ? `event ${command?.eventIndex ?? -1}`
+                            : `#${work.workIndex} ${work.kind}`}
+                        </span>
+                        <span className="shrink-0 text-muted-foreground">
+                          {command?.kind ?? 'work'}
+                        </span>
+                        {command !== undefined && command.group.length > 0 && (
+                          <span className="truncate">{command.group.join(' / ')}</span>
+                        )}
+                        {command?.marker !== undefined && (
+                          <span className="truncate">{command.marker}</span>
+                        )}
+                        {command !== undefined && (
+                          <span className="truncate font-mono text-[10px] text-muted-foreground">
+                            {JSON.stringify(command.params)}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                  {(mode === 'works-only'
+                    ? passWorks.length
+                    : (commandsByPass.get(pass.passIndex)?.length ?? 0)) === 0 && (
+                    <p className="px-2 py-1 text-xs text-muted-foreground">No commands</p>
                   )}
                 </div>
               )}
             </div>
           );
         })}
+        {passes.length === 0 && (
+          <p className="p-2 text-xs text-muted-foreground">No events in tape</p>
+        )}
+        {commands.length > 0 && (
+          <button
+            type="button"
+            className="sr-only"
+            onClick={() => selectCommand(commands[0]?.eventIndex ?? 0)}
+            {...{ [commandRowAnchor()]: '0' }}
+          >
+            command
+          </button>
+        )}
       </div>
-    </div>
+    </section>
   );
 }

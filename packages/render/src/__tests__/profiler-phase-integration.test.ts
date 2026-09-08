@@ -1,7 +1,7 @@
 import { createProfiler, type ProfileFrameToken } from '@forgeax/engine-profiler';
 import { describe, expect, it } from 'vitest';
 
-import { RENDER_PHASE_CATALOG } from '../renderer';
+import { RENDER_PHASE_CATALOG } from '../render-contract';
 
 function start(profiler: ReturnType<typeof createProfiler>) {
   const result = profiler.startCapture({ frameLimit: 2, eventLimit: 16 });

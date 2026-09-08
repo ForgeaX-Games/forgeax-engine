@@ -998,6 +998,8 @@ def _parse_args() -> argparse.Namespace:
   parser.add_argument("--validate-cache", action="store_true")
   parser.add_argument("--ready-marker", type=Path)
   parser.add_argument("--evidence-output", type=Path)
+  parser.add_argument("--github-env", type=Path)
+  parser.add_argument("--github-path", type=Path)
   return parser.parse_args()
 
 
@@ -1070,6 +1072,50 @@ def _write_evidence(path: Path | None, payload: dict[str, Any]) -> None:
   os.replace(temporary, path)
 
 
+def _write_activation(
+  args: argparse.Namespace,
+  payload: dict[str, Any],
+  toolchain_layout: dict[str, str],
+) -> None:
+  if args.github_env is None and args.github_path is None:
+    return
+  cache_dir = args.cache_dir.resolve()
+  emscripten_root = cache_dir / toolchain_layout["installRoot"]
+  emsdk_root = emscripten_root.parent
+  llvm_root = cache_dir / toolchain_layout["toolBinRelativePath"]
+  binaryen_root = cache_dir / toolchain_layout["binaryenRootRelativePath"]
+  emscripten_cache = cache_dir / toolchain_layout["emscriptenCacheRelativePath"]
+  node_path = payload["nodeAuthority"]["emsdkNode"]
+  config_path = cache_dir / "forgeax-emscripten-config.py"
+  config_path.write_text(
+    "".join([
+      f"LLVM_ROOT = {json.dumps(str(llvm_root))}\n",
+      f"BINARYEN_ROOT = {json.dumps(str(binaryen_root))}\n",
+      f"NODE_JS = {json.dumps(node_path)}\n",
+      f"CACHE = {json.dumps(str(emscripten_cache))}\n",
+    ]),
+    encoding="utf-8",
+  )
+  if args.github_env is not None:
+    args.github_env.parent.mkdir(parents=True, exist_ok=True)
+    with args.github_env.open("a", encoding="utf-8") as github_env:
+      for name, value in [
+        ("EMSDK", emsdk_root),
+        ("EMSCRIPTEN", emscripten_root),
+        ("EMSCRIPTEN_ROOT", emscripten_root),
+        ("EMSDK_NODE", node_path),
+        ("EM_CONFIG", config_path),
+        ("EM_CACHE", emscripten_cache),
+        ("EM_LLVM_ROOT", llvm_root),
+        ("EM_BINARYEN_ROOT", binaryen_root),
+      ]:
+        github_env.write(f"{name}={value}\n")
+  if args.github_path is not None:
+    args.github_path.parent.mkdir(parents=True, exist_ok=True)
+    with args.github_path.open("a", encoding="utf-8") as github_path:
+      github_path.write(f"{emscripten_root}\n{llvm_root}\n")
+
+
 def main() -> int:
   args = _parse_args()
   try:
@@ -1079,6 +1125,8 @@ def main() -> int:
       payload = {"status": "ready", "nodeAuthority": validate_node_authority(_read_json(args.validate_node_json, "node-authority"))}
     else:
       payload = _bootstrap(args)
+      lock = _read_json(args.lock, "release-identity")
+      _write_activation(args, payload, _validate_toolchain_layout(lock))
     _write_evidence(args.evidence_output, payload)
   except ContractError as error:
     payload = error.payload()

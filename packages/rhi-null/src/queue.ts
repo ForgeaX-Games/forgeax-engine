@@ -11,9 +11,11 @@
 import type {
   Buffer,
   CommandBuffer,
+  ExternalImageTextureDestination,
   Result,
   RhiError as RhiErrorType,
   RhiQueue,
+  TextureWriteDestination,
 } from '@forgeax/engine-rhi';
 import { ok } from '@forgeax/engine-types';
 
@@ -30,7 +32,7 @@ export class RhiNullQueue implements RhiQueue {
   }
 
   writeTexture(
-    _destination: Pick<GPUTexelCopyTextureInfo, 'texture' | 'mipLevel' | 'origin' | 'aspect'>,
+    _destination: TextureWriteDestination,
     _data: ArrayBufferView | ArrayBuffer,
     _dataLayout: Pick<GPUTexelCopyBufferLayout, 'offset' | 'bytesPerRow' | 'rowsPerImage'>,
     _size: GPUExtent3DStrict,
@@ -40,10 +42,7 @@ export class RhiNullQueue implements RhiQueue {
 
   copyExternalImageToTexture(
     _source: Pick<GPUCopyExternalImageSourceInfo, 'source' | 'origin' | 'flipY'>,
-    _destination: Pick<
-      GPUCopyExternalImageDestInfo,
-      'texture' | 'mipLevel' | 'origin' | 'aspect' | 'colorSpace' | 'premultipliedAlpha'
-    >,
+    _destination: ExternalImageTextureDestination,
     _copySize: GPUExtent3DStrict,
   ): Result<void, RhiErrorType> {
     return ok(undefined);

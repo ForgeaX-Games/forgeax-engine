@@ -1,6 +1,13 @@
+import { createHash } from 'node:crypto';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import type { ImportedOutputDeclaration, PackErrorCode } from '@forgeax/engine-types';
+import type {
+  CatalogDiagnostic,
+  PackErrorCode,
+  ProviderProvenance,
+  ResourceRevision,
+  SourceOverrideDescriptor,
+} from '@forgeax/engine-types';
 import { PACK_ERROR_HINTS } from '@forgeax/engine-types';
 import { loadAssetConfig } from './config.js';
 import { PackError } from './errors.js';
@@ -8,6 +15,17 @@ import { isValidAssetGuidString } from './guid.js';
 import { validateProducerContract, validateProducerOutputs } from './producer-contract.js';
 import { resolveAssetSource } from './resolve-asset-source.js';
 import { validateMeta, validatePack } from './schema-compiled.js';
+import {
+  projectScriptablePackMeta,
+  type ScriptablePackDefinition,
+  type ScriptablePackMetaJson,
+  type ScriptablePackSourceClosureEntry,
+} from './scriptable-pack.js';
+import {
+  inventoryScriptablePackSource,
+  loadScriptablePack,
+  type ScriptablePackModuleExecutor,
+} from './scriptable-pack-node.js';
 
 // Minimal Result<T, E> — structurally compatible with @forgeax/engine-rhi Result
 // but defined locally to avoid a heavy runtime dep in this build-time package.
@@ -26,6 +44,117 @@ function packErr<E>(error: E): ScanResult<never, E> {
 /** Host-owned source paths that should not enter the Pack catalog. */
 export interface ScanOptions {
   readonly ignorePath?: (path: string) => boolean;
+  readonly scriptablePack?: ScriptablePackScanOptions;
+}
+
+/** One bounded executor policy shared by ScriptablePack inventory and production. */
+export interface ScriptablePackScanOptions {
+  readonly timeoutMs?: number;
+  readonly buildTimeoutMs?: number;
+  readonly executor?: ScriptablePackModuleExecutor;
+  /** Path-only scans must release the isolated loader before returning. */
+  readonly metadataOnly?: boolean;
+}
+
+/** Stable default policy shared by inventory and production owners. */
+export const STANDARD_SCRIPTABLE_PACK_SCAN_OPTIONS = Object.freeze(
+  {},
+) satisfies ScriptablePackScanOptions;
+
+export interface InventoryDeclaration {
+  readonly guid: string;
+  readonly kind: string;
+  readonly sourcePath: string;
+  readonly sourceRevision: string;
+  readonly sourceKey?: string;
+  readonly sourceIndex?: number;
+}
+
+export interface ScanInventory {
+  readonly paths: readonly string[];
+  readonly inventory: readonly InventoryDeclaration[];
+  /** Complete parsed source declarations captured by the validated scan pass. */
+  readonly declarations: ReadonlyMap<string, ScanSourceDeclaration>;
+}
+
+export interface ScriptablePackInventoryDeclaration {
+  readonly sourcePath: string;
+  readonly sourceRevision: string;
+  readonly meta: ScriptablePackMetaJson;
+  readonly definition: Readonly<ScriptablePackDefinition>;
+  readonly sourceClosure: readonly ScriptablePackSourceClosureEntry[];
+}
+
+export interface MetaInventoryDocument {
+  readonly schemaVersion: string | number;
+  readonly kind: 'external-asset-package';
+  readonly packageId?: string;
+  readonly name?: string;
+  readonly provenance?: ProviderProvenance;
+  readonly revision?: ResourceRevision;
+  readonly diagnostics?: readonly CatalogDiagnostic[];
+  readonly importer: string;
+  readonly source?: string;
+  readonly importSettings: Readonly<Record<string, unknown>>;
+  readonly sourceOverrides?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+  readonly sourceOverrideDescriptors?: readonly SourceOverrideDescriptor[];
+  readonly paramSchema?: readonly Readonly<Record<string, unknown>>[];
+  readonly subAssets: readonly MetaInventorySubAsset[];
+}
+
+export interface MetaInventorySubAsset {
+  readonly guid: string;
+  readonly sourceIndex: number;
+  readonly sourceKey?: string;
+  readonly name?: string;
+  readonly kind: string;
+}
+
+export interface PackInventoryDocument {
+  readonly schemaVersion: '1.0.0' | '2.0.0';
+  readonly kind: 'internal-text-package';
+  readonly packageId?: string;
+  readonly provenance?: ProviderProvenance;
+  readonly revision?: ResourceRevision;
+  readonly diagnostics?: readonly CatalogDiagnostic[];
+  readonly assets: readonly PackInventoryAsset[];
+}
+
+export interface PackInventoryAsset {
+  readonly guid: string;
+  readonly kind: string;
+  readonly name?: string;
+  readonly execution?: 'direct' | 'cooked';
+  readonly sourceKey?: string;
+  readonly sourceIndex?: number;
+  readonly payload: Readonly<Record<string, unknown>>;
+  readonly refs: readonly string[];
+  readonly artifacts?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+}
+
+export type ScanSourceDeclaration =
+  | {
+      readonly format: 'meta.json';
+      readonly sourcePath: string;
+      readonly sourceRevision: string;
+      readonly value: MetaInventoryDocument;
+    }
+  | {
+      readonly format: 'pack.json';
+      readonly sourcePath: string;
+      readonly sourceRevision: string;
+      readonly sourceText: string;
+      readonly value: PackInventoryDocument;
+    }
+  | ({
+      readonly format: 'pack.ts';
+      readonly sourcePath: string;
+      readonly sourceRevision: string;
+      readonly value: ScriptablePackMetaJson;
+    } & ScriptablePackInventoryDeclaration);
+
+interface ScanCapture {
+  readonly declarations: Map<string, ScanSourceDeclaration>;
 }
 
 /**
@@ -50,6 +179,45 @@ const BLACKLIST = new Set([
 ]);
 
 export const SCANNER_BLACKLIST: ReadonlySet<string> = BLACKLIST;
+
+type MalformedFileCode = Extract<PackErrorCode, 'pack-malformed-pack' | 'pack-malformed-meta'>;
+
+type JsonValidator = {
+  (value: unknown): boolean;
+  errors?: readonly { readonly instancePath?: string; readonly message?: string }[] | null;
+};
+
+async function readValidatedJson(
+  path: string,
+  code: MalformedFileCode,
+  validate: JsonValidator,
+): Promise<ScanResult<{ readonly raw: string; readonly parsed: unknown }, PackError>> {
+  let raw: string;
+  let parsed: unknown;
+  try {
+    raw = await readFile(path, 'utf-8');
+    parsed = JSON.parse(raw);
+  } catch {
+    return packErr(
+      makePackError(code, {
+        path,
+        ajvErrors: [{ instancePath: '', message: 'JSON parse failed' }],
+      }),
+    );
+  }
+  if (!validate(parsed)) {
+    return packErr(
+      makePackError(code, {
+        path,
+        ajvErrors: (validate.errors ?? []).map((error) => ({
+          instancePath: error.instancePath ?? '',
+          message: error.message ?? 'unknown ajv error',
+        })),
+      }),
+    );
+  }
+  return ok({ raw, parsed });
+}
 
 function makePackError(
   code: PackErrorCode,
@@ -91,7 +259,7 @@ function* extractMountSourceGuids(asset: {
 }
 
 /**
- * Scan one or more root directories for `.meta.json` and `.pack.json` files.
+ * Scan one or more root directories for `.meta.json`, `.pack.json`, and `.pack.ts` files.
  * Runs a 7-step fail-fast validation chain (w17 + M7-T01):
  *   Step 1 - collect all .meta.json + .pack.json paths (blacklist skipped)
  *   Step 2 - schema validation (ajv strict)
@@ -105,11 +273,14 @@ function* extractMountSourceGuids(asset: {
  *
  * NOTE: source files without a .meta.json are logged but not fatal (requirements §5).
  */
-export async function scan(
+async function scanValidated(
   roots: readonly string[],
   opts: ScanOptions = {},
+  capture?: ScanCapture,
 ): Promise<ScanResult<string[], PackError>> {
-  // Step 1: collect all .meta.json and .pack.json paths
+  // Step 1: collect all authored package declarations. ScriptablePack runtime
+  // validation belongs to its trusted module loader; scanner only inventories
+  // the source path so CLI/Vite share one discovery set.
   const rawPaths: string[] = [];
   const explicitRootSet = new Set(roots);
 
@@ -134,7 +305,11 @@ export async function scan(
         await traverse(fullPath);
       } else if (entry.isFile()) {
         const name = entry.name;
-        if (name.endsWith('.meta.json') || name.endsWith('.pack.json')) {
+        if (
+          name.endsWith('.meta.json') ||
+          name.endsWith('.pack.json') ||
+          name.endsWith('.pack.ts')
+        ) {
           rawPaths.push(fullPath);
         }
       }
@@ -149,7 +324,13 @@ export async function scan(
       const rootStat = await stat(root);
       if (rootStat.isFile()) {
         if (opts.ignorePath?.(root) === true) continue;
-        if (root.endsWith('.meta.json') || root.endsWith('.pack.json')) rawPaths.push(root);
+        if (
+          root.endsWith('.meta.json') ||
+          root.endsWith('.pack.json') ||
+          root.endsWith('.pack.ts')
+        ) {
+          rawPaths.push(root);
+        }
         continue;
       }
     } catch {
@@ -161,6 +342,7 @@ export async function scan(
   // Separate meta and pack paths
   const metaPaths = rawPaths.filter((p) => p.endsWith('.meta.json'));
   const packPaths = rawPaths.filter((p) => p.endsWith('.pack.json'));
+  const scriptablePaths = rawPaths.filter((p) => p.endsWith('.pack.ts'));
 
   // Step 2 + 3: parse + schema validate + GUID format validate each pack file
   // One normalized GUID map covers pack assets and meta subAssets. The source
@@ -169,31 +351,9 @@ export async function scan(
   const packRefs = new Map<string, string[]>(); // guid -> refs[]
 
   for (const packPath of packPaths) {
-    let parsed: unknown;
-    try {
-      const raw = await readFile(packPath, 'utf-8');
-      parsed = JSON.parse(raw);
-    } catch {
-      return packErr(
-        makePackError('pack-malformed-pack', {
-          path: packPath,
-          ajvErrors: [{ instancePath: '', message: 'JSON parse failed' }],
-        }),
-      );
-    }
-
-    const valid = validatePack(parsed);
-    if (!valid) {
-      return packErr(
-        makePackError('pack-malformed-pack', {
-          path: packPath,
-          ajvErrors: (validatePack.errors ?? []).map((e) => ({
-            instancePath: e.instancePath,
-            message: e.message ?? 'unknown ajv error',
-          })),
-        }),
-      );
-    }
+    const loaded = await readValidatedJson(packPath, 'pack-malformed-pack', validatePack);
+    if (!loaded.ok) return loaded;
+    const { raw, parsed } = loaded.value;
 
     const packageContract = validateProducerContract(parsed);
     if (!packageContract.ok) {
@@ -206,18 +366,7 @@ export async function scan(
     }
 
     // Step 3: validate GUIDs in pack
-    const packObj = parsed as {
-      assets: {
-        guid: string;
-        kind: string;
-        execution?: 'direct' | 'cooked';
-        payload: unknown;
-        refs: string[];
-        artifacts?: Readonly<Record<string, unknown>>;
-        sourceKey?: string;
-        sourceIndex?: number;
-      }[];
-    };
+    const packObj = parsed as unknown as PackInventoryDocument;
     for (const asset of packObj.assets) {
       if (
         asset.kind === 'particle-effect' &&
@@ -254,7 +403,12 @@ export async function scan(
         }
       }
       const topologyContract = validateProducerOutputs(
-        producerAssets as unknown as readonly ImportedOutputDeclaration[],
+        producerAssets.map((asset, sourceIndex) => ({
+          guid: asset.guid,
+          kind: asset.kind,
+          sourceIndex: asset.sourceIndex ?? sourceIndex,
+          ...(asset.sourceKey === undefined ? {} : { sourceKey: asset.sourceKey }),
+        })),
       );
       if (!topologyContract.ok) {
         return packErr(
@@ -298,12 +452,6 @@ export async function scan(
       }
       guidToPath.set(normalizedGuid, packPath);
 
-      // Accumulate refs for cycle detection
-      const existingRefs = packRefs.get(normalizedGuid) ?? [];
-      for (const ref of asset.refs) {
-        existingRefs.push(ref.toLowerCase());
-      }
-
       // feat-20260608-scene-nesting-ecs-fication M1 / w14 (D-1):
       // mount-payload-extract — for scene assets, redundantly inject the
       // mount.source -> resolved GUID edge into the cycle graph alongside
@@ -315,41 +463,26 @@ export async function scan(
       // refs[]. The `kind: 'mount-asset'` tag on the resulting
       // pack-cyclic-reference detail is set by the cycle producer below
       // (R10).
-      for (const guid of extractMountSourceGuids(asset)) {
-        existingRefs.push(guid);
-      }
-      packRefs.set(normalizedGuid, existingRefs);
+      packRefs.set(normalizedGuid, [
+        ...asset.refs.map((ref) => ref.toLowerCase()),
+        ...extractMountSourceGuids(asset),
+      ]);
     }
+    capture?.declarations.set(packPath, {
+      format: 'pack.json',
+      sourcePath: packPath,
+      sourceRevision: `sha256:${createHash('sha256').update(raw).digest('hex')}`,
+      sourceText: raw,
+      value: packObj,
+    });
   }
 
   // Step 2 + 3 + 5: parse + schema validate + GUID format validate + orphan check for meta files
   const { paths: assetPaths } = loadAssetConfig(process.cwd());
   for (const metaPath of metaPaths) {
-    let parsed: unknown;
-    try {
-      const raw = await readFile(metaPath, 'utf-8');
-      parsed = JSON.parse(raw);
-    } catch {
-      return packErr(
-        makePackError('pack-malformed-meta', {
-          path: metaPath,
-          ajvErrors: [{ instancePath: '', message: 'JSON parse failed' }],
-        }),
-      );
-    }
-
-    const valid = validateMeta(parsed);
-    if (!valid) {
-      return packErr(
-        makePackError('pack-malformed-meta', {
-          path: metaPath,
-          ajvErrors: (validateMeta.errors ?? []).map((e) => ({
-            instancePath: e.instancePath,
-            message: e.message ?? 'unknown ajv error',
-          })),
-        }),
-      );
-    }
+    const loaded = await readValidatedJson(metaPath, 'pack-malformed-meta', validateMeta);
+    if (!loaded.ok) return loaded;
+    const { raw, parsed } = loaded.value;
 
     const metaContract = validateProducerContract(parsed);
     if (!metaContract.ok) {
@@ -362,16 +495,13 @@ export async function scan(
     }
 
     // Step 3: validate GUIDs in meta subAssets
-    const metaObj = parsed as {
-      source?: string;
-      subAssets: {
-        guid: string;
-        sourceIndex: number;
-        sourceKey?: string;
-        kind: string;
-      }[];
-      sourceOverrides?: unknown;
-    };
+    const metaObj = parsed as unknown as MetaInventoryDocument;
+    capture?.declarations.set(metaPath, {
+      format: 'meta.json',
+      sourcePath: metaPath,
+      sourceRevision: `sha256:${createHash('sha256').update(raw).digest('hex')}`,
+      value: metaObj,
+    });
     for (const sub of metaObj.subAssets) {
       if (!isValidAssetGuidString(sub.guid)) {
         return packErr(
@@ -395,9 +525,7 @@ export async function scan(
     }
     const producerSubAssets = metaObj.subAssets.length > 1 ? metaObj.subAssets : [];
     if (producerSubAssets.length > 0) {
-      const topologyContract = validateProducerOutputs(
-        producerSubAssets as unknown as readonly ImportedOutputDeclaration[],
-      );
+      const topologyContract = validateProducerOutputs(producerSubAssets);
       if (!topologyContract.ok) {
         return packErr(
           makePackError('pack-malformed-meta', {
@@ -425,6 +553,86 @@ export async function scan(
           expectedFile: expectedSourcePath,
         }),
       );
+    }
+  }
+
+  // ScriptablePack identity enters the same topology and collision authority as JSON declarations.
+  for (const sourcePath of scriptablePaths) {
+    let source: string;
+    try {
+      source = await readFile(sourcePath, 'utf8');
+    } catch {
+      return packErr(
+        makePackError('pack-malformed-meta', {
+          path: sourcePath,
+          ajvErrors: [{ instancePath: '', message: 'ScriptablePack source read failed' }],
+        }),
+      );
+    }
+    const loaded = await loadScriptablePack(sourcePath, {
+      ...(opts.scriptablePack ?? {}),
+      ...(capture === undefined ? { metadataOnly: true } : {}),
+    });
+    if (!loaded.ok) {
+      const diagnostic =
+        'diagnostic' in loaded.error.detail ? loaded.error.detail.diagnostic : undefined;
+      return packErr(
+        makePackError('pack-malformed-meta', {
+          path: sourcePath,
+          ajvErrors: [
+            {
+              instancePath: '',
+              message:
+                diagnostic === undefined
+                  ? loaded.error.code
+                  : `${loaded.error.code}: ${diagnostic}`,
+            },
+          ],
+        }),
+      );
+    }
+    let sourceClosure: readonly ScriptablePackSourceClosureEntry[];
+    try {
+      sourceClosure = await inventoryScriptablePackSource(sourcePath, source);
+    } catch {
+      return packErr(
+        makePackError('pack-malformed-meta', {
+          path: sourcePath,
+          ajvErrors: [{ instancePath: '', message: 'ScriptablePack source closure read failed' }],
+        }),
+      );
+    }
+    const meta = projectScriptablePackMeta(loaded.value, sourcePath);
+    const topology = validateProducerOutputs(meta.subAssets);
+    if (!topology.ok) {
+      return packErr(
+        makePackError('pack-malformed-meta', {
+          path: sourcePath,
+          ajvErrors: [{ instancePath: '/subAssets', message: topology.error.code }],
+        }),
+      );
+    }
+    const declaration = {
+      sourcePath,
+      sourceRevision: `sha256:${createHash('sha256').update(source).digest('hex')}`,
+      meta,
+      definition: loaded.value,
+      sourceClosure,
+    } satisfies ScriptablePackInventoryDeclaration;
+    capture?.declarations.set(sourcePath, {
+      format: 'pack.ts',
+      ...declaration,
+      value: meta,
+    });
+    for (const sub of meta.subAssets) {
+      const guid = sub.guid.toLowerCase();
+      const existing = guidToPath.get(guid);
+      if (existing !== undefined) {
+        return packErr(
+          makePackError('pack-guid-collision', { paths: [existing, sourcePath], guid }),
+        );
+      }
+      guidToPath.set(guid, sourcePath);
     }
   }
 
@@ -468,4 +676,40 @@ export async function scan(
   }
 
   return ok(rawPaths);
+}
+
+/** Scan one complete Pack inventory while preserving the public path-only API. */
+export async function scan(
+  roots: readonly string[],
+  opts: ScanOptions = {},
+): Promise<ScanResult<string[], PackError>> {
+  return scanValidated(roots, opts);
+}
+
+/** Return the validated source inventory without interpreting producer output kinds. */
+export async function scanInventory(
+  roots: readonly string[],
+  opts: ScanOptions = {},
+): Promise<ScanResult<ScanInventory, PackError>> {
+  const declarations = new Map<string, ScanSourceDeclaration>();
+  const scanned = await scanValidated(roots, opts, { declarations });
+  if (!scanned.ok) return scanned;
+  const inventory: InventoryDeclaration[] = [];
+  for (const sourcePath of scanned.value) {
+    const declaration = declarations.get(sourcePath);
+    if (declaration?.format !== 'pack.json') continue;
+    for (const [index, asset] of declaration.value.assets.entries()) {
+      inventory.push({
+        guid: asset.guid,
+        kind: asset.kind,
+        sourcePath,
+        sourceRevision: declaration.sourceRevision,
+        ...(asset.sourceKey === undefined ? {} : { sourceKey: asset.sourceKey }),
+        ...(asset.sourceIndex === undefined
+          ? { sourceIndex: index }
+          : { sourceIndex: asset.sourceIndex }),
+      });
+    }
+  }
+  return ok({ paths: scanned.value, inventory, declarations });
 }

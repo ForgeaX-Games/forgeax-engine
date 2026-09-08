@@ -31,8 +31,11 @@ function makeMesh(): TypesMeshAsset {
         indexCount: 1,
         vertexCount: 12,
         topology: 'triangle-list',
+        materialSlot: 0,
       },
     ],
+
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 

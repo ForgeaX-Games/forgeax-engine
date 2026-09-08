@@ -84,6 +84,18 @@
       "path": "./packages/app"
     },
     {
+      "path": "./packages/tool-runtime"
+    },
+    {
+      "path": "./packages/preview"
+    },
+    {
+      "path": "./packages/plugin"
+    },
+    {
+      "path": "./packages/devkit"
+    },
+    {
       "path": "./packages/codec"
     },
     {
@@ -133,6 +145,18 @@
     },
     {
       "path": "./packages/profiler"
+    },
+    {
+      "path": "./packages/intelligence"
+    },
+    {
+      "path": "./packages/intelligence-fake"
+    },
+    {
+      "path": "./packages/intelligence-dsh"
+    },
+    {
+      "path": "./packages/dsh"
     }
   ]
 }

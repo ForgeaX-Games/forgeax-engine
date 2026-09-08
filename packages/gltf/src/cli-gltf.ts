@@ -314,12 +314,7 @@ async function runWrite(target: string, ctx: AssetCtx): Promise<number> {
     sourceRelative,
   );
   if (!pack.ok) {
-    return emitError(ctx, {
-      code: pack.error.code,
-      expected: pack.error.expected,
-      hint: pack.error.hint,
-      detail: { source: sourceRelative, sourceIndices: pack.error.sourceIndices },
-    });
+    return emitError(ctx, pack.error);
   }
   await writeFile(metaPath, serializeMetaJson(pack.value.meta), 'utf-8');
   return 0;

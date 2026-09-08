@@ -1,6 +1,7 @@
-import type { BootstrapContext } from '@forgeax/engine-app';
+import type { GameHost } from '@forgeax/engine-app';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import type { PhysicsWorld } from '@forgeax/engine-physics';
+import type { Context } from '@forgeax/engine-plugin';
 import { installAssetContentEvidence } from './asset-content-evidence';
 import { createFbxMeshSwap, resetFbxMeshSwap, type FbxMeshSwap } from './fbx-mesh-swap';
 import { createFbxSkinnedTarget, type FbxSkinnedTarget } from './fbx-skinned-target';
@@ -16,6 +17,7 @@ import { installVisibilityLoop, type VisibilityLoopHandle } from './visibility-l
 import { firstScoringTarget, scoringTargetEntities } from './scoring-target';
 import { assembleGameplayScene, type GameplaySceneAssembly } from './gameplay-scene';
 import { createTargetRelay, type TargetRelayHandle } from './target-relay';
+import { createResonanceForge, type ResonanceForge } from './resonance-forge';
 
 export type GameplayTargetFeatures = GameplaySceneAssembly & {
   readonly targetEntities: () => EntityHandle[];
@@ -32,6 +34,7 @@ export type GameplayTargetFeatures = GameplaySceneAssembly & {
   readonly toggleProfile: () => ReturnType<typeof targetProfileSnapshot>;
   readonly fbxSkinnedTarget: FbxSkinnedTarget | undefined;
   readonly targetRelay: TargetRelayHandle;
+  readonly resonanceForge: ResonanceForge;
   readonly damageTarget: (entity: EntityHandle, points: number) => void;
 };
 
@@ -42,11 +45,14 @@ export type GameplayTargetOptions = {
 
 /** Assemble the target roster and the guided asset loops around it. */
 export async function createGameplayTargetFeatures(
+  context: Context,
   world: World,
-  host: BootstrapContext | undefined,
+  host: GameHost | undefined,
   options: GameplayTargetOptions = {},
 ): Promise<GameplayTargetFeatures> {
   const scene = await assembleGameplayScene(world, host);
+  const resonanceForge = await createResonanceForge(world, host?.assets);
+  context.effect(() => () => resonanceForge.dispose(), 'game-default/resonance-forge');
   const targetEntities = (): EntityHandle[] => scoringTargetEntities(scene.targetQuery);
   const primaryTarget = (): EntityHandle | undefined => firstScoringTarget(world, scene.targetQuery);
   const targetHealth = installTargetHealth(world, scene.targetQuery);
@@ -62,9 +68,15 @@ export async function createGameplayTargetFeatures(
   const gltfMeshSwap = comparisonEvidenceMode ? await createGltfMeshSwap(world, host?.assets, primaryTarget()) : undefined;
   const jpegTextureSwap = await createJpegTextureSwap(world, host?.assets, primaryTarget());
   const videoTexturePanel = await createVideoTexturePanel(world, host?.assets, primaryTarget());
-  host?.registerCleanup?.(() => videoTexturePanel?.dispose());
+  context.effect(() => () => videoTexturePanel?.dispose(), 'game-default/video-texture-panel');
 
-  host?.assets?.loaders.register(targetProfileLoader());
+  const assets = host?.assets;
+  if (assets !== undefined) {
+    context.effect(
+      () => assets.loaders.register(targetProfileLoader()),
+      'game-default/target-profile-loader',
+    );
+  }
   const targetProfile = await createTargetProfileLoop(world, host?.assets, primaryTarget());
   const toggleProfile = (): ReturnType<typeof targetProfileSnapshot> => {
     if (targetProfile === undefined) return targetProfileSnapshot(undefined);
@@ -87,7 +99,7 @@ export async function createGameplayTargetFeatures(
       ? { world, assets: host?.assets }
       : { world, assets: host?.assets, target: guidedFbxTarget, ...(physics === undefined ? {} : { physics }) },
   );
-  host?.registerCleanup?.(() => fbxSkinnedTarget?.dispose());
+  context.effect(() => () => fbxSkinnedTarget?.dispose(), 'game-default/fbx-skinned-target');
   const relayVariation = guidedFbxTarget === undefined || fbxSkinnedTarget === undefined
     ? undefined
     : {
@@ -102,16 +114,13 @@ export async function createGameplayTargetFeatures(
   const skylightEntity = scene.loaded?.nodes
     .find((node) => (node.components.Name as { value?: string } | undefined)?.value === 'Skylight')
     ?.localId;
-  const assetEvidenceBase = {
+  installAssetContentEvidence({
+    context,
     assets: host?.assets,
     renderer: host?.renderer,
     world,
     skylight: skylightEntity === undefined ? undefined : scene.loaded?.mapping.get(skylightEntity),
-  };
-  const assetEvidenceArgs = host?.registerCleanup === undefined
-    ? assetEvidenceBase
-    : { ...assetEvidenceBase, registerCleanup: host.registerCleanup };
-  installAssetContentEvidence(assetEvidenceArgs);
+  });
 
   const damageTarget = (entity: EntityHandle, points: number): void => {
     targetHealth.damage(entity, points);
@@ -135,6 +144,7 @@ export async function createGameplayTargetFeatures(
     toggleProfile,
     fbxSkinnedTarget,
     targetRelay,
+    resonanceForge,
     damageTarget,
   };
 }

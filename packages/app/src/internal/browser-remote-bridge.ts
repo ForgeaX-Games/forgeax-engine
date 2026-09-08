@@ -9,18 +9,22 @@
 // WebSocket CLIENT to the loopback relay
 // (skills/forgeax-engine-cli/scripts/remote-bridge-server.mjs) and run
 // @forgeax/engine-remote/execute (the ws-free eval core) in the page realm
-// against the live world/renderer/assets/debugAdapter. A CLI POSTs to the relay;
+// against the live world/renderer/assets/rhiCapture. A CLI POSTs to the relay;
 // the relay forwards to us; we eval and reply. This is the engine-side mirror of
 // the editor's ViewportComponent DEV bridge.
 //
 // This module is reached only via a DEV-gated dynamic import from create-app.ts,
 // so production (import.meta.env.DEV === false) never bundles it (tree-shake /
-// zero-injection). It carries NO static @forgeax/engine-remote dependency — the
-// eval core is pulled by a further dynamic import, keeping @forgeax/engine-app
-// free of a runtime dep on @forgeax/engine-remote (same discipline as the
-// createApp startServer path).
+// zero-injection). It carries NO static top-level @forgeax/engine-remote
+// dependency — the eval core is pulled by a further dynamic import, keeping
+// @forgeax/engine-app free of a runtime dep on @forgeax/engine-remote (same
+// discipline as the createApp startServer path). The import is deliberately
+// left visible to Vite: the SDK host aliases the focused package to its exact
+// installed path, while @vite-ignore would make a browser resolve the bare
+// specifier from the consumer document root and yield a 500.
 
 import { Update, type World } from '@forgeax/engine-ecs';
+import { createEcsImportModule } from './ecs-import';
 
 type ExecuteResult = { ok: true; value: unknown } | { ok: false; error: unknown };
 
@@ -31,7 +35,7 @@ type ExecuteModule = {
       world: unknown;
       renderer: unknown;
       assets: unknown;
-      debugAdapter?: unknown;
+      rhiCapture?: unknown;
       profiler?: unknown;
       execution?: unknown;
       importModule?: (specifier: string) => Promise<unknown>;
@@ -53,10 +57,8 @@ type ComponentLike = { readonly name: string };
 function canonicalRuntimeModule(moduleValue: unknown, world: World): unknown {
   if (moduleValue === null || typeof moduleValue !== 'object') return moduleValue;
   const componentsByName = new Map<string, ComponentLike>();
-  for (const archetype of world._getGraph().archetypes) {
-    for (const component of archetype.components) {
-      if (!componentsByName.has(component.name)) componentsByName.set(component.name, component);
-    }
+  for (const [name, component] of world.components.entries()) {
+    if (!componentsByName.has(name)) componentsByName.set(name, component);
   }
   const projected: Record<string, unknown> = { ...(moduleValue as Record<string, unknown>) };
   for (const [key, value] of Object.entries(projected)) {
@@ -73,7 +75,7 @@ export interface BrowserRemoteBridgeDeps {
   readonly assets: unknown;
   /** The host's already-loaded runtime namespace; preserves component-token identity. */
   readonly runtimeModule: unknown;
-  readonly debugAdapter?: unknown;
+  readonly rhiCapture?: unknown;
   /** The host's explicit CPU profiler capability, when opted in. */
   readonly profiler?: unknown;
   readonly execution?: unknown;
@@ -116,14 +118,14 @@ function serializeError(error: unknown): Record<string, unknown> {
 export async function installBrowserRemoteBridge(
   deps: BrowserRemoteBridgeDeps,
 ): Promise<() => void> {
-  const { world, renderer, assets, debugAdapter, profiler, execution, port } = deps;
+  const { world, renderer, assets, rhiCapture, profiler, execution, port } = deps;
 
   // The ws-free eval core. Dynamic import keeps @forgeax/engine-app free of a
-  // static @forgeax/engine-remote dependency (@vite-ignore mirrors the
-  // startServer path in create-app.ts).
-  const mod = (await import(/* @vite-ignore */ '@forgeax/engine-remote/execute')) as ExecuteModule;
+  // static @forgeax/engine-remote dependency while allowing the consumer's
+  // Vite config to resolve the focused package through its SDK alias.
+  const mod = (await import('@forgeax/engine-remote/execute')) as ExecuteModule;
   const executeScript = mod.executeScript;
-  const importModule = (specifier: string): Promise<unknown> => {
+  const importModule = createEcsImportModule((specifier: string): Promise<unknown> => {
     // The host app and the bridge must share the same component-token objects.
     // Vite can otherwise serve `/@id/@forgeax/engine-runtime` as a second
     // module graph entry, so `world.get(entity, Transform)` sees a different
@@ -134,7 +136,7 @@ export async function installBrowserRemoteBridge(
     return import(/* @vite-ignore */ browserSpecifier).then((moduleValue) =>
       canonicalRuntimeModule(moduleValue, world),
     );
-  };
+  });
 
   let ws: WebSocket | null = null;
   let backoff = 1000;
@@ -168,7 +170,7 @@ export async function installBrowserRemoteBridge(
             world,
             renderer,
             assets,
-            debugAdapter,
+            rhiCapture,
             profiler: profiler,
             execution,
             importModule,
@@ -241,7 +243,9 @@ export async function installBrowserRemoteBridge(
   connect();
 
   const teardown = (): void => {
+    if (stopped) return;
     stopped = true;
+    world.removeSystem(Update, 'browser-remote-bridge-drain-eval-queue');
     const s = ws;
     ws = null;
     if (s) {

@@ -14,7 +14,7 @@ import {
   resolveAssetHandle,
   walkMaterialPassesOverSharedRefs,
 } from '@forgeax/engine-assets-runtime';
-import { type EntityHandle, type Handle, World } from '@forgeax/engine-ecs';
+import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import { PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
 import {
   FONT_CONCURRENCY_LIMIT,
@@ -24,16 +24,17 @@ import {
   VERTEX_OFFSET,
 } from '@forgeax/engine-graphics-extras';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  GlyphText,
-  glyphTextLayoutSystem,
-  resetGlyphBakeCache,
-} from '@forgeax/engine-render/authoring';
-import { GpuResourceStore, MeshFilter, MeshRenderer } from '@forgeax/engine-render/internal';
+import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { GlyphText } from '@forgeax/engine-render/authoring';
 import { Transform } from '@forgeax/engine-scene';
-import type { FontAsset, GlyphMetric, MeshAsset } from '@forgeax/engine-types';
+import type { FontAsset, GlyphMetric, Handle, MeshAsset } from '@forgeax/engine-types';
 import { TextError } from '@forgeax/engine-types';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { GpuResidencyCache } from '../../../render/src/device/gpu-residency';
+import {
+  glyphTextLayoutSystem,
+  resetGlyphBakeCache,
+} from '../../../render/src/glyph-text-layout-system';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 {
@@ -44,7 +45,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     // These CPU-side layout/bake/attach tests do not wire a device, so the store's
     // updateMesh dirty path no-ops -- the bake + MeshFilter/MeshRenderer attach
     // assertions are unaffected.
-    const gpuStore = new GpuResourceStore();
+    const gpuStore = new GpuResidencyCache();
 
     function metric(overrides: Partial<GlyphMetric> = {}): GlyphMetric {
       return {
@@ -210,7 +211,22 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         expect(world.sharedRefs._liveCount()).toBe(size1);
       });
 
-      it('(b2.1) bounds producer refs across slot reuse and tint changes', () => {
+      it('(b2.1) clean re-pass repairs a legacy cached glyph mesh slot table', () => {
+        const world = new World();
+        const fontId = registerFont(world, ASCII('Hi'));
+        const e = spawnLabel(world, fontId, 'Hi');
+
+        glyphTextLayoutSystem(world, gpuStore);
+        const mf = world.get(e, MeshFilter).unwrap() as { assetHandle: number };
+        const mesh = resolveAssetHandle<MeshAsset>(world, mf.assetHandle as never).unwrap();
+        delete (mesh as { materialSlots?: unknown }).materialSlots;
+
+        glyphTextLayoutSystem(world, gpuStore);
+
+        expect(mesh.materialSlots).toEqual([{ slotName: 'Default' }]);
+      });
+
+      it('(b2.2) bounds producer refs across slot reuse and tint changes', () => {
         const assets = makeRegistry();
         const world = new World();
         const fontId = registerFont(world, ASCII('Hi'));
@@ -235,7 +251,27 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         expect(world.sharedRefs._liveCount()).toBe(baseline);
       });
 
-      it('(b2.2) keeps runtime-derived materials out of the persistent catalog across Worlds', () => {
+      it('(b2.3) a fresh world never reuses the prior PlayWorld glyph cache', () => {
+        const first = new World();
+        const firstFontId = registerFont(first, ASCII('Hi'));
+        spawnLabel(first, firstFontId, 'Hi');
+        glyphTextLayoutSystem(first, gpuStore);
+
+        const second = new World();
+        const secondFontId = registerFont(second, ASCII('Hi'));
+        const secondEntity = spawnLabel(second, secondFontId, 'Hi');
+        glyphTextLayoutSystem(second, gpuStore);
+
+        const filter = second.get(secondEntity, MeshFilter);
+        expect(filter.ok).toBe(true);
+        const mesh = resolveAssetHandle<MeshAsset>(
+          second,
+          (filter.unwrap() as { assetHandle: number }).assetHandle as never,
+        ).unwrap();
+        expect(mesh.materialSlots).toEqual([{ slotName: 'Default' }]);
+      });
+
+      it('(b2.4) keeps runtime-derived materials out of the persistent catalog across Worlds', () => {
         const assets = makeRegistry();
         const catalogBaseline = assets.assetCatalog.size;
 
@@ -256,7 +292,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         glyphTextLayoutSystem(world, gpuStore);
         const mf = world.get(e, MeshFilter).unwrap() as { assetHandle: number };
         const meshHandle = mf.assetHandle as unknown as Handle<'MeshAsset', 'shared'>;
-        expect(resolveAssetHandle<MeshAsset>(world, meshHandle).unwrap().vertices.length).toBe(0);
+        const initialMesh = resolveAssetHandle<MeshAsset>(world, meshHandle).unwrap();
+        expect(initialMesh.vertices.length).toBe(0);
+        // Simulate a pre-material-slot runtime mesh surviving into the in-place
+        // rebake path. The update owns the complete procedural mesh contract and
+        // must normalize the slot table alongside its submesh draw range.
+        delete (initialMesh as { materialSlots?: unknown }).materialSlots;
 
         world.set(e, GlyphText, { text: 'Hi' }).unwrap();
         glyphTextLayoutSystem(world, gpuStore);
@@ -266,6 +307,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         expect(mesh.indices?.length).toBe(12);
         expect(mesh.submeshes[0]?.indexCount).toBe(12);
         expect(mesh.submeshes[0]?.vertexCount).toBe(8);
+        expect(mesh.materialSlots).toEqual([{ slotName: 'Default' }]);
         expect(mesh.aabb?.[3]).toBeGreaterThan(0);
       });
 

@@ -1,10 +1,26 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { afterEach, describe, expect, it } from 'vitest';
-import { pluginPack } from '../index.js';
+import {
+  createPluginPackInternal,
+  createPluginPackInternal as pluginPack,
+} from '../plugin-pack.js';
 
 const GUID = '01900000-0000-7000-8000-aaaaaaaaaaaa';
+const IMAGE_GUID = '01900000-0000-7000-8000-bbbbbbbbbbbb';
+const ONE_PIXEL_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  'base64',
+);
+
+function projectDdcForTest(root: string) {
+  return {
+    buildCacheRoot: join(root, '.forgeax', 'ddc', 'build-cache'),
+    projectDdcRoot: join(root, '.forgeax', 'ddc', 'v2'),
+  } as const;
+}
 
 describe('runtime-scoped pack routes', () => {
   let root: string | undefined;
@@ -24,6 +40,7 @@ describe('runtime-scoped pack routes', () => {
       middlewares: { use: (middleware) => middlewares.push(middleware as never) },
       ws: { send: () => {} },
     });
+    expect(plugin.runtimeBinding()).toBeUndefined();
 
     expect((await request(middlewares, '/__pack/index')).statusCode).toBe(404);
     expect((await request(middlewares, '/pack-index.json')).statusCode).toBe(404);
@@ -82,6 +99,11 @@ describe('runtime-scoped pack routes', () => {
     );
     expect(bound.status).toBe('ready');
     expect(bound.authority).toBe('authoritative');
+    expect(plugin.runtimeBinding()).toMatchObject({
+      scopeId: 'active',
+      generation: 7,
+      status: 'ready',
+    });
 
     const catalog = await request(middlewares, '/__pack/scopes/active/7/catalog.json');
     expect(catalog.statusCode).toBe(200);
@@ -134,7 +156,7 @@ describe('runtime-scoped pack routes', () => {
       }),
     );
 
-    const plugin = pluginPack({ roots: [active], base: '/preview/' });
+    const plugin = createPluginPackInternal({ roots: [active] }, { transportBase: '/preview/' });
     close = () => plugin.closeBundle();
     const middlewares: Middleware[] = [];
     plugin.configureServer({
@@ -165,6 +187,82 @@ describe('runtime-scoped pack routes', () => {
       `/preview/__pack/scopes/active/7/asset/__forgeax-ddc/${GUID}.pack.json`,
     );
     expect(snapshot.entries[0]?.packageUrl).not.toContain('/asset/preview/');
+
+    const baseCatalog = await request(middlewares, '/preview/__pack/scopes/active/7/catalog.json');
+    expect(baseCatalog.statusCode).toBe(200);
+    expect(JSON.parse(baseCatalog.body).authority).toBe('authoritative');
+  });
+
+  it('publishes a complete runtime tuple for an on-demand image import', async () => {
+    root = await mkdtemp(join(tmpdir(), 'forgeax-runtime-scope-image-'));
+    const active = join(root, 'active');
+    await mkdir(active, { recursive: true });
+    await writeFile(join(active, 'pixel.png'), ONE_PIXEL_PNG);
+    await writeFile(
+      join(active, 'pixel.png.meta.json'),
+      JSON.stringify({
+        schemaVersion: '1.0.0',
+        kind: 'external-asset-package',
+        importer: 'image',
+        source: 'pixel.png',
+        importSettings: { colorSpace: 'srgb', mipmap: false },
+        subAssets: [{ guid: IMAGE_GUID, sourceIndex: 0, kind: 'texture' }],
+      }),
+    );
+
+    const plugin = pluginPack({
+      roots: [active],
+      producerReadiness: 'on-demand',
+      importers: [imageImporter],
+      ddc: projectDdcForTest(root),
+    });
+    close = () => plugin.closeBundle();
+    const middlewares: Middleware[] = [];
+    plugin.configureServer({
+      middlewares: { use: (middleware) => middlewares.push(middleware as never) },
+      ws: { send: () => {} },
+    });
+
+    const bound = await plugin.rebind(
+      {
+        schemaVersion: 'runtime-asset-binding-v1',
+        gameId: 'active',
+        scopeId: 'active',
+        generation: 9,
+        status: 'unbound',
+        catalogUrl: '/__pack/scopes/active/9/catalog.json',
+        importUrlBase: '/__pack/scopes/active/9/import',
+        packageUrlBase: '/__pack/scopes/active/9/asset',
+      },
+      [active],
+    );
+    expect(bound.status).toBe('ready');
+
+    const imported = await request(
+      middlewares,
+      `/__pack/scopes/active/9/import/${IMAGE_GUID}`,
+      'POST',
+    );
+    expect(imported.statusCode).toBe(200);
+    const importedRows = JSON.parse(imported.body) as Array<{
+      guid: string;
+      publication?: { schemaVersion?: string; generation?: number };
+    }>;
+    expect(importedRows[0]?.publication).toMatchObject({
+      schemaVersion: 'asset-publication/1',
+    });
+    expect(importedRows[0]?.publication?.generation).toBeGreaterThan(0);
+
+    const catalog = await request(middlewares, '/__pack/scopes/active/9/catalog.json');
+    const snapshot = JSON.parse(catalog.body) as {
+      entries: Array<{
+        guid: string;
+        publication?: { schemaVersion?: string; generation?: number };
+      }>;
+    };
+    const entry = snapshot.entries.find((candidate) => candidate.guid === IMAGE_GUID);
+    expect(entry?.publication).toMatchObject({ schemaVersion: 'asset-publication/1' });
+    expect(entry?.publication?.generation).toBeGreaterThan(0);
   });
 
   it('exposes degraded catalog evidence but fails closed for lazy import', async () => {
@@ -174,10 +272,8 @@ describe('runtime-scoped pack routes', () => {
     const brokenRoot = join(active, 'broken');
     await mkdir(validRoot, { recursive: true });
     await mkdir(brokenRoot, { recursive: true });
-    // Keep one valid root beside a broken root: this is the production failure
-    // shape where a non-empty snapshot is still unusable because authority is
-    // degraded. Rows remain machine evidence only and must not become lookup
-    // or import payloads.
+    // Keep one valid root beside a broken root: one inventory failure is
+    // fail-closed, so an initial session has no accepted Catalog generation.
     await writeFile(
       join(validRoot, 'valid.pack.json'),
       JSON.stringify({
@@ -223,25 +319,10 @@ describe('runtime-scoped pack routes', () => {
     expect(bound.diagnostics?.length).toBeGreaterThan(0);
 
     const catalog = await request(middlewares, '/__pack/scopes/active/8/catalog.json');
-    expect(catalog.statusCode).toBe(200);
-    const catalogSnapshot = JSON.parse(catalog.body) as {
-      authority?: unknown;
-      entries?: unknown;
-      diagnostics?: unknown;
-    };
-    expect(catalogSnapshot).toMatchObject({
-      authority: 'degraded',
-    });
-    expect(Array.isArray(catalogSnapshot.entries)).toBe(true);
-    expect(catalogSnapshot.entries).toHaveLength(1);
-    expect(Array.isArray(catalogSnapshot.diagnostics)).toBe(true);
-    expect(catalogSnapshot.diagnostics).toHaveLength(1);
+    expect(catalog.statusCode).toBe(503);
 
     const imported = await request(middlewares, `/__pack/scopes/active/8/import/${GUID}`, 'POST');
-    expect(imported.statusCode).toBe(409);
-    expect(JSON.parse(imported.body)).toMatchObject({
-      error: 'runtime-scope-catalog-degraded',
-    });
+    expect(imported.statusCode).toBe(503);
   });
 });
 

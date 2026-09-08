@@ -9,15 +9,10 @@
 // loop, dt clamp, error fan-out, and input attach internals land in
 // later milestones (M2..M5 per plan-strategy section 7).
 
+import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { AudioBackend } from '@forgeax/engine-audio';
 import type { DebugDraw } from '@forgeax/engine-debug-draw';
-import type {
-  Result,
-  SimulationError,
-  SimulationParticipant,
-  TimePolicy,
-  World,
-} from '@forgeax/engine-ecs';
+import type { TimePolicy, World } from '@forgeax/engine-ecs';
 import type {
   ActionConfig,
   InputBackend,
@@ -25,20 +20,17 @@ import type {
   VirtualJoystickConfig,
 } from '@forgeax/engine-input';
 import type { PhysicsWorld, PhysicsWorld2D } from '@forgeax/engine-physics';
-import type { PluginError, PluginSource } from '@forgeax/engine-plugin';
+import type { Context, Plugin } from '@forgeax/engine-plugin';
 import type { Profiler } from '@forgeax/engine-profiler';
-import type {
-  MembershipTimingOptions,
-  Renderer,
-  RendererError,
-  RenderFeature,
-} from '@forgeax/engine-render';
+import type { RenderError, Renderer, RenderFeature, RenderProfile } from '@forgeax/engine-render';
+import type { RhiBackendInstrumentation } from '@forgeax/engine-render/internal/construct-renderer';
 import type { RhiError, RhiInstance } from '@forgeax/engine-rhi';
 import type { EngineEnvironmentError } from '@forgeax/engine-runtime';
-import type { ImportTransport } from '@forgeax/engine-types';
+import type { ImportTransport, Result } from '@forgeax/engine-types';
 
 import type { AppError, AppErrorCode } from './errors';
 import type { ExecutionControl, ExecutionOptions } from './execution';
+import type { RhiCapture } from './internal/rhi-capture';
 
 // Re-export AppError + AppErrorCode (the canonical SSOT lives in
 // `./errors`). Pre-M5 (M1..M4) referenced these as type-only declarations
@@ -60,7 +52,7 @@ export type { AppError, AppErrorCode };
  * `RhiErrorCode` / per-cluster `*ErrorCode` / `PostProcessErrorCode` literal
  * sets let TS narrow each arm to the concrete class.
  */
-export type AppDispatchError = AppError | RendererError;
+export type AppDispatchError = AppError | RenderError;
 
 /**
  * Per-frame draw description pulled from the host each frame
@@ -139,9 +131,11 @@ export type DrawSource = () => DrawSourceResult | undefined;
  */
 export interface AppAssembleArgs {
   readonly renderer: Renderer;
+  /** Host-owned asset catalogue paired with the renderer construction. */
+  readonly assets?: AssetRegistry;
   readonly world: World;
   /** Unified plugin list (M1 feat-20260623-plugin-system-unify-build-world-protocol). */
-  readonly plugins?: readonly PluginSource[];
+  readonly plugins?: readonly Plugin[];
   readonly silenceUnhandledErrors?: boolean;
   /**
    * Per-frame draw-source injection seam (M2 / D-3). When supplied, the
@@ -152,10 +146,12 @@ export interface AppAssembleArgs {
   readonly drawSource?: DrawSource;
   /** Explicit profiler capability shared by the host and renderer. */
   readonly profiler?: Profiler;
-  /** Explicit opt-in for Render-owned HDRP membership timing evidence. */
-  readonly membershipTiming?: MembershipTimingOptions;
-  /** Already-created, ready simulation owners registered with the World. */
-  readonly simulationParticipants?: readonly SimulationParticipant[];
+}
+
+/** Effective physical canvas size transported to an Engine Worker frame. */
+export interface CanvasDrawingBufferSize {
+  readonly width: number;
+  readonly height: number;
 }
 
 /**
@@ -163,8 +159,8 @@ export interface AppAssembleArgs {
  *
  * feat-20260608-create-app-param-surface-trim / M2 / D-3: self-describing
  * surface -- no longer `extends RendererOptions`. The 7 app-only fields
- * (input / audio / physics / silenceUnhandledErrors) plus the 2 RHI escape-hatch
- * fields (rhi / rawDeviceForContextConfigure) are
+ * (input / audio / physics / silenceUnhandledErrors) plus the RHI escape-hatch
+ * field (rhi) are
  * listed inline, so IDE autocomplete shows AI users a clean surface
  * without inheriting now-disallowed slots like clearColor (M1, on Camera)
  * and shaderManifestUrl (M2, on BundlerOptions / 3rd arg). The escape
@@ -178,10 +174,10 @@ export interface CreateAppOptions {
   readonly uiRoot?: Node;
   /** Producer-owned render features forwarded to the renderer unchanged. */
   readonly features?: readonly RenderFeature<unknown>[];
+  /** Standard profile forwarded to the single renderer-owned pipeline. */
+  readonly standardProfile?: RenderProfile;
   /** Unified plugin list (M1 feat-20260623-plugin-system-unify-build-world-protocol). */
-  readonly plugins?: readonly PluginSource[];
-  /** Already-created, ready simulation owners registered with the canvas World. */
-  readonly simulationParticipants?: readonly SimulationParticipant[];
+  readonly plugins?: readonly Plugin[];
   /**
    * A host-owned input backend for this canvas. When supplied, createApp inserts
    * it into the World instead of attaching a second browser listener set. The
@@ -205,13 +201,8 @@ export interface CreateAppOptions {
    * advanced AI users that ship their own RhiInstance shim.
    */
   readonly rhi?: RhiInstance | undefined;
-  /**
-   * D-S1 raw GPUDevice escape hatch -- forwarded verbatim to createRenderer.
-   * Same semantics as `RendererOptions.rawDeviceForContextConfigure`. Used
-   * by the apps/hello/triangle bootstrap, where the host configures the
-   * canvas's GPUCanvasContext outside the RHI surface.
-   */
-  readonly rawDeviceForContextConfigure?: unknown | (() => unknown | undefined);
+  /** Optional host-owned RHI lifecycle instrumentation, such as recording. */
+  readonly rhiInstrumentation?: RhiBackendInstrumentation;
   /**
    * Neutral PointerLock gate forwarded verbatim to the canvas-form input
    * attach (attachInputAuto → attachBrowserInputBackend). When it returns
@@ -262,8 +253,6 @@ export interface CreateAppOptions {
   readonly drawSource?: DrawSource;
   /** Explicit profiler capability shared by the host and renderer. */
   readonly profiler?: Profiler;
-  /** Explicit opt-in for Render-owned HDRP membership timing evidence. */
-  readonly membershipTiming?: MembershipTimingOptions;
 }
 
 /**
@@ -328,6 +317,8 @@ export interface BundlerOptions {
 export interface App {
   /** Caller-owned Renderer (reference equality with the assemble input). */
   readonly renderer: Renderer;
+  /** Host-owned asset catalogue paired with this renderer lease. */
+  readonly assets?: AssetRegistry;
   /** Caller-owned World (reference equality with the assemble input). */
   readonly world: World;
   /** Host-side lifecycle and immutable diagnostics for the selected execution tier. */
@@ -336,18 +327,11 @@ export interface App {
    * Pause frame submission and relinquish the renderer presentation surface
    * without replacing World, Renderer, AssetRegistry, plugins, or history.
    */
-  releaseSurfacePreserveWorld(): Promise<Result<void, RhiError>>;
+  releaseSurfacePreserveWorld(): Promise<Result<void, RhiError | RenderError>>;
   /** Restore the same surface and resume only when release paused a running App. */
-  restoreSurface(): Promise<Result<void, RhiError>>;
-  /**
-   * Plugin registry produced by runPlugins() —— Map<string, Plugin>.
-   * The caller passes this to wireDefaultInspectors context so the
-   * inspector's 'plugins' RPC method can enumerate loaded plugins.
-   * Always present after a successful createApp call.
-   */
-  readonly pluginRegistry: Map<string, import('@forgeax/engine-plugin').Plugin>;
-  /** Read-only World-owned simulation diagnostics; App does not own record/schema state. */
-  readonly simulationInspection: () => import('./internal/simulation-participants').SimulationInspectionSummary;
+  restoreSurface(): Promise<Result<void, RhiError | RenderError>>;
+  /** Native Cordis realm that owns this App's capability fibers and effects. */
+  readonly pluginContext: Context;
   /** InputBackend handle when input attach is enabled; undefined otherwise. */
   readonly input?: InputBackend;
   /** AudioBackend handle when audio attach is enabled; undefined otherwise. */
@@ -386,6 +370,8 @@ export interface App {
    * M1 stub returns Result.ok(undefined) unconditionally.
    */
   stop(): Result<void, AppError>;
+  /** Tear down plugins, host resources, and renderer ownership. */
+  dispose(): Promise<Result<void, AppError>>;
   /**
    * Pause rAF scheduling. Idempotent in 'paused' state. M1 stub returns
    * Result.ok(undefined) unconditionally; full state machine in M2.
@@ -418,42 +404,12 @@ export interface App {
    */
   setDrawSource(drawSource: DrawSource | undefined): void;
   /**
-   * Last error captured by the M4 cleanup funnel. Useful for host
-   * self-inspection on device-lost without requiring an onError
-   * listener up-front (charter P3 explicit failure: silent device-lost
-   * is a footgun). Reads `undefined` until the funnel runs once.
-   *
-   * M4 (w13) wires this for stop / device-lost / exception throw paths
-   * (R-4 triple-funnel). The slot updates on every funnel invocation,
-   * so subsequent device-lost-after-stop events overwrite the field --
-   * AI users get the latest signal, not the first one.
+   * Most recent dispatched error retained for host self-inspection without
+   * requiring an onError listener up front.
    */
   readonly lastError?: AppDispatchError | undefined;
-  /**
-   * @internal
-   * Live `DebugRhiInstance` recorder proxy when `FORGEAX_ENGINE_RHI_DEBUG=1` is set;
-   * `undefined` otherwise. Demo / e2e harness code calls `_debugRhi.arm(N)`
-   * + later `_debugRhi.finalize()` directly. Production code should
-   * reach the same pipeline through the WS:5732 eval `debugAdapter.captureFrames`
-   * surface (which routes through `_debugAdapter`). The optional
-   * `snapshotTimeoutMs` capture option is the bounded fault-control for the
-   * documented timeout/recovery boundary.
-   * Typed as `unknown` here to avoid pulling
-   * `@forgeax/engine-rhi-debug` into the `@forgeax/engine-app` type
-   * surface — host code that wants the typed shape imports
-   * `DebugRhiInstance` separately and casts.
-   */
-  readonly _debugRhi?: unknown;
-  /**
-   * @internal
-   * `DebugRhiAdapter` instance that the host wired into
-   * `wireDefaultInspectors({ debugRhi: ... })`. Exposed for in-process
-   * tests to drive captureFrames / inspectAt / replayDispose without
-   * setting up the WS:5732 stack. `undefined` when `FORGEAX_ENGINE_RHI_DEBUG !== '1'`.
-   * Same `unknown`-typed escape as `_debugRhi` to keep the rhi-debug
-   * package out of the app's public type surface.
-   */
-  readonly _debugAdapter?: unknown;
+  /** Optional single-frame RHI capture capability owned by the App host. */
+  readonly rhiCapture?: RhiCapture;
   /**
    * Handle for the remote eval server started by createApp (dev mode).
    *
@@ -479,11 +435,9 @@ export type ExecutionApp = Pick<
  * wrapper widens this with EngineEnvironmentError (createRenderer
  * construction-time failure path -- plan-strategy D-5 / requirements AC-01).
  *
- * feat-20260623-plugin-system-unify (M2 / D-7): widened with PluginError
- * (duplicate-plugin / plugin-build-failed) since runPlugins now drives the
- * assemble-form wiring and can fail with a structured plugin error.
+ * Cordis activation failures are projected into AppError at this boundary.
  */
-export type AssembleAppError = AppError | RhiError | PluginError | SimulationError;
+export type AssembleAppError = AppError | RhiError;
 
 /**
  * Error union returned by the canvas-form thin wrapper. Extends
@@ -491,7 +445,6 @@ export type AssembleAppError = AppError | RhiError | PluginError | SimulationErr
  * createRenderer construction-time failures unchanged (preserves
  * .detail.webgpuError per requirements section 6.1).
  *
- * PluginError rides in via AssembleAppError (the canvas form also runs
- * runPlugins; M2 / D-7).
+ * The canvas form adds renderer construction failures.
  */
 export type CanvasAppError = AssembleAppError | EngineEnvironmentError;

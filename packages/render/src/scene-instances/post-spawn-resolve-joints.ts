@@ -32,19 +32,9 @@
 //   - charter P3 (explicit failure: path-unresolved fail-fast)
 
 import type { SkinJointResolver } from '@forgeax/engine-assets-runtime';
-import type { Archetype, EntityHandle, Table, World } from '@forgeax/engine-ecs';
-import { Entity as EntityComponent } from '@forgeax/engine-ecs';
-import { Name } from '@forgeax/engine-scene';
+import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import { collectSubtree, Name } from '@forgeax/engine-scene';
 import { Skin } from '@forgeax/engine-skinning';
-import { collectSubtree } from '../scene-utils/collect-subtree';
-
-// Internal archetype graph shape (not public-barelled in engine-ecs).
-// Same pattern used by render-system-extract.ts and propagate-transforms.ts.
-// Minimal interface covering only the fields we walk.
-interface ArchetypeGraph {
-  readonly archetypes: readonly (Archetype | undefined)[];
-  readonly tables: readonly (Table | undefined)[];
-}
 
 // feat-20260705-runtime-tier2-decomposition M1 / w6 (D-1): SkinJointResolver
 // relocated to registry/instantiate.ts so the hook contract travels with the
@@ -76,137 +66,99 @@ interface SkinAssetUnresolvedError {
 
 type ResolveError = JointPathUnresolvedError | SkinAssetUnresolvedError;
 
-type WorldInternal = World & {
-  _getGraph(): ArchetypeGraph;
-};
-
-/**
- * Read the full packed `Entity` handle for archetype `row` from the essential
- * id=0 `Entity` column (`self` field), present on every archetype.
- */
-function readEntityAt(table: Table, row: number): EntityHandle {
-  const selfCol = table.storage.get(EntityComponent.id)?.fields.get('self')?.view as
-    | Uint32Array
-    | undefined;
-  return (selfCol?.[row] ?? 0) as EntityHandle;
-}
-
 export function postSpawnResolveJoints(
   world: World,
   resolver: SkinJointResolver,
   spawnRoot: EntityHandle,
 ): { ok: true } | { ok: false; error: ResolveError } {
-  const w = world as WorldInternal;
-  const graph = w._getGraph();
-
   // tweak-20260611 D-7: scope nameIndex to the spawnRoot's ChildOf-descendant
   // subtree (incl. spawnRoot itself). Multiple instantiate() calls on the same
   // SceneAsset each get an independent subtree, so leaf-name collisions across
   // instances no longer wire all spawns to the first instance's joints.
   const subtree = collectSubtree(world, spawnRoot);
   const nameIndex = new Map<string, number[]>();
-  for (const arch of graph.archetypes) {
-    if (!arch || arch.size === 0) continue;
-    if (!arch.components.some((component) => component.id === Name.id)) continue;
-    const table = graph.tables[arch.tableId];
-    if (table === undefined) continue;
-
-    for (let archetypeRow = 0; archetypeRow < arch.size; archetypeRow++) {
-      const entity = readEntityAt(table, arch.rows[archetypeRow] ?? 0);
-      if (!subtree.has(entity as number)) continue;
-
-      const nameData = world.get(entity, Name);
-      if (!nameData.ok) continue;
-      const nameVal = nameData.value.value;
+  const nameQuery = world.query({ read: [Name] });
+  if (nameQuery.ok) {
+    for (const row of nameQuery.value) {
+      if (!subtree.has(row.entity as number)) continue;
+      const nameVal = row.get(Name).value;
       const list = nameIndex.get(nameVal) ?? [];
-      list.push(entity);
+      list.push(row.entity);
       nameIndex.set(nameVal, list);
     }
   }
 
-  // Walk Skin-bearing entities IN THE SUBTREE and resolve joints. `Skin.id`
-  // is the global token.id; archetypes without a Skin column skip via the
-  // `componentIds.includes(Skin.id)` guard, and entities outside the subtree
+  // Walk Skin-bearing entities IN THE SUBTREE and resolve joints. Skin is
+  // matched through the owner identity projection, and entities outside the subtree
   // are filtered after readEntityAt (cheaper than per-archetype filtering).
-  for (const arch of graph.archetypes) {
-    if (!arch || arch.size === 0) continue;
-    if (!arch.components.some((c) => c.id === Skin.id)) continue;
+  const skinQuery = world.query({ read: [Skin] });
+  if (!skinQuery.ok) return { ok: true };
+  for (const queryRow of skinQuery.value) {
+    const entity = queryRow.entity;
+    if (!subtree.has(entity as number)) continue;
+    const skeletonHandle = queryRow.get(Skin).skeleton as number;
 
-    const table = graph.tables[arch.tableId];
-    if (table === undefined) continue;
-    const skinRows = table.storage.get(Skin.id)?.fields;
-    if (skinRows === undefined) continue;
-    const skeletonCol = skinRows.get('skeleton')?.view as Uint32Array | undefined;
+    const skinAsset = resolver.resolveSkinAsset(skeletonHandle);
+    if (skinAsset === undefined) {
+      // feat-20260612 M2 fixup: was a silent `continue` that left
+      // `Skin.joints` empty -- the M2-introduced
+      // JointCountMismatchError fail-fast in render-system-extract then
+      // triggered every frame on the browser-async-pack-fetch path.
+      // The cure is to load SkinAssets through the SceneAsset.skinGuids
+      // cross-edge (gltfImporter scene branch emits the SkinAsset GUIDs into
+      // the scene envelope's refs[], the runtime recursion source) so this
+      // resolver should always succeed; if it does not, fail-fast here
+      // with a precise errorCode rather than silently producing an
+      // unresolvable Skin.joints state.
+      return {
+        ok: false,
+        error: {
+          code: 'skin-asset-unresolved',
+          expected: `SkinAsset registered for skeleton handle ${skeletonHandle} when instantiate triggers postSpawnResolveJoints`,
+          hint: `SkinAsset matching skeletonGuid for handle ${skeletonHandle} was not found in AssetRegistry; verify the SceneAsset.skinGuids[] cross-edge is populated by the importer (gltfImporter scene branch) and that loadByGuid<SceneAsset> recursively loaded each SkinAsset before instantiate (browser-async-pack-fetch path)`,
+          detail: { skinEntity: entity, skeletonHandle },
+        },
+      };
+    }
 
-    for (let archetypeRow = 0; archetypeRow < arch.size; archetypeRow++) {
-      const row = arch.rows[archetypeRow] ?? 0;
-      const entity = readEntityAt(table, row);
-      if (!subtree.has(entity as number)) continue;
-      if (skeletonCol === undefined) continue;
-      const skeletonHandle = skeletonCol[row] as number;
+    const jointEntityList: number[] = [];
+    for (const jointPath of skinAsset.jointPaths) {
+      const pathSegments = jointPath.split('/').filter(Boolean);
+      if (pathSegments.length === 0) continue;
 
-      const skinAsset = resolver.resolveSkinAsset(skeletonHandle);
-      if (skinAsset === undefined) {
-        // feat-20260612 M2 fixup: was a silent `continue` that left
-        // `Skin.joints` empty -- the M2-introduced
-        // JointCountMismatchError fail-fast in render-system-extract then
-        // triggered every frame on the browser-async-pack-fetch path.
-        // The cure is to load SkinAssets through the SceneAsset.skinGuids
-        // cross-edge (gltfImporter scene branch emits the SkinAsset GUIDs into
-        // the scene envelope's refs[], the runtime recursion source) so this
-        // resolver should always succeed; if it does not, fail-fast here
-        // with a precise errorCode rather than silently producing an
-        // unresolvable Skin.joints state.
+      const leafName = pathSegments[pathSegments.length - 1];
+      if (leafName === undefined) continue;
+
+      const nameMatches = nameIndex.get(leafName);
+      if (nameMatches === undefined || nameMatches.length === 0) {
         return {
           ok: false,
           error: {
-            code: 'skin-asset-unresolved',
-            expected: `SkinAsset registered for skeleton handle ${skeletonHandle} when instantiate triggers postSpawnResolveJoints`,
-            hint: `SkinAsset matching skeletonGuid for handle ${skeletonHandle} was not found in AssetRegistry; verify the SceneAsset.skinGuids[] cross-edge is populated by the importer (gltfImporter scene branch) and that loadByGuid<SceneAsset> recursively loaded each SkinAsset before instantiate (browser-async-pack-fetch path)`,
-            detail: { skinEntity: entity, skeletonHandle },
+            code: 'skin-joint-path-unresolved',
+            expected: `joint entity with Name="${leafName}" exists in the spawned subtree (root entity ${spawnRoot})`,
+            hint: `joint path "${jointPath}" for skin entity ${entity} could not be resolved within spawnRoot ${spawnRoot}'s ChildOf-subtree; verify glTF node names are preserved and instantiateScene seeded a Children mirror`,
+            detail: {
+              skinEntity: entity,
+              path: pathSegments,
+              failedAtIndex: pathSegments.length - 1,
+            },
           },
         };
       }
 
-      const jointEntityList: number[] = [];
-      for (const jointPath of skinAsset.jointPaths) {
-        const pathSegments = jointPath.split('/').filter(Boolean);
-        if (pathSegments.length === 0) continue;
-
-        const leafName = pathSegments[pathSegments.length - 1];
-        if (leafName === undefined) continue;
-
-        const nameMatches = nameIndex.get(leafName);
-        if (nameMatches === undefined || nameMatches.length === 0) {
-          return {
-            ok: false,
-            error: {
-              code: 'skin-joint-path-unresolved',
-              expected: `joint entity with Name="${leafName}" exists in the spawned subtree (root entity ${spawnRoot})`,
-              hint: `joint path "${jointPath}" for skin entity ${entity} could not be resolved within spawnRoot ${spawnRoot}'s ChildOf-subtree; verify glTF node names are preserved and instantiateScene seeded a Children mirror`,
-              detail: {
-                skinEntity: entity,
-                path: pathSegments,
-                failedAtIndex: pathSegments.length - 1,
-              },
-            },
-          };
-        }
-
-        if (nameMatches.length > 1) {
-          console.warn(
-            `[Skin] same-name sibling: "${leafName}" matches ${nameMatches.length} entities ` +
-              `within spawn subtree of root ${spawnRoot}; using first-match (entity ${nameMatches[0]}) per D-6a`,
-          );
-        }
-
-        jointEntityList.push(nameMatches[0] as number);
+      if (nameMatches.length > 1) {
+        console.warn(
+          `[Skin] same-name sibling: "${leafName}" matches ${nameMatches.length} entities ` +
+            `within spawn subtree of root ${spawnRoot}; using first-match (entity ${nameMatches[0]}) per D-6a`,
+        );
       }
 
-      world.set(entity as number as EntityHandle, Skin, {
-        joints: new Uint32Array(jointEntityList),
-      } as never);
+      jointEntityList.push(nameMatches[0] as number);
     }
+
+    world.set(entity, Skin, {
+      joints: new Uint32Array(jointEntityList),
+    } as never);
   }
 
   return { ok: true };

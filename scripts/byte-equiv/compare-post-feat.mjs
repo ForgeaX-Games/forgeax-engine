@@ -413,20 +413,26 @@ async function compareDemo(demo) {
     globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
   }
 
-  const ready = await renderer.ready;
-  if (!ready.ok) {
-    console.error(`  SKIP - renderer.ready failed: ${ready.error?.code}`);
-    return { diffs: [`renderer.ready failed: ${ready.error?.code}`], pipelineCount: 0 };
+  const attached = renderer.attach(world);
+  if (!attached.ok) {
+    console.error(`  SKIP - renderer attach failed: ${attached.error.code}`);
+    return { diffs: [`renderer attach failed: ${attached.error.code}`], pipelineCount: 0 };
   }
-
-  console.log(`  backend=${renderer.backend}`);
-  renderer.attachWorld(world).unwrap();
+  const lease = attached.value;
+  const drawFrame = () =>
+    renderer.draw({
+      leases: [lease],
+      camera: { lease },
+      environment: { lease },
+    });
+  console.log(`  backend=${renderer.inspect().capabilities.backendKind}`);
 
   // 6. Run frames 0..29
   for (let frame = 0; frame < TARGET_FRAME; frame++) {
     currentFrame = frame;
     world.update().unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const drawn = drawFrame();
+    if (!drawn.ok) return { diffs: [`draw failed: ${drawn.error.code}`], pipelineCount: 0 };
     await delay(0);
   }
 

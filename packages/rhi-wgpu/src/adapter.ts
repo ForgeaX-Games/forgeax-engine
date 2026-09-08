@@ -142,9 +142,9 @@ export function makeCanvasContext(
   // viewport (uniform-coloured rectangle, all draws collapse to single pixel).
   canvas?: HTMLCanvasElement | OffscreenCanvas,
 ): RhiCanvasContext {
-  // bug-20260610: per-context closure stash for the previous-frame
-  // SurfaceTexture wrapper — see getCurrentTexture below for the
-  // auto-present hook.
+  // Per-context ownership of the acquired SurfaceTexture wrapper. A microtask
+  // presents after the synchronous record/submit stack; the next acquire and
+  // teardown remain idempotent fallbacks if the task is interrupted.
   let pendingSurfaceTexture: { present: () => void } | null = null;
   let surfaceDescriptor: { format?: unknown; usage?: unknown } = {};
 
@@ -158,6 +158,18 @@ export function makeCanvasContext(
       // Detach the wrapper even when present fails so it cannot outlive the
       // surface and be dropped against a dead wgpu surface.
     }
+  }
+
+  function scheduleSurfaceTexturePresent(surfaceTexture: { present: () => void }): void {
+    globalThis.queueMicrotask(() => {
+      if (pendingSurfaceTexture !== surfaceTexture) return;
+      pendingSurfaceTexture = null;
+      try {
+        surfaceTexture.present();
+      } catch {
+        // A later acquisition or teardown may already have released it.
+      }
+    });
   }
 
   // wasm-bindgen texture handles are intentionally opaque, so their browser
@@ -265,14 +277,11 @@ export function makeCanvasContext(
         // `commandEncoder.beginRenderPass` etc., and wasm-bindgen's
         // `_assertClass(texture, RhiWgpuTexture)` rejects.
         //
-        // Auto-present hook: wgpu-wasm requires explicit
-        // `surfaceTexture.present()` to release the acquired surface image
-        // (browser-native WebGPU auto-presents on the next browser frame).
-        // We stash the previous-frame wrapper on the closure and `present()`
-        // it before acquiring the current frame — the engine never sees the
-        // wrapper, the spec contract stays single-method `getCurrentTexture`,
-        // and wgpu_core no longer panics with "Surface image is already
-        // acquired" on frame 2 onward.
+        // wgpu-wasm requires explicit `surfaceTexture.present()` while
+        // browser-native WebGPU presents automatically after the submitted
+        // frame. The renderer records and submits synchronously, so a microtask
+        // presents after that stack without depending on rAF callback ordering.
+        // The next acquire still releases an unpresented wrapper if interrupted.
         presentPendingSurfaceTexture();
         const raw = rawContext.getCurrentTexture() as
           | { getTexture?: () => unknown; present?: () => void }
@@ -280,6 +289,7 @@ export function makeCanvasContext(
         if (raw !== undefined && raw !== null && typeof raw.getTexture === 'function') {
           if (typeof raw.present === 'function') {
             pendingSurfaceTexture = raw as { present: () => void };
+            scheduleSurfaceTexturePresent(pendingSurfaceTexture);
           }
           const texture = raw.getTexture() as unknown as Texture;
           annotateSurfaceTexture(texture);

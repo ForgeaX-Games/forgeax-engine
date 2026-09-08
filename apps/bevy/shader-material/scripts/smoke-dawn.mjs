@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -68,46 +69,28 @@ const manifest = JSON.parse(readFileSync(resolve(root, 'dist', 'shaders', 'manif
 const manifestUrl = `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;
 let renderer;
 try {
-  renderer = await createRenderer(canvas, {}, { shaderManifestUrl: manifestUrl });
+  renderer = await createSmokeRenderer(createRenderer, canvas, {}, { shaderManifestUrl: manifestUrl });
 } finally {
   gpu.requestAdapter = originalRequestAdapter;
 }
-console.log(`[bevy-shader-material] backend=${renderer.backend}`);
+console.log(`[bevy-shader-material] backend=${rendererBackend(renderer)}`);
 const errors = [];
-renderer.onError((error) => errors.push(error));
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
+subscribeSmokeErrors(renderer, (error) => errors.push(error));
 
 const shaderEntry = (manifest.materialShaders ?? []).find((entry) => entry?.identifier === SHADER_ID);
-const shaderRegistry = renderer.shader;
-if (shaderRegistry === null || shaderEntry === undefined) throw new Error('shader material manifest entry missing');
-if (!shaderRegistry.findMaterialArtifact(SHADER_ID).ok) {
-  shaderRegistry.installMaterialArtifact(SHADER_ID, {
-    source: shaderEntry.composedWgsl,
-    paramSchema: JSON.parse(shaderEntry.paramSchema),
-  });
-}
+if (shaderEntry === undefined) throw new Error('shader material manifest entry missing');
 
 const pixels = makeTexturePixels();
 const texture = makeTextureAsset(pixels);
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const textureHandle = world.allocSharedRef('TextureAsset', texture);
-const upload = await renderer.store.uploadTexture(textureHandle, texture, {
-  bytes: pixels,
-  width: TEXTURE_SIZE,
-  height: TEXTURE_SIZE,
-  mime: 'image/png',
-  colorSpace: 'srgb',
-  mipmap: false,
-});
-if (!upload.ok) throw new Error(`${upload.error.code}: ${upload.error.hint}`);
 if (!buildShaderMaterialWorld(world, unwrapHandle(textureHandle))) throw new Error('scene construction failed');
 
 for (let frame = 0; frame < FRAMES; frame += 1) {
   world.update().unwrap();
-  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const draw = drawSmokeFrame(renderer, world);
   if (!draw.ok) throw new Error(`${draw.error.code}: ${draw.error.hint}`);
   await delay(0);
 }
@@ -150,7 +133,7 @@ for (let i = 0; i < framePixels.length; i += 4) {
 }
 console.log(`[smoke] frames=${FRAMES} visiblePixels=${visiblePixels} chromaticPixels=${chromaticPixels} colorBins=${colors.size} errors=${errors.length} png=${pngPath}`);
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`backend=${renderer.backend}`);
+if (rendererBackend(renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(renderer)}`);
 if (visiblePixels < 500) failures.push(`visiblePixels=${visiblePixels} < 500`);
 if (chromaticPixels < 500) failures.push(`chromaticPixels=${chromaticPixels} < 500`);
 if (colors.size < 8) failures.push(`colorBins=${colors.size} < 8 (texture/color path is not visible)`);

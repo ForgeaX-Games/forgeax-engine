@@ -15,7 +15,10 @@ function meshWith(position: Float32Array | ArrayBuffer | undefined): MeshAsset {
     kind: 'mesh',
     vertices: new Float32Array(0),
     attributes: position === undefined ? {} : { position },
-    submeshes: [{ indexOffset: 0, indexCount: 0, vertexCount: 0, topology: 'triangle-list' }],
+    submeshes: [
+      { indexOffset: 0, indexCount: 0, vertexCount: 0, topology: 'triangle-list', materialSlot: 0 },
+    ],
+    materialSlots: [{ slotName: 'Default' }],
   } as MeshAsset;
 }
 

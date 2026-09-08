@@ -15,7 +15,7 @@
 //      artefacts off disk -- the SAME production fetch chain the browser uses
 //      (pack-index.json -> .pack.json), no HTTP server required.
 //   4. Real load + real use (AC-01 functional): register the host loader on
-//      renderer.assets, configurePackIndex, `loadByGuid<ReelGameBlob>`, assert
+//      host assets, configurePackIndex, `loadByGuid<ReelGameBlob>`, assert
 //      the typed payload (title + reels), then spawn one cube per reel and
 //      render 300 frames + pixel readback (the scene is non-empty because the
 //      blob really loaded).
@@ -248,10 +248,7 @@ const mockCanvas = {
 
 const { World } = await import('@forgeax/engine-ecs');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
-const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  createRenderer,
-} = enginePkg;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const {
@@ -280,8 +277,12 @@ if (!existsSync(MANIFEST_PATH)) {
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
 
 let renderer;
+let assets;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  assets = constructed.value.assets;
 } catch (err) {
   console.error(
     `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
@@ -291,20 +292,16 @@ try {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[hello-custom-importer] backend=${renderer.backend}`);
+console.log('[hello-custom-importer] Standard pipeline active');
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint });
+});
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
-const assets = renderer.assets;
 if (assets === null || assets === undefined) {
-  console.error('[smoke] FAIL - renderer.assets is null');
+  console.error('[smoke] FAIL - host assets are unavailable');
   process.exit(1);
 }
 
@@ -362,7 +359,7 @@ if (recoveryOk) {
 
 // REAL use (e): spawn one cube per reel from the loaded blob
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 if (loadOk) {
   for (const reel of blob.reels) {
@@ -394,7 +391,11 @@ const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = renderer.draw({
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
 }
@@ -469,7 +470,7 @@ console.log(`[smoke] pixelSamples=${JSON.stringify(pixelSamples)}`);
 // --- 5. Verdict -------------------------------------------------------------
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (!sharedDevice) failures.push('(a) Dawn device was not created by the host-owned Standard pipeline');
 if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (!structuralOk) {
   failures.push(`(c) pack-index has no '${REEL_GAME_BLOB_KIND}' row for GUID ${REEL_GAME_LEVEL_1_GUID}`);

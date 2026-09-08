@@ -3,14 +3,14 @@ import { Update } from '../schedule-token';
 // red-green-refactor unit tests.
 //
 // Drives the SharedRefStore class directly (no World) per plan-strategy §5.3.
-// The store mirrors UniqueRefStore in shape but adds reference counting +
-// onLastRelease registration. Five public API surfaces:
+// The store mirrors UniqueRefStore in shape but adds reference counting and
+// structured release evidence. Five public API surfaces:
 //
 //   alloc(tag, value)          -> Handle<T, 'shared'> (rc starts at 1)
 //   resolve(handle)            -> Result<T, SharedRefReleasedError>
 //   retain(handle)             -> Result<void, SharedRefReleasedError>
-//   release(handle)            -> Result<void, SharedRefDoubleReleaseError>
-//   onLastRelease(cb)          -> unsubscribe fn (fires once at rc=0)
+//   release(handle)            -> Result<release evidence | undefined, ...>
+//   readReleaseEvidence()     -> bounded final-release records
 //
 // Tests are split across three describe blocks tracking the w6 / w7 / w8
 // task boundary. The first two run as TDD red against the still-absent
@@ -33,7 +33,7 @@ import {
   toShared,
   unwrapHandle,
 } from '@forgeax/engine-types';
-import { describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import { defineComponent } from '../component';
 import { BuiltinSlotNotOwnedError, SharedRefStaleError } from '../errors';
 import { SharedRefStore } from '../shared-ref-store';
@@ -59,6 +59,41 @@ describe('w6 SharedRefStore: alloc + resolve', () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.value).toBe(payload);
+    }
+  });
+
+  it('publishes explicit in-place payload changes through one monotonic epoch', () => {
+    const store = new SharedRefStore();
+    const handle = store.alloc('MaterialAsset', { value: 1 });
+
+    expect(store.getMutationEpoch()).toBe(0);
+    expect(store.markChanged(handle).ok).toBe(true);
+    expect(store.getMutationEpoch()).toBe(1);
+    expect(store.readChangesSince(0)).toEqual({
+      status: 'ok',
+      cursor: 1,
+      records: [{ epoch: 1, handle: unwrapHandle(handle) }],
+    });
+
+    expect(store.release(handle).ok).toBe(true);
+    expect(store.markChanged(handle).ok).toBe(false);
+    expect(store.getMutationEpoch()).toBe(1);
+  });
+
+  it('reports bounded-journal overflow instead of hiding changed handles', () => {
+    const store = new SharedRefStore();
+    const handle = store.alloc('MaterialAsset', { value: 1 });
+    for (let index = 0; index < 4097; index += 1) store.markChanged(handle).unwrap();
+
+    expect(store.readChangesSince(0)).toEqual({
+      status: 'overflow',
+      cursor: 4097,
+      oldestAvailable: 2,
+    });
+    const latest = store.readChangesSince(4096);
+    expect(latest.status).toBe('ok');
+    if (latest.status === 'ok') {
+      expect(latest.records).toEqual([{ epoch: 4097, handle: unwrapHandle(handle) }]);
     }
   });
 
@@ -139,83 +174,12 @@ describe('SharedRefStore.intern: producer identity', () => {
   });
 });
 
-// ─── w29 (D-10): retain + release + per-handle onLastRelease deleter ─────
-// M6 D-10: the global onLastRelease(globalCb) listener Set is deleted; the
-// release signal is a per-handle deleter passed as the third alloc argument
-// (mirrors UniqueRefStore.alloc). AC-21 (deleter fires once at rc=0) /
-// AC-22 (no deleter -> no callback) / AC-23 (deleter inner alloc isolated).
-describe('w29 SharedRefStore: retain + release + per-handle deleter', () => {
-  it('AC-21: alloc(target, payload, cb) deleter fires once and only once at rc 1 -> 0', () => {
-    const store = new SharedRefStore();
-    const cb = vi.fn();
-
-    const handle = store.alloc('Asset', { id: 1 }, cb);
-    expect(store.refcount(handle)).toBe(1);
-
-    expect(store.retain(handle).ok).toBe(true);
-    expect(store.refcount(handle)).toBe(2);
-
-    expect(store.release(handle).ok).toBe(true);
-    expect(store.refcount(handle)).toBe(1);
-    expect(cb).not.toHaveBeenCalled();
-
-    expect(store.release(handle).ok).toBe(true);
-    expect(store.refcount(handle)).toBe(0);
-    expect(cb).toHaveBeenCalledTimes(1);
-    expect(cb).toHaveBeenCalledWith({ id: 1 });
-  });
-
-  it('AC-21: deleter fires exactly once at rc 1 -> 0 (no second fire on double-release)', () => {
-    const store = new SharedRefStore();
-    const cb = vi.fn();
-
-    const handle = store.alloc('Asset', { id: 2 }, cb);
-    expect(store.release(handle).ok).toBe(true);
-    expect(cb).toHaveBeenCalledTimes(1);
-
-    // Second release is the error path -- it MUST NOT re-fire the deleter.
-    const second = store.release(handle);
-    expect(second.ok).toBe(false);
-    expect(cb).toHaveBeenCalledTimes(1);
-  });
-
-  it('AC-22: alloc without deleter (third arg undefined) -> no callback at rc=0', () => {
-    const store = new SharedRefStore();
-    const handle = store.alloc('Asset', { id: 3 }, undefined);
-    // Reaching rc=0 with no deleter is a clean drop; nothing to observe except
-    // refcount 0 and a successful release Result.
-    expect(store.release(handle).ok).toBe(true);
-    expect(store.refcount(handle)).toBe(0);
-  });
-
-  it('AC-23: deleter that allocs a fresh handle observes the dropped slot (snapshot isolation)', () => {
-    const store = new SharedRefStore();
-    let observedDuringCb: number | undefined;
-    let innerHandle: Handle<string, 'shared'> | undefined;
-    const handle = store.alloc('Asset', { id: 4 }, () => {
-      // Slot is dropped BEFORE the deleter fires (mirrors UniqueRefStore): the
-      // released slot's refcount is already 0 when the cb runs.
-      observedDuringCb = store.refcount(handle);
-      innerHandle = store.alloc('Asset', { id: 5 });
-    });
-
-    expect(store.release(handle).ok).toBe(true);
-    expect(observedDuringCb).toBe(0);
-    // The inner alloc minted an independent live handle, undisturbed by the
-    // surrounding release.
-    expect(innerHandle).toBeDefined();
-    if (innerHandle !== undefined) {
-      expect(store.refcount(innerHandle)).toBe(1);
-      expect(store.release(innerHandle).ok).toBe(true);
-      expect(store.refcount(innerHandle)).toBe(0);
-    }
-  });
-
+// ─── w29 (D-10): retain + release evidence ─────────────────────────────
+describe('w29 SharedRefStore: retain + structured release evidence', () => {
   it('alloc -> retain N -> release N+1 cycles through rc=0 cleanly', () => {
     const store = new SharedRefStore();
-    const cb = vi.fn();
-
-    const handle = store.alloc('Asset', { id: 4 }, cb);
+    const payload = { id: 4 };
+    const handle = store.alloc('Asset', payload);
     for (let i = 0; i < 5; i++) {
       expect(store.retain(handle).ok).toBe(true);
     }
@@ -225,7 +189,19 @@ describe('w29 SharedRefStore: retain + release + per-handle deleter', () => {
       expect(store.release(handle).ok).toBe(true);
     }
     expect(store.refcount(handle)).toBe(0);
-    expect(cb).toHaveBeenCalledTimes(1);
+    expect(store.readReleaseEvidence()).toEqual([
+      { payload, refcount: 0, generation: 1, evidence: 'released' },
+    ]);
+  });
+
+  it('final release returns the same payload/refcount/generation evidence', () => {
+    const store = new SharedRefStore();
+    const payload = { id: 1 };
+    const handle = store.alloc('Asset', payload);
+
+    const result = store.release(handle);
+    expect(result.ok).toBe(true);
+    expect(result.unwrap()).toEqual({ payload, refcount: 0, generation: 1, evidence: 'released' });
   });
 
   it('retain after release-to-zero is a SharedRefStaleError (gen mismatch after w10)', () => {
@@ -258,15 +234,15 @@ describe('w8 World.allocSharedRef: facade + AC-16 type inference', () => {
     expectTypeOf(handle).toEqualTypeOf<Handle<'MaterialAsset', 'shared'>>();
   });
 
-  it('explicit release of the alloc-grant takes rc to 0 and triggers the per-handle deleter', () => {
+  it('explicit release of the alloc-grant takes rc to 0 and publishes evidence', () => {
     const world = new World();
-    const cb = vi.fn();
 
-    const handle = world.allocSharedRef('Asset', { id: 99 }, cb);
+    const payload = { id: 99 };
+    const handle = world.allocSharedRef('Asset', payload);
     const r = world.sharedRefs.release(handle);
     expect(r.ok).toBe(true);
     expect(world.sharedRefs.refcount(handle)).toBe(0);
-    expect(cb).toHaveBeenCalledTimes(1);
+    expect(r.unwrap()).toMatchObject({ payload, refcount: 0, generation: 1, evidence: 'released' });
   });
 
   it('AC-16 fourth application point: addSystem fn callback infers Handle<Target, "shared">', () => {
@@ -305,30 +281,11 @@ describe('w8 World.allocSharedRef: facade + AC-16 type inference', () => {
   });
 });
 
-// ─── w30 (AC-26): global listener API removed from the public surface ─────
-// D-10 deletes the global onLastRelease(globalCb) broadcast method + the
-// lastReleaseListeners Set. The release signal is the per-handle deleter
-// (alloc third argument) only. Type-level assertion: SharedRefStore must not
-// expose an `onLastRelease` instance method.
-describe('w30 SharedRefStore: global listener API deleted (AC-26)', () => {
-  it('SharedRefStore has no onLastRelease instance method', () => {
-    const store = new SharedRefStore();
-    expect((store as unknown as Record<string, unknown>).onLastRelease).toBeUndefined();
-  });
-
-  it('type-level: onLastRelease is not a key of SharedRefStore', () => {
-    type StoreKeys = keyof SharedRefStore;
-    expectTypeOf<'onLastRelease'>().not.toEqualTypeOf<StoreKeys>();
-    // A positive control: alloc remains a key.
-    expectTypeOf<'alloc'>().toMatchTypeOf<StoreKeys>();
-  });
-});
-
 // ─── w50 (AC-32): builtin-slot fail-fast guard ───────────────────────────
 // D-15: World.sharedRefs manages ONLY user-tier slots (>= BUILTIN_BASE).
 // Passing a builtin slot (< BUILTIN_BASE) to alloc/retain/release/resolve is a
 // caller error -> BuiltinSlotNotOwnedError with a hint pointing at
-// BuiltinAssetRegistry. (toShared(1) is HANDLE_CUBE's slot.)
+// the builtin asset owner. (toShared(1) is the cube slot.)
 describe('w50 SharedRefStore: fail-fast on builtin slot < BUILTIN_BASE (AC-32)', () => {
   it('retain(builtin slot) returns BuiltinSlotNotOwnedError with a hint', () => {
     const store = new SharedRefStore();
@@ -431,13 +388,16 @@ describe('w6 M3 SharedRefStore: gen welding on alloc', () => {
     }
   });
 
-  it('alloc with onLastRelease fires deleter after gen-welded release', () => {
-    const cb = vi.fn();
+  it('alloc publishes release evidence after gen-welded release', () => {
     const store = new SharedRefStore();
-    const h = store.alloc('Asset', { key: 1 }, cb);
-    expect(store.release(h).ok).toBe(true);
-    expect(cb).toHaveBeenCalledTimes(1);
-    expect(cb).toHaveBeenCalledWith({ key: 1 });
+    const payload = { key: 1 };
+    const h = store.alloc('Asset', payload);
+    expect(store.release(h).unwrap()).toEqual({
+      payload,
+      refcount: 0,
+      generation: 1,
+      evidence: 'released',
+    });
   });
 
   it('M4: alloc after release reuses slot with gen 1 (gen increments on release)', () => {
@@ -602,6 +562,57 @@ describe('w9 M4 SharedRefStore: stale detection (resolve/retain/release + retire
     if (!rStale.ok) {
       expect(rStale.error.code).toBe('shared-ref-stale');
     }
+  });
+
+  it('M32: public World mutation fences a released producer from its replacement', () => {
+    const Material = defineComponent('M32SharedMaterialField', {
+      asset: 'shared<MaterialAsset>',
+    });
+    const world = new World();
+    const sibling = world.allocSharedRef('MaterialAsset', { id: 'healthy-sibling' });
+    const oldPayload = { id: 'old-material' };
+    const oldHandle = world.allocSharedRef('MaterialAsset', oldPayload);
+    const entity = world.spawn({ component: Material, data: { asset: oldHandle } }).unwrap();
+
+    expect(world.sharedRefs.refcount(oldHandle)).toBe(2);
+    expect(world.sharedRefs.refcount(sibling)).toBe(1);
+
+    expect(world.removeComponent(entity, Material).ok).toBe(true);
+    expect(world.sharedRefs.refcount(oldHandle)).toBe(1);
+    expect(world.sharedRefs.release(oldHandle).ok).toBe(true);
+
+    const replacementPayload = { id: 'replacement-material' };
+    const replacementHandle = world.allocSharedRef('MaterialAsset', replacementPayload);
+    expect(handleSlot(replacementHandle)).toBe(handleSlot(oldHandle));
+    expect(handleGeneration(replacementHandle)).toBe(handleGeneration(oldHandle) + 1);
+
+    const stale = world.sharedRefs.resolve(oldHandle);
+    expect(stale.ok).toBe(false);
+    if (!stale.ok) {
+      expect(stale.error.code).toBe('shared-ref-stale');
+      expect(stale.error.detail).toEqual({
+        slot: handleSlot(oldHandle),
+        expectedGeneration: handleGeneration(oldHandle),
+        actualGeneration: handleGeneration(replacementHandle),
+      });
+    }
+
+    expect(
+      world.addComponent(entity, { component: Material, data: { asset: replacementHandle } }).ok,
+    ).toBe(true);
+    expect(world.sharedRefs.refcount(replacementHandle)).toBe(2);
+    expect(world.sharedRefs.resolve(replacementHandle)).toMatchObject({
+      ok: true,
+      value: replacementPayload,
+    });
+
+    expect(world.removeComponent(entity, Material).ok).toBe(true);
+    expect(world.sharedRefs.release(replacementHandle).ok).toBe(true);
+    expect(world.sharedRefs.release(sibling).ok).toBe(true);
+    expect(world.sharedRefs.refcount(oldHandle)).toBe(0);
+    expect(world.sharedRefs.refcount(replacementHandle)).toBe(0);
+    expect(world.sharedRefs.refcount(sibling)).toBe(0);
+    expect(world.sharedRefs._liveCount()).toBe(0);
   });
 
   it('AC-07: retire-on-255 — gen pushed past MAX_GEN then slot not in freeSlots after release', () => {

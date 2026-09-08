@@ -10,6 +10,8 @@ import {
   type ArrayMeta,
   type Component,
   type ComponentSchema,
+  componentId,
+  componentSchema,
   fieldTypeToMetaKey,
   isEntityField,
   isManagedArrayField,
@@ -19,19 +21,21 @@ import {
   type ShapeOf,
   TYPE_METADATA,
 } from './component';
+import { componentDefinition } from './component-schema';
 import { Entity as EntityComponent } from './entity';
 import { ENTITY_NULL_RAW, type EntityHandle, entityGeneration, entityIndex } from './entity-handle';
 import type { ManagedArrayErrorEnvelope } from './errors';
-import type { ErrorContext } from './schedule';
-import { Severity } from './schedule';
+
+type ErrorContext = { readonly systemName: string };
+
 import type { SharedRefStore } from './shared-ref-store';
 import { type Archetype, appendArchetypeRow, removeArchetypeRow } from './storage/archetype';
 import { type ArchetypeGraph, getTable } from './storage/archetype-graph';
-import { copyComponentEpoch } from './storage/change-epoch';
+import { copyComponentEpoch } from './storage/change-detection';
 import { arrayCountColumnName, type FieldView, normalizeBufferWrite } from './storage/column';
 import { appendTableRow, removeTableRow, type Table } from './storage/table';
 import type { UniqueRefStore } from './unique-ref-store';
-import type { ComponentData, EntityRecord } from './world';
+import type { EntityRecord } from './world';
 
 export interface ComponentStorageState {
   readonly graph: ArchetypeGraph;
@@ -75,17 +79,17 @@ export class ComponentStorage {
     row: number,
     fieldName: string,
   ): FieldView | undefined {
-    const fieldCols = this.table(arch).storage.get(component.id)?.fields;
+    const fieldCols = this.table(arch).storage.get(componentId(component))?.fields;
     if (!fieldCols) return undefined;
 
-    const fieldType = component.schema[fieldName];
+    const fieldType = componentSchema(component)[fieldName];
     if (fieldType === undefined) return undefined;
     // Component reflection already parses and freezes array metadata at
     // registration time. Reusing it here keeps the per-entity zero-copy path
     // parse-free; this accessor is called once for every renderable every
     // frame. The field lookup also preserves the existing undefined result
     // for non-array fields without reparsing arbitrary schema strings.
-    const arrayMeta = component.fields[fieldName]?.arrayMeta;
+    const arrayMeta = componentDefinition(component).fields[fieldName]?.arrayMeta;
     if (arrayMeta === undefined) return undefined;
 
     const col = fieldCols.get(fieldName);
@@ -119,14 +123,14 @@ export class ComponentStorage {
     component: Component<string, S>,
     row: number,
   ): ShapeOf<S> {
-    const localId = component.id;
+    const localId = componentId(component);
     const fieldCols = this.table(arch).storage.get(localId)?.fields;
     const out = {} as ShapeOf<S>;
     /* istanbul ignore next -- defensive: component is registered and arch has it */
     if (!fieldCols) {
       return out;
     }
-    for (const [fieldName, fieldType] of Object.entries(component.schema)) {
+    for (const [fieldName, fieldType] of Object.entries(componentSchema(component))) {
       const col = fieldCols.get(fieldName);
       if (!col) {
         continue;
@@ -169,7 +173,7 @@ export class ComponentStorage {
         const resolveR = this.uniqueRefs.resolve<'String'>(toUnique<'String'>(raw as number));
         (out as Record<string, unknown>)[fieldName] = resolveR.ok ? resolveR.value : '';
       } else {
-        const arrayMeta = component.fields[fieldName]?.arrayMeta;
+        const arrayMeta = componentDefinition(component).fields[fieldName]?.arrayMeta;
         if (arrayMeta !== undefined) {
           // M1 read path: materialise a fresh TypedArray snapshot each call
           // (D-4 no cache; plan-strategy §2.2 read-only contract). The
@@ -200,7 +204,7 @@ export class ComponentStorage {
    * archetype -- so this is a direct u32 store, no readRow/writeRow walk.
    */
   writeEntitySelf(arch: Archetype, row: number, handle: EntityHandle): void {
-    const col = this.table(arch).storage.get(EntityComponent.id)?.fields.get('self');
+    const col = this.table(arch).storage.get(componentId(EntityComponent))?.fields.get('self');
     /* istanbul ignore next -- defensive: Entity column is folded into every archetype */
     if (!col) return;
     col.view[row] = handle as unknown as number;
@@ -212,13 +216,13 @@ export class ComponentStorage {
     row: number,
     value: ShapeOf<S>,
   ): void {
-    const localId = component.id;
+    const localId = componentId(component);
     const fieldCols = this.table(arch).storage.get(localId)?.fields;
     /* istanbul ignore next -- defensive: component is registered and arch has it */
     if (!fieldCols) {
       return;
     }
-    for (const [fieldName, fieldType] of Object.entries(component.schema)) {
+    for (const [fieldName, fieldType] of Object.entries(componentSchema(component))) {
       const col = fieldCols.get(fieldName);
       /* istanbul ignore next -- defensive: schema fields always have columns */
       if (!col) {
@@ -259,7 +263,6 @@ export class ComponentStorage {
           const allocR = this.bufferPool.alloc(allocBytes);
           if (!allocR.ok) {
             const ctx: ErrorContext = {
-              severity: Severity.Error,
               systemName: `World.spawn (${component.name}.${fieldName})`,
             };
             this.routeError(allocR.error, ctx);
@@ -286,7 +289,7 @@ export class ComponentStorage {
         const handle = this.uniqueRefs.alloc<'String'>('String', text);
         col.view[row] = unwrapHandle(handle);
       } else {
-        const arrayMeta = component.fields[fieldName]?.arrayMeta;
+        const arrayMeta = componentDefinition(component).fields[fieldName]?.arrayMeta;
         if (arrayMeta !== undefined) {
           // M1 spawn path for array<T> / array<T,N> fields (D-3 double-
           // column for variable; single column for fixed).
@@ -350,9 +353,9 @@ export class ComponentStorage {
    * `__tests__/world-managed-roundtrip.unit.test.ts` (w3 net-zero matrix).
    */
   releaseManagedRefsOnRow(arch: Archetype, component: Component, row: number): void {
-    const fieldCols = this.table(arch).storage.get(component.id)?.fields;
+    const fieldCols = this.table(arch).storage.get(componentId(component))?.fields;
     if (!fieldCols) return;
-    for (const fieldName of Object.keys(component.schema)) {
+    for (const fieldName of Object.keys(componentSchema(component))) {
       this.releaseManagedFieldOnRow(arch, component, row, fieldName);
     }
   }
@@ -397,11 +400,11 @@ export class ComponentStorage {
     row: number,
     fieldName: string,
   ): void {
-    const fieldCols = this.table(arch).storage.get(component.id)?.fields;
+    const fieldCols = this.table(arch).storage.get(componentId(component))?.fields;
     if (!fieldCols) return;
     const col = fieldCols.get(fieldName);
     if (!col) return;
-    const fieldType = (component.schema as Record<string, string>)[fieldName] ?? '';
+    const fieldType = (componentSchema(component) as Record<string, string>)[fieldName] ?? '';
     if (isManagedField(fieldType)) {
       // Sub-dispatch by the schema-vocab keyword (feat-20260614 M4 / AC-08):
       //   - 'shared<T>' scalar    -> SharedRefStore.release (rc--; drop on rc=0)
@@ -432,7 +435,7 @@ export class ComponentStorage {
       // registration (AC-03c parse-free hot path); reaching for
       // `parseManagedArraySchema` here would violate the parse-free
       // invariant exercised by hierarchy.unit.test.ts §w5 AC-03(a).
-      const arrayMeta = component.fields[fieldName]?.arrayMeta;
+      const arrayMeta = componentDefinition(component).fields[fieldName]?.arrayMeta;
       if (arrayMeta === undefined) return;
       const isSharedElement = arrayMeta.elementType.startsWith('shared<');
       if (arrayMeta.length === undefined) {
@@ -489,7 +492,6 @@ export class ComponentStorage {
     // defaults to Error so the chain continues; matchSeverity prints to
     // console.error rather than throw.
     const ctx: ErrorContext = {
-      severity: Severity.Error,
       systemName: `World.release (${componentName}.${fieldName})`,
     };
     this.routeError(r.error, ctx);
@@ -515,7 +517,6 @@ export class ComponentStorage {
     const r = this.sharedRefs.release(toShared<string>(handleU32));
     if (r.ok) return;
     const ctx: ErrorContext = {
-      severity: Severity.Error,
       systemName: `World.release (${componentName}.${fieldName})`,
     };
     this.routeError(r.error, ctx);
@@ -536,7 +537,6 @@ export class ComponentStorage {
     const r = this.sharedRefs.retain(toShared<string>(handleU32));
     if (r.ok) return;
     const ctx: ErrorContext = {
-      severity: Severity.Error,
       systemName: `World.write (${componentName}.${fieldName} shared scalar retain)`,
     };
     this.routeError(r.error, ctx);
@@ -557,7 +557,6 @@ export class ComponentStorage {
     /* istanbul ignore if -- BufferPool.release is total in v1 (Result<void, never>); branch reserved for future fail-fast extension. */
     if (!r.ok) {
       const ctx: ErrorContext = {
-        severity: Severity.Error,
         systemName: `World.release (${componentName}.${fieldName})`,
       };
       this.routeError(r.error, ctx);
@@ -576,7 +575,6 @@ export class ComponentStorage {
    */
   routeArrayError(err: ManagedArrayErrorEnvelope, componentName: string, fieldName: string): void {
     const ctx: ErrorContext = {
-      severity: Severity.Error,
       systemName: `World.write (${componentName}.${fieldName})`,
     };
     this.routeError(err, ctx);
@@ -614,7 +612,7 @@ export class ComponentStorage {
     arrayMeta: ArrayMeta,
     raw: unknown,
   ): void {
-    const fieldCols = this.table(arch).storage.get(component.id)?.fields;
+    const fieldCols = this.table(arch).storage.get(componentId(component))?.fields;
     /* istanbul ignore next -- writeArrayField caller validated the column map */
     if (!fieldCols) return;
     const col = fieldCols.get(fieldName);
@@ -849,7 +847,7 @@ export class ComponentStorage {
     | Uint16Array
     | Int8Array
     | Uint8Array {
-    const fieldCols = this.table(arch).storage.get(component.id)?.fields;
+    const fieldCols = this.table(arch).storage.get(componentId(component))?.fields;
     if (fixedLength !== undefined) {
       // Fixed `array<T,N>` (feat-20260602): the elements live INLINE in the
       // stride-N column. Reinterpret the row's byte window directly — no
@@ -926,7 +924,7 @@ export class ComponentStorage {
     const oldTableRow = srcArch.rows[oldArchetypeRow] ?? 0;
     const srcTable = this.table(srcArch);
     const targetTable = this.table(targetArch);
-    const entity = (srcTable.storage.get(EntityComponent.id)?.fields.get('self')?.view[
+    const entity = (srcTable.storage.get(componentId(EntityComponent))?.fields.get('self')?.view[
       oldTableRow
     ] ?? 0) as EntityHandle;
     const newTableRow = appendTableRow(targetTable, entity);
@@ -968,9 +966,8 @@ export class ComponentStorage {
 
     const archetypeSwap = removeArchetypeRow(srcArch, oldArchetypeRow);
     if (archetypeSwap !== null) {
-      const movedEntity = (srcTable.storage.get(EntityComponent.id)?.fields.get('self')?.view[
-        archetypeSwap.movedTableRow
-      ] ?? 0) as EntityHandle;
+      const movedEntity = (srcTable.storage.get(componentId(EntityComponent))?.fields.get('self')
+        ?.view[archetypeSwap.movedTableRow] ?? 0) as EntityHandle;
       const movedRecord = this.records[entityIndex(movedEntity)];
       if (movedRecord?.generation === entityGeneration(movedEntity)) {
         movedRecord.archetypeRow = archetypeSwap.newRow;
@@ -1000,9 +997,8 @@ export class ComponentStorage {
     const tableRow = srcArch.rows[oldArchetypeRow] ?? 0;
     const archetypeSwap = removeArchetypeRow(srcArch, oldArchetypeRow);
     if (archetypeSwap !== null) {
-      const movedEntity = (table.storage.get(EntityComponent.id)?.fields.get('self')?.view[
-        archetypeSwap.movedTableRow
-      ] ?? 0) as EntityHandle;
+      const movedEntity = (table.storage.get(componentId(EntityComponent))?.fields.get('self')
+        ?.view[archetypeSwap.movedTableRow] ?? 0) as EntityHandle;
       const movedRecord = this.records[entityIndex(movedEntity)];
       if (movedRecord?.generation === entityGeneration(movedEntity)) {
         movedRecord.archetypeRow = archetypeSwap.newRow;
@@ -1011,56 +1007,6 @@ export class ComponentStorage {
     record.archetypeId = targetArch.id;
     record.archetypeRow = appendArchetypeRow(targetArch, tableRow);
   }
-
-  expandCoAttach(componentDatas: ComponentData[]): ComponentData[] {
-    return expandCoAttach(componentDatas);
-  }
-}
-
-/**
- * Expand a caller-supplied `world.spawn` bundle with any `coAttach` companion
- * components declared on the caller's tokens
- * (tweak-20260714-tilemap-layer-childed-render-entities M1). Layer-1 wins: if
- * the caller already names a coAttach-declared component in the bundle, that
- * caller entry is preserved and the coAttach entry is skipped. Chain-isolated:
- * only the caller's original tokens contribute; auto-added companions do NOT
- * recursively add their own coAttach (charter P4 — bounded expansion +
- * deterministic archetype hash).
- *
- * @internal
- */
-function expandCoAttach(componentDatas: ComponentData[]): ComponentData[] {
-  // Fast path: nothing declares coAttach → return caller bundle unchanged.
-  let hasCoAttach = false;
-  for (const cd of componentDatas) {
-    if ((cd.component as Component).coAttach !== undefined) {
-      hasCoAttach = true;
-      break;
-    }
-  }
-  if (!hasCoAttach) return componentDatas;
-
-  // Track which component ids the caller already supplied; layer-1 wins.
-  const present = new Set<number>();
-  for (const cd of componentDatas) {
-    present.add((cd.component as Component).id);
-  }
-
-  const expanded: ComponentData[] = componentDatas.slice();
-  for (const cd of componentDatas) {
-    const coAttach = (cd.component as Component).coAttach;
-    if (coAttach === undefined) continue;
-    for (const entry of coAttach) {
-      const compId = (entry.component as Component).id;
-      if (present.has(compId)) continue;
-      present.add(compId);
-      expanded.push({
-        component: entry.component as unknown as ComponentData['component'],
-        data: entry.data as unknown as ComponentData['data'],
-      });
-    }
-  }
-  return expanded;
 }
 
 /**

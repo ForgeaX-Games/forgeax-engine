@@ -1,7 +1,6 @@
+import { calculateCatalogDelta } from '@forgeax/engine-pack/build';
 import type { PackIndexEntry } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-
-import { calculateCatalogDelta } from '../catalog-watch.js';
 
 const guid = (suffix: string): string => `019e2cc6-0c86-79da-aa76-b0984c86d${suffix}`;
 

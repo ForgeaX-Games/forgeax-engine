@@ -18,21 +18,18 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { encodeTileBits } from '@forgeax/engine-graphics-extras';
+import { Layer, MeshFilter } from '@forgeax/engine-render';
+import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
+import type { TilesetAsset } from '@forgeax/engine-types';
+import { describe, expect, it } from 'vitest';
+import { encodeSortScope } from '../../../render/src/components/tile-layer';
 import {
-  encodeSortScope,
-  TileLayer,
-  Tilemap,
-  tilemapChunkExtractSystem,
-} from '@forgeax/engine-render/authoring';
-import {
-  Layer,
-  MeshFilter,
   resetTilemapChunkExtractCache,
   resetTilemapDerivedEntityTracker,
-} from '@forgeax/engine-render/internal';
-import { ChildOf, Transform } from '@forgeax/engine-scene';
-import { type TilesetAsset, toShared } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
+  tilemapChunkExtractSystem,
+} from '../../../render/src/tilemap-chunk-extract-system';
+import { makeTilemapAssetLookup } from './helpers/tilemap-assets';
 
 function setup(opts: {
   cols: number;
@@ -43,8 +40,7 @@ function setup(opts: {
   const world = new World();
   const tileset: TilesetAsset = {
     kind: 'tileset',
-    guid: 'test/region-pack',
-    atlases: [toShared<'TextureAsset'>(101)],
+    atlases: ['test/atlas'],
     tileWidth: 16,
     tileHeight: 16,
     columns: opts.cols,
@@ -52,7 +48,7 @@ function setup(opts: {
     regions: [{ x: 0, y: 0, width: 16, height: 16 }],
     tiles: [{ regionIndex: 0 }],
   };
-  const tilesetHandle = world.allocSharedRef<'TilesetAsset', TilesetAsset>('TilesetAsset', tileset);
+  const lookup = makeTilemapAssetLookup(tileset);
   const tilemap = world
     .spawn(
       {
@@ -62,7 +58,7 @@ function setup(opts: {
           rows: opts.rows,
           tileSize: opts.tileSize,
           chunkSize: 4,
-          tileset: tilesetHandle,
+          tileset: 'test/tileset',
         },
       },
       { component: Transform, data: {} },
@@ -77,7 +73,7 @@ function setup(opts: {
   );
   resetTilemapChunkExtractCache();
   resetTilemapDerivedEntityTracker();
-  return { world };
+  return { world, lookup };
 }
 
 function readDerivedTransforms(world: World): Array<{
@@ -116,8 +112,8 @@ describe('tilemap region pack — M0 1x1 unit-cell Transform field assertions', 
     const tiles = new Uint32Array(2);
     tiles[0] = 1; // (0, 0)
     tiles[1] = 1; // (1, 0)
-    const { world } = setup({ cols: 2, rows: 1, tileSize: [32, 16], tiles });
-    tilemapChunkExtractSystem(world);
+    const { world, lookup } = setup({ cols: 2, rows: 1, tileSize: [32, 16], tiles });
+    tilemapChunkExtractSystem(world, lookup);
     const xs = readDerivedTransforms(world)
       .map((t) => t.posX)
       .sort((a, b) => a - b);
@@ -127,8 +123,8 @@ describe('tilemap region pack — M0 1x1 unit-cell Transform field assertions', 
 
   it('default tileSize (1, 1) on a 1x1 cell anchored at (0, 0)', () => {
     const tiles = new Uint32Array([1]);
-    const { world } = setup({ cols: 1, rows: 1, tileSize: [1, 1], tiles });
-    tilemapChunkExtractSystem(world);
+    const { world, lookup } = setup({ cols: 1, rows: 1, tileSize: [1, 1], tiles });
+    tilemapChunkExtractSystem(world, lookup);
     const transforms = readDerivedTransforms(world);
     expect(transforms.length).toBe(1);
     const t = transforms[0];
@@ -143,8 +139,8 @@ describe('tilemap region pack — M0 1x1 unit-cell Transform field assertions', 
 
   it('flipH alone negates scaleX, flipV alone negates scaleY (per-cell sign)', () => {
     const tiles = new Uint32Array([encodeTileBits(1, true, false, false, false)]);
-    const { world } = setup({ cols: 1, rows: 1, tileSize: [1, 1], tiles });
-    tilemapChunkExtractSystem(world);
+    const { world, lookup } = setup({ cols: 1, rows: 1, tileSize: [1, 1], tiles });
+    tilemapChunkExtractSystem(world, lookup);
     const t = readDerivedTransforms(world)[0];
     if (t === undefined) throw new Error('expected one derived Transform');
     expect(t.scaleX).toBe(-1);

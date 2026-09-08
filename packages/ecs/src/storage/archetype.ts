@@ -1,4 +1,5 @@
 import type { Component, ComponentId } from '../component';
+import { componentId } from '../component';
 import { foldEssentials } from '../entity';
 import type { TableId } from './table';
 
@@ -28,11 +29,11 @@ export function createArchetype(
   tableId: TableId,
 ): Archetype {
   const byId = new Map<ComponentId, Component>();
-  for (const component of components) byId.set(component.id, component);
-  const sorted = [...byId.values()].sort((a, b) => a.id - b.id);
+  for (const component of components) byId.set(componentId(component), component);
+  const sorted = [...byId.values()].sort((a, b) => componentId(a) - componentId(b));
   return {
     id,
-    key: archetypeKey(sorted.map((component) => component.id)),
+    key: archetypeKey(sorted.map((component) => componentId(component))),
     components: sorted,
     tableId,
     rows: new Uint32Array(INITIAL_CAPACITY),

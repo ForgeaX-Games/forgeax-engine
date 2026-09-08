@@ -7,20 +7,30 @@
 // Anchors: requirements AC-13 (Renderer.draw/ready Result form);
 //          plan-strategy D-P7 break-point #4; w23 test SSOT.
 
-import type { Renderer, RenderResult } from '@forgeax/engine-render/internal';
-import type { RhiError } from '@forgeax/engine-rhi';
+import type {
+  FrameReceipt,
+  RenderError,
+  Renderer,
+  RenderFrameInput,
+  RenderResult,
+  RenderWorldLease,
+} from '@forgeax/engine-render';
 import { describe, expectTypeOf, it } from 'vitest';
 
-describe('AC-13 — Renderer.draw returns Result<void, RhiError>', () => {
-  it('Renderer.draw(world) return type is Result<void, RhiError>', () => {
+describe('M6 — Renderer.draw returns Result<FrameReceipt, RenderError>', () => {
+  it('Renderer.draw(request) return type is Result<FrameReceipt, RenderError>', () => {
     type RetType = ReturnType<Renderer['draw']>;
-    expectTypeOf<RetType>().toEqualTypeOf<RenderResult<void, RhiError>>();
+    expectTypeOf<RetType>().toEqualTypeOf<RenderResult<FrameReceipt, RenderError>>();
   });
 });
 
-describe('AC-13 — Renderer.ready is Promise<Result<void, RhiError>>', () => {
-  it('Renderer.ready type is Promise<Result<void, RhiError>>', () => {
-    type ReadyType = Renderer['ready'];
-    expectTypeOf<ReadyType>().toEqualTypeOf<Promise<RenderResult<void, RhiError>>>();
+describe('M6 — Renderer.attach returns a lease and draw consumes it', () => {
+  it('Renderer.attach returns RenderWorldLease and draw consumes RenderFrameInput', () => {
+    type AttachType = Renderer['attach'];
+    type DrawArg = Parameters<Renderer['draw']>[0];
+    expectTypeOf<AttachType>().returns.toEqualTypeOf<
+      RenderResult<RenderWorldLease, import('@forgeax/engine-render').RenderError>
+    >();
+    expectTypeOf<DrawArg>().toEqualTypeOf<RenderFrameInput>();
   });
 });

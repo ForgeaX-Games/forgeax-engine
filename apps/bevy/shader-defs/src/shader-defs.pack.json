@@ -3,7 +3,7 @@
   "kind": "internal-text-package",
   "assets": [
     {
-      "guid": "3ce70155-2b31-580d-b0e3-520ebb4b0ae9",
+      "guid": "3ce70155-2b31-580d-b0e3-520ebb4b0ae8",
       "kind": "material",
       "sourceKey": "shader-defs.wgsl",
       "payload": {
@@ -15,7 +15,8 @@
               "module": "bevy::shader_defs",
               "vertexEntry": "vs_main",
               "fragmentEntry": "fs_main"
-            }
+            },
+            "renderState": { "tags": { "LightMode": "Forward" }, "queue": 2000 }
           }
         ],
         "parameters": [
@@ -42,12 +43,6 @@
           {
             "name": "baseColorTexture",
             "type": "texture"
-          },
-          {
-            "name": "IS_RED",
-            "type": "bool",
-            "static": true,
-            "default": false
           }
         ]
       },

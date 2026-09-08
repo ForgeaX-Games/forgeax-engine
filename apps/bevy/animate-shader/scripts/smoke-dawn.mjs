@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -70,31 +71,22 @@ const { Transform } = await import('@forgeax/engine-scene');
 
 let renderer;
 try {
-  renderer = await createRenderer(canvas, {}, { shaderManifestUrl: manifestUrl });
+  renderer = await createSmokeRenderer(createRenderer, canvas, {}, { shaderManifestUrl: manifestUrl });
 } finally {
   gpu.requestAdapter = originalRequestAdapter;
 }
-console.log(`[bevy-animate-shader] backend=${renderer.backend}`);
+console.log(`[bevy-animate-shader] backend=${rendererBackend(renderer)}`);
 const errors = [];
-renderer.onError((error) => errors.push(error));
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
+subscribeSmokeErrors(renderer, (error) => errors.push(error));
 
 const shaderId = 'bevy::animate_shader';
 const shaderEntry = (manifest.materialShaders ?? []).find((entry) => entry?.identifier === shaderId);
-const shaderRegistry = renderer.shader;
-if (shaderRegistry === null || shaderEntry === undefined) throw new Error('animate shader manifest entry missing');
-if (!shaderRegistry.findMaterialArtifact(shaderId).ok) {
-  shaderRegistry.installMaterialArtifact(shaderId, {
-    source: shaderEntry.composedWgsl,
-    paramSchema: JSON.parse(shaderEntry.paramSchema),
-  });
-}
+if (shaderEntry === undefined) throw new Error('animate shader manifest entry missing');
 
 const geometry = createBoxGeometry(1, 1, 1);
 if (!geometry.ok) throw new Error(`${geometry.error.code}: ${geometry.error.hint}`);
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const mesh = world.allocSharedRef('MeshAsset', geometry.value);
 const values = { time: 0 };
@@ -144,8 +136,9 @@ async function capture(label) {
 
 for (let frame = 0; frame < FRAME_COUNT; frame += 1) {
   values.time = frame / 60;
+  world.sharedRefs.markChanged(material).unwrap();
   world.update().unwrap();
-  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const draw = drawSmokeFrame(renderer, world);
   if (!draw.ok) console.error(`[smoke] draw frame ${frame} error: ${draw.error.code}`);
   await delay(0);
   if (frame === 60) await capture('early');
@@ -170,7 +163,7 @@ console.log(`[smoke] frames observed=${FRAME_COUNT}`);
 console.log(`[smoke] pixelDelta=${pixelDelta.toFixed(5)} lateMaxLuma=${lateLuma.toFixed(4)}`);
 for (const capture of captures) console.log(`[smoke] wrote PNG=${capture.pngPath}`);
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`backend=${renderer.backend}`);
+if (rendererBackend(renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(renderer)}`);
 if (FRAME_COUNT < MIN_FRAMES) failures.push(`frames=${FRAME_COUNT} < ${MIN_FRAMES}`);
 if (lateLuma <= 0.15) failures.push(`lateMaxLuma=${lateLuma.toFixed(4)} <= 0.15`);
 if (pixelDelta <= 0.0005) failures.push(`pixelDelta=${pixelDelta.toFixed(5)} <= 0.0005 (shader animation is frozen)`);

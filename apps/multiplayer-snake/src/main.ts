@@ -1,6 +1,24 @@
 import { Update } from '@forgeax/engine-ecs';
+import type { NetRecoverySnapshot, NetSession } from '@forgeax/engine-net';
 import { isEndpointError } from '@forgeax/engine-net';
+import type { Renderer } from '@forgeax/engine-render';
 import { createClient } from './client';
+
+type SnakeBrowserProbe = {
+  readonly recover: () => ReturnType<NetSession['recover']>;
+  readonly recoverRenderer: () => ReturnType<Renderer['recover']>;
+  readonly rendererInspection: () => ReturnType<Renderer['inspect']>;
+  readonly advanceRecovery: () => void;
+  readonly snapshot: () => NetRecoverySnapshot;
+  readonly directionCommandSendCount: () => number;
+  readonly dispose: () => void;
+};
+
+declare global {
+  interface Window {
+    __forgeaxSnake?: SnakeBrowserProbe;
+  }
+}
 
 function endpointUrl(): string {
   const requested = new URLSearchParams(window.location.search).get('server');
@@ -14,31 +32,80 @@ async function main(): Promise<void> {
   const state = document.querySelector<HTMLOutputElement>('[data-testid="snake-state"]');
   if (canvas === null || state === null) return;
 
+  let disposeClient: (() => void) | undefined;
   try {
     const client = await createClient(canvas, endpointUrl());
-    const ready = await client.renderer.ready;
-    if (!ready.ok) throw ready.error;
+    const browserProbeEnabled =
+      new URLSearchParams(window.location.search).get('m16-reconnect') === '1';
+    const browserProbe: SnakeBrowserProbe = {
+      recover: () => client.session.recover(),
+      recoverRenderer: () => client.renderer.recover(),
+      rendererInspection: () => client.renderer.inspect(),
+      advanceRecovery: () => client.session.advanceRecovery(),
+      snapshot: client.getRecoverySnapshot,
+      directionCommandSendCount: () => client.directionCommandEvidence.directionCommandSendCount,
+      dispose: () => {
+        client.dispose();
+        if (window.__forgeaxSnake === browserProbe) delete window.__forgeaxSnake;
+      },
+    };
+    if (browserProbeEnabled) window.__forgeaxSnake = browserProbe;
+    disposeClient = browserProbe.dispose;
 
     client.world
       .addSystem(Update, {
         name: 'snake-client-observability',
         queries: [],
         fn: () => {
+          const recovery = client.getRecoverySnapshot();
+          state.dataset.netSessionId = String(recovery.sessionId);
+          state.dataset.netSessionState = recovery.state.kind;
+          state.dataset.netPendingPackets = String(recovery.pendingPackets);
+          state.dataset.netOwnedResources = JSON.stringify(recovery.ownedResources);
+          switch (recovery.state.kind) {
+            case 'connecting':
+              break;
+            case 'resyncing':
+              state.dataset.netEpoch = String(recovery.state.epoch);
+              break;
+            case 'active':
+              state.dataset.netEpoch = String(recovery.state.epoch);
+              state.dataset.netSequence = String(recovery.state.sequence);
+              break;
+            case 'recovering':
+              state.dataset.netRecoveryAttempt = String(recovery.state.attempt);
+              break;
+            case 'failed':
+              state.dataset.netErrorCode = recovery.state.error.code;
+              state.dataset.netErrorHint = recovery.state.error.hint;
+              state.dataset.netErrorDetail = JSON.stringify(recovery.state.error.detail);
+              break;
+            case 'retired':
+              state.dataset.netRetireReason = recovery.state.reason;
+              break;
+          }
           state.dataset.directionCommandSendCount = String(
             client.directionCommandEvidence.directionCommandSendCount,
           );
-          state.dataset.renderableTotal = String(client.renderer.frustumStats.total);
-          state.dataset.renderableCulled = String(client.renderer.frustumStats.culled);
+          if (recovery.lastError !== undefined)
+            state.dataset.netLastErrorDetail = JSON.stringify(recovery.lastError.detail);
+          const frustumStats = client.renderer.inspect().frustumStats;
+          state.dataset.renderableTotal = String(frustumStats.total);
+          state.dataset.renderableCulled = String(frustumStats.culled);
         },
       })
       .unwrap();
 
+    const appErrors: string[] = [];
     client.app.onError((error) => {
-      state.textContent = `${error.code}: ${error.hint}`;
+      appErrors.push(error.message);
+      state.dataset.appErrorTail = JSON.stringify(appErrors.slice(-8));
+      state.textContent = error.message;
     });
     const started = client.app.start();
     if (!started.ok) throw started.error;
   } catch (error) {
+    disposeClient?.();
     if (isEndpointError(error)) {
       state.textContent = `${error.code}: ${error.hint} (${JSON.stringify(error.detail)})`;
     } else {

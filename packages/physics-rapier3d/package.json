@@ -26,7 +26,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@dimforge/rapier3d-compat": "0.19.3",
+    "@dimforge/rapier3d-compat": "0.20.0",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-physics": "workspace:*",
@@ -34,7 +34,7 @@
     "@forgeax/engine-scene": "workspace:*"
   },
   "devDependencies": {
-    "@dimforge/rapier3d": "0.19.3",
+    "@dimforge/rapier3d": "0.20.0",
     "@forgeax/engine-runtime": "workspace:*"
   },
   "forgeax": {

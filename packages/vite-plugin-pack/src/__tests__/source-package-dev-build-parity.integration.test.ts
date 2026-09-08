@@ -1,9 +1,9 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createStandaloneRuntimeAssetBinding, type Importer } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it } from 'vitest';
-import { pluginPack } from '../index.js';
+import { createPluginPackInternal as pluginPack } from '../plugin-pack.js';
 
 const MAIN_GUID = '00000000-0000-4000-8000-000000000001';
 const CHILD_GUID = '00000000-0000-4000-8000-000000000002';
@@ -140,7 +140,6 @@ describe('source package dev/build parity', () => {
     const root = await mkdtemp(join(tmpdir(), 'forgeax-pack-parity-'));
     roots.push(root);
     const assets = join(root, 'assets');
-    const dist = join(root, 'dist');
     await mkdir(assets);
     await writeFile(join(assets, 'scene.fixture'), 'fixture source');
     await writeFile(join(assets, 'scene.fixture.meta.json'), meta());
@@ -174,8 +173,6 @@ describe('source package dev/build parity', () => {
           return `assets/${referenceId}`;
         },
       });
-      await mkdir(dist, { recursive: true });
-      await build.writeBundle({ dir: dist });
       const buildPackAsset = emitted.find((asset) =>
         asset.name?.startsWith(`${MAIN_GUID}.pack.json`),
       );
@@ -187,9 +184,9 @@ describe('source package dev/build parity', () => {
       expect(semanticPack(devPack)).toBe(semanticPack(buildPack));
       expect(devRow?.packageUrl).toContain('/__forgeax-ddc/');
       expect(String(buildPackAsset?.source)).toContain('body.bin');
-      expect(await readFile(join(dist, 'assets', `${MAIN_GUID}-body.bin`))).toEqual(
-        Buffer.from([1, 2, 3]),
-      );
+      expect(
+        emitted.find((asset) => asset.fileName === `assets/${MAIN_GUID}-body.bin`)?.source,
+      ).toEqual(new Uint8Array([1, 2, 3]));
       await dev.closeBundle();
     } finally {
       process.chdir(previousCwd);

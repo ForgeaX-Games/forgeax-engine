@@ -1,4 +1,5 @@
-import type { Result } from '@forgeax/engine-types';
+import type { WorldExecutionHealth } from '@forgeax/engine-ecs/shared';
+import type { Result, RuntimeAssetBinding } from '@forgeax/engine-types';
 import type { AppError } from '../errors';
 
 export const EXECUTION_TIERS = ['main-serial', 'engine-worker', 'shared'] as const;
@@ -42,7 +43,7 @@ export interface ExecutionSelection {
 }
 
 export type ExecutionEngineHealth = 'idle' | 'starting' | 'running' | 'stopped' | 'faulted';
-export type ExecutionWorldHealth = 'healthy' | 'poisoned';
+export type ExecutionWorldHealth = WorldExecutionHealth;
 
 export type KernelDispatchReason =
   | 'no-eligible-kernel'
@@ -80,6 +81,16 @@ export interface ExecutionAudioReport {
     readonly hint: string;
     readonly detail: unknown;
   } | null;
+}
+
+/**
+ * Serializable asset-catalog configuration copied into the selected Engine
+ * realm. The URL is resolved by that realm, so a Worker never closes over a
+ * Host-side CatalogSource or Registry instance.
+ */
+export interface ExecutionAssetCatalog {
+  readonly url: string;
+  readonly expectedScope?: Pick<RuntimeAssetBinding, 'scopeId' | 'generation'>;
 }
 
 export interface ExecutionReport {
@@ -127,6 +138,13 @@ export interface ExecutionOptions {
    * to a Worker when needed and otherwise preserves the same port contract.
    */
   readonly bootstrapPort?: MessagePort;
+  /**
+   * Serializable CatalogSource configuration constructed inside the selected
+   * execution realm. This is the asset delivery seam for Worker execution;
+   * `CreateAppOptions.assetCatalog` remains realm-bound and is rejected when
+   * execution is requested.
+   */
+  readonly assetCatalog?: ExecutionAssetCatalog;
   readonly startupTimeoutMs?: number;
   readonly frameTimeoutMs?: number;
 }

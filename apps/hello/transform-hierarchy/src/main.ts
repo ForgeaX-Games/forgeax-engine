@@ -65,14 +65,14 @@ bootstrap(canvas).catch((err: unknown) => {
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Step 1: createRenderer (explicit path; no createApp).
-  const renderer = await createRenderer(target, {}, forgeaxBundlerAdapter());
-  console.warn(`[transform-hierarchy] backend=${renderer.backend}`);
-
-  const ready = await renderer.ready;
-  if (!ready.ok) {
-    console.error('[transform-hierarchy] renderer.ready failed:', ready.error.code, ready.error.hint);
+  const rendererResult = await createRenderer(target, {}, forgeaxBundlerAdapter());
+  if (!rendererResult.ok) {
+    console.error('[transform-hierarchy] renderer construction failed:', rendererResult.error);
     return;
   }
+  const renderer = rendererResult.value;
+  console.warn(`[transform-hierarchy] backend=${renderer.inspect().capabilities.backendKind}`);
+
 
   // Step 2: wire the propagate kernel. The registerPropagateTransforms line
   // is the whole point of this demo -- it derives every entity's
@@ -80,8 +80,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // world mat4 lives on Transform; defineComponent makes every component
   // usable, so spawn is direct with no per-World registration).
   const world = new World();
-  const worldAttachment1 = renderer.attachWorld(world);
+  const worldAttachment1 = renderer.attach(world);
   if (!worldAttachment1.ok) throw worldAttachment1.error;
+  const frameRequest = {
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  };
 
   registerPropagateTransforms(world);
 
@@ -206,7 +211,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   const projectionIds = new WeakMap<object, number>();
   let nextProjectionId = 1;
-  const staleParent = 0xffffffff as EntityHandle;
+  // Keep a real stale handle for the malformed-edge probe. The ECS reserves
+  // 0xffffffff as the explicit null-entity sentinel, so it must not be used
+  // to represent a despawned parent.
+  const staleParent = world.spawn({ component: Transform, data: {} }).unwrap();
+  world.despawn(staleParent).unwrap();
 
   function projectionId(snapshot: object): number {
     const existing = projectionIds.get(snapshot);
@@ -257,7 +266,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   function drawProbeFrame(): { ok: boolean; error?: string } {
-    const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const result = renderer.draw(frameRequest);
     return result.ok ? { ok: true } : { ok: false, error: result.error.code };
   }
 
@@ -342,7 +351,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       requestAnimationFrame(frame);
       return;
     }
-    const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const draw = renderer.draw(frameRequest);
     if (!draw.ok) {
       console.error('[transform-hierarchy] draw failed:', draw.error.code);
       return;

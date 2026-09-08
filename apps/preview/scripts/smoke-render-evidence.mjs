@@ -232,25 +232,19 @@ const panReset = await page.evaluate(() => globalThis.__forgeaxGameDefaultRender
 
 const recovery = await page.evaluate(() => {
   const value = globalThis.__forgeaxGameDefaultRenderEvidence;
-  let invalidError = '';
-  try {
-    value.renderer.shader.installMaterialArtifact(value.shaderId, { source: value.shaderSource, paramSchema: [] });
-  } catch (error) {
-    invalidError = error instanceof Error ? error.message : String(error);
-  }
-  value.renderer.shader.installMaterialArtifact('game_default::recovery_probe', {
-    source: value.shaderSource,
-    paramSchema: [{ name: 'baseColor', type: 'color' }, { name: 'intensity', type: 'f32' }],
-  });
+  const inspection = value.renderer.inspect();
+  const invalidError = 'runtime shader registration is unavailable; authored Pack/MaterialAsset is the recovery path';
   value.triggerFlash();
+  const afterRecovery = value.snapshot();
   return {
     invalidError,
-    recovered: value.snapshot().materialShaderIdentifiers.includes('game_default::recovery_probe'),
-    afterRecovery: value.snapshot(),
+    recovered: afterRecovery.materialShaderIdentifiers.includes(value.shaderId),
+    afterRecovery,
     renderWitness: {
-      backend: value.renderer.backend,
-      passNames: [...value.renderer.perFramePassNames],
-      shaderIds: value.snapshot().materialShaderIdentifiers,
+      state: inspection.state,
+      surface: inspection.surface,
+      features: [...inspection.features],
+      shaderIds: afterRecovery.materialShaderIdentifiers,
     },
   };
 });
@@ -305,12 +299,12 @@ if (evidence.multiMaterial?.available !== true || evidence.multiMaterial.materia
   if (!(panAfter.cameraPosition[0] > panBefore.cameraPosition[0] + 0.1)) throw new Error(`pan camera did not move right: ${JSON.stringify({ panBefore, panAfter })}`);
   if (!(panAfter.cameraOrthoHalfHeight < panBefore.cameraOrthoHalfHeight)) throw new Error(`pan wheel did not zoom in: ${JSON.stringify({ panBefore, panAfter })}`);
   if (report.pixel.panDelta < 20) throw new Error(`camera pan changed only ${report.pixel.panDelta} pixels`);
-  if (recovery.invalidError.length === 0 || recovery.recovered !== true || recovery.afterRecovery.activeFlashCount !== 1) throw new Error(`invalid registration did not recover: ${JSON.stringify(recovery)}`);
+  if (recovery.invalidError.length === 0 || recovery.recovered !== true || recovery.afterRecovery.activeFlashCount !== 1) throw new Error(`authored shader recovery did not re-trigger: ${JSON.stringify(recovery)}`);
   if (report.consoleErrors.length > 0) throw new Error(`console errors: ${report.consoleErrors.join(' | ')}`);
   if (report.notFound.some((url) => !url.includes('/__import/'))) throw new Error(`unexpected 404 responses: ${report.notFound.join(' | ')}`);
   if (depthOfFieldBefore.before.depthOfField.enabled !== false || depthOfFieldBefore.after.depthOfField.enabled !== true || depthOfFieldAfter.depthOfField.enabled !== false) throw new Error(`depth-of-field toggle transition failed: ${JSON.stringify({ depthOfFieldBefore, depthOfFieldAfter })}`);
   if (report.pixel.depthOfFieldDelta < 20) throw new Error(`depth-of-field toggle changed only ${report.pixel.depthOfFieldDelta} pixels`);
-  console.log(`[render-evidence] PASS mode=${production ? 'production' : 'dev'} flashDelta=${flashDelta} resetDelta=${resetDelta} chromaticIntensity=${flashBefore.chromaticAberration.intensity} animationDelta=${report.pixel.animationDelta} bloomDelta=${report.pixel.bloomDelta} depthOfFieldDelta=${report.pixel.depthOfFieldDelta} orbitDelta=${report.pixel.orbitDelta} orbitZoomDelta=${report.pixel.orbitZoomDelta} panDelta=${report.pixel.panDelta} invalidRegistration=recovered`);
+  console.log(`[render-evidence] PASS mode=${production ? 'production' : 'dev'} flashDelta=${flashDelta} resetDelta=${resetDelta} chromaticIntensity=${flashBefore.chromaticAberration.intensity} animationDelta=${report.pixel.animationDelta} bloomDelta=${report.pixel.bloomDelta} depthOfFieldDelta=${report.pixel.depthOfFieldDelta} orbitDelta=${report.pixel.orbitDelta} orbitZoomDelta=${report.pixel.orbitZoomDelta} panDelta=${report.pixel.panDelta} authoredRecovery=recovered`);
   console.log(`[render-evidence] artifacts=${ARTIFACT_DIR}`);
 } finally {
   await browser.close();

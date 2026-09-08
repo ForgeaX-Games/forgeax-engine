@@ -1,9 +1,11 @@
-#import forgeax_view::common::{View, Mesh, InstanceData, view, meshes, instances, PointLight, SpotLight, pointLightsBuffer, spotLightsBuffer, shadowMap, shadowSampler, sampleMaterialTexture}
+#import forgeax_view::common::{View, FogViewParams, FogRay, Mesh, InstanceData, view, meshes, instances, PointLight, SpotLight, pointLightsBuffer, spotLightsBuffer, shadowMap, shadowSampler, sampleMaterialTexture}
+#import forgeax_pbr::temporal::{projectPbrSceneTemporal}
 #import forgeax_pbr::brdf::{f_schlick, v_smith, d_ggx}
 #import forgeax_pbr::ibl_sampling::{sampleIblDiffuse, sampleIblSpecular}
 #import forgeax_pbr::tbn::{decodeTangentSpaceNormalRg, scaleTangentSpaceNormal, applyTBN}
 #import forgeax_pbr::lighting_directional::{evalDirectionalNoShadow, evalDirectionalShadowFactor}
 #import forgeax_pbr::lighting_punctual::{evalPoint, evalSpot}
+#import forgeax_view::fog::{apply_fog}
 #ifdef POINT_SHADOW_AVAILABLE
 #import forgeax_pbr::lighting_punctual::{evalPointShadowed}
 #import forgeax_view::common::{shadowParams}
@@ -11,6 +13,7 @@
 
 #define_import_path forgeax_material::pbr-skin
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
+#pragma variant_axis VERTEX_COLOR_AVAILABLE
 
 // @forgeax/engine-shader - default-standard-pbr-skin.wgsl
 // (feat-20260523-skin-skeleton-animation M3 / T-29).
@@ -64,11 +67,6 @@
 // 4 joints max; weighted sum of skinned positions from the palette buffer
 // indexed by the per-vertex skinIndex vector.
 
-struct MaterialTextureCoordinates {
-  transform : vec4<f32>,
-  metadata : vec4<f32>,
-};
-
 struct Material {
   baseColor          : vec4<f32>,
   metallic           : f32,
@@ -89,13 +87,19 @@ struct Material {
   clearcoat          : f32,
   clearcoatRoughness : f32,
   specularTint       : vec3<f32>,
-  baseColorCoordinates          : MaterialTextureCoordinates,
-  metallicRoughnessCoordinates  : MaterialTextureCoordinates,
-  normalCoordinates             : MaterialTextureCoordinates,
-  specularTintCoordinates       : MaterialTextureCoordinates,
-  emissiveCoordinates           : MaterialTextureCoordinates,
-  occlusionCoordinates          : MaterialTextureCoordinates,
   normalScale                   : f32,
+  baseColorTextureCoordinatesTransform : vec4<f32>,
+  baseColorTextureCoordinatesMetadata : vec4<f32>,
+  metallicRoughnessTextureCoordinatesTransform : vec4<f32>,
+  metallicRoughnessTextureCoordinatesMetadata : vec4<f32>,
+  normalTextureCoordinatesTransform : vec4<f32>,
+  normalTextureCoordinatesMetadata : vec4<f32>,
+  specularTintTextureCoordinatesTransform : vec4<f32>,
+  specularTintTextureCoordinatesMetadata : vec4<f32>,
+  emissiveTextureCoordinatesTransform : vec4<f32>,
+  emissiveTextureCoordinatesMetadata : vec4<f32>,
+  occlusionTextureCoordinatesTransform : vec4<f32>,
+  occlusionTextureCoordinatesMetadata : vec4<f32>,
 };
 
 @group(1) @binding(0) var<uniform> material : Material;
@@ -107,6 +111,10 @@ struct Material {
 @group(1) @binding(6) var normalTexture : texture_2d<f32>;
 @group(1) @binding(7) var specularTintSampler : sampler;
 @group(1) @binding(8) var specularTintTexture : texture_2d<f32>;
+@group(1) @binding(9) var emissiveSampler : sampler;
+@group(1) @binding(10) var emissiveTexture : texture_2d<f32>;
+@group(1) @binding(11) var occlusionSampler : sampler;
+@group(1) @binding(12) var occlusionTexture : texture_2d<f32>;
 
 // Preserve filtering reflection for resources passed to the shared sampler.
 fn materialTextureFilteringWitness() {
@@ -114,10 +122,14 @@ fn materialTextureFilteringWitness() {
   let metallicRoughness = metallicRoughnessTexture;
   let normal = normalTexture;
   let specularTint = specularTintTexture;
+  let emissive = emissiveTexture;
+  let occlusion = occlusionTexture;
   let baseWitness = textureSample(base, baseColorSampler, vec2<f32>(0.0));
   let metallicRoughnessWitness = textureSample(metallicRoughness, metallicRoughnessSampler, vec2<f32>(0.0));
   let normalWitness = textureSample(normal, normalSampler, vec2<f32>(0.0));
   let specularTintWitness = textureSample(specularTint, specularTintSampler, vec2<f32>(0.0));
+  let emissiveWitness = textureSample(emissive, emissiveSampler, vec2<f32>(0.0));
+  let occlusionWitness = textureSample(occlusion, occlusionSampler, vec2<f32>(0.0));
 }
 
 struct SkylightUniforms {
@@ -134,18 +146,20 @@ struct SkylightUniforms {
   colorB : f32,
   rotation : vec4<f32>,
 };
-@group(1) @binding(9)  var irradianceMap        : texture_cube<f32>;
-@group(1) @binding(10) var irradianceSampler    : sampler;
-@group(1) @binding(11) var prefilterMap         : texture_cube<f32>;
-@group(1) @binding(12) var prefilterSampler     : sampler;
-@group(1) @binding(13) var brdfLut              : texture_2d<f32>;
-@group(1) @binding(14) var brdfLutSampler       : sampler;
-@group(1) @binding(15) var<uniform> skylight    : SkylightUniforms;
+@group(1) @binding(13) var irradianceMap        : texture_cube<f32>;
+@group(1) @binding(14) var irradianceSampler    : sampler;
+@group(1) @binding(15) var prefilterMap         : texture_cube<f32>;
+@group(1) @binding(16) var prefilterSampler     : sampler;
+@group(1) @binding(17) var brdfLut              : texture_2d<f32>;
+@group(1) @binding(18) var brdfLutSampler       : sampler;
+@group(1) @binding(19) var<uniform> skylight    : SkylightUniforms;
 
 #if STORAGE_BUFFER_AVAILABLE == true
 @group(2) @binding(1) var<storage, read> palette : array<mat4x4<f32>>;
+@group(2) @binding(2) var<storage, read> previousPalette : array<mat4x4<f32>>;
 #else
 @group(2) @binding(1) var<uniform> palette : array<mat4x4<f32>, 255>;
+@group(2) @binding(2) var<uniform> previousPalette : array<mat4x4<f32>, 255>;
 #endif
 
 struct VsIn  {
@@ -164,6 +178,9 @@ struct VsIn  {
   @location(10) uv5    : vec2<f32>,
   @location(11) uv6    : vec2<f32>,
   @location(12) uv7    : vec2<f32>,
+#ifdef VERTEX_COLOR_AVAILABLE
+  @location(13) color  : vec4<f32>,
+#endif
 };
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
@@ -181,6 +198,9 @@ struct VsOut {
   @location(11) uv5 : vec2<f32>,
   @location(12) uv6 : vec2<f32>,
   @location(13) uv7 : vec2<f32>,
+#ifdef VERTEX_COLOR_AVAILABLE
+  @location(14) color : vec4<f32>,
+#endif
   @location(7) viewZ : f32,
 };
 
@@ -191,6 +211,22 @@ fn pick_channel(rgba : vec4<f32>, channelIndex : u32) -> f32 {
     case 2u: { return rgba.b; }
     default: { return rgba.a; }
   }
+}
+
+fn applySceneFog(viewParams : View, color : vec3<f32>, alpha : f32, worldPos : vec3<f32>) -> vec4<f32> {
+  var origin = viewParams.cameraPos;
+  var direction = normalize(worldPos - origin);
+  var rayDistance = length(worldPos - origin);
+  if (viewParams.temporalProjection.z >= 0.5) {
+    let nearH = viewParams.inverseViewProj * vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    let farH = viewParams.inverseViewProj * vec4<f32>(0.0, 0.0, 1.0, 1.0);
+    let nearPoint = nearH.xyz / nearH.w;
+    let farPoint = farH.xyz / farH.w;
+    direction = normalize(farPoint - nearPoint);
+    origin = worldPos - direction * dot(worldPos - viewParams.cameraPos, direction);
+    rayDistance = max(dot(worldPos - origin, direction), 0.0);
+  }
+  return apply_fog(viewParams.fog, FogRay(origin, direction, rayDistance), vec4<f32>(color, alpha));
 }
 
 @vertex
@@ -259,6 +295,9 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   out.uv5 = in.uv5;
   out.uv6 = in.uv6;
   out.uv7 = in.uv7;
+#ifdef VERTEX_COLOR_AVAILABLE
+  out.color = in.color;
+#endif
   out.instanceIdx = idx;
   // feat-20260613-csm-cascaded-shadow-maps M5 / w19: viewZ replaces the
   // prior light-space-position varying; evalDirectional picks the cascade
@@ -267,30 +306,43 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   return out;
 }
 
-fn transformedMaterialUv(coordinates : MaterialTextureCoordinates, in : VsOut) -> vec2<f32> {
+fn transformedMaterialUv(transform : vec4<f32>, metadata : vec4<f32>, in : VsOut) -> vec2<f32> {
   var source = in.uv;
-  if (coordinates.metadata.x >= 1.0) { source = in.uv1; }
-  if (coordinates.metadata.x >= 2.0) { source = in.uv2; }
-  if (coordinates.metadata.x >= 3.0) { source = in.uv3; }
-  if (coordinates.metadata.x >= 4.0) { source = in.uv4; }
-  if (coordinates.metadata.x >= 5.0) { source = in.uv5; }
-  if (coordinates.metadata.x >= 6.0) { source = in.uv6; }
-  if (coordinates.metadata.x >= 7.0) { source = in.uv7; }
-  let scaled = source * coordinates.transform.zw;
-  let angle = coordinates.metadata.y;
+  if (metadata.x >= 1.0) { source = in.uv1; }
+  if (metadata.x >= 2.0) { source = in.uv2; }
+  if (metadata.x >= 3.0) { source = in.uv3; }
+  if (metadata.x >= 4.0) { source = in.uv4; }
+  if (metadata.x >= 5.0) { source = in.uv5; }
+  if (metadata.x >= 6.0) { source = in.uv6; }
+  if (metadata.x >= 7.0) { source = in.uv7; }
+  let scaled = source * transform.zw;
+  let angle = metadata.y;
   let c = cos(angle);
   let s = sin(angle);
-  return vec2<f32>(scaled.x * c - scaled.y * s, scaled.x * s + scaled.y * c) + coordinates.transform.xy;
+  return vec2<f32>(scaled.x * c - scaled.y * s, scaled.x * s + scaled.y * c) + transform.xy;
+}
+
+fn materialVertexColor(in : VsOut) -> vec4<f32> {
+#ifdef VERTEX_COLOR_AVAILABLE
+  return in.color;
+#else
+  return vec4<f32>(1.0);
+#endif
 }
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  let baseUv = transformedMaterialUv(material.baseColorCoordinates, in);
-  let baseSample = sampleMaterialTexture(baseColorTexture, baseColorSampler, baseUv, material.baseColorCoordinates.metadata.zw);
-  let albedo = material.baseColor.rgb * baseSample.rgb;
+  let baseUv = transformedMaterialUv(material.baseColorTextureCoordinatesTransform, material.baseColorTextureCoordinatesMetadata, in);
+  let baseSample = sampleMaterialTexture(baseColorTexture, baseColorSampler, baseUv, material.baseColorTextureCoordinatesMetadata.zw);
+  let vertexColor = materialVertexColor(in);
+  let alpha = material.baseColor.a * baseSample.a * vertexColor.a;
+  if (material.alphaCutoff > 0.0 && alpha <= material.alphaCutoff) {
+    discard;
+  }
+  let albedo = material.baseColor.rgb * baseSample.rgb * vertexColor.rgb;
 
-  let mrUv = transformedMaterialUv(material.metallicRoughnessCoordinates, in);
-  let mrSample = sampleMaterialTexture(metallicRoughnessTexture, metallicRoughnessSampler, mrUv, material.metallicRoughnessCoordinates.metadata.zw);
+  let mrUv = transformedMaterialUv(material.metallicRoughnessTextureCoordinatesTransform, material.metallicRoughnessTextureCoordinatesMetadata, in);
+  let mrSample = sampleMaterialTexture(metallicRoughnessTexture, metallicRoughnessSampler, mrUv, material.metallicRoughnessTextureCoordinatesMetadata.zw);
   let metallic = material.metallic * pick_channel(mrSample, u32(material.metallicChannel));
   let roughnessTex = pick_channel(mrSample, u32(material.roughnessChannel));
 
@@ -298,8 +350,8 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   a = a * roughnessTex;
   a = a * a;
 
-  let normalUv = transformedMaterialUv(material.normalCoordinates, in);
-  let normSampleRg = sampleMaterialTexture(normalTexture, normalSampler, normalUv, material.normalCoordinates.metadata.zw).rg;
+  let normalUv = transformedMaterialUv(material.normalTextureCoordinatesTransform, material.normalTextureCoordinatesMetadata, in);
+  let normSampleRg = sampleMaterialTexture(normalTexture, normalSampler, normalUv, material.normalTextureCoordinatesMetadata.zw).rg;
   let normTangent = scaleTangentSpaceNormal(
     decodeTangentSpaceNormalRg(normSampleRg), material.normalScale,
   );
@@ -308,8 +360,8 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   let v = normalize(view.cameraPos - in.worldPos);
   let specularTint = material.specularTint * sampleMaterialTexture(
     specularTintTexture, specularTintSampler,
-    transformedMaterialUv(material.specularTintCoordinates, in),
-    material.specularTintCoordinates.metadata.zw,
+    transformedMaterialUv(material.specularTintTextureCoordinatesTransform, material.specularTintTextureCoordinatesMetadata, in),
+    material.specularTintTextureCoordinatesMetadata.zw,
   ).rgb;
   let f0 = mix(vec3<f32>(0.04) * specularTint, albedo, metallic);
   let coatRoughness = max(material.clearcoatRoughness, 0.04);
@@ -404,5 +456,83 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
       );
     }
   }
-  return vec4<f32>(color, material.baseColor.a * baseSample.a);
+  return applySceneFog(view, color, alpha, in.worldPos);
+}
+
+struct TemporalVsOut {
+  @builtin(position) clip : vec4<f32>,
+  @location(0) uv : vec2<f32>,
+  @location(1) uv1 : vec2<f32>,
+  @location(2) uv2 : vec2<f32>,
+  @location(3) uv3 : vec2<f32>,
+  @location(4) uv4 : vec2<f32>,
+  @location(5) uv5 : vec2<f32>,
+  @location(6) uv6 : vec2<f32>,
+  @location(7) uv7 : vec2<f32>,
+  @location(8) @interpolate(linear) currentClip : vec4<f32>,
+  @location(9) @interpolate(linear) previousClip : vec4<f32>,
+#ifdef VERTEX_COLOR_AVAILABLE
+  @location(14) color : vec4<f32>,
+#endif
+};
+
+@vertex
+fn vs_temporal(in : VsIn, @builtin(instance_index) idx : u32) -> TemporalVsOut {
+  let currentSkin = palette[in.skinIndex.x] * in.skinWeight.x +
+    palette[in.skinIndex.y] * in.skinWeight.y +
+    palette[in.skinIndex.z] * in.skinWeight.z +
+    palette[in.skinIndex.w] * in.skinWeight.w;
+  let previousSkin = previousPalette[in.skinIndex.x] * in.skinWeight.x +
+    previousPalette[in.skinIndex.y] * in.skinWeight.y +
+    previousPalette[in.skinIndex.z] * in.skinWeight.z +
+    previousPalette[in.skinIndex.w] * in.skinWeight.w;
+  let currentWorld = currentSkin * vec4<f32>(in.pos, 1.0);
+  let previousWorld = previousSkin * vec4<f32>(in.pos, 1.0);
+  var out : TemporalVsOut;
+  out.currentClip = view.temporalCurrentViewProj * currentWorld;
+  out.clip = out.currentClip;
+  out.previousClip = view.temporalPreviousViewProj * previousWorld;
+  out.uv = in.uv;
+  out.uv1 = in.uv1;
+  out.uv2 = in.uv2;
+  out.uv3 = in.uv3;
+  out.uv4 = in.uv4;
+  out.uv5 = in.uv5;
+  out.uv6 = in.uv6;
+  out.uv7 = in.uv7;
+#ifdef VERTEX_COLOR_AVAILABLE
+  out.color = in.color;
+#endif
+  _ = idx;
+  return out;
+}
+
+fn temporalVertexAlpha(in : TemporalVsOut) -> f32 {
+#ifdef VERTEX_COLOR_AVAILABLE
+  return in.color.a;
+#else
+  return 1.0;
+#endif
+}
+
+@fragment
+fn fs_temporal(in : TemporalVsOut) -> @location(0) vec4<f32> {
+#if STORAGE_BUFFER_AVAILABLE == true
+  let reactive = meshes[0].temporal.x;
+#else
+  let reactive = 1.0;
+#endif
+  return projectPbrSceneTemporal(
+    material.baseColor.a * temporalVertexAlpha(in),
+    material.alphaCutoff,
+    baseColorTexture,
+    baseColorSampler,
+    material.baseColorTextureCoordinatesTransform,
+    material.baseColorTextureCoordinatesMetadata,
+    in.currentClip,
+    in.previousClip,
+    reactive,
+    in.uv, in.uv1, in.uv2, in.uv3,
+    in.uv4, in.uv5, in.uv6, in.uv7,
+  );
 }

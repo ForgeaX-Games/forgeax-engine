@@ -10,27 +10,49 @@
 //
 // This file is *.test-d.ts: vitest typecheck validates it; it is not executed.
 
-import type { RenderError, RenderErrorCode } from '@forgeax/engine-render/internal';
+import type { RenderError, RenderErrorCode } from '@forgeax/engine-render';
 
 function exhaustiveSwitchOnRenderCode(code: RenderErrorCode): string {
   switch (code) {
+    case 'lifecycle-construction-failed':
+      return code;
+    case 'world-lease-invalid':
+      return code;
+    case 'frame-input-invalid':
+      return code;
+    case 'scene-projection-failed':
+      return code;
+    case 'asset-binding-failed':
+      return code;
+    case 'feature-plan-failed':
+      return code;
+    case 'graph-build-failed':
+      return code;
+    case 'device-operation-failed':
+      return code;
+    case 'surface-unavailable':
+      return code;
+    case 'renderer-state-invalid':
+      return code;
+    case 'recovery-failed':
+      return code;
+    case 'cleanup-failed':
+      return code;
+    case 'frame-receipt-stale':
+      return code;
+    case 'renderer-contract-failed':
+      return code;
     case 'observation-unavailable':
       return code;
     case 'shadow-invalid-config':
       return code;
     case 'equirect-projection-failed':
       return code;
-    case 'hdrp-caps-insufficient':
-      return code;
     case 'hdrp-light-budget-exceeded':
       return code;
     case 'hdrp-index-list-overflow':
       return code;
     case 'hdrp-deferred-caps-insufficient':
-      return code;
-    case 'gbuffer-rt-alloc-failed':
-      return code;
-    case 'gbuffer-attachment-count-mismatch':
       return code;
     case 'point-shadow-atlas-uninitialized':
       return code;
@@ -39,6 +61,8 @@ function exhaustiveSwitchOnRenderCode(code: RenderErrorCode): string {
     case 'video-upload-unsupported':
       return code;
     case 'vertex-storage-buffer-unavailable':
+      return code;
+    case 'vertex-color-variant-conflict':
       return code;
     case 'skin-palette-overflow':
       return code;
@@ -60,6 +84,18 @@ function exhaustiveSwitchOnRenderCode(code: RenderErrorCode): string {
       return code;
     case 'render-feature-draw-recording-failed':
       return code;
+    case 'points-lines-invalid-style':
+      return code;
+    case 'points-lines-topology-mismatch':
+      return code;
+    case 'points-lines-style-unsupported':
+      return code;
+    case 'points-lines-material-unsupported':
+      return code;
+    case 'points-lines-budget-exceeded':
+      return code;
+    case 'points-lines-prepare-failed':
+      return code;
     default: {
       const exhaustive: never = code;
       return exhaustive;
@@ -69,6 +105,68 @@ function exhaustiveSwitchOnRenderCode(code: RenderErrorCode): string {
 
 function narrowRenderError(err: RenderError): void {
   switch (err.code) {
+    case 'lifecycle-construction-failed':
+      void err.detail.owner;
+      void err.detail.generation;
+      void err.detail.receipt;
+      break;
+    case 'world-lease-invalid':
+      void err.detail.operation;
+      void err.detail.cause;
+      break;
+    case 'frame-input-invalid':
+      void err.detail.operation;
+      void err.detail.cause;
+      break;
+    case 'scene-projection-failed':
+      void err.detail.operation;
+      void err.detail.cause;
+      break;
+    case 'asset-binding-failed':
+      void err.detail.operation;
+      void err.detail.cause;
+      break;
+    case 'feature-plan-failed':
+      void err.detail.operation;
+      void err.detail.cause;
+      break;
+    case 'graph-build-failed':
+      void err.detail.operation;
+      void err.detail.cause;
+      break;
+    case 'device-operation-failed':
+      void err.detail.operation;
+      void err.detail.frameId;
+      void err.detail.deviceGeneration;
+      void err.detail.cause;
+      break;
+    case 'surface-unavailable':
+      void err.detail.operation;
+      void err.detail.cause;
+      break;
+    case 'renderer-state-invalid':
+      void err.detail.operation;
+      void err.detail.state;
+      void err.detail.cause;
+      break;
+    case 'recovery-failed':
+      void err.detail.operation;
+      void err.detail.oldGeneration;
+      void err.detail.cause;
+      break;
+    case 'cleanup-failed':
+      void err.detail.operation;
+      void err.detail.causes;
+      break;
+    case 'frame-receipt-stale':
+      void err.detail.frameId;
+      void err.detail.receiptGeneration;
+      void err.detail.currentGeneration;
+      break;
+    case 'renderer-contract-failed':
+      void err.detail.operation;
+      void err.detail.cause;
+      break;
     case 'observation-unavailable':
       void err.detail.reason;
       void err.detail.recovery;
@@ -80,11 +178,6 @@ function narrowRenderError(err: RenderError): void {
     case 'equirect-projection-failed':
       void err.detail.handle; // number
       break;
-    case 'hdrp-caps-insufficient':
-      void err.detail.capName; // string
-      void err.detail.actual; // number
-      void err.detail.required; // number
-      break;
     case 'hdrp-light-budget-exceeded':
       void err.detail.actual; // number
       void err.detail.budget; // number
@@ -94,14 +187,6 @@ function narrowRenderError(err: RenderError): void {
       void err.detail.capacity; // number
       break;
     case 'hdrp-deferred-caps-insufficient':
-      void err.detail.actual; // number
-      void err.detail.expected; // number
-      break;
-    case 'gbuffer-rt-alloc-failed':
-      void err.detail.attachmentIndex; // number
-      void err.detail.requestedBytes; // number
-      break;
-    case 'gbuffer-attachment-count-mismatch':
       void err.detail.actual; // number
       void err.detail.expected; // number
       break;
@@ -161,6 +246,35 @@ function narrowRenderError(err: RenderError): void {
       void err.detail.featureIdentity;
       void err.detail.backendReason;
       void err.detail.operation;
+      break;
+    case 'vertex-color-variant-conflict':
+      void err.detail.authored;
+      void err.detail.authoredValue;
+      void err.detail.projected;
+      break;
+    case 'points-lines-invalid-style':
+      void err.detail.component;
+      void err.detail.field;
+      break;
+    case 'points-lines-topology-mismatch':
+      void err.detail.submesh;
+      void err.detail.actual;
+      break;
+    case 'points-lines-style-unsupported':
+      void err.detail.member;
+      void err.detail.supported;
+      break;
+    case 'points-lines-material-unsupported':
+      void err.detail.material;
+      void err.detail.pass;
+      break;
+    case 'points-lines-budget-exceeded':
+      void err.detail.requested;
+      void err.detail.limit;
+      break;
+    case 'points-lines-prepare-failed':
+      void err.detail.owner;
+      void err.detail.generation;
       break;
     default: {
       const exhaustive: never = err;

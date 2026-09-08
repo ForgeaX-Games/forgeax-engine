@@ -114,9 +114,9 @@ const mockCanvas = {
 
 // --- Step 2: Engine boot ---
 
-const { ok: okResult, World } = await import('@forgeax/engine-ecs');
-const runtime = await import('@forgeax/engine-runtime');
-const { createRenderer } = runtime;
+const { Entity, World } = await import('@forgeax/engine-ecs');
+const { ok: okResult } = await import('@forgeax/engine-types');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Materials } = await import('@forgeax/engine-render');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 const { Transform, registerPropagateTransforms } = await import('@forgeax/engine-scene');
@@ -126,8 +126,8 @@ const {
 } = await import('@forgeax/engine-assets-runtime');
 
 const {
-  defineState, getState, registerStatesPlugin, setNextState,
-  addOnEnter, despawnOnExit,
+  addOnEnter, defineState, despawnOnEnter, despawnOnExit,
+  getPreviousState, getState, registerStatesPlugin, setNextState, setNextStateForce,
 } = await import('@forgeax/engine-state');
 
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
@@ -138,6 +138,9 @@ globalThis.__smokeDrawCount = 0;
 // --- Step 3: Define state, register materials, create real scene assets ---
 
 const LevelId = defineState('LevelId', ['main-menu', 'tutorial', 'street-a']);
+const M29Primary = defineState('M29PrimarySmoke', ['idle', 'ready']);
+const M29Later = defineState('M29LaterSmoke', ['cold', 'hot']);
+const M41Independent = defineState('M41IndependentSmoke', ['cold', 'warm']);
 
 const TUTORIAL_GUID = '6a000001-0001-4000-a000-000000000001';
 const STREET_A_GUID = '6a000002-0001-4000-a000-000000000002';
@@ -157,25 +160,64 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  var hostAssets = constructed.value.assets;
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 }
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
-console.log(`[hello-level-switch] backend=${renderer.backend}`);
+const assets = hostAssets;
+const lease = worldAttachment1.value;
+const drawFrame = () => renderer.draw({
+  leases: [lease],
+  camera: { lease },
+  environment: { lease },
+});
+console.log(`[hello-level-switch] backend=${renderer.inspect().capabilities.backendKind}`);
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code}`);
-  process.exit(1);
-}
 
-const assets = renderer.assets;
-if (!assets) {
-  console.error('[smoke] FAIL - AssetRegistry is null');
-  process.exit(1);
+async function readRenderSamples() {
+  if (!sharedDevice || !renderTarget) {
+    console.error('[smoke] FAIL - M41 pixel readback has no shared render target');
+    process.exit(1);
+  }
+  await sharedDevice.queue.onSubmittedWorkDone();
+  const bytesPerPixel = 4;
+  const bytesPerRow = Math.ceil((WIDTH * bytesPerPixel) / 256) * 256;
+  const readbackBuffer = sharedDevice.createBuffer({ size: bytesPerRow * HEIGHT, usage: 0x01 | 0x08 });
+  const encoder = sharedDevice.createCommandEncoder();
+  encoder.copyTextureToBuffer(
+    { texture: renderTarget },
+    { buffer: readbackBuffer, bytesPerRow, rowsPerImage: HEIGHT },
+    { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
+  );
+  sharedDevice.queue.submit([encoder.finish()]);
+  try {
+    await readbackBuffer.mapAsync(0x01);
+  } catch (err) {
+    console.error(`[smoke] FAIL - M41 pixel readback mapAsync rejected: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+  const mapped = readbackBuffer.getMappedRange();
+  const bytes = new Uint8Array(mapped.slice(0));
+  readbackBuffer.unmap();
+  readbackBuffer.destroy();
+  const readRgba = (x, y) => {
+    const offset = y * bytesPerRow + x * bytesPerPixel;
+    return [
+      (bytes[offset] ?? 0) / 255,
+      (bytes[offset + 1] ?? 0) / 255,
+      (bytes[offset + 2] ?? 0) / 255,
+    ];
+  };
+  return {
+    center: readRgba(Math.floor(WIDTH / 2), Math.floor(HEIGHT / 2)),
+    corner: readRgba(Math.floor(WIDTH * 0.05), Math.floor(HEIGHT * 0.05)),
+  };
 }
 
 // Register materials referenced by the inline scene PODs.
@@ -326,7 +368,7 @@ const STATE_VARIANTS = ['tutorial', 'street-a'];
 for (const variant of STATE_VARIANTS) {
   setNextState(world, LevelId, variant);
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = drawFrame();
   if (!r.ok) console.error(`[smoke] warmup transition to ${variant} failed: ${r.error.code}`);
 }
 console.log('[smoke] warmup transitions complete: tutorial -> street-a');
@@ -335,7 +377,7 @@ console.log('[smoke] warmup transitions complete: tutorial -> street-a');
 const BASELINE_FRAMES = 30;
 for (let i = 0; i < BASELINE_FRAMES; i++) {
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = drawFrame();
   if (!r.ok) console.error(`[smoke] baseline draw frame ${i} error: ${r.error.code}`);
 }
 
@@ -348,7 +390,7 @@ for (let s = 0; s < 10; s++) {
   const variant = STATE_VARIANTS[s % STATE_VARIANTS.length];
   setNextState(world, LevelId, variant);
   world.update(1 / 60).unwrap();
-  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  drawFrame();
 }
 const switchTotalWall = performance.now() - switchTotalStart;
 console.log(`[smoke] INFO - 10-switch wall = ${switchTotalWall.toFixed(2)}ms`);
@@ -356,7 +398,7 @@ console.log(`[smoke] INFO - 10-switch wall = ${switchTotalWall.toFixed(2)}ms`);
 // Stabilise: 5 frames after all switches.
 for (let i = 0; i < 5; i++) {
   world.update(1 / 60).unwrap();
-  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  drawFrame();
 }
 
 // AC-14 #2: Player survives through all transitions.
@@ -410,17 +452,237 @@ if (meshEntityCount !== 2) {
 }
 console.log(`[smoke] GATE 4/5 PASS: falsification check — scope-despawn verification: ${meshEntityCount} mesh entities (1 scene + 1 player, no leak). If scope-despawn were commented out in transitionStatesSystem, this falsification variant WOULD fail with meshEntityCount >> 2.`);
 
+// --- M29: callback fault keeps partial commit and supports forced retry ---
+
+// This is the package-level leg of the real App/World/page probe in
+// smoke-browser.mjs. It isolates two fresh tokens so the existing rendered
+// level cannot hide a transition-order regression.
+const m29World = new World();
+registerStatesPlugin(m29World);
+const m29Exit = m29World.spawn().unwrap();
+const m29Enter = m29World.spawn().unwrap();
+despawnOnExit(m29World, m29Exit, M29Primary, 'idle');
+despawnOnEnter(m29World, m29Enter, M29Primary, 'ready');
+const m29Fault = new Error('m29 callback fault');
+let m29FaultRuns = 0;
+const removeM29Fault = addOnEnter(M29Primary, 'ready', () => {
+  m29FaultRuns += 1;
+  throw m29Fault;
+});
+setNextState(m29World, M29Primary, 'ready');
+setNextState(m29World, M29Later, 'hot');
+let m29Thrown;
+try {
+  m29World.update(1 / 60).unwrap();
+} catch (error) {
+  m29Thrown = error;
+}
+if (m29Thrown !== m29Fault) {
+  console.error('[smoke] FAIL - M29 callback cause did not bubble verbatim');
+  process.exit(1);
+}
+const m29PrimaryAfterFailure = getState(m29World, M29Primary);
+const m29PrimaryPrevious = getPreviousState(m29World, M29Primary);
+const m29LaterAfterFailure = getState(m29World, M29Later);
+if (
+  m29FaultRuns !== 1 ||
+  !m29PrimaryAfterFailure.ok || m29PrimaryAfterFailure.value !== 'ready' ||
+  !m29PrimaryPrevious.ok || m29PrimaryPrevious.value !== 'idle' ||
+  !m29LaterAfterFailure.ok || m29LaterAfterFailure.value !== 'cold' ||
+  m29World.get(m29Exit, Entity).ok || m29World.get(m29Enter, Entity).ok
+) {
+  console.error('[smoke] FAIL - M29 partial commit or later-token abort contract failed');
+  process.exit(1);
+}
+
+removeM29Fault();
+let m29RepairRuns = 0;
+let m29RepairEntity;
+const removeM29Repair = addOnEnter(M29Primary, 'ready', (w) => {
+  m29RepairRuns += 1;
+  m29RepairEntity = w.spawn().unwrap();
+  despawnOnExit(w, m29RepairEntity, M29Primary, 'ready');
+});
+// Consume the stale no-op request first; the later token must progress here.
+m29World.update(1 / 60).unwrap();
+const m29LaterAfterStale = getState(m29World, M29Later);
+if (!m29LaterAfterStale.ok || m29LaterAfterStale.value !== 'hot' || m29RepairRuns !== 0) {
+  console.error('[smoke] FAIL - M29 stale request did not defer callback and advance later token');
+  process.exit(1);
+}
+setNextStateForce(m29World, M29Primary, 'ready');
+m29World.update(1 / 60).unwrap();
+if (m29RepairRuns !== 1 || m29RepairEntity === undefined || !m29World.get(m29RepairEntity, Entity).ok) {
+  console.error('[smoke] FAIL - M29 forced retry did not run repaired callback exactly once');
+  process.exit(1);
+}
+setNextState(m29World, M29Primary, 'idle');
+m29World.update(1 / 60).unwrap();
+setNextStateForce(m29World, M29Primary, 'idle');
+m29World.update(1 / 60).unwrap();
+if (m29RepairEntity === undefined || m29World.get(m29RepairEntity, Entity).ok) {
+  console.error('[smoke] FAIL - M29 scoped cleanup was not idempotent after retry');
+  process.exit(1);
+}
+removeM29Repair();
+console.log('[smoke] M29 PASS: partial commit, later-token deferral, same-world forced retry, exact-once callback, cleanup');
+
 // Run remaining frames to reach SMOKE_MIN_FRAMES.
 const remainingFrames = Math.max(0, SMOKE_MIN_FRAMES - BASELINE_FRAMES - 10 - 5);
 for (let i = 0; i < remainingFrames; i++) {
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = drawFrame();
   if (!r.ok) console.error(`[smoke] tail draw frame ${i} error: ${r.error.code}`);
 }
 
+// --- M41: invalid variant refusal and same-World recovery ------------------
+
+const m41NextStateKey = '__nextState__LevelId';
+const m41InvalidVariant = String('m41-runtime-invalid');
+const m41ExecutionSignature = () => {
+  const inspection = world.inspect();
+  return {
+    systems: inspection.systems.map((system) => ({ name: system.name, sets: [...system.sets] })),
+    schedules: inspection.schedules.map((schedule) => ({
+      name: schedule.schedule.name,
+      systems: schedule.systems.map((system) => ({ name: system.name, sets: [...system.sets] })),
+    })),
+    resourceKeys: [...inspection.resourceKeys].sort(),
+  };
+};
+const m41Snapshot = (mainMenuExit, tutorialEnter, repairEntity, callbackRuns) => {
+  const inspection = world.inspect();
+  const pending = world.getResource(m41NextStateKey);
+  const meshRows = world.query({ with: [MeshFilter] }).unwrap();
+  let meshCount = 0;
+  for (const _row of meshRows) meshCount += 1;
+  return {
+    level: getState(world, LevelId),
+    previousLevel: getPreviousState(world, LevelId),
+    independent: getState(world, M41Independent),
+    previousIndependent: getPreviousState(world, M41Independent),
+    pendingNextState: pending === undefined ? null : { ...pending },
+    mainMenuExitAlive: world.get(mainMenuExit, Entity).ok,
+    tutorialEnterAlive: world.get(tutorialEnter, Entity).ok,
+    repairEntityAlive: repairEntity === undefined ? false : world.get(repairEntity, Entity).ok,
+    callbackRuns,
+    entityCount: inspection.entityCount,
+    meshEntityCount: meshCount,
+    activeComponents: [...inspection.activeComponents].sort(),
+    execution: m41ExecutionSignature(),
+  };
+};
+const m41InvalidDetail = {
+  code: 'invalid-variant',
+  name: 'LevelId',
+  got: m41InvalidVariant,
+  valid: ['main-menu', 'tutorial', 'street-a'],
+};
+const m41Fail = (message) => {
+  console.error(`[smoke] FAIL - ${message}`);
+  process.exit(1);
+};
+const assertM41Invalid = (result, label) => {
+  if (
+    result.ok ||
+    result.error.code !== 'invalid-variant' ||
+    JSON.stringify(result.error.detail) !== JSON.stringify(m41InvalidDetail)
+  ) {
+    m41Fail(`M41 ${label} did not return the exact structured invalid-variant error: ${JSON.stringify(result)}`);
+  }
+};
+const drawM41 = (label) => {
+  const result = drawFrame();
+  if (!result.ok) m41Fail(`M41 ${label} draw failed: ${result.error.code}`);
+};
+const pixelDelta = (left, right) => [...left.center, ...left.corner]
+  .reduce((sum, value, index) => sum + Math.abs(value - [...right.center, ...right.corner][index]), 0);
+const pixelEnergy = (pixels) => [...pixels.center, ...pixels.corner].reduce((sum, value) => sum + value, 0);
+
+const m41MainMenuExit = world.spawn().unwrap();
+despawnOnExit(world, m41MainMenuExit, LevelId, 'street-a');
+const m41TutorialEnter = world.spawn().unwrap();
+despawnOnEnter(world, m41TutorialEnter, LevelId, 'tutorial');
+let m41CallbackRuns = 0;
+let m41RepairEntity;
+const removeM41Callback = addOnEnter(LevelId, 'tutorial', (w) => {
+  m41CallbackRuns += 1;
+  m41RepairEntity = w.spawn().unwrap();
+  despawnOnExit(w, m41RepairEntity, LevelId, 'tutorial');
+});
+
+const m41Before = m41Snapshot(m41MainMenuExit, m41TutorialEnter, m41RepairEntity, m41CallbackRuns);
+if (!m41Before.level.ok || m41Before.level.value !== 'street-a') {
+  m41Fail(`M41 expected the warm main World to be in street-a, got ${JSON.stringify(m41Before.level)}`);
+}
+drawM41('before-invalid');
+const m41BeforePixels = await readRenderSamples();
+const m41Request = setNextState(world, LevelId, m41InvalidVariant);
+const m41ForceRequest = setNextStateForce(world, LevelId, m41InvalidVariant);
+assertM41Invalid(m41Request, 'setNextState');
+assertM41Invalid(m41ForceRequest, 'setNextStateForce');
+const m41AfterRequest = m41Snapshot(m41MainMenuExit, m41TutorialEnter, m41RepairEntity, m41CallbackRuns);
+if (JSON.stringify(m41AfterRequest) !== JSON.stringify(m41Before)) {
+  m41Fail(`M41 invalid requests changed the same World before update: ${JSON.stringify({ before: m41Before, after: m41AfterRequest })}`);
+}
+world.update(1 / 60).unwrap();
+drawM41('after-invalid');
+const m41AfterInvalidPixels = await readRenderSamples();
+const m41AfterInvalid = m41Snapshot(m41MainMenuExit, m41TutorialEnter, m41RepairEntity, m41CallbackRuns);
+if (JSON.stringify(m41AfterInvalid) !== JSON.stringify(m41Before)) {
+  m41Fail(`M41 invalid requests changed the same World after update: ${JSON.stringify({ before: m41Before, after: m41AfterInvalid })}`);
+}
+if (pixelDelta(m41BeforePixels, m41AfterInvalidPixels) > 0.05) {
+  m41Fail(`M41 invalid requests changed the rendered frame: delta=${pixelDelta(m41BeforePixels, m41AfterInvalidPixels).toFixed(4)}`);
+}
+
+const m41ValidRequest = setNextState(world, LevelId, 'tutorial');
+const m41IndependentRequest = setNextState(world, M41Independent, 'warm');
+if (!m41ValidRequest.ok || !m41IndependentRequest.ok) {
+  m41Fail(`M41 valid same-World requests failed: ${JSON.stringify({ m41ValidRequest, m41IndependentRequest })}`);
+}
+world.update(1 / 60).unwrap();
+drawM41('after-valid');
+const m41RepairedPixels = await readRenderSamples();
+const m41Repaired = m41Snapshot(m41MainMenuExit, m41TutorialEnter, m41RepairEntity, m41CallbackRuns);
+if (
+  !m41Repaired.level.ok || m41Repaired.level.value !== 'tutorial' ||
+  !m41Repaired.previousLevel.ok || m41Repaired.previousLevel.value !== 'street-a' ||
+  !m41Repaired.independent.ok || m41Repaired.independent.value !== 'warm' ||
+  !m41Repaired.previousIndependent.ok || m41Repaired.previousIndependent.value !== 'cold' ||
+  m41Repaired.pendingNextState !== null ||
+  m41Repaired.mainMenuExitAlive || m41Repaired.tutorialEnterAlive ||
+  !m41Repaired.repairEntityAlive || m41Repaired.callbackRuns !== 1
+) {
+  m41Fail(`M41 valid transition did not commit exactly once: ${JSON.stringify(m41Repaired)}`);
+}
+if (pixelEnergy(m41RepairedPixels) <= 0.05) {
+  m41Fail(`M41 valid transition rendered an empty frame: ${JSON.stringify(m41RepairedPixels)}`);
+}
+
+setNextState(world, LevelId, 'main-menu');
+world.update(1 / 60).unwrap();
+drawM41('after-cleanup');
+setNextStateForce(world, LevelId, 'main-menu');
+world.update(1 / 60).unwrap();
+drawM41('after-idempotent-cleanup');
+const m41Cleaned = m41Snapshot(m41MainMenuExit, m41TutorialEnter, m41RepairEntity, m41CallbackRuns);
+if (
+  !m41Cleaned.level.ok || m41Cleaned.level.value !== 'main-menu' ||
+  !m41Cleaned.previousLevel.ok || m41Cleaned.previousLevel.value !== 'main-menu' ||
+  m41Cleaned.pendingNextState !== null ||
+  m41Cleaned.mainMenuExitAlive || m41Cleaned.tutorialEnterAlive || m41Cleaned.repairEntityAlive ||
+  m41Cleaned.callbackRuns !== 1
+) {
+  m41Fail(`M41 cleanup was not idempotent or left a stale request: ${JSON.stringify(m41Cleaned)}`);
+}
+removeM41Callback();
+console.log(`[smoke] M41 PASS: invalid refusal atomic, pixel delta=${pixelDelta(m41BeforePixels, m41AfterInvalidPixels).toFixed(4)}, valid callback exactly once, cleanup idempotent`);
+
 const finalState = getState(world, LevelId);
 const finalVariant = finalState.ok ? finalState.value : '???';
-console.log(`[smoke] final state = ${finalVariant}, player count = ${playerCount}, draw count = ${drawCount}, mesh count = ${meshEntityCount}`);
+const finalDrawCount = globalThis.__smokeDrawCount;
+console.log(`[smoke] final state = ${finalVariant}, player count = ${playerCount}, draw count = ${finalDrawCount}, mesh count = ${meshEntityCount}`);
 
 if (sharedDevice) sharedDevice.destroy?.();
 delete globalThis.navigator.gpu;

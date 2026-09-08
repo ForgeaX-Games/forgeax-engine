@@ -1,3 +1,4 @@
+import type { RenderFeatureMaterialShaderBindingContract } from '@forgeax/engine-render';
 import {
   err,
   type MaterialAsset,
@@ -8,6 +9,10 @@ import {
 } from '@forgeax/engine-types';
 import type { ParticleRendererSource } from '@forgeax/engine-vfx';
 
+type ParticleRendererKind = ParticleRendererSource['kind'];
+type ParticleTopologyRenderer = Extract<ParticleRendererSource, { readonly capacity: number }>;
+type ParticleTopologyKind = ParticleTopologyRenderer['kind'];
+
 export const PARTICLE_SHADER_IDENTIFIERS = Object.freeze({
   billboard: 'forgeax::vfx-render.particles.billboard',
   mesh: 'forgeax::vfx-render.particles.mesh',
@@ -17,7 +22,7 @@ export const PARTICLE_SHADER_IDENTIFIERS = Object.freeze({
 });
 
 export interface TopologyResourcePlan {
-  readonly topology: 'ribbon' | 'trail' | 'beam';
+  readonly topology: ParticleTopologyKind;
   readonly capacity: number;
   readonly vertexBytes: number;
   readonly indexBytes: number;
@@ -140,7 +145,7 @@ export interface ParticleMaterialPass {
  * shape and make authored particle shaders appear to work while never running.
  */
 export function particleMaterialPass(
-  kind: 'billboard' | 'mesh' | 'ribbon' | 'trail' | 'beam',
+  kind: ParticleRendererKind,
   material: MaterialAsset | undefined,
 ): ParticleMaterialPass {
   const pass = material?.passes?.find((candidate) => candidate.name === `particle-${kind}`);
@@ -155,6 +160,23 @@ export function particleMaterialPass(
 /** True when the authored particle shader consumes the standard material bind group. */
 export function particleMaterialUsesBindings(material: MaterialAsset | undefined): boolean {
   return (material?.parameters?.length ?? 0) > 0;
+}
+
+/**
+ * Return the scene-depth binding slot required by a particle material shader.
+ *
+ * Custom particle shaders historically bind only the sampled depth resource at
+ * group(0)/binding(0), while the renderer-owned billboard shader also consumes
+ * the view UBO at binding(0) and therefore uses depth at binding(1). Keep this
+ * choice derived from the renderer contract instead of assuming every
+ * billboard has the built-in layout.
+ */
+export function particleMaterialSceneDepthBinding(
+  contract: RenderFeatureMaterialShaderBindingContract | undefined,
+): 0 | 1 | undefined {
+  if (contract === 'group-0-resource') return 0;
+  if (contract === 'view-and-scene-depth') return 1;
+  return undefined;
 }
 
 function floatAttribute(value: ArrayBuffer | Float32Array | Uint16Array | undefined): Float32Array {

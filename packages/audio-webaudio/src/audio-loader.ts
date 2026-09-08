@@ -17,7 +17,13 @@ export const audioLoader: Loader = {
       });
     }
     const source = input.artifacts.source;
-    if (source === undefined || !source.descriptor.mediaType.startsWith('audio/')) {
+    const payloadMediaType =
+      typeof input.payload.mediaType === 'string' ? input.payload.mediaType : undefined;
+    if (
+      source === undefined ||
+      !source.descriptor.mediaType.startsWith('audio/') ||
+      payloadMediaType !== source.descriptor.mediaType
+    ) {
       return Promise.resolve({
         ok: false,
         error: {
@@ -27,13 +33,13 @@ export const audioLoader: Loader = {
           detail: {
             guid: input.guid,
             artifactKey: 'source',
-            observed: source?.descriptor.mediaType ?? 'missing',
-            expected: 'audio/*',
+            observed: payloadMediaType ?? source?.descriptor.mediaType ?? 'missing',
+            expected: 'payload.mediaType matching the audio/* source artifact',
           },
         },
       });
     }
-    return decodeAudioClipBytes(input.guid, source.bytes);
+    return decodeAudioClipBytes(input.guid, source.bytes, payloadMediaType as `audio/${string}`);
   },
   async load(): Promise<LoaderAsyncResult> {
     return {

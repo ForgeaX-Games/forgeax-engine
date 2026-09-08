@@ -15,10 +15,10 @@ import {
   MeshFilter,
   MeshRenderer,
   TONEMAP_NONE,
-} from '@forgeax/engine-render/internal';
+} from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import { createRenderer } from '../index';
+import { constructRuntimeRendererHost } from '../renderer-host';
 import { drawPublished } from './draw-published';
 
 const WIDTH = 256;
@@ -156,16 +156,22 @@ describe('feat-20260528-fxaa-post-processing M3 w16: AC-03 pixel diff + AC-04 to
       removeEventListener() {},
     } as unknown as HTMLCanvasElement;
 
-    let renderer: Awaited<ReturnType<typeof createRenderer>>;
+    let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
     try {
-      renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+      host = await constructRuntimeRendererHost(
+        mockCanvas,
+        {},
+        {
+          shaderManifestUrl: ENGINE_MANIFEST_URL,
+        },
+      );
     } finally {
       globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
     }
-    expect(renderer.backend).toBe('webgpu');
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
-    if (!ready.ok) return;
+    expect(host.ok).toBe(true);
+    if (!host.ok) throw host.error;
+    const { renderer } = host.value;
+    expect(renderer.inspect().state).toBe('alive');
     const device = sharedDevice;
     if (device === undefined) throw new Error('GPUDevice not captured');
 
@@ -255,16 +261,22 @@ describe('feat-20260528-fxaa-post-processing M3 w16: AC-03 pixel diff + AC-04 to
       removeEventListener() {},
     } as unknown as HTMLCanvasElement;
 
-    let renderer: Awaited<ReturnType<typeof createRenderer>>;
+    let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
     try {
-      renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+      host = await constructRuntimeRendererHost(
+        mockCanvas,
+        {},
+        {
+          shaderManifestUrl: ENGINE_MANIFEST_URL,
+        },
+      );
     } finally {
       globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
     }
-    expect(renderer.backend).toBe('webgpu');
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
-    if (!ready.ok) return;
+    expect(host.ok).toBe(true);
+    if (!host.ok) throw host.error;
+    const { renderer } = host.value;
+    expect(renderer.inspect().state).toBe('alive');
     const device = sharedDevice;
     if (device === undefined) throw new Error('GPUDevice not captured');
 

@@ -1,5 +1,6 @@
-import type { BootstrapContext } from '@forgeax/engine-app';
+import type { GameHost } from '@forgeax/engine-app';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import type { Context } from '@forgeax/engine-plugin';
 import { CharacterController } from '@forgeax/engine-physics';
 import { Camera } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
@@ -34,7 +35,8 @@ import { GAME_DEFAULT_COMMAND_COUNTERS } from './resources/gameplay';
 import { installRenderEvidence } from './render-evidence';
 
 type GameplayRenderEvidenceArgs = {
-  readonly host: BootstrapContext | undefined;
+  readonly context: Context;
+  readonly host: GameHost | undefined;
   readonly world: World;
   readonly root: EntityHandle;
   readonly camera: EntityHandle;
@@ -85,6 +87,7 @@ type GameplayRenderEvidenceArgs = {
 export function installGameplayRenderEvidence(args: GameplayRenderEvidenceArgs): void {
   const projectile = args.customProjectile;
   installRenderEvidence({
+    context: args.context,
     world: args.world,
     renderer: args.host?.renderer,
     targetQuery: args.targetQuery,
@@ -189,7 +192,7 @@ export function installGameplayRenderEvidence(args: GameplayRenderEvidenceArgs):
     },
     targetHealth: () => args.targetHealth.snapshot(),
     targetDisabling: () => args.targetDisabling.snapshot(),
-    visibility: () => args.visibilityLoop.snapshot(args.host?.renderer),
+    visibility: () => args.visibilityLoop.snapshot(),
     ...(args.worldScoreText === undefined ? {} : { worldScoreText: args.worldScoreText.snapshot }),
     isFlashed: (entity) => {
       const flash = args.world.get(entity, HitFlash);
@@ -199,6 +202,5 @@ export function installGameplayRenderEvidence(args: GameplayRenderEvidenceArgs):
     ...(args.state === undefined ? {} : { state: args.state }),
     ...(args.changeDetection === undefined ? {} : { changeDetection: args.changeDetection }),
     input: args.input,
-    ...(args.host?.registerCleanup === undefined ? {} : { registerCleanup: args.host.registerCleanup }),
   });
 }

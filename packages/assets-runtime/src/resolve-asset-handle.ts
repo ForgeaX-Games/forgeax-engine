@@ -13,8 +13,7 @@
 // is the material parent-chain walk used by the render extract stage. Charter
 // F1 single-entry indexability -- one import, one call, no dual-path leak.
 
-import type { World } from '@forgeax/engine-ecs';
-import { SharedRefStaleError, UniqueRefStaleError } from '@forgeax/engine-ecs';
+import type { SharedRefStaleError, UniqueRefStaleError, World } from '@forgeax/engine-ecs';
 import type { AssetGuid } from '@forgeax/engine-pack/guid';
 import { err, ok, type Result } from '@forgeax/engine-rhi';
 import type {
@@ -68,15 +67,13 @@ export function resolveAssetHandle<T extends Asset>(
   }
   const res = world.sharedRefs.resolve<string, T>(handle);
   if (res.ok) return ok(res.value);
-  // Forward structured stale error codes transparently (D-3, AC-10).
-  // instanceof guards on the concrete error classes so callers
-  // (e.g. render-system-extract) can switch on err.code with
-  // exhaustive-casing — stale vs released vs not-found distinguishable.
-  if (res.error instanceof SharedRefStaleError) return err(res.error);
-  if (res.error instanceof UniqueRefStaleError) return err(res.error);
-  // Exhaustive switch over remaining error codes from SharedRefStore.resolve.
-  // No default case; tsc validates completeness if new codes join the union.
+  // Forward the closed error code transparently. Checking the discriminant,
+  // rather than constructor identity, preserves the structured stale detail
+  // when a browser bundles the bridge and its World through different module
+  // instances.
   switch (res.error.code) {
+    case 'shared-ref-stale':
+      return err(res.error);
     case 'shared-ref-released':
     case 'builtin-slot-not-owned':
       break;

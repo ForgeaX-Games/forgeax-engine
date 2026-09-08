@@ -30,7 +30,7 @@
 // fail-fast at TS edge — `'array<f32, 4>'` rejects mismatched lengths
 // at the ECS storage / runtime boundary).
 
-import type { Component, ShapeOf } from '@forgeax/engine-ecs';
+import type { Component, SchemaOf, ShapeOf } from '@forgeax/engine-ecs';
 import type { SpriteRegionOverride } from '@forgeax/engine-render/authoring';
 import { describe, expectTypeOf, it } from 'vitest';
 
@@ -40,13 +40,15 @@ describe('SpriteRegionOverride — Component token shape (AC-01 schema lock)', (
   });
 
   it("schema is exactly { region: 'array<f32, 4>' } (D-6 fixed-length 4)", () => {
-    expectTypeOf<typeof SpriteRegionOverride.schema>().toEqualTypeOf<
+    expectTypeOf<SchemaOf<typeof SpriteRegionOverride>>().toEqualTypeOf<
       Readonly<{ readonly region: 'array<f32, 4>' }>
     >();
   });
 
   it("schema field 'region' literal narrows to 'array<f32, 4>' (compile-time length=4)", () => {
-    expectTypeOf<(typeof SpriteRegionOverride.schema)['region']>().toEqualTypeOf<'array<f32, 4>'>();
+    expectTypeOf<
+      SchemaOf<typeof SpriteRegionOverride>['region']
+    >().toEqualTypeOf<'array<f32, 4>'>();
   });
 
   it('SpriteRegionOverride is Component<"SpriteRegionOverride", { region: "array<f32, 4>" }>', () => {
@@ -57,13 +59,13 @@ describe('SpriteRegionOverride — Component token shape (AC-01 schema lock)', (
 
 describe('SpriteRegionOverride — data shape via ShapeOf (AC-08 spawn affordance)', () => {
   it('ShapeOf<schema> has a single readonly field `region` typed Float32Array', () => {
-    type Data = ShapeOf<typeof SpriteRegionOverride.schema>;
+    type Data = ShapeOf<SchemaOf<typeof SpriteRegionOverride>>;
     expectTypeOf<keyof Data>().toEqualTypeOf<'region'>();
     expectTypeOf<Data['region']>().toEqualTypeOf<Float32Array>();
   });
 
   it('world.spawn data is Partial<ShapeOf<schema>> — region optional at consumer surface', () => {
-    type SpawnData = Partial<ShapeOf<typeof SpriteRegionOverride.schema>>;
+    type SpawnData = Partial<ShapeOf<SchemaOf<typeof SpriteRegionOverride>>>;
     expectTypeOf<SpawnData['region']>().toEqualTypeOf<Float32Array | undefined>();
 
     const empty: SpawnData = {};
@@ -76,21 +78,21 @@ describe('SpriteRegionOverride — data shape via ShapeOf (AC-08 spawn affordanc
 
 describe('SpriteRegionOverride — @ts-expect-error negative assertions (AC-08)', () => {
   it('1. plain number[] is not assignable to data.region (Float32Array nominal)', () => {
-    type SpawnData = Partial<ShapeOf<typeof SpriteRegionOverride.schema>>;
+    type SpawnData = Partial<ShapeOf<SchemaOf<typeof SpriteRegionOverride>>>;
     // @ts-expect-error number[] lacks the Float32Array brand.
     const wrong: SpawnData = { region: [0, 0, 1, 1] };
     void wrong;
   });
 
   it('2. Uint32Array is not assignable to data.region (TypedArrays do not cross-assign)', () => {
-    type SpawnData = Partial<ShapeOf<typeof SpriteRegionOverride.schema>>;
+    type SpawnData = Partial<ShapeOf<SchemaOf<typeof SpriteRegionOverride>>>;
     // @ts-expect-error TypedArray nominal types do not cross-assign in TS.
     const wrong: SpawnData = { region: new Uint32Array(4) };
     void wrong;
   });
 
   it('3. extra fields beyond schema (e.g. layer) are not part of ShapeOf', () => {
-    type Data = ShapeOf<typeof SpriteRegionOverride.schema>;
+    type Data = ShapeOf<SchemaOf<typeof SpriteRegionOverride>>;
     // The schema is a single-field record; an unknown key has no inferred
     // entry on Data. Negative assertion: a key the schema does not declare
     // is not on the type.

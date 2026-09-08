@@ -12,13 +12,13 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:process-e2e": "vitest run src/__tests__/process-e2e.test.ts",
-    "gauntlet": "node scripts/m15-gauntlet.mjs",
+    "gauntlet": "node scripts/m17-gauntlet.mjs",
     "e2e:browser": "FORGEAX_ENGINE_RHI_DEBUG=1 node scripts/browser-e2e.mjs",
     "smoke:rhi-debug": "FORGEAX_ENGINE_RHI_DEBUG=1 node scripts/browser-e2e.mjs"
   },
   "forgeax": {
     "gauntletScenario": {
-      "id": "m15-network-terminal-fault-fresh-session",
+      "id": "m17-network-reconnect-chaos-gauntlet",
       "script": "gauntlet",
       "domains": [
         "World and host contract",
@@ -43,25 +43,33 @@
         "replacement/add/remove/spawn/despawn convergence",
         "malformed terminal fault",
         "trusted-state preservation",
-        "same-process fresh endpoint/session",
-        "fresh authority baseline",
-        "cleanup"
+        "same-process same-session reconnect with replacement PeerId",
+        "fresh authority baseline at a new epoch before delta",
+        "bounded ACK accounting and pre-baseline command rejection",
+        "real WebSocket proxy controls for disconnect, duplicate, out-of-order, delayed delivery, and late join",
+        "three complete process/browser chaos matrix repeats with authority-derived roster convergence",
+        "one named sabotage per chaos control fails only its intended invariant",
+        "structured browser recovery trace and visual falsifiers",
+        "terminal cleanup"
       ],
       "evidence": {
         "frontDoors": [
           "node-websocket-listener",
           "node-websocket-client",
-          "multiplayer-snake-process-e2e"
+          "multiplayer-snake-process-e2e",
+          "multiplayer-snake-browser-e2e",
+          "multiplayer-snake-real-websocket-chaos-proxy"
         ],
         "legs": ["semantic", "live", "behavioral", "recovery"]
       },
       "oracle": {
         "stdoutIncludes": [
-          "[m15-net] initial baseline and replacement: PASS",
-          "[m15-net] spawn and despawn convergence: PASS",
-          "[m15-net] malformed terminal fault and trusted-state preservation: PASS",
-          "[m15-net] same-process fresh session baseline and convergence: PASS",
-          "[m15-net] PASS - M15 terminal fault fresh session GREEN"
+          "[m17-net] sabotage m17-disconnect-recovery: PASS",
+          "[m17-net] sabotage m17-duplicate-exactly-once: PASS",
+          "[m17-net] sabotage m17-out-of-order-baseline: PASS",
+          "[m17-net] sabotage m17-delayed-delivery: PASS",
+          "[m17-net] sabotage m17-late-join-baseline: PASS",
+          "[m17-net] complete real-WebSocket chaos matrix repeats=3: PASS"
         ]
       }
     },
@@ -97,6 +105,7 @@
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-net": "workspace:*",
     "@forgeax/engine-net-websocket": "workspace:*",
+    "@forgeax/engine-plugin": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-scene": "workspace:*",
@@ -107,7 +116,8 @@
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",
     "esbuild": "^0.27.2",
+    "ws": "^8.20.0",
     "vite": "8.0.10",
-    "vitest": "4.1.5"
+    "vitest": "4.1.11"
   }
 }

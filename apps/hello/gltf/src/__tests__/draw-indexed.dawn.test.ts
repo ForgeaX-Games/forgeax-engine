@@ -9,9 +9,10 @@
 // reach (browser tests stop at the type-level + ECS-level surface promises).
 //
 // Coverage layout (3 assertions, kept lean to fit the dawn project budget):
-//   (1) renderer.backend === 'webgpu' — RHI backend probe lands on the
-//       dawn-node WebGPU implementation (real driver, not mock);
-//   (2) >=3 frames of renderer.draw(world) succeed and queue.onSubmittedWorkDone
+//   (1) constructRendererHost succeeds through the dawn-node WebGPU
+//       implementation (real driver, not mock);
+//   (2) >=3 frames of the lease-bound renderer.draw request succeed and
+//       queue.onSubmittedWorkDone
 //       resolves cleanly — drawIndexed paths are exercised inside the record
 //       stage (`packages/runtime/src/render-system-record.ts:435`) for the
 //       single Tier-B mesh entity;
@@ -32,8 +33,16 @@ import { fileURLToPath } from 'node:url';
 import { World } from '@forgeax/engine-ecs';
 import { parseGltf } from '@forgeax/engine-gltf';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { type MeshAsset } from '@forgeax/engine-assets-runtime';
-import { createRenderer, type Handle, type MaterialAsset } from '@forgeax/engine-runtime';
+import type { MeshAsset } from '@forgeax/engine-assets-runtime';
+import {
+  Camera,
+  MeshFilter,
+  MeshRenderer,
+  SceneInstance,
+} from '@forgeax/engine-render';
+import { ChildOf, Children, Transform } from '@forgeax/engine-scene';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
+import type { Handle, MaterialAsset } from '@forgeax/engine-types';
 import type { LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
@@ -78,6 +87,12 @@ function distance(
   b: readonly [number, number, number],
 ): number {
   return Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2);
+}
+
+function registerSceneComponents(world: World): void {
+  for (const component of [Camera, ChildOf, Children, MeshFilter, MeshRenderer, SceneInstance, Transform]) {
+    world.components.register(component).unwrap();
+  }
 }
 
 // Expand positions-only meshIr to canonical 12F interleaved layout
@@ -169,17 +184,14 @@ describe('hello-gltf w28 - dawn drawIndexed real GPU spine (AC-15)', () => {
       removeEventListener() {},
     } as unknown as HTMLCanvasElement;
 
-    let renderer: Awaited<ReturnType<typeof createRenderer>>;
+    let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
     try {
-      renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: EMPTY_MANIFEST_URL });
+      host = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: EMPTY_MANIFEST_URL });
     } finally {
       globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
     }
-    expect(renderer.backend).toBe('webgpu');
-
-    const assets = renderer.assets;
-    expect(assets).not.toBeNull();
-    if (assets === null) return;
+    if (!host.ok) throw host.error;
+    const { renderer, assets } = host.value;
 
     // Parse + register Tier-B PODs (mirror of smoke-dawn.mjs section 3).
     const gltfJson = JSON.parse(readFileSync(BOX_GLTF_PATH, 'utf8')) as unknown;
@@ -218,21 +230,24 @@ describe('hello-gltf w28 - dawn drawIndexed real GPU spine (AC-15)', () => {
           indexCount: meshIr.indices.length,
           vertexCount: meshIr.positions.length,
           topology: 'triangle-list',
+          materialSlot: 0,
         },
       ],
+      materialSlots: [{ slotName: 'Default' }],
     };
     const materialAsset: MaterialAsset = {
       kind: 'material',
       passes: [{ name: 'Forward', program: { module: 'forgeax::default-unlit' }, renderState: { tags: { LightMode: 'Forward' }, queue: 2000 } }],
       values: { baseColor: matIr.baseColorFactor },
     };
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
-    if (!ready.ok) return;
-
     const world = new World();
-    const worldAttachment1 = renderer.attachWorld(world);
+    const worldAttachment1 = renderer.attach(world);
     if (!worldAttachment1.ok) throw worldAttachment1.error;
+    const frameRequest = {
+      leases: [worldAttachment1.value],
+      camera: { lease: worldAttachment1.value },
+      environment: { lease: worldAttachment1.value },
+    };
 
     // feat-20260614 M8: registerWithGuid deleted. catalog(guid, payload) feeds
     // loadByGuid; world.allocSharedRef mints the column handle the bridge needs.
@@ -242,6 +257,7 @@ describe('hello-gltf w28 - dawn drawIndexed real GPU spine (AC-15)', () => {
       'MaterialAsset',
       MaterialAsset
     >('MaterialAsset', materialAsset);
+    registerSceneComponents(world);
 
     const meshNode = doc.nodes[0];
     const cameraNode = doc.nodes[1];
@@ -299,14 +315,14 @@ describe('hello-gltf w28 - dawn drawIndexed real GPU spine (AC-15)', () => {
     if (!instRes.ok) return;
 
     const renderErrors: unknown[] = [];
-    renderer.onError((err) => {
-      renderErrors.push(err);
+    renderer.subscribe((event) => {
+      if (event.kind === 'error') renderErrors.push(event.error);
     });
 
     let framesObserved = 0;
     for (let i = 0; i < TARGET_FRAMES; i++) {
       world.update().unwrap();
-      const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      const r = renderer.draw(frameRequest);
       expect(r.ok).toBe(true);
       framesObserved++;
     }

@@ -130,18 +130,16 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // pbr/unlit entries. feat-20260608 / M3: the manifest URL is owned by the
   // plugin (SSOT) and surfaced via the virtual:forgeax/bundler adapter so
   // callsites no longer name it.
-  const renderer = await createRenderer(target, {}, forgeaxBundlerAdapter());
-  console.warn(`[instancing-static] backend=${renderer.backend}`);
+  const rendererResult = await createRenderer(target, {}, forgeaxBundlerAdapter());
+  if (!rendererResult.ok) throw rendererResult.error;
+  const renderer = rendererResult.value;
+  console.warn(`[instancing-static] state=${renderer.inspect().state}`);
 
-  const ready = await renderer.ready;
-  if (!ready.ok) {
-    console.error('[instancing-static] renderer.ready failed:', ready.error);
-    return;
-  }
 
   const world = new World();
-  const worldAttachment1 = renderer.attachWorld(world);
-  if (!worldAttachment1.ok) throw worldAttachment1.error;
+  const worldAttachment = renderer.attach(world);
+  if (!worldAttachment.ok) throw worldAttachment.error;
+  const lease = worldAttachment.value;
 
   // Single entity holding the Instances component + cube mesh + standard
   // material renderer. Per requirements.md §4 "Per-draw fallback" + group
@@ -199,7 +197,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // across its sampleCount * frameCount window.
   const tick = (): void => {
     world.update().unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const frame = renderer.draw({
+      leases: [lease],
+      camera: { lease },
+      environment: { lease },
+    });
+    if (!frame.ok) throw frame.error;
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);

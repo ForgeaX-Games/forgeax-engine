@@ -23,9 +23,69 @@ const monorepoRoot = resolve(here, '..', '..', '..');
 // explicit failure, surfaced as VideoUploadUnsupportedError).
 const demoAssets = resolve(monorepoRoot, 'forgeax-engine-assets', 'demo-assets', 'hello-video-cutscene');
 
+const VIDEO_GUID = 'f1b3d000-1111-4aaa-9eee-aa1111112222';
+
+function videoPackRetryFixture() {
+  let repaired = false;
+  return {
+    name: 'video-texture-pack-retry-fixture',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const path = req.url?.split('?', 1)[0];
+        if (path === '/__forgeax-video-pack-reset' && req.method === 'POST') {
+          repaired = false;
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (path === '/__forgeax-video-pack-repair' && req.method === 'POST') {
+          repaired = true;
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (path === '/video-pack-index.json') {
+          res.setHeader('Content-Type', 'application/json');
+          res.end(
+            JSON.stringify([
+              {
+                guid: VIDEO_GUID,
+                packageUrl: '/video.pack.json',
+                kind: 'video',
+                sourcePath: 'cutscene.webm',
+              },
+            ]),
+          );
+          return;
+        }
+        if (path === '/video.pack.json') {
+          res.setHeader('Content-Type', 'application/json');
+          res.end(
+            JSON.stringify({
+              schemaVersion: '2.0.0',
+              kind: 'internal-text-package',
+              assets: [
+                {
+                  guid: VIDEO_GUID,
+                  kind: 'video',
+                  payload: { url: repaired ? '/cutscene.webm' : 'javascript:alert(1)' },
+                  refs: [],
+                  artifacts: {},
+                },
+              ],
+            }),
+          );
+          return;
+        }
+        next();
+      });
+    },
+  };
+}
+
 export default defineConfig({
   publicDir: demoAssets,
-  plugins: [forgeaxShader() as never],
+  plugins: [forgeaxShader() as never, videoPackRetryFixture()],
   server: {
     fs: {
       allow: [monorepoRoot],

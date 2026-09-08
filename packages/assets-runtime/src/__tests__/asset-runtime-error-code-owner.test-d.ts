@@ -3,6 +3,11 @@ import type { AssetRuntimeError, AssetRuntimeErrorCode } from '../errors/asset';
 
 describe('AssetRuntimeErrorCode owner proof', () => {
   it('derives the exact closed code surface and narrows the correlated detail', () => {
+    expectTypeOf<AssetRuntimeError>().toMatchTypeOf<{
+      code: string;
+      expected: string;
+      hint: string;
+    }>();
     expectTypeOf<AssetRuntimeErrorCode>().toEqualTypeOf<AssetRuntimeError['code']>();
     expectTypeOf<AssetRuntimeErrorCode>().toEqualTypeOf<
       | 'material-resolved-empty-passes'

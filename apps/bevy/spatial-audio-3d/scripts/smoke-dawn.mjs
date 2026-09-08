@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // Headless structural smoke for spatial_audio_3d.
 // Dawn has no AudioContext, so this gate checks the real createApp audio
 // resource, scene construction, renderer draws, and absence of RHI errors.
@@ -64,7 +65,7 @@ const canvas = {
 };
 
 const { createApp } = await import('@forgeax/engine-app');
-const { AUDIO_ENGINE_RESOURCE_KEY, audioPlugin, createAudioIntentBackend } = await import('@forgeax/engine-audio');
+const { AUDIO_ENGINE_RESOURCE_KEY, audioBackendPlugin, audioPlugin, createAudioIntentBackend } = await import('@forgeax/engine-audio');
 const { World } = await import('@forgeax/engine-ecs');
 const { createRenderer } = await import('@forgeax/engine-runtime');
 const { buildSpatialAudioWorld } = await import('../src/spatial-audio-3d.ts');
@@ -72,16 +73,14 @@ const here = dirname(fileURLToPath(import.meta.url));
 const manifestPath = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const shaderManifestUrl = `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}`;
 
-const renderer = await createRenderer(canvas, {}, { shaderManifestUrl });
+const renderer = await createSmokeRenderer(createRenderer, canvas, {}, { shaderManifestUrl });
 gpu.requestAdapter = originalRequestAdapter;
 const world = new World();
-world.insertResource(AUDIO_ENGINE_RESOURCE_KEY, createAudioIntentBackend({ emit: () => {} }));
-const appResult = await createApp({ renderer, world, plugins: [audioPlugin()] });
+const audioBackend = createAudioIntentBackend({ emit: () => {} });
+const appResult = await createApp({ renderer, world, plugins: [audioBackendPlugin(audioBackend), audioPlugin()] });
 if (!appResult.ok) throw new Error(`createApp failed: ${appResult.error.code}`);
 const app = appResult.value;
-const ready = await app.renderer.ready;
-if (!ready.ok) throw new Error(`renderer.ready failed: ${ready.error.code}`);
-const attachment = app.renderer.attachWorld(app.world);
+const attachment = app.renderer.attach(app.world);
 if (!attachment.ok) throw attachment.error;
 
 const scene = buildSpatialAudioWorld(app.world, WIDTH / HEIGHT);
@@ -91,15 +90,15 @@ let frames = 0;
 let drawErrors = 0;
 for (; frames < MIN_FRAMES; frames += 1) {
   app.world.update(1 / 60).unwrap();
-  const result = app.renderer.draw([app.world], { cameraOwner: 0, resourceOwner: 0 });
+  const result = drawSmokeFrame(app.renderer, app.world);
   if (!result.ok) drawErrors += 1;
 }
 
 const hasAudioEngine = app.world.hasResource(AUDIO_ENGINE_RESOURCE_KEY);
-console.log(`[spatial-audio-3d] backend=${app.renderer.backend} frames=${frames} audioResource=${hasAudioEngine} camera=${scene.camera} emitter=${scene.emitter}`);
+console.log(`[spatial-audio-3d] backend=${rendererBackend(app.renderer)} frames=${frames} audioResource=${hasAudioEngine} camera=${scene.camera} emitter=${scene.emitter}`);
 
 const failures = [];
-if (app.renderer.backend !== 'webgpu') failures.push(`backend=${app.renderer.backend}`);
+if (rendererBackend(app.renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(app.renderer)}`);
 if (frames < MIN_FRAMES) failures.push(`frames=${frames} < ${MIN_FRAMES}`);
 if (!hasAudioEngine) failures.push('AudioEngine resource missing');
 if (drawErrors > 0) failures.push(`draw errors=${drawErrors}`);

@@ -5,7 +5,7 @@
 // T-M8-03 + T-M8-04 green; AC-03 + AC-08 + AC-09 + AC-13 + AC-25 90s
 // budget). Mirrors apps/hello/cube/scripts/smoke-dawn.mjs structure +
 // hello-room baseline grid + adds the GUID-keyed wood-container.image
-// .meta.json -> AssetRegistry.uploadTexture path so the textured cube
+// .meta.json -> AssetRegistry catalog path so the textured cube
 // renders the LO 1.4 container chapter end-to-end.
 //
 // Strategy (charter P5 producer / consumer split + P4 consistent
@@ -17,13 +17,12 @@
 //          @forgeax/engine-image -- the build-time decoder reads the
 //          sidecar GUID + colorSpace + mipmap settings, returns
 //          DecodedImage POD.
-//      (b) registerWithGuid<TextureAsset>(woodGuid, texAsset) +
-//          uploadTexture(handle, decoded) -- consistency assertion +
-//          GPU upload via the wired sharedDevice.
-//      (c) registerWithGuid<MeshAsset>(cubeGuid, cubeMesh) -- mirror of
+//      (b) catalog<TextureAsset>(woodGuid, texAsset) and mint the ECS handle;
+//          the Standard host owns GPU residency and upload.
+//      (c) catalog<MeshAsset>(cubeGuid, cubeMesh) -- mirror of
 //          hello-room cube-mesh.stub.meta.json + cube-mesh.pack.json
 //          handle ordering.
-//      (d) registerWithGuid<MaterialAsset>(matGuid, unlitMat) carrying
+//      (d) catalog<MaterialAsset>(matGuid, unlitMat) carrying
 //          baseColorTexture: woodHandle reference.
 //      (e) await loadByGuid<MaterialAsset>(matGuid) + spawn entity +
 //          renderer.draw 300x.
@@ -194,12 +193,11 @@ if (!existsSync(CONTAINER_SRC_PATH) || !existsSync(CONTAINER_META_PATH)) {
   process.exit(1);
 }
 
-const { ok: okResult, World } = await import('@forgeax/engine-ecs');
+const { World } = await import('@forgeax/engine-ecs');
+const { ok: okResult } = await import('@forgeax/engine-types');
 const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
-const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  createRenderer,
-} = enginePkg;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
+const { createShaderModule, rhi } = await import('@forgeax/engine-rhi-webgpu');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const {
@@ -227,56 +225,31 @@ const ENGINE_MANIFEST = await buildEngineShaderManifest();
 const EMPTY_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
 
 let renderer;
+let assets;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: EMPTY_MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(
+    mockCanvas,
+    {},
+    { shaderManifestUrl: EMPTY_MANIFEST_URL },
+    { rhi, createShaderModule },
+  );
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  assets = constructed.value.assets;
 } catch (err) {
   console.error(
-    `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
+    `[smoke] FAIL - renderer host threw: ${err instanceof Error ? err.message : String(err)}`,
   );
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[learn-render-textures] backend=${renderer.backend}`);
-
-const assets = renderer.assets;
-if (!assets) {
-  console.error('[smoke] FAIL - AssetRegistry is null (renderer construction did not complete successfully)');
-  process.exit(1);
-}
+console.log('[learn-render-textures] Standard host constructed');
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => { if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint }); });
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
-
-// Wire the GPU device into the AssetRegistry so uploadTexture takes
-// the GPU path (charter P3 explicit: without this call uploadTexture
-// short-circuits and the materialBindGroup falls back to the 1x1
-// white default view -- the smoke still draws something on the cube
-// surface, but not the LO 1.4 wood-container pixels).
-//
-// AssetRegistry.uploadTexture expects a forgeax RHI device wrapper
-// (Result-returning queue.writeTexture / createTexture surface);
-// the dawn-node `sharedDevice` is the raw GPUDevice and would
-// short-circuit the assertion. The M8 smoke therefore takes the
-// deferred-upload path: registerWithGuid<TextureAsset> registers the
-// asset under its GUID + the material's baseColorTexture handle is
-// wired correctly, but the actual GPU pixel upload is skipped --
-// render-system-record.ts then falls back to pipelineState.fallback
-// TextureView (1x1 white) for the materialBindGroup binding=2 entry
-// (research F-6 fix path). The cube still renders white-on-clear,
-// which is enough to prove (c) the multi-site mesh-render gate (the
-// cube pixels distance from the teal clear color exceed
-// SMOKE_PIXEL_THRESHOLD). The full GPU upload exercise lives in
-// browser test (apps/learn-render/.../4.textures/src/__tests__/
-// textures.browser.test.ts) where the forgeax RHI wrapper is the
-// renderer-internal device.
 
 const woodTexAsset = {
   kind: 'texture',
@@ -287,10 +260,12 @@ const woodTexAsset = {
   colorSpace: woodDecoded.colorSpace,
   mipmap: woodDecoded.mipmap,
 };
+assets.catalog(woodMeta.guid, woodTexAsset);
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const lease = worldAttachment1.value;
 // Mint a user-tier column handle for the wood texture (M8 D-17); the
 // baseColorTexture slot carries the resolved numeric Handle via unwrapHandle.
 const woodTexHandle = unwrapHandle(world.allocSharedRef('TextureAsset', woodTexAsset));
@@ -345,8 +320,17 @@ const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-  if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  const r = renderer.draw({
+    leases: [lease],
+    camera: { lease },
+    environment: { lease },
+  });
+  if (!r.ok) {
+    console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  } else {
+    const completed = await r.value.completed;
+    if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+  }
   framesObserved++;
 }
 const device = sharedDevice;
@@ -432,8 +416,7 @@ const wallTotalMs = Date.now() - frameStart;
 console.log(`[smoke] wallTotalMs=${wallTotalMs} (budget=${SMOKE_WALL_BUDGET_MS})`);
 
 const failures = [];
-if (renderer.backend !== 'webgpu')
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (assets === undefined) failures.push('(a) host asset owner is unavailable');
 if (framesObserved < SMOKE_MIN_FRAMES)
   failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (meshedRenderCount < 1) {

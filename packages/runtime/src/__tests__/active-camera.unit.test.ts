@@ -27,18 +27,17 @@
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
-import {
-  ACTIVE_CAMERA_KEY,
-  Camera,
-  extractFrame,
-  getActiveCamera,
-  prepareExtractContext,
-  selectActiveCameraIndex,
-  setActiveCamera,
-} from '@forgeax/engine-render/internal';
+import { Camera } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
 import { describe, expect, it } from 'vitest';
+import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
+import {
+  ACTIVE_CAMERA_KEY,
+  getActiveCamera,
+  selectActiveCameraIndex,
+  setActiveCamera,
+} from '../../../render/src/systems/active-camera';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 

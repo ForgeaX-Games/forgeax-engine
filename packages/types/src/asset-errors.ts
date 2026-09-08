@@ -1,5 +1,85 @@
 /** Closed structured error contracts for Pack v2 and asset evidence. */
 
+export type AssetLoadErrorCode =
+  | 'asset-guid-invalid'
+  | 'asset-kind-mismatch'
+  | 'asset-not-found'
+  | 'asset-not-ready'
+  | 'catalog-unavailable'
+  | 'catalog-discontinuous'
+  | 'asset-fetch-failed'
+  | 'asset-integrity-failed'
+  | 'asset-package-invalid'
+  | 'asset-decoder-missing'
+  | 'asset-decode-failed'
+  | 'asset-dependency-failed'
+  | 'asset-superseded'
+  | 'asset-load-cancelled'
+  | 'asset-runtime-disposed';
+
+export const ASSET_LOAD_ERROR_HINTS: Readonly<Record<AssetLoadErrorCode, string>> = {
+  'asset-guid-invalid': 'provide a valid asset GUID and retry the current publication',
+  'asset-kind-mismatch': 'pass the Catalog kind or the matching custom AssetKind token',
+  'asset-not-found': 'inspect the producer Catalog and rebuild the missing publication',
+  'asset-not-ready': 'wait for the current publication or inspect its producer lifecycle',
+  'catalog-unavailable': 'inspect the scope and create a fresh Registry for a new scope',
+  'catalog-discontinuous': 'reconcile the Catalog baseline before loading the current row',
+  'asset-fetch-failed': 'verify the package locator and republish the Pack',
+  'asset-integrity-failed': 'verify the artifact digest and recook the Pack',
+  'asset-package-invalid': 'validate the Pack v2 envelope and recook invalid output',
+  'asset-decoder-missing': 'install the owner decoder lease for this kind',
+  'asset-decode-failed': 'inspect the structured decoder detail and repair the owner output',
+  'asset-dependency-failed': 'repair the dependency publication named in detail and retry',
+  'asset-superseded': 'load the current publication instead of the superseded ticket',
+  'asset-load-cancelled': 'retry with a live AbortSignal when the request is still needed',
+  'asset-runtime-disposed': 'obtain a new Registry from the current realm',
+};
+
+type AssetLoadErrorBase<C extends AssetLoadErrorCode, D> = {
+  readonly code: C;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: D;
+};
+
+export type AssetLoadError =
+  | AssetLoadErrorBase<'asset-guid-invalid', { readonly guid: string }>
+  | AssetLoadErrorBase<
+      'asset-kind-mismatch',
+      { readonly guid: string; readonly expectedKind: string; readonly actualKind: string }
+    >
+  | AssetLoadErrorBase<'asset-not-found', { readonly guid: string }>
+  | AssetLoadErrorBase<'asset-not-ready', { readonly guid: string; readonly generation: number }>
+  | AssetLoadErrorBase<'catalog-unavailable', { readonly scopeId: string }>
+  | AssetLoadErrorBase<
+      'catalog-discontinuous',
+      {
+        readonly scopeId: string;
+        readonly expectedGeneration: number;
+        readonly actualGeneration: number;
+      }
+    >
+  | AssetLoadErrorBase<'asset-fetch-failed', { readonly guid: string; readonly packageUrl: string }>
+  | AssetLoadErrorBase<
+      'asset-integrity-failed',
+      {
+        readonly guid: string;
+        readonly artifactKey: string;
+        readonly expectedDigest: string;
+        readonly actualDigest: string;
+      }
+    >
+  | AssetLoadErrorBase<'asset-package-invalid', { readonly guid: string; readonly reason: string }>
+  | AssetLoadErrorBase<'asset-decoder-missing', { readonly kind: string }>
+  | AssetLoadErrorBase<'asset-decode-failed', { readonly guid: string; readonly kind: string }>
+  | AssetLoadErrorBase<
+      'asset-dependency-failed',
+      { readonly guid: string; readonly dependencyGuid: string }
+    >
+  | AssetLoadErrorBase<'asset-superseded', { readonly guid: string; readonly generation: number }>
+  | AssetLoadErrorBase<'asset-load-cancelled', { readonly guid: string }>
+  | AssetLoadErrorBase<'asset-runtime-disposed', { readonly scopeId: string }>;
+
 export type AssetArtifactErrorCode =
   | 'asset-artifact-path-invalid'
   | 'asset-artifact-missing'

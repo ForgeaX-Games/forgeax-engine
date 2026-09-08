@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // Dawn smoke for Bevy's shader/fullscreen_material reproduction.
 // FALSIFY=force-no-effect removes the post-process and must remove its pass.
 
@@ -99,23 +100,35 @@ const { quat } = await import('@forgeax/engine-math');
 const { HANDLE_CUBE, HANDLE_SPHERE } = await import('@forgeax/engine-assets-runtime');
 const { Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer, PointLight, perspective } =
   await import('@forgeax/engine-render');
-const { PostProcessParams, URP_PIPELINE_ID } = await import('@forgeax/engine-render/internal');
+const { PostProcessParams } = await import('@forgeax/engine-render');
+const { createFullscreenRenderFeature } = await import('@forgeax/engine-app');
 const { Transform } = await import('@forgeax/engine-scene');
 
-const appResult = await createApp(mockCanvas, {}, { shaderManifestUrl: manifestUrl });
+if (!existsSync(shaderPath)) {
+  console.error(`[smoke] FAIL - missing fullscreen shader: ${shaderPath}`);
+  process.exit(1);
+}
+const source = readFileSync(shaderPath, 'utf8');
+const paramsBytes = new Uint8Array(new Float32Array([0.04, 0, 0, 0]).buffer);
+const effect = createFullscreenRenderFeature({
+  identity: effectId,
+  source,
+  reads: ['sceneColor'],
+  params: { byteSize: 16, defaultValue: paramsBytes },
+});
+const appResult = await createApp(
+  mockCanvas,
+  { features: falsify === 'force-no-effect' ? [] : [effect] },
+  { shaderManifestUrl: manifestUrl },
+);
 globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 if (!appResult.ok) {
   console.error(`[smoke] FAIL - createApp: ${appResult.error.code} - ${appResult.error.hint}`);
   process.exit(1);
 }
 const app = appResult.value;
-app.renderer.onError((error) => errors.push(error));
+subscribeSmokeErrors(app.renderer, (error) => errors.push(error));
 app.onError((error) => errors.push(error));
-const ready = await app.renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 const world = app.world;
 const blue = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.08, 0.18, 0.8, 1], roughness: 0.3 }));
@@ -143,27 +156,7 @@ world.spawn(
   { component: Camera, data: { ...perspective({ fov: Math.PI / 4, aspect: width / height, near: 0.1, far: 80 }), clearColor: [0.03, 0.03, 0.05, 1] } },
 ).unwrap();
 
-if (!existsSync(shaderPath)) {
-  console.error(`[smoke] FAIL - missing fullscreen shader: ${shaderPath}`);
-  process.exit(1);
-}
-const source = readFileSync(shaderPath, 'utf8');
-const paramsBytes = new Uint8Array(new Float32Array([0.04, 0, 0, 0]).buffer);
-app.renderer.postProcess.register(effectId, {
-  source,
-  reads: ['sceneColor'],
-  params: { byteSize: 16, defaultValue: paramsBytes },
-});
 world.spawn({ component: PostProcessParams, data: { shader: effectId, data: paramsBytes } }).unwrap();
-const install = app.renderer.installPipeline({
-  kind: 'render-pipeline',
-  pipelineId: URP_PIPELINE_ID,
-  config: { postEffects: falsify === 'force-no-effect' ? [] : [effectId] },
-});
-if (!install.ok) {
-  console.error(`[smoke] FAIL - installPipeline: ${install.error.code} - ${install.error.hint}`);
-  process.exit(1);
-}
 
 const started = app.start();
 if (!started.ok) {
@@ -178,7 +171,7 @@ for (let i = 0; i < targetFrames; i += 1) {
   now += 16.67;
   due.callback(now);
   frames += 1;
-  if (i === 5) passNames = [...app.renderer.perFramePassNames];
+  if (i === 5) passNames = [...app.renderer.inspect().perFramePassNames];
   if (i % 16 === 15) await delay(1);
 }
 app.stop();
@@ -229,7 +222,7 @@ if (falsify === '' && channelSpreadPixels < 1500) failures.push(`channelSpreadPi
 if (falsify === 'force-no-effect' && hasPostEffect) failures.push(`FALSIFY kept the fullscreen pass: ${JSON.stringify(passNames)}`);
 if (falsify !== 'force-no-effect' && !hasPostEffect) failures.push(`fullscreen material pass missing: ${JSON.stringify(passNames)}`);
 if (errors.length > 0) failures.push(`engine errors=${errors.map((error) => error.code).join(',')}`);
-console.log(`[smoke] backend=${app.renderer.backend}`);
+console.log(`[smoke] backend=${rendererBackend(app.renderer)}`);
 console.log(`[smoke] frames=${frames} passNames=${JSON.stringify(passNames)}`);
 console.log(`[smoke] visiblePixels=${visiblePixels} channelSpreadPixels=${channelSpreadPixels} maxLuma=${maxLuma.toFixed(4)} png=${pngOut}`);
 if (failures.length > 0) {

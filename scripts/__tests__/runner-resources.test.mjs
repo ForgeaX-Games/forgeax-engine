@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  coverageGroupConcurrency,
   coverageVitestWorkers,
   runnerResources,
   workspaceConcurrency,
@@ -52,4 +53,11 @@ test('derives a conservative coverage worker budget from CPU and memory', () => 
   assert.equal(coverageVitestWorkers({ cpus: 4, memoryBytes: 8 * 1024 ** 3 }), 3);
   assert.equal(coverageVitestWorkers({ cpus: 8, memoryBytes: 16 * 1024 ** 3 }), 6);
   assert.equal(coverageVitestWorkers({ cpus: 32, memoryBytes: 64 * 1024 ** 3 }), 6);
+});
+
+test('derives isolated coverage group concurrency from CPU and memory', () => {
+  assert.equal(coverageGroupConcurrency({ cpus: 4, memoryBytes: 8_000_000_000 }), 1);
+  assert.equal(coverageGroupConcurrency({ cpus: 8, memoryBytes: 16_000_000_000 }), 2);
+  assert.equal(coverageGroupConcurrency({ cpus: 16, memoryBytes: 32_000_000_000 }), 3);
+  assert.equal(coverageGroupConcurrency({ cpus: 64, memoryBytes: 256 * 1024 ** 3 }), 3);
 });

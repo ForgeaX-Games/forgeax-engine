@@ -18,7 +18,7 @@
 //       outline band surrounding each cube.
 //
 // Textures are loaded through the GUID asset pipeline:
-//   configurePackIndex('/pack-index.json') + loadByGuid<TextureAsset>.
+//   configureRuntimeAssetCatalog(...) + loadByGuid<TextureAsset>.
 //
 // LO exact stencil parameters (research Finding LO-SCENE section 2):
 //   - outline color: vec4(0.04, 0.28, 0.26, 1.0) -- cyan-green
@@ -33,6 +33,7 @@
 //   - "// 3. bootstrap"       entry point wiring (1)+(2)
 
 // 1. engine usage
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
 import type { App } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
@@ -41,10 +42,11 @@ import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import { createDevImportTransport } from '@forgeax/engine-runtime';
+
 
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
-import { createStandaloneRuntimeAssetBinding, RenderQueue, unwrapHandle } from '@forgeax/engine-types';
+import { RenderQueue, unwrapHandle } from '@forgeax/engine-types';
+import { captureCanvasPixels } from '@forgeax/apps-shared/canvas-capture';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
@@ -54,10 +56,7 @@ import './outline-solid.wgsl';
 
 const OUTLINE_SHADER_ID = 'learn_render::outline_solid';
 
-const PACK_INDEX_URL = '/pack-index.json';
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-4-2-stencil-testing',
-);
+
 
 // Texture GUIDs from forgeax-engine-assets/learn-opengl/textures/*.meta.json
 const METAL_GUID_STR = '019e3969-1d47-760f-982e-7bad1ffd969c';
@@ -105,25 +104,27 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 4.2 stencil-testing] createApp failed:', appRes.error);
     return;
   }
   const app = appRes.value;
-  const renderer = app.renderer;
   const world = app.world;
   app.onError((error) => {
     console.error('[learn-render 4.2 stencil-testing] app.onError:', error.code, error.hint);
     const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;
     if (bus !== undefined) bus.push({ code: error.code, hint: error.hint });
   });
-  const assets = renderer.assets;
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[learn-render 4.2 stencil-testing] asset owner is unavailable');
+    return;
+  }
 
   // Wire the pack-index URL for GUID-based texture loading.
-  assets.configureRuntimeBinding(runtimeBinding);
-  assets.configurePackIndex(PACK_INDEX_URL);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   // Parse texture GUIDs.
   const metalGuidRes = AssetGuid.parse(METAL_GUID_STR);
@@ -288,7 +289,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
   ).unwrap();
 
-  addFirstPersonSystem(app.world, app.renderer, {
+  addFirstPersonSystem(app.world, {
     name: 'learn-render-4.2-first-person',
     overrideBackend: undefined,
   });
@@ -299,7 +300,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  installCaptureHook(app, world);
+  installCaptureHook(target, world);
 
   window.addEventListener('resize', () => {
     const dpr = devicePixelRatio;
@@ -308,24 +309,20 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     world.set(cameraEntity, Camera, { aspect: window.innerWidth / window.innerHeight });
   });
 
-  console.warn(`[learn-render 4.2 stencil-testing] backend=${renderer.backend}`);
+  console.warn('[learn-render 4.2 stencil-testing] Standard pipeline active');
 }
 
-// RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives
-// one update + draw + readPixels so the live canvas read is anchored to the same
-// frame the capture records. Only meaningful when the page is served with
-// FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
-function installCaptureHook(app: App, world: App['world']): void {
+// Canvas capture hook for the capture smoke harness (pixel mode). Advances the
+// World before reading the Host-owned presentation surface.
+function installCaptureHook(target: HTMLCanvasElement, world: App['world']): void {
   type CaptureHook = () => Promise<Uint8Array>;
   const win = window as unknown as { __captureStencilTesting?: CaptureHook };
-  const renderer = app.renderer;
   win.__captureStencilTesting = async (): Promise<Uint8Array> => {
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    const r = await renderer.readPixels();
+    const r = await captureCanvasPixels(target);
     if (!r.ok) {
       throw new Error(
-        `[learn-render 4.2 stencil-testing] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
+        `[learn-render 4.2 stencil-testing] canvas capture failed: ${r.error.code} -- ${r.error.hint}`,
       );
     }
     return r.value;

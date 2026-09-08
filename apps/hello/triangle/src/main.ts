@@ -20,7 +20,7 @@
 //                            end-to-end via CPU pre-bake binding exemplar).
 //   - @forgeax/engine-ecs       -> World + spawn (5-component schemas).
 //   - @forgeax/engine-runtime     -> createRenderer(canvas) async factory + Renderer
-//                            ECS-driven path (M3): renderer.ready barrier +
+//                            ECS-driven path (M3): host initialization barrier +
 //                            renderer.draw(world) every frame.
 //
 // Frame driver: requestAnimationFrame. Each frame the engine-internal
@@ -47,35 +47,13 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { mat4, quat, vec3 } from '@forgeax/engine-math';
-// M4 RHI canvas-context migration (feat-20260510-rhi-resource-creation / w28
-// + M6 fix-up [w51] + Round 3 fix-up F-P3-1 / w57): the previous D-S1
-// single-point escape hatch (`_internal_getRawDevice`) was replaced with the
-// M3-shipped RHI canvas-context abstraction; the second escape hatch (a
-// monkey-patch on `rhi.requestAdapter` to capture the forgeax RhiDevice the
-// engine created internally) was retired in F-P3-1 — the Renderer interface
-// now exposes the captured device through `renderer.device: RhiDevice | null`.
-// The flow is now:
-//
-//   1. Call `createRenderer(canvas)` directly; the engine internally walks
-//      the strict two-step path `rhi.requestAdapter() ->
-//      adapter.requestDevice()` (M6 fix-up [w51] / AGENTS.md break-point
-//      list 2026-05-10 #2) and stores the forgeax RhiDevice on the
-//      Renderer instance.
-//   2. Fetch the canvas' WebGPU context via `canvas.getContext('webgpu')`
-//      and wrap it through the RHI seam: `rhi.acquireCanvasContext(canvas)`.
-//   3. Call `canvasContext.configure({ device: renderer.device, format,
-//      usage })`. The shim translates the forgeax `device` brand into the
-//      underlying raw `GPUDevice` internally (RAW_DEVICE_MAP) so the spec
-//      `GPUCanvasContext.configure({ device })` slot still receives a valid
-//      raw device, while AI-user-facing code only sees the forgeax
-//      abstraction (charter proposition 5 consistent abstraction red line).
 import { AssetRegistry, HANDLE_TRIANGLE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { type Renderer } from '@forgeax/engine-render';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
 import { perspective } from '@forgeax/engine-render';
-import { acquireCanvasContext, createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import brdfSrc from './shaders/brdf.wgsl?raw';
@@ -200,40 +178,19 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // manifest URL string literals). The adapter is orthogonal to the D-S1
   // raw-device escape hatch demonstrated below: it only supplies the shader
   // manifest URL plumbing.
-  const renderer = await createRenderer(target, {}, forgeaxBundlerAdapter());
-  const worldAttachment1 = renderer.attachWorld(world);
+  const constructed = await constructRuntimeRendererHost(target, {}, forgeaxBundlerAdapter());
+  if (!constructed.ok) throw constructed.error;
+  const renderer = constructed.value.renderer;
+  const worldAttachment1 = renderer.attach(world);
   if (!worldAttachment1.ok) throw worldAttachment1.error;
 
-  // Configure the canvas WebGPU context through the RHI canvas-context
-  // abstraction (`acquireCanvasContext(canvas)` -> `canvasContext.
-  // configure({ device, format, usage })`). The shim internally maps the
-  // forgeax RhiDevice back to the raw GPUDevice inside RAW_DEVICE_MAP so
-  // the spec context.configure({ device }) slot still receives a valid
-  // raw device handle.
-  const ctxResult = acquireCanvasContext(target);
-  if (ctxResult.ok) {
-    const canvasContext = ctxResult.value;
-    const cfgResult = canvasContext.configure({
-      device: renderer.device,
-      format: 'rgba8unorm',
-      usage: 0x10 | 0x01,
-    });
-    if (!cfgResult.ok) {
-      console.error('[triangle] canvasContext.configure failed:', cfgResult.error);
-    }
-  } else {
-    console.error('[triangle] acquireCanvasContext failed:', ctxResult.error);
-  }
-
-  // Surface the chosen backend in DevTools so manual verification (AC-06) is
-  // trivial: open console, look for "[triangle] backend=webgpu".
-  console.warn(`[triangle] backend=${renderer.backend}`);
+  console.warn('[triangle] Standard pipeline active');
 
   // CPU pre-bake binding exemplar (M5 t13 / S-3): actually run (v0, v1, v2)
   // x (projWebGL, projReverseZ) = 6 mat4.transformPoint calls, mapping vec3
   // vertices into clip space. clipBuf is a throwaway scratch - this path does
   // NOT feed any GPU vertex buffer (the engine RenderSystem owns its own via
-  // the AssetRegistry HANDLE_TRIANGLE upload during `await renderer.ready`);
+  // the AssetRegistry HANDLE_TRIANGLE upload during `await host initialization`);
   // it exists purely to (1) force mat4.transformPoint surface resolution at
   // build time (AC-17 dual-projection smoke); (2) satisfy charter proposition
   // 4 - an AI user can copy-paste from main.ts once and learn the call shape.
@@ -253,7 +210,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // smoke counter-example entry points (i)(ii)
   // (feat-20260508-verify-gpu-smoke-gate w6 / w5 counter-examples):
-  //   ?backend=webgl2 -> console reports backend=webgl2 (simulates non-WebGPU
+  //   ?backend=webgl2 -> console reports the simulated non-WebGPU path
   //                      backend for counter-example (i) smoke FAIL)
   //   ?clearOnly=1    -> renderer.draw(world) skipped (counter-example (ii):
   //                      clear only, no draw - the page leaves the canvas at
@@ -265,7 +222,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const clearOnly = params.get('clearOnly') === '1';
   if (forceBackend === 'webgl2') {
     // Override the backend report line so smoke criterion (a) FAILs (even if
-    // renderer.backend is actually WebGPU; this query param only simulates
+    // The active backend is WebGPU; this query param only simulates
     // a non-WebGPU backend signal for counter-example (i)).
     console.warn(`[triangle] backend=webgl2`);
   }
@@ -285,17 +242,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // complete.
   // w25 — Renderer.ready resolves Result<void, RhiError>; AI users branch
   // on `.ok` rather than try/catch.
-  const ready = await renderer.ready;
-  if (!ready.ok) {
-    console.error('[triangle] renderer.ready failed:', ready.error);
-    return;
-  }
 
   // raf-driven frame: hand the World to the renderer; the engine-internal
   // RenderSystem walks the query graph (D-S2 Extract / Prepare / Record) and
   // submits one GPU command buffer per call. AC-09 contract: RenderSystem is
   // NOT registered to world.systems schedule; world.update() does not run
-  // it - renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }) is the sole invocation site.
+  // it - renderer.draw({ leases, camera, environment }) is the sole invocation site.
   const frame = (): void => {
     if (!clearOnly) {
       // w25 — draw returns Result; ignore .ok for the smoke path (onError
@@ -306,7 +258,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       // breaking change compiles + runs end-to-end (dawn-node smoke) rather
       // than passing compile-only. Single world composites at owner 0.
       world.update().unwrap();
-      const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      const r = renderer.draw({
+        leases: [worldAttachment1.value],
+        camera: { lease: worldAttachment1.value },
+        environment: { lease: worldAttachment1.value },
+      });
       if (!r.ok) console.error('[triangle] draw error:', r.error);
     } else {
       // Counter-example (ii): skip the draw call, leaving the canvas at
@@ -319,34 +275,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   };
   requestAnimationFrame(frame);
 }
-
-// feat-20260708-composited-multi-world-rendering M3 / m3-t2 — AC-02 owner-required
-// compile-time probes at the REAL consumer callsite (requirements AC-02 CAUTION:
-// the owner-required narrowing must be verified on the real draw path, not only
-// via *.test-d.ts). These are dead code (never invoked; `void` reference keeps the
-// bundler + lint happy) so they add no runtime behaviour to the smoke path.
-//
-// Each `@ts-expect-error` asserts the illegal call form fails tsc under the new
-// draw(worlds: World[], { cameraOwner: number; resourceOwner: number }) signature:
-//   1. omitting the required owner options argument;
-//   2. passing a non-array draw(world) form.
-//
-// Validation timing: hello-triangle is not in the M3 scoped sweep (it is the D-8
-// smoke integration probe), and during the M3->M4 red window the runtime
-// dist/*.d.ts is intentionally stale (tsup dts:false; regen needs tsc -b, which
-// is red until M4 migrates the remaining callsites). So these directives are
-// enforced by the M4 full-repo `pnpm run typecheck` gate. The migrated real call
-// above is exercised by the M3 dawn-node smoke (runtime execution).
-function __ac02OwnerRequiredCompileProbes(renderer: Renderer, world: World): void {
-  world.update().unwrap();
-  // @ts-expect-error AC-02: owner options are required; omitting them must fail tsc.
-  renderer.draw([world]);
-  const worldAttachment2 = renderer.attachWorld(world);
-  if (!worldAttachment2.ok) throw worldAttachment2.error;
-  // @ts-expect-error AC-02: `worlds` must be an array; the legacy draw(world) form must fail tsc.
-  renderer.draw(world, { cameraOwner: 0, resourceOwner: 0 });
-}
-void __ac02OwnerRequiredCompileProbes;
 
 function renderFallbackBanner(target: HTMLCanvasElement, err: EngineEnvironmentError): void {
   const parent = target.parentElement;

@@ -1,4 +1,4 @@
-// ssao-data.test.ts -- M1 / w1: kernel distribution test (TDD red phase).
+// ssao-kernel.test.ts -- M1 / w1: kernel distribution test (TDD red phase).
 //
 // Asserts:
 //  - generateSsaoKernel() returns 64 vec3 samples.
@@ -10,8 +10,8 @@
 //
 // AC-03 anchor: kernel length 64 + distribution properties.
 
-import { generateSsaoKernel, generateSsaoNoise } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
+import { generateSsaoKernel, generateSsaoNoise } from '../../../render/src/ssao-buffers';
 
 function readFloat(v: Float32Array, idx: number): number {
   const val = v[idx];

@@ -51,6 +51,10 @@ const UNKNOWN_CODES = new Set([
   'missing-timestamp',
   'missing-timing',
   'artifact-binding-missing',
+  'artifact-attempt-missing',
+  'artifact-head-missing',
+  'artifact-treatment-missing',
+  'artifact-fingerprint-missing',
 ]);
 
 function isObject(value) {
@@ -123,6 +127,10 @@ function identityFrom(value) {
       ),
       null,
     ),
+    treatmentId: firstDefined(
+      field(value, 'treatmentId', 'treatment_id', 'identity.treatmentId', 'identity.treatment_id'),
+      null,
+    ),
     inputFingerprint: firstDefined(
       field(
         value,
@@ -161,12 +169,14 @@ function expectedFrom(packet, expected) {
     runId: firstDefined(packet?.expectedRunId, packet?.expected?.runId),
     headSha: firstDefined(packet?.expectedHeadSha, packet?.expected?.headSha),
     runAttempt: firstDefined(packet?.expectedRunAttempt, packet?.expected?.runAttempt),
+    treatmentId: firstDefined(packet?.expectedTreatmentId, packet?.expected?.treatmentId),
     inputFingerprint: firstDefined(packet?.expectedFingerprint, packet?.expected?.inputFingerprint),
   };
   return {
     runId: firstDefined(sourceIdentity.runId, packetExpectedIdentity.runId),
     headSha: firstDefined(sourceIdentity.headSha, packetExpectedIdentity.headSha),
     runAttempt: firstDefined(sourceIdentity.runAttempt, packetExpectedIdentity.runAttempt),
+    treatmentId: firstDefined(sourceIdentity.treatmentId, packetExpectedIdentity.treatmentId),
     inputFingerprint: firstDefined(
       sourceIdentity.inputFingerprint,
       packetExpectedIdentity.inputFingerprint,
@@ -187,6 +197,7 @@ function observedRunFrom(packet) {
     runId: firstDefined(nestedIdentity.runId, packetIdentity.runId),
     headSha: firstDefined(nestedIdentity.headSha, packetIdentity.headSha),
     runAttempt: firstDefined(nestedIdentity.runAttempt, packetIdentity.runAttempt),
+    treatmentId: firstDefined(nestedIdentity.treatmentId, packetIdentity.treatmentId),
     inputFingerprint: firstDefined(
       nestedIdentity.inputFingerprint,
       packetIdentity.inputFingerprint,
@@ -231,10 +242,17 @@ function addReason(state, code, detail = {}, scope = 'packet') {
 }
 
 function identityComparison(state, expected, observed) {
+  const observedAttempt = integerValue(observed.runAttempt);
+  if (observedAttempt !== null && observedAttempt < 1)
+    addReason(state, 'attempt-invalid', { observed: observed.runAttempt }, 'run');
+  const observedHead = stringValue(observed.headSha);
+  if (observedHead !== null && !/^[0-9a-f]{40}$/i.test(observedHead))
+    addReason(state, 'head-sha-invalid', { observed: observed.headSha }, 'run');
   const fields = [
     ['runId', integerValue],
     ['headSha', stringValue],
     ['runAttempt', integerValue],
+    ['treatmentId', stringValue],
     ['inputFingerprint', stringValue],
   ];
   for (const [name, normalize] of fields) {
@@ -249,7 +267,9 @@ function identityComparison(state, expected, observed) {
         ? 'attempt'
         : name === 'inputFingerprint'
           ? 'fingerprint'
-          : name.replace('headSha', 'head-sha').replace('runId', 'run-id');
+          : name === 'treatmentId'
+            ? 'treatment-id'
+            : name.replace('headSha', 'head-sha').replace('runId', 'run-id');
     if (observedValue === null) {
       addReason(state, `${codeName}-missing`, { expected: expectedValue });
       continue;
@@ -267,6 +287,7 @@ function jobIdentity(job) {
     runId: firstDefined(field(job, 'runId', 'run_id', 'run.id'), null),
     headSha: firstDefined(field(job, 'headSha', 'head_sha', 'run.headSha', 'run.head_sha'), null),
     runAttempt: firstDefined(field(job, 'runAttempt', 'run_attempt', 'attempt'), null),
+    treatmentId: firstDefined(field(job, 'treatmentId', 'treatment_id'), null),
     inputFingerprint: firstDefined(
       field(job, 'inputFingerprint', 'input_fingerprint', 'fingerprint'),
       null,
@@ -291,6 +312,11 @@ function artifactIdentity(artifact) {
     runAttempt: firstDefined(
       field(artifact, 'runAttempt', 'run_attempt', 'attempt'),
       field(workflowRun, 'run_attempt', 'runAttempt'),
+      null,
+    ),
+    treatmentId: firstDefined(
+      field(artifact, 'treatmentId', 'treatment_id'),
+      field(workflowRun, 'treatmentId', 'treatment_id'),
       null,
     ),
     inputFingerprint: firstDefined(
@@ -460,6 +486,7 @@ function normalizeJob(job, expected, state) {
     ['runId', integerValue, 'run-id-mismatch'],
     ['headSha', stringValue, 'head-sha-mismatch'],
     ['runAttempt', integerValue, 'attempt-mismatch'],
+    ['treatmentId', stringValue, 'treatment-id-mismatch'],
     ['inputFingerprint', stringValue, 'fingerprint-mismatch'],
   ]) {
     const value = normalize(identity[key]);
@@ -518,26 +545,53 @@ function normalizeArtifact(artifact, expected, state) {
   if (id === null) add('artifact-id-missing');
   const runId = integerValue(identity.runId);
   const expectedRunId = integerValue(expected.runId);
-  if (runId === null) add('artifact-binding-missing', { field: 'runId' });
-  else if (expectedRunId !== null && runId !== expectedRunId)
-    add('artifact-run-mismatch', { expected: expectedRunId, observed: runId });
+  if (expectedRunId !== null) {
+    if (runId === null)
+      add('artifact-binding-missing', { expected: expectedRunId, observed: null });
+    else if (runId !== expectedRunId)
+      add('artifact-run-mismatch', { expected: expectedRunId, observed: runId });
+  }
   const attempt = integerValue(identity.runAttempt);
   const expectedAttempt = integerValue(expected.runAttempt);
-  if (attempt !== null && expectedAttempt !== null && attempt !== expectedAttempt)
-    add('artifact-attempt-mismatch', { expected: expectedAttempt, observed: attempt });
+  if (expectedAttempt !== null) {
+    if (attempt === null)
+      add('artifact-attempt-missing', { expected: expectedAttempt, observed: null });
+    else if (attempt !== expectedAttempt)
+      add('artifact-attempt-mismatch', { expected: expectedAttempt, observed: attempt });
+  }
   const headSha = stringValue(identity.headSha);
   const expectedHeadSha = stringValue(expected.headSha);
-  if (headSha !== null && expectedHeadSha !== null && headSha !== expectedHeadSha)
-    add('artifact-head-mismatch', { expected: expectedHeadSha, observed: headSha });
+  if (expectedHeadSha !== null) {
+    if (headSha === null)
+      add('artifact-head-missing', { expected: expectedHeadSha, observed: null });
+    else if (headSha !== expectedHeadSha)
+      add('artifact-head-mismatch', { expected: expectedHeadSha, observed: headSha });
+  }
+  const treatmentId = stringValue(identity.treatmentId);
+  const expectedTreatmentId = stringValue(expected.treatmentId);
+  if (expectedTreatmentId !== null) {
+    if (treatmentId === null)
+      add('artifact-treatment-missing', { expected: expectedTreatmentId, observed: null });
+    else if (treatmentId !== expectedTreatmentId)
+      add('artifact-treatment-mismatch', { expected: expectedTreatmentId, observed: treatmentId });
+  }
   const fingerprint = stringValue(identity.inputFingerprint);
   const expectedFingerprint = stringValue(expected.inputFingerprint);
-  if (fingerprint !== null && expectedFingerprint !== null && fingerprint !== expectedFingerprint)
-    add('artifact-fingerprint-mismatch', { expected: expectedFingerprint, observed: fingerprint });
+  if (expectedFingerprint !== null) {
+    if (fingerprint === null)
+      add('artifact-fingerprint-missing', { expected: expectedFingerprint, observed: null });
+    else if (fingerprint !== expectedFingerprint)
+      add('artifact-fingerprint-mismatch', {
+        expected: expectedFingerprint,
+        observed: fingerprint,
+      });
+  }
   return {
     artifactId: id,
     runId,
     headSha,
     runAttempt: attempt,
+    treatmentId,
     inputFingerprint: fingerprint,
     status: reasons.length === 0 ? 'valid' : 'invalid',
     reasonCodes: reasons.map(({ code }) => code),
@@ -608,6 +662,7 @@ export function normalizeRunPacket(packet, expected = {}) {
     runId: integerValue(run.runId),
     headSha: stringValue(run.headSha),
     runAttempt: integerValue(run.runAttempt),
+    treatmentId: stringValue(run.treatmentId),
     inputFingerprint: stringValue(run.inputFingerprint),
   };
   return result(state, identity, expectation, jobRows, artifactRows);

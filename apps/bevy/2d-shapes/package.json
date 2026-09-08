@@ -19,6 +19,9 @@
       "category": "2D Rendering",
       "status": "implemented"
     },
+    "rhiDebug": {
+      "riskFamilies": ["geometry-scale"]
+    },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-2d-shapes smoke",
     "metrics": {
       "bundle-size": { "enabled": false, "reason": "vite app bundle downstream of engine-runtime sizes already tracked at the package level" },

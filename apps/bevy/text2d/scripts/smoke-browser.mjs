@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 
+import { createHash } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { chromium } from 'playwright';
 import { verifyDemoCapture } from '../../../shared/scripts/rhi-debug-verify.mjs';
 import {
   collectRhiDebugDraws,
@@ -14,7 +18,9 @@ const appDir = dirname(scriptsDir);
 const root = resolve(scriptsDir, '..', '..', '..', '..');
 const packageName = '@forgeax/bevy-text2d';
 
-if (process.env.TEXT2D_PUBLIC === '1') {
+if (process.argv.includes('--m34-recovery')) {
+  await runM34RecoveryBrowser();
+} else if (process.env.TEXT2D_PUBLIC === '1') {
   await verifyDemoCapture({
     pkg: packageName,
     label: 'bevy text2d public captureFrame',
@@ -39,6 +45,127 @@ if (process.env.TEXT2D_PUBLIC === '1') {
       `indexCount=${inspected.drawCall.indexCount} bindings=${inspected.bindings.length} ` +
       `atlas=${selected.fontAtlasTexture} sampler=${selected.fontAtlasSampler}`,
   });
+}
+
+async function runM34RecoveryBrowser() {
+  const artifactDir = resolve(
+    process.env.SMOKE_ARTIFACT_DIR ??
+      process.env.FORGEAX_GAUNTLET_ARTIFACT_DIR ??
+      resolve(appDir, 'artifacts', 'm34-browser'),
+  );
+  mkdirSync(artifactDir, { recursive: true });
+  const vite = spawn('pnpm', ['-F', packageName, 'dev'], {
+    cwd: root,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let url;
+  vite.stdout.on('data', (chunk) => {
+    const text = String(chunk);
+    process.stdout.write(`[vite] ${text}`);
+    url ??= text.match(/Local:\s+(http:\/\/[^\s]+)/)?.[1]?.replace(/\/$/, '');
+  });
+  vite.stderr.on('data', (chunk) => process.stderr.write(`[vite-err] ${String(chunk)}`));
+  let browser;
+  try {
+    const deadline = Date.now() + 30_000;
+    while (url === undefined && Date.now() < deadline) await sleep(100);
+    if (url === undefined) throw new Error('M34 Vite dev server did not publish a URL in 30s');
+    browser = await chromium.launch({
+      headless: true,
+      channel: 'chrome',
+      args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer', '--ignore-gpu-blocklist'],
+    });
+    const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
+    const pageErrors = [];
+    const consoleErrors = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    page.on('console', (message) => {
+      if (message.type() === 'error' && !message.text().includes('font-concurrency-exceeded')) {
+        consoleErrors.push(message.text());
+      }
+    });
+    await page.goto(`${url}/?m34-font-recovery=1`, { waitUntil: 'networkidle', timeout: 30_000 });
+    await page.waitForFunction(
+      () => typeof globalThis.__bevyText2dM34?.baseline === 'function',
+      undefined,
+      { timeout: 30_000 },
+    );
+
+    const capture = async (name, method) => {
+      const state = await page.evaluate((operation) => globalThis.__bevyText2dM34[operation](), method);
+      const path = resolve(artifactDir, `m34-${name}.png`);
+      const bytes = await page.locator('#app').screenshot({ path });
+      return {
+        state,
+        path,
+        bytes: bytes.byteLength,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+      };
+    };
+    const baseline = await capture('baseline', 'baseline');
+    const overflow = await capture('overflow', 'overflow');
+    const recovered = await capture('recovered', 'recover');
+    const cleanup = await capture('cleanup', 'cleanup');
+    const cleanupAgain = await page.evaluate(() => globalThis.__bevyText2dM34.cleanup());
+    const evidence = { baseline, overflow, recovered, cleanup, cleanupAgain, pageErrors, consoleErrors };
+    writeFileSync(resolve(artifactDir, 'm34-browser-evidence.json'), `${JSON.stringify(evidence, null, 2)}\n`);
+
+    const overflowError = overflow.state.lastError;
+    const failures = [];
+    if (baseline.state.prefixAttached !== 8 || !baseline.state.targetAttached || baseline.state.errorCount !== 0) {
+      failures.push(`baseline=${JSON.stringify(baseline.state)}`);
+    }
+    if (
+      overflow.state.prefixAttached !== 8 ||
+      overflow.state.targetAttached ||
+      overflow.state.errorCount !== 1 ||
+      overflow.state.liveRefs !== overflow.state.baselineLiveRefs - 2 ||
+      overflowError?.code !== 'font-concurrency-exceeded' ||
+      overflowError.expected !== '8' ||
+      overflowError.detail?.active !== 8 ||
+      overflowError.detail?.limit !== 8 ||
+      !Number.isInteger(overflowError.detail?.rejected)
+    ) {
+      failures.push(`overflow=${JSON.stringify(overflow.state)}`);
+    }
+    if (
+      recovered.state.prefixAttached !== 8 ||
+      !recovered.state.targetAttached ||
+      recovered.state.errorCount !== 1 ||
+      recovered.state.liveRefs !== recovered.state.baselineLiveRefs ||
+      recovered.state.targetMeshHandle === baseline.state.targetMeshHandle ||
+      recovered.state.targetMaterialHandle === baseline.state.targetMaterialHandle
+    ) {
+      failures.push(`recovered=${JSON.stringify(recovered.state)}`);
+    }
+    if (
+      cleanup.state.prefixAttached !== 0 ||
+      cleanup.state.targetAttached ||
+      !cleanup.state.unrelatedPresent ||
+      cleanup.state.liveRefs !== cleanup.state.baselineLiveRefs - 27 ||
+      JSON.stringify(cleanupAgain) !== JSON.stringify(cleanup.state) ||
+      cleanup.state.errorCount !== 1
+    ) {
+      failures.push(`cleanup=${JSON.stringify({ cleanup: cleanup.state, cleanupAgain })}`);
+    }
+    if (baseline.bytes < 1000 || overflow.sha256 === baseline.sha256 || cleanup.sha256 === baseline.sha256) {
+      failures.push(`pixel evidence hashes=${JSON.stringify({ baseline, overflow, cleanup })}`);
+    }
+    if (pageErrors.length > 0 || consoleErrors.length > 0) {
+      failures.push(`browser errors=${JSON.stringify({ pageErrors, consoleErrors })}`);
+    }
+    if (failures.length > 0) {
+      throw new Error(`[m34] FAIL - ${failures.join('; ')}`);
+    }
+    console.log(
+      `[m34] Browser PASS baseline=${baseline.sha256} overflow=${overflow.sha256} ` +
+        `recovered=${recovered.sha256} cleanup=${cleanup.sha256}`,
+    );
+  } finally {
+    await browser?.close();
+    vite.kill('SIGTERM');
+    await sleep(500);
+  }
 }
 
 function runPublicCaptureFrame() {

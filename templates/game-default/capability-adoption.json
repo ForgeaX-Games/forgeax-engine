@@ -194,6 +194,10 @@
         "apps/hello/text/README.md",
         "apps/hello/m2-content-pipeline/scripts/smoke.mjs",
         "apps/preview/vite.config.ts",
+        "apps/preview/scripts/smoke-scriptable-pack.mjs",
+        "templates/game-default/assets/resonance-forge.pack.ts",
+        "templates/game-default/assets/plugins/resonance-forge.ts",
+        "apps/preview/vite.config.ts",
         "apps/preview/scripts/smoke-inspection-recovery.mjs",
         "templates/game-default/assets/plugins/world-score-text.ts",
         "templates/game-default/main.ts",
@@ -1233,7 +1237,7 @@
         "packages/plugin/README.md",
         ".forgeax-harness/solo/game-default/experiments/20260730-024656-classify-plugin-group-candidate/REPORT.md"
       ],
-      "reason": "The canonical app is a configuration-only ordered PluginGroup proof: its print systems have no gameplay input, reset/re-entry owner, asset/runtime observation, browser witness, or recovery story to compose with game-default. Wrapping Preview's existing plugin list would only rename host wiring and would create no observable template feature; keep the group contract in its focused canonical consumer.",
+      "reason": "The canonical app is a focused native Cordis parent-Fiber proof: its print systems have no gameplay input, reset/re-entry owner, asset/runtime observation, browser witness, or recovery story to compose with game-default. Wrapping Preview's existing plugin list would only rename host wiring and would create no observable template feature; keep the composition contract in its focused canonical consumer.",
       "betterConsumer": "apps/bevy/plugin-group"
     },
     {
@@ -2043,7 +2047,7 @@
         "apps/hello/app/scripts/smoke.mjs",
         ".forgeax-harness/solo/game-default/experiments/20260731-133003-classify-hello-app-candidate/REPORT.md"
       ],
-      "reason": "The canonical app proves the one-screen createApp(canvas) bootstrap, structured error union, clearColor frame loop, and browser canvas. Preview already owns createApp plus loadGame, BootstrapContext, run-scoped UI cleanup, dev import transport, and failure reporting; copying this static cube host would create a parallel entry point without authored assets, gameplay, reset/re-entry, or recovery.",
+      "reason": "The canonical app proves the one-screen createApp(canvas) bootstrap, structured error union, clearColor frame loop, and browser canvas. Preview already owns createApp plus loadGame, an App-owned Cordis Context, the GameHost service, run-scoped UI cleanup, dev import transport, and failure reporting; copying this static cube host would create a parallel entry point without authored assets, gameplay, reset/re-entry, or recovery.",
       "betterConsumer": "apps/hello/app"
     },
     {
@@ -3040,7 +3044,7 @@
         ".forgeax-harness/solo/game-default/experiments/20260805-061828-asset-import-plugin-loop/REPORT.md",
         "templates/game-default/AGENTS.md"
       ],
-      "reason": "engine-import is a build-time ImporterRegistry/runImport protocol, not a runtime asset plugin. The template already owns the host plugin boundary and real image/glTF/FBX/font/audio GUID chains through its existing target-profile and authored scene rows; the canonical M2 and custom-importer apps are the better importer/recovery consumers. Adding another registry or runtime dependency would duplicate the source-to-pack lesson and split asset authority.",
+      "reason": "engine-import is build-time producer infrastructure, not a runtime game dependency. Preview now uses its AssetOutputProducerRegistry with the standard material and mesh producers to cook game-default's nine-output ScriptablePack atomically; the game consumes only the resulting GUID rows and payloads. M2 and custom-importer remain the better generic importer/recovery consumers, while adding engine-import to the template runtime would still split asset authority.",
       "betterConsumer": "apps/hello/m2-content-pipeline"
     },
     {
@@ -3181,12 +3185,15 @@
         "apps/preview/vite.config.ts",
         "apps/preview/scripts/catalog-host-refresh.browser.mjs",
         "apps/preview/scripts/smoke-ui-production.mjs",
+        "apps/preview/scripts/smoke-scriptable-pack.mjs",
+        "templates/game-default/assets/resonance-forge.pack.ts",
+        "templates/game-default/assets/plugins/resonance-forge.ts",
         "apps/hello/m2-content-pipeline/scripts/smoke.mjs",
         "asset-authority.schema.json",
         "templates/game-default/AGENTS.md",
         ".forgeax-harness/solo/game-default/experiments/20260805-080050-vite-pack-host-plugin-boundary-loop/REPORT.md"
       ],
-      "reason": "engine-vite-plugin-pack is the Vite host seam for dev catalog/HMR/lazy import and production pack-index/artifact emission. apps/preview and M2 prove importer/native-cooker registration, DDC/catalog projection, structured diagnostics, re-enumeration, HMR, production Pack v2, and cleanup. game-default should consume the resulting GUID rows through its existing target/reset owners, not ship Vite transport, a second catalog registry, or cache identity; adding the package as a game dependency would duplicate host authority and teach less.",
+      "reason": "engine-vite-plugin-pack is the Vite host seam, so Preview rather than the game remains its direct consumer. Preview now scans game-default's ScriptablePack, publishes nine outputs and receipts in one Pack v2 transaction, and proves the production Catalog/package/runtime path; game-default loads those GUIDs into one animated ECS formation. Shipping Vite transport, a second catalog registry, or cache identity in the template would still duplicate host authority.",
       "betterConsumer": "apps/preview"
     },
     {
@@ -3314,7 +3321,7 @@
         ".forgeax-harness/solo/game-default/experiments/20260805-170128-package-engine-placeholder-boundary-loop/artifacts/capability-audit-pre.json",
         ".forgeax-harness/solo/game-default/experiments/20260805-170128-package-engine-placeholder-boundary-loop/artifacts/build-engine.log"
       ],
-      "reason": "@forgeax/engine is intentionally a private, files-only placeholder for the @forgeax/engine-* family: it has no exports, source entry, runtime artifact, or test surface. Its README and the root package map route first users to @forgeax/engine-runtime plus focused domain packages, and game-default already imports those focused owners directly. Adding the bare name would teach an unusable import or force a compatibility mega-barrel, increasing concepts without adding a feature. Revisit only if this package gains a documented shippable API representing a distinct first-game capability.",
+      "reason": "@forgeax/engine is the public distribution umbrella and CLI entry, while this contributor-checkout template intentionally exercises focused workspace owners directly so package boundaries remain visible to owner-level tests. SDK assembly rewrites the copied consumer template to the matching @forgeax/engine/* subpaths and declares only @forgeax/engine, so published game users get one dependency without turning the source template into a second release topology.",
       "betterConsumer": "@forgeax/engine-runtime"
     },
     {

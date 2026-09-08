@@ -11,12 +11,16 @@ type MessageListener = (event: MessageEventLike) => void;
 export class NodeWorkerAdapter {
   private readonly worker: Worker;
   private readonly listeners = new Map<MessageListener, (data: unknown) => void>();
+  private terminationPromise?: Promise<number>;
 
   public constructor(url: string | URL) {
     this.worker = new Worker(url);
   }
 
   public postMessage(message: unknown, transferList: readonly ArrayBuffer[] = []): void {
+    if (this.terminationPromise !== undefined) {
+      return;
+    }
     this.worker.postMessage(message, [...transferList]);
   }
 
@@ -36,6 +40,9 @@ export class NodeWorkerAdapter {
   }
 
   public terminate(): Promise<number> {
-    return this.worker.terminate();
+    if (this.terminationPromise === undefined) {
+      this.terminationPromise = this.worker.terminate();
+    }
+    return this.terminationPromise;
   }
 }

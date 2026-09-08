@@ -46,7 +46,8 @@ describe('game-default Boss Lightning suite', () => {
     expect(source).toContain('stopHostile');
     expect(source).toContain('impactCarriers');
     expect(source).toContain("'host-unavailable'");
-    expect(source).toContain("recovery !== 'next-frame'");
+    expect(source).toContain('renderFeaturePlugin(host.feature)');
+    expect(source).not.toContain('renderFeatureDiagnostics');
     expect(source).not.toContain('Float32Array[]');
   });
 

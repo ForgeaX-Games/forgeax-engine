@@ -43,7 +43,7 @@ import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { orthographic, TONEMAP_NONE } from '@forgeax/engine-render';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
 import { PointLight, SpotLight } from '@forgeax/engine-render';
 
@@ -82,26 +82,21 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter() },
   );
   if (!appRes.ok) {
     reportAppError(appRes.error);
     return;
   }
   const app: App = appRes.value;
-  console.warn(`[2d-flashlight] backend=${app.renderer.backend}`);
+  console.warn(`[2d-flashlight] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
-  const ready = await app.renderer.ready;
-  if (!ready.ok) {
-    console.error('[2d-flashlight] renderer.ready failed:', ready.error.code, ready.error.hint);
-    return;
-  }
 
   const world = app.world;
   const mode = readModeFromUrl();
   console.warn(`[2d-flashlight] mode=${mode}`);
 
-  const textureHandle = await uploadCheckerboardTexture(world, app);
+  const textureHandle = await uploadCheckerboardTexture(world);
 
   buildScene({ mode, world, textureHandle });
 
@@ -316,7 +311,6 @@ function spawnSprite(
 // pre-multiplication drift.
 async function uploadCheckerboardTexture(
   world: World,
-  app: App,
 ): Promise<Handle<'TextureAsset', 'shared'>> {
   const side = 8;
   const bytes = new Uint8Array(side * side * 4);
@@ -349,19 +343,6 @@ async function uploadCheckerboardTexture(
     mipmap: false,
   };
   const handle = world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', desc);
-  const uploadRes = await app.renderer.store.uploadTexture(handle, desc, {
-    bytes,
-    width: side,
-    height: side,
-    mime: 'image/png',
-    colorSpace: 'srgb',
-    mipmap: false,
-  });
-  if (!uploadRes.ok) {
-    throw new Error(
-      `[2d-flashlight] texture upload failed: ${uploadRes.error.code} - ${uploadRes.error.hint}`,
-    );
-  }
   return handle;
 }
 

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { Disabled, FixedUpdate, World } from '@forgeax/engine-ecs';
+import { Context } from '@forgeax/engine-plugin';
 import { CollidingEntities, type PhysicsWorld } from '@forgeax/engine-physics';
 import { Transform } from '@forgeax/engine-scene';
+import { registerStatesPlugin } from '@forgeax/engine-state';
 import {
   BouncyBallHazard,
   COUNTERATTACK_COOLDOWN_SECONDS,
@@ -131,7 +133,8 @@ describe('game-default counterattack damage', () => {
 
   it('installs reward then projectile then BouncyBall so Sentinel owns the new Shield', () => {
     const world = new World();
-    installGameplayState({ world, reset: () => {} });
+    registerStatesPlugin(world);
+    installGameplayState({ context: new Context(), world, reset: () => {} });
     for (const [name, after] of [
       ['physicsCollisionSync', []],
       ['game-player-movement', ['physicsCollisionSync']],

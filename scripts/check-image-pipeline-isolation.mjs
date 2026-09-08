@@ -142,33 +142,33 @@ for (const scanRoot of pathAScanRoots) {
 // (a.2) decoder-strip requirement (w27, AC-15): inverted from the
 // pre-strip "runtime MUST import the decoder" anchor.
 //
-// Static `import ... from '@forgeax/engine-image'` (any subpath) line
-// matcher, reused by both conjuncts.
+// Static value `import ... from '@forgeax/engine-image'` (any subpath) line
+// matcher; type-only imports do not create a runtime bundle edge.
 const engineImageImportRe =
-  /^\s*import\b[\s\S]*?from\s+['"]@forgeax\/engine-image(?:\/[^'"]+)?['"]\s*;?/gm;
+  /^\s*import\s+(?!type\b)[^\n;]*?from\s+['"]@forgeax\/engine-image(?:\/[^'"]+)?['"]\s*;?/gm;
 const decoderStripFailures = [];
 
-// (a.2-anti-whitelist) tweak-20260714-runtime-image-bytes-decoder-add-
-// decodeimagebytes M1: `packages/assets-runtime/src/decode-image-bytes.ts`
-// is the SINGLE assets-runtime file allowed to statically import from
-// @forgeax/engine-image (plan-strategy D-2). It is the runtime-facing
-// wrapper around `decodeImageInBrowser`, and the whitelist is a single
-// exact-path exception -- NOT a glob or directory softening. Every other
-// file under packages/assets-runtime/src and every file under
-// packages/runtime/src remains banned so a stray static edge cannot
-// re-bundle the decoder (AC-16 bundle-size delta preserved).
-const engineImageImportWhitelist = new Set([
-  join(root, 'packages/assets-runtime/src/decode-image-bytes.ts'),
+// (a.2-anti-whitelist) Runtime value imports from the image package are limited
+// to the two existing owner seams. Keep both exact-path and symbol-scoped: a
+// new decoder or a second assembly file must fail closed.
+const engineImageImportAllowlist = new Map([
+  [
+    join(root, 'packages/runtime/src/asset-contributions.ts'),
+    /\b(?:textureContribution|equirectContribution)\b/,
+  ],
+  [join(root, 'packages/assets-runtime/src/decode-image-bytes.ts'), /\bdecodeImageInBrowser\b/],
 ]);
 
-// (a.2-anti) NO file under packages/runtime/src may statically import from
-// @forgeax/engine-image. The runtime carries no decoder after the M3 strip;
-// a static edge here would re-bundle it (regressing the AC-16 delta).
+// (a.2-anti) Only the exact owner assembly may import browser-safe image
+// contributions. The runtime carries no disk decoder after the M3 strip;
+// any other static edge would re-bundle an implementation (regressing the
+// AC-16 delta).
 for (const scanRoot of pathAScanRoots) {
   walk(scanRoot, (p, content) => {
-    if (engineImageImportWhitelist.has(p)) return;
     const importLines = content.match(engineImageImportRe) ?? [];
     for (const line of importLines) {
+      const allowedSymbols = engineImageImportAllowlist.get(p);
+      if (allowedSymbols?.test(line) === true) continue;
       decoderStripFailures.push(
         `runtime/assets-runtime static import of @forgeax/engine-image: ${p} (\`${line.trim()}\`) -- the runtime decoder was stripped (M3 AC-15); import images at build time via the imageImporter`,
       );
@@ -224,12 +224,12 @@ if (pathAFailures.length > 0) {
   process.stderr.write(`AC-15 (a) FAIL: packages/runtime/src violations\n`);
   for (const f of pathAFailures) process.stderr.write(`  - ${f}\n`);
   process.stderr.write(
-    '[hint] @forgeax/engine-runtime is the GPU consumer and carries NO image decoder after the M3 strip (AC-15). Do not static-import @forgeax/engine-image from runtime (import images at build time via the imageImporter, which now holds parseImage); do not re-declare a decode symbol or class .+Decoder in runtime; do not regrow the legacy `image-decoders.d.ts` artefact. The build-time imageImporter (packages/image/src/image-importer.ts) must statically import parseImage.\n',
+    '[hint] @forgeax/engine-runtime carries no disk decoder after the M3 strip (AC-15). Only the exact owner assembly may import browser-safe image contributions; do not import parse/decode implementation symbols, re-declare a decode symbol or class .+Decoder, or regrow `image-decoders.d.ts`. The build-time imageImporter (packages/image/src/image-importer.ts) must statically import parseImage.\n',
   );
   totalFailures += 1;
 } else {
   process.stdout.write(
-    `AC-15 (a) OK: packages/runtime/src clean (forbidden symbols absent, no static @forgeax/engine-image import, imageImporter holds parseImage, no legacy filename)\n`,
+    `AC-15 (a) OK: packages/runtime/src clean (forbidden symbols absent, owner-only image contribution import, imageImporter holds parseImage, no legacy filename)\n`,
   );
 }
 
@@ -262,7 +262,7 @@ if (!existsSync(texturesEntry)) {
 } else {
   const content = readFileSync(texturesEntry, 'utf8');
   // (c) regex: `\bassets\.loadByGuid\b` accepts the receiver-alias form
-  // (`const assets = renderer.assets; assets.loadByGuid<T>(guid)`); the
+  // (`const assets = app.assets; assets.loadByGuid<T>(guid)`); the
   // `\.uploadTexture\s*\(` form matches actual method calls (skipping
   // doc-comment mentions of the architectural verb).
   const hasLoadByGuid = /\bassets\.loadByGuid\b/.test(content);

@@ -20,8 +20,8 @@
 // radialSegments < 3) fail-fast with AssetError('asset-parse-failed'),
 // matching the 6 sibling factories.
 
-import { err, ok, type Result } from '@forgeax/engine-ecs';
 import type { AssetError, MeshAsset } from '@forgeax/engine-types';
+import { err, type Result } from '@forgeax/engine-types';
 import { degenerate, FACTORY_FLOATS_PER_VERTEX, meshFromInterleaved } from './box';
 
 /**
@@ -141,5 +141,5 @@ export function createCapsuleGeometry(
   }
 
   const trimmed = indices.slice(0, iIdx);
-  return ok(meshFromInterleaved(vertices, trimmed));
+  return meshFromInterleaved(vertices, trimmed);
 }

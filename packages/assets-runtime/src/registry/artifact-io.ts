@@ -137,7 +137,10 @@ async function verifyBytes(
       ),
     );
   }
-  if (integrity.digest !== digest.base64 && integrity.digest.toLowerCase() !== digest.hex) {
+  const expectedDigest = integrity.digest.startsWith('sha256:')
+    ? integrity.digest.slice('sha256:'.length)
+    : integrity.digest;
+  if (expectedDigest !== digest.base64 && expectedDigest.toLowerCase() !== digest.hex) {
     return err(
       failure(
         'asset-artifact-integrity-mismatch',
@@ -155,6 +158,17 @@ export async function readArtifact(
   request: ArtifactReadRequest,
   fetcher: ArtifactFetcher = (url) => globalThis.fetch(url),
 ): Promise<Result<Uint8Array, AssetArtifactError>> {
+  if (request.descriptor.mediaType.trim().length === 0) {
+    return err(
+      failure(
+        'asset-artifact-media-unsupported',
+        request,
+        'a non-empty durable artifact mediaType',
+        'set the artifact mediaType during production and re-publish the package',
+        request.descriptor.mediaType,
+      ),
+    );
+  }
   const path = validateArtifactPath(request.descriptor.path, {
     packageRoot: request.packageUrl,
     guid: request.guid,

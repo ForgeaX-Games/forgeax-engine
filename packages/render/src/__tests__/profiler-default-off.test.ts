@@ -1,6 +1,6 @@
 import { createProfiler } from '@forgeax/engine-profiler';
 import { describe, expect, it } from 'vitest';
-import type { RendererOptions } from '../renderer';
+import type { RendererOptions } from '../render-contract';
 
 describe('Render profiler default-off allocation boundary', () => {
   it('keeps the complete render capability path at zero event objects', () => {

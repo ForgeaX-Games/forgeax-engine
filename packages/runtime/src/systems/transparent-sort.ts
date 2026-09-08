@@ -59,16 +59,14 @@
 // archetypeStorage layout).
 
 import type { World } from '@forgeax/engine-ecs';
-import type { TransparentEntry } from '@forgeax/engine-render/internal';
+import type { TransparentEntry } from '../../../render/src/systems/transparent-sort-config';
 import {
   getTransparentSortConfig,
   TRANSPARENT_SORT_MODE_DISTANCE,
   TRANSPARENT_SORT_MODE_LAYER_Y,
   TRANSPARENT_SORT_MODE_LAYER_YZ,
   TRANSPARENT_SORT_MODE_LAYER_Z,
-} from '@forgeax/engine-render/internal';
-
-export type { TransparentEntry } from '@forgeax/engine-render/internal';
+} from '../../../render/src/systems/transparent-sort-config';
 
 /**
  * Sort the transparent-bucket entries by `(layer ASC, sortValue ASC,

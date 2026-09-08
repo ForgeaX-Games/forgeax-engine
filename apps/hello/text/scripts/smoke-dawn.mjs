@@ -10,7 +10,7 @@
 // fontLoader's POD shape is identical regardless of how the asset was registered.
 //
 // Verdict criteria:
-//   (a) createApp + renderer.ready + app.start succeed.
+//   (a) createApp + host initialization + app.start succeed.
 //   (b) app.onError fires 0 times.
 //   (c) console.error fires 0 times (modulo the smoke's own '[smoke]' lines).
 //   (d) frames >= SMOKE_MIN_FRAMES.
@@ -185,11 +185,11 @@ if (!appResult.ok) {
   process.exit(1);
 }
 const app = appResult.value;
-console.log(`[hello-text] backend=${app.renderer.backend}`);
+console.log(`[hello-text] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
 const world = app.world;
 
-const assets = app.renderer.assets;
+const assets = app.assets;
 if (assets === null) {
   originalConsoleError('[smoke] FAIL - AssetRegistry is null');
   process.exit(1);
@@ -240,11 +240,6 @@ world.spawn(
 const onErrorEvents = [];
 app.onError((err) => onErrorEvents.push({ code: err.code, hint: err.hint }));
 
-const ready = await app.renderer.ready;
-if (!ready.ok) {
-  originalConsoleError(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 let fakeNow = 0;
 globalThis.performance.now = () => fakeNow;
@@ -362,7 +357,7 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log(`[smoke] PASS - frames=${totalFrames}, onError=0, textEntities=${textEntities.length}, backend=${app.renderer.backend}`);
+console.log(`[smoke] PASS - frames=${totalFrames}, onError=0, textEntities=${textEntities.length}, backend=${app.renderer.inspect().capabilities.backendKind}`);
 if (sharedDevice) sharedDevice.destroy?.();
 delete globalThis.navigator.gpu;
 process.exit(0);

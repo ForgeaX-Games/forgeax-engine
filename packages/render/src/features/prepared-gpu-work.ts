@@ -1,10 +1,11 @@
+import type { GraphBufferAccess } from '@forgeax/engine-render-graph';
 import type {
   BindGroup,
   BindGroupLayout,
   Buffer,
   ComputePipeline,
   PipelineLayout,
-  RhiCommandEncoder,
+  RhiComputePassEncoder,
   RhiComputePipelineOps,
   RhiDevice,
   ShaderModule,
@@ -12,7 +13,6 @@ import type {
 import { type BindGroupLayoutDescriptor, err, ok, type Result } from '@forgeax/engine-types';
 import { type RenderError, RenderFeaturePreparationFailedError } from '../errors/render';
 import type { PipelineBuilderShaderModuleFactory } from '../pipeline-builder';
-import type { PreparedGraphicsResourceLease } from '../prepare/prepared-graphics-resolver';
 
 declare const RenderFeatureGpuProgramBrand: unique symbol;
 export interface RenderFeatureGpuProgramRef {
@@ -33,7 +33,13 @@ export interface RenderFeatureGpuBindingsRef {
   readonly generation: number;
 }
 
-export type RenderFeatureGpuBufferUsage = 'storage' | 'uniform' | 'indirect' | 'vertex' | 'index';
+export type RenderFeatureGpuBufferUsage =
+  | 'storage'
+  | 'uniform'
+  | 'indirect'
+  | 'vertex'
+  | 'index'
+  | 'copy-src';
 
 export interface RenderFeatureGpuProgramDescriptor {
   readonly wgsl: string;
@@ -71,11 +77,25 @@ export interface RenderFeatureGpuPrepare {
   ): Result<RenderFeatureGpuBindingsRef, RenderError>;
 }
 
-export interface RenderFeatureGpuDispatch {
+interface RenderFeatureGpuDispatchBase {
   readonly entryPoint: string;
-  readonly workgroups: readonly [number, number?, number?];
   readonly bindings?: RenderFeatureGpuBindingsRef;
 }
+
+export type RenderFeatureGpuDispatch = RenderFeatureGpuDispatchBase &
+  (
+    | {
+        readonly workgroups: readonly [number, number?, number?];
+        readonly indirect?: never;
+      }
+    | {
+        readonly workgroups?: never;
+        readonly indirect: {
+          readonly buffer: RenderFeatureGpuBufferRef;
+          readonly offset: number;
+        };
+      }
+  );
 
 export interface RenderFeatureGpuComputePassDescriptor {
   readonly program: RenderFeatureGpuProgramRef;
@@ -84,18 +104,59 @@ export interface RenderFeatureGpuComputePassDescriptor {
 }
 
 export interface RenderFeatureResolvedGpuComputePass {
-  record(encoder: RhiCommandEncoder): Result<void, RenderError>;
+  readonly buffers: readonly {
+    readonly name: string;
+    readonly buffer: Buffer;
+    readonly size: number;
+    readonly physicalUsage: number;
+    readonly access: GraphBufferAccess;
+  }[];
+  readonly dispatches: readonly (
+    | {
+        readonly pipeline: ComputePipeline;
+        readonly bindGroup: BindGroup;
+        readonly workgroups: readonly [number, number, number];
+      }
+    | {
+        readonly pipeline: ComputePipeline;
+        readonly bindGroup: BindGroup;
+        readonly indirectBuffer: Buffer;
+        readonly indirectOffset: number;
+      }
+  )[];
 }
 
-export interface RenderFeatureGpuWorkResolver extends RenderFeatureGpuPrepare {
+export interface RenderFeatureResolvedGpuBuffer {
+  readonly buffer: Buffer;
+  readonly size: number;
+  readonly physicalUsage: number;
+}
+
+export function encodeRenderFeatureGpuComputePass(
+  pass: RhiComputePassEncoder,
+  work: RenderFeatureResolvedGpuComputePass,
+): void {
+  for (const dispatch of work.dispatches) {
+    pass.setPipeline(dispatch.pipeline);
+    pass.setBindGroup(0, dispatch.bindGroup);
+    if ('workgroups' in dispatch) pass.dispatchWorkgroups(...dispatch.workgroups);
+    else pass.dispatchWorkgroupsIndirect(dispatch.indirectBuffer, dispatch.indirectOffset);
+  }
+}
+
+export interface RenderFeatureGpuPrepareSession extends RenderFeatureGpuPrepare {
   beginFrame(): void;
   resolveComputePass(
     featureIdentity: string,
     descriptor: RenderFeatureGpuComputePassDescriptor,
   ): Result<RenderFeatureResolvedGpuComputePass, RenderError>;
-  resolveBuffer(reference: RenderFeatureGpuBufferRef): Buffer | undefined;
+  resolveBuffer(reference: RenderFeatureGpuBufferRef): RenderFeatureResolvedGpuBuffer | undefined;
   retireUntouched(): readonly PreparedGraphicsResourceLease[];
   dispose(): Result<void, RenderError>;
+}
+
+export interface PreparedGraphicsResourceLease {
+  release(): Result<void, RenderError>;
 }
 
 interface ProgramItem {
@@ -105,6 +166,7 @@ interface ProgramItem {
   readonly module: ShaderModule;
   readonly pipelines: ReadonlyMap<string, ComputePipeline>;
   readonly bindGroupLayout?: BindGroupLayout;
+  readonly bindingLayouts: ReadonlyMap<number, GPUBufferBindingType>;
 }
 
 interface BufferItem {
@@ -112,6 +174,8 @@ interface BufferItem {
   readonly signature: string;
   readonly reference: RenderFeatureGpuBufferRef;
   readonly buffer: Buffer;
+  readonly size: number;
+  readonly physicalUsage: number;
 }
 
 interface BindingsItem {
@@ -119,7 +183,7 @@ interface BindingsItem {
   readonly signature: string;
   readonly reference: RenderFeatureGpuBindingsRef;
   readonly program: ProgramItem;
-  readonly buffers: readonly BufferItem[];
+  readonly buffers: readonly { readonly binding: number; readonly item: BufferItem }[];
   readonly bindGroup: BindGroup;
 }
 
@@ -129,11 +193,23 @@ const BUFFER_USAGE = {
   indirect: 0x0100,
   vertex: 0x0020,
   index: 0x0010,
+  'copy-src': 0x0004,
 } as const;
 const COPY_DST = 0x0008;
 
 function alignedSize(size: number): number {
   return Math.max(4, Math.ceil(size / 4) * 4);
+}
+
+function graphAccess(type: GPUBufferBindingType): GraphBufferAccess {
+  switch (type) {
+    case 'uniform':
+      return 'uniform-read';
+    case 'read-only-storage':
+      return 'storage-read';
+    case 'storage':
+      return 'storage-read-write';
+  }
 }
 
 function bytes(value: ArrayBufferView): Uint8Array {
@@ -179,12 +255,12 @@ function rhiReason(error: {
   return `${error.code}:${error.hint}${detail}`;
 }
 
-export function createRenderFeatureGpuWorkResolver(input: {
+function createRenderFeatureGpuWorkSession(input: {
   readonly device: RhiDevice;
   readonly shaderModuleFactory: PipelineBuilderShaderModuleFactory;
   readonly generation: number;
   readonly featureIdentity: string;
-}): RenderFeatureGpuWorkResolver {
+}): RenderFeatureGpuPrepareSession {
   const programs = new Map<string, ProgramItem>();
   const programRefs = new Map<object, ProgramItem>();
   const buffers = new Map<string, BufferItem>();
@@ -204,7 +280,7 @@ export function createRenderFeatureGpuWorkResolver(input: {
   const touchBindings = (item: BindingsItem): void => {
     touchedBindings.add(item);
     touchProgram(item.program);
-    for (const buffer of item.buffers) touchBuffer(buffer);
+    for (const entry of item.buffers) touchBuffer(entry.item);
   };
 
   const prepareProgram: RenderFeatureGpuPrepare['prepareProgram'] = (name, descriptor) => {
@@ -343,6 +419,13 @@ export function createRenderFeatureGpuWorkResolver(input: {
       reference,
       module: module.value,
       pipelines: pipelineMap,
+      bindingLayouts: new Map(
+        (descriptor.bindings?.[0]?.entries ?? []).flatMap((entry) =>
+          entry.buffer === undefined
+            ? []
+            : [[entry.binding, entry.buffer.type ?? 'uniform'] as const],
+        ),
+      ),
       ...(bindGroupLayout === undefined ? {} : { bindGroupLayout }),
     };
     programs.set(name, item);
@@ -402,7 +485,14 @@ export function createRenderFeatureGpuWorkResolver(input: {
         name,
         generation: input.generation,
       }) as RenderFeatureGpuBufferRef;
-      item = { name, signature, reference, buffer: created.value };
+      item = {
+        name,
+        signature,
+        reference,
+        buffer: created.value,
+        size: alignedSize(descriptor.size),
+        physicalUsage: usage,
+      };
       buffers.set(name, item);
       bufferRefs.set(reference, item);
     }
@@ -530,7 +620,7 @@ export function createRenderFeatureGpuWorkResolver(input: {
       signature,
       reference,
       program,
-      buffers: availableEntries.map((entry) => entry.item),
+      buffers: availableEntries,
       bindGroup: created.value,
     };
     bindings.set(name, item);
@@ -575,7 +665,9 @@ export function createRenderFeatureGpuWorkResolver(input: {
       if (
         program === undefined ||
         binding === undefined ||
+        binding.program !== program ||
         dispatchBindings.some((item) => item === undefined) ||
+        dispatchBindings.some((item) => item?.program !== program) ||
         descriptor.program.generation !== input.generation ||
         descriptor.bindings.generation !== input.generation
       ) {
@@ -584,9 +676,13 @@ export function createRenderFeatureGpuWorkResolver(input: {
             ? 'program-unavailable'
             : binding === undefined
               ? 'bindings-unavailable'
-              : dispatchBindings.some((item) => item === undefined)
-                ? 'dispatch-bindings-unavailable'
-                : 'generation-mismatch';
+              : binding.program !== program
+                ? 'bindings-program-mismatch'
+                : dispatchBindings.some((item) => item === undefined)
+                  ? 'dispatch-bindings-unavailable'
+                  : dispatchBindings.some((item) => item?.program !== program)
+                    ? 'dispatch-bindings-program-mismatch'
+                    : 'generation-mismatch';
         return err(
           failure(
             featureIdentity,
@@ -602,10 +698,27 @@ export function createRenderFeatureGpuWorkResolver(input: {
       for (const dispatchBinding of dispatchBindings) {
         if (dispatchBinding !== undefined) touchBindings(dispatchBinding);
       }
-      for (const dispatch of descriptor.dispatches) {
+      const indirectItems = descriptor.dispatches.map((dispatch) =>
+        dispatch.indirect === undefined
+          ? undefined
+          : bufferRefs.get(dispatch.indirect.buffer as object),
+      );
+      for (const [index, dispatch] of descriptor.dispatches.entries()) {
+        const indirectItem = indirectItems[index];
+        const invalidDirect = dispatch.workgroups !== undefined && dispatch.workgroups[0] <= 0;
+        const invalidIndirect =
+          dispatch.indirect !== undefined &&
+          (indirectItem === undefined ||
+            dispatch.indirect.buffer.generation !== input.generation ||
+            (indirectItem.physicalUsage & BUFFER_USAGE.indirect) === 0 ||
+            !Number.isInteger(dispatch.indirect.offset) ||
+            dispatch.indirect.offset < 0 ||
+            dispatch.indirect.offset % 4 !== 0 ||
+            dispatch.indirect.offset + 12 > indirectItem.size);
         if (
           program.pipelines.get(dispatch.entryPoint) === undefined ||
-          dispatch.workgroups[0] <= 0
+          invalidDirect ||
+          invalidIndirect
         ) {
           return err(
             failure(
@@ -613,50 +726,115 @@ export function createRenderFeatureGpuWorkResolver(input: {
               'resolve-gpu-compute',
               'pipeline',
               dispatch.entryPoint,
-              program.pipelines.has(dispatch.entryPoint)
-                ? 'workgroup-count-invalid'
-                : 'entry-point-unavailable',
+              !program.pipelines.has(dispatch.entryPoint)
+                ? 'entry-point-unavailable'
+                : invalidDirect
+                  ? 'workgroup-count-invalid'
+                  : 'indirect-dispatch-invalid',
             ),
           );
         }
+        if (indirectItem !== undefined) touchBuffer(indirectItem);
+      }
+      const resolvedDispatches: RenderFeatureResolvedGpuComputePass['dispatches'][number][] = [];
+      for (const [index, dispatch] of descriptor.dispatches.entries()) {
+        const pipeline = program.pipelines.get(dispatch.entryPoint);
+        const dispatchBinding = dispatchBindings[index];
+        if (pipeline === undefined || dispatchBinding === undefined) continue;
+        if (dispatch.workgroups !== undefined) {
+          resolvedDispatches.push({
+            pipeline,
+            bindGroup: dispatchBinding.bindGroup,
+            workgroups: [
+              dispatch.workgroups[0],
+              dispatch.workgroups[1] ?? 1,
+              dispatch.workgroups[2] ?? 1,
+            ],
+          });
+          continue;
+        }
+        const indirectItem = indirectItems[index];
+        if (indirectItem === undefined) continue;
+        resolvedDispatches.push({
+          pipeline,
+          bindGroup: dispatchBinding.bindGroup,
+          indirectBuffer: indirectItem.buffer,
+          indirectOffset: dispatch.indirect.offset,
+        });
+      }
+      if (resolvedDispatches.length !== descriptor.dispatches.length) {
+        return err(
+          failure(
+            featureIdentity,
+            'resolve-gpu-compute',
+            'bindings',
+            program.name,
+            'resolved-resource-unavailable',
+          ),
+        );
+      }
+      const resolvedBuffers = new Map<BufferItem, Set<GraphBufferAccess>>();
+      for (const item of dispatchBindings) {
+        if (item === undefined) continue;
+        for (const entry of item.buffers) {
+          const access = program.bindingLayouts.get(entry.binding);
+          if (access === undefined) {
+            return err(
+              failure(
+                featureIdentity,
+                'resolve-gpu-compute',
+                'bindings',
+                item.name,
+                `buffer-layout-unavailable:${entry.binding}`,
+              ),
+            );
+          }
+          const derived = graphAccess(access);
+          const prior = resolvedBuffers.get(entry.item) ?? new Set<GraphBufferAccess>();
+          if (prior.size > 0 && !prior.has(derived)) {
+            if (prior.has('storage-read-write') || derived === 'storage-read-write') {
+              resolvedBuffers.set(entry.item, new Set(['storage-read-write']));
+              continue;
+            }
+            return err(
+              failure(
+                featureIdentity,
+                'resolve-gpu-compute',
+                'bindings',
+                item.name,
+                `buffer-access-conflict:${entry.binding}`,
+              ),
+            );
+          }
+          prior.add(derived);
+          resolvedBuffers.set(entry.item, prior);
+        }
+      }
+      for (const item of indirectItems) {
+        if (item === undefined) continue;
+        const accesses = resolvedBuffers.get(item) ?? new Set<GraphBufferAccess>();
+        accesses.add('indirect-read');
+        resolvedBuffers.set(item, accesses);
       }
       return ok({
-        record: (encoder) => {
-          const pass = encoder.beginComputePass({ label: `${featureIdentity}.compute` });
-          try {
-            for (const [index, dispatch] of descriptor.dispatches.entries()) {
-              const pipeline = program.pipelines.get(dispatch.entryPoint);
-              const dispatchBinding = dispatchBindings[index];
-              if (pipeline === undefined || dispatchBinding === undefined) {
-                return err(
-                  failure(
-                    featureIdentity,
-                    'record-gpu-compute',
-                    pipeline === undefined ? 'pipeline' : 'bindings',
-                    dispatch.entryPoint,
-                    'resolved-resource-unavailable',
-                  ),
-                );
-              }
-              pass.setPipeline(pipeline);
-              pass.setBindGroup(0, dispatchBinding.bindGroup);
-              pass.dispatchWorkgroups(
-                dispatch.workgroups[0],
-                dispatch.workgroups[1] ?? 1,
-                dispatch.workgroups[2] ?? 1,
-              );
-            }
-          } finally {
-            pass.end();
-          }
-          return ok(undefined);
-        },
+        buffers: [...resolvedBuffers].flatMap(([item, accesses]) =>
+          [...accesses].map((access) => ({
+            name: item.name,
+            buffer: item.buffer,
+            size: item.size,
+            physicalUsage: item.physicalUsage,
+            access,
+          })),
+        ),
+        dispatches: resolvedDispatches,
       });
     },
     resolveBuffer: (reference) => {
       const item = bufferRefs.get(reference as object);
       if (item !== undefined) touchBuffer(item);
-      return item?.buffer;
+      return item === undefined
+        ? undefined
+        : { buffer: item.buffer, size: item.size, physicalUsage: item.physicalUsage };
     },
     retireUntouched: () => {
       for (const [name, item] of bindings) {
@@ -718,6 +896,63 @@ export function createRenderFeatureGpuWorkResolver(input: {
       programs.clear();
       buffers.clear();
       bindings.clear();
+      return first === undefined ? ok(undefined) : err(first);
+    },
+  };
+}
+
+/**
+ * RenderSystem's one owner for persistent feature GPU work.
+ *
+ * Sessions remain private to this module. The host asks for a session for the
+ * current feature and generation, while this owner is the only place that
+ * retains the per-feature prepared GPU state and recreates it after recovery.
+ */
+export interface RenderFeatureGpuWorkOwner {
+  beginFeature(featureIdentity: string, generation: number): RenderFeatureGpuPrepareSession;
+  resolveBuffer(
+    featureIdentity: string,
+    reference: RenderFeatureGpuBufferRef,
+  ): RenderFeatureResolvedGpuBuffer | undefined;
+  dispose(): Result<void, RenderError>;
+}
+
+export function createRenderFeatureGpuWorkOwner(input: {
+  readonly getDevice: () => RhiDevice;
+  readonly getShaderModuleFactory: () => PipelineBuilderShaderModuleFactory;
+}): RenderFeatureGpuWorkOwner {
+  const sessions = new Map<
+    string,
+    { generation: number; session: RenderFeatureGpuPrepareSession }
+  >();
+
+  return {
+    beginFeature: (featureIdentity, generation) => {
+      const existing = sessions.get(featureIdentity);
+      if (existing?.generation === generation) {
+        existing.session.beginFrame();
+        return existing.session;
+      }
+      if (existing !== undefined) existing.session.dispose();
+      const session = createRenderFeatureGpuWorkSession({
+        device: input.getDevice(),
+        shaderModuleFactory: input.getShaderModuleFactory(),
+        generation,
+        featureIdentity,
+      });
+      sessions.set(featureIdentity, { generation, session });
+      session.beginFrame();
+      return session;
+    },
+    resolveBuffer: (featureIdentity, reference) =>
+      sessions.get(featureIdentity)?.session.resolveBuffer(reference),
+    dispose: () => {
+      let first: RenderError | undefined;
+      for (const { session } of sessions.values()) {
+        const disposed = session.dispose();
+        if (!disposed.ok && first === undefined) first = disposed.error;
+      }
+      sessions.clear();
       return first === undefined ? ok(undefined) : err(first);
     },
   };

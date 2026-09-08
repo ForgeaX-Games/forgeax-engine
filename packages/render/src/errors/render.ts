@@ -13,18 +13,39 @@
 // SpotLight / PointLightShadow component validators (forward cross-directory
 // import, no cycle -- research Finding C2).
 
+import type { DeviceResourceKind, DeviceScopeReceipt } from '../device/resource-types';
 import type {
-  RenderFeatureCapabilityMissingDetail,
-  RenderFeatureDrawRecordingFailedDetail,
-  RenderFeatureErrorCode,
-  RenderFeaturePassOrderConflictDetail,
-  RenderFeaturePreparationFailedDetail,
-  RenderFeaturePreparedStateMismatchDetail,
+  PreparedKind,
+  RenderFeatureCapabilityKey,
   RenderFeatureRecovery,
-  RenderFeatureRegistrationConflictDetail,
   RenderFeatureStage,
-  RenderFeatureStageFailedDetail,
-} from '../features/types';
+} from '../features/vocabulary';
+
+export interface LifecycleConstructionFailureDetail {
+  readonly owner: string;
+  readonly generation: number;
+  readonly operation: 'create' | 'dispose';
+  readonly resourceKind: DeviceResourceKind;
+  readonly cause: unknown;
+  readonly cleanupFailures: readonly {
+    readonly resourceKind: DeviceResourceKind;
+    readonly cause: unknown;
+  }[];
+  readonly receipt: DeviceScopeReceipt;
+}
+
+export class LifecycleConstructionError extends Error {
+  readonly code = 'lifecycle-construction-failed' as const;
+  readonly expected = 'all DeviceScope resources establish and terminate in order';
+  readonly hint = 'inspect detail and cleanupFailures, then recover or rebuild the DeviceScope';
+  readonly detail: LifecycleConstructionFailureDetail;
+
+  constructor(detail: LifecycleConstructionFailureDetail) {
+    super(`lifecycle-construction-failed: ${detail.resourceKind} lifecycle transaction failed`);
+    this.name = 'LifecycleConstructionError';
+    this.detail = detail;
+  }
+}
 
 // ── ShadowInvalidConfigError ──────────────────────────────────────────────
 
@@ -163,48 +184,6 @@ export class EquirectProjectionFailedError extends Error {
   }
 }
 
-// ── HdrpCapsInsufficientError ──────────────────────────────────────────────
-
-/**
- * Detail for `RuntimeErrorCode 'hdrp-caps-insufficient'`.
- *
- * Emitted at install time when `device.caps.maxStorageBuffersPerShaderStage < 4`.
- */
-export interface HdrpCapsInsufficientDetail {
-  readonly capName: string;
-  readonly actual: number;
-  readonly required: number;
-}
-
-/**
- * Structured error for HDRP storage-buffer capability gate failure (AC-17/AC-18).
- *
- * Emitted at `installPipeline(hdrpAsset)` time — synchronous throw.
- *   - `.code = 'hdrp-caps-insufficient'` (closed RuntimeErrorCode)
- *   - `.expected` — describes the required capability
- *   - `.hint` — 'fall back to URP by not calling installPipeline'
- *   - `.detail = { capName, actual, required }`
- */
-export class HdrpCapsInsufficientError extends Error {
-  readonly code = 'hdrp-caps-insufficient' as const;
-  readonly expected: string;
-  readonly hint: string;
-  readonly detail: HdrpCapsInsufficientDetail;
-
-  constructor(capName: string, actual: number, required: number) {
-    const expected = `${capName} >= ${required}`;
-    const hint =
-      `${capName} = ${actual} (need >= ${required}); ` +
-      'this device does not have enough storage buffer slots for HDRP cluster-forward rendering. ' +
-      'Fall back to URP by not calling installPipeline(hdrpAsset)';
-    super(`HDRP caps insufficient: ${capName} = ${actual} (need >= ${required})`);
-    this.name = 'HdrpCapsInsufficientError';
-    this.expected = expected;
-    this.hint = hint;
-    this.detail = { capName, actual, required };
-  }
-}
-
 // ── HdrpLightBudgetExceededError ───────────────────────────────────────────
 
 /**
@@ -294,7 +273,7 @@ export class HdrpIndexListOverflowError extends Error {
 /**
  * Detail for `RuntimeErrorCode 'hdrp-deferred-caps-insufficient'`.
  *
- * Emitted at `installPipeline(hdrpAsset)` time when `device.caps.maxColorAttachments < 4`,
+ * Emitted when the Standard clustered lane has fewer than 4 color attachments,
  * meaning the deferred path cannot allocate 3 g-buffer color targets + depth.
  */
 export interface HdrpDeferredCapsInsufficientDetail {
@@ -305,13 +284,13 @@ export interface HdrpDeferredCapsInsufficientDetail {
 /**
  * Structured error for deferred-path capability gate failure.
  *
- * Emitted at `installPipeline(hdrpAsset)` time — synchronous throw.
+ * Emitted during Standard clustered lane validation — synchronous throw.
  *   - `.code = 'hdrp-deferred-caps-insufficient'` (closed RuntimeErrorCode)
  *   - `.expected` — 'maxColorAttachments >= 4'
  *   - `.hint` — actionable guidance to upgrade browser or select URP
  *   - `.detail = { actual, expected }`
  *
- * @see plan-strategy D-5 (install-time caps check, no silent fallback)
+ * @see plan-strategy D-5 (capability validation, no silent fallback)
  */
 export class HdrpDeferredCapsInsufficientError extends Error {
   readonly code = 'hdrp-deferred-caps-insufficient' as const;
@@ -329,97 +308,6 @@ export class HdrpDeferredCapsInsufficientError extends Error {
       `HDRP deferred caps insufficient: maxColorAttachments = ${actual} (need >= ${_expected})`,
     );
     this.name = 'HdrpDeferredCapsInsufficientError';
-    this.expected = _expectedStr;
-    this.hint = hint;
-    this.detail = { actual, expected: _expected };
-  }
-}
-
-// ── GbufferRtAllocFailedError ──────────────────────────────────────────────
-
-/**
- * Detail for `RuntimeErrorCode 'gbuffer-rt-alloc-failed'`.
- *
- * Emitted at runtime when a g-buffer color target pool allocation fails
- * (OOM or backend resource limit). The attachmentIndex identifies which
- * g-buffer slot failed.
- */
-export interface GbufferRtAllocFailedDetail {
-  readonly attachmentIndex: number;
-  readonly requestedBytes: number;
-}
-
-/**
- * Structured error for g-buffer color-target pool allocation failure.
- *
- * Emitted at runtime during g-buffer pass setup.
- *   - `.code = 'gbuffer-rt-alloc-failed'` (closed RuntimeErrorCode)
- *   - `.expected` — 'g-buffer color target allocation succeeded'
- *   - `.hint` — actionable recovery steps (check GPU memory / reduce resolution)
- *   - `.detail = { attachmentIndex, requestedBytes }`
- *
- * @note This error is declared in M1 but only triggered in M2 (g-buffer RT
- *   allocation path). The union member exists for compile-time narrowing now.
- */
-export class GbufferRtAllocFailedError extends Error {
-  readonly code = 'gbuffer-rt-alloc-failed' as const;
-  readonly expected: string;
-  readonly hint: string;
-  readonly detail: GbufferRtAllocFailedDetail;
-
-  constructor(attachmentIndex: number, requestedBytes: number) {
-    const expected = 'g-buffer color target allocation succeeded';
-    const hint =
-      `g-buffer color target (attachment ${attachmentIndex}, ${requestedBytes} bytes) allocation failed. ` +
-      'Common causes: (a) GPU memory pressure; (b) framebuffer resolution too large; ' +
-      '(c) RHI backend limits hit. Check device.limits and reduce frame resolution.';
-    super(`g-buffer RT alloc failed: attachment[${attachmentIndex}] = ${requestedBytes} bytes`);
-    this.name = 'GbufferRtAllocFailedError';
-    this.expected = expected;
-    this.hint = hint;
-    this.detail = { attachmentIndex, requestedBytes };
-  }
-}
-
-// ── GbufferAttachmentCountMismatchError ────────────────────────────────────
-
-/**
- * Detail for `RuntimeErrorCode 'gbuffer-attachment-count-mismatch'`.
- *
- * Emitted at install-time when the g-buffer attachment count declared
- * in the pipeline schema does not equal 3.
- */
-export interface GbufferAttachmentCountMismatchDetail {
-  readonly actual: number;
-  readonly expected: number;
-}
-
-/**
- * Structured error for g-buffer attachment count mismatch.
- *
- * Emitted at `installPipeline(hdrpAsset)` time via topology validation.
- *   - `.code = 'gbuffer-attachment-count-mismatch'` (closed RuntimeErrorCode)
- *   - `.expected` — 'exactly 3 g-buffer color attachments'
- *   - `.hint` — check pipeline internal schema or custom g-buffer override
- *   - `.detail = { actual, expected }`
- *
- * @note This error is declared in M1 but only triggered in M2 (g-buffer
- *   topology validation). The union member exists for compile-time narrowing now.
- */
-export class GbufferAttachmentCountMismatchError extends Error {
-  readonly code = 'gbuffer-attachment-count-mismatch' as const;
-  readonly expected: string;
-  readonly hint: string;
-  readonly detail: GbufferAttachmentCountMismatchDetail;
-
-  constructor(actual: number) {
-    const _expected = 3;
-    const _expectedStr = `exactly ${_expected} g-buffer color attachments`;
-    const hint =
-      `HDRP deferred expects ${_expected} g-buffer color attachments, got ${actual}. ` +
-      'Check hdrp-pipeline internal schema or custom g-buffer override.';
-    super(`g-buffer attachment count mismatch: got ${actual}, expected ${_expected}`);
-    this.name = 'GbufferAttachmentCountMismatchError';
     this.expected = _expectedStr;
     this.hint = hint;
     this.detail = { actual, expected: _expected };
@@ -564,6 +452,33 @@ export class VertexStorageBufferUnavailableError extends Error {
   }
 }
 
+// ── VertexColorVariantConflictError ───────────────────────────────────────
+
+export interface VertexColorVariantConflictDetail {
+  readonly authored: true;
+  readonly authoredValue: string;
+  readonly projected: boolean;
+}
+
+/** The authored color axis disagrees with the canonical geometry projection. */
+export class VertexColorVariantConflictError extends Error {
+  readonly code = 'vertex-color-variant-conflict' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: VertexColorVariantConflictDetail;
+
+  constructor(authoredValue: string, projected: boolean) {
+    const expected = `VERTEX_COLOR_AVAILABLE=${projected ? 'true' : 'false'}`;
+    const hint =
+      'derive the shader variant from the mesh VertexLayoutProjection; COLOR_0 presence is a geometry fact';
+    super(`authored vertex-color variant ${authoredValue} disagrees with projected ${expected}`);
+    this.name = 'VertexColorVariantConflictError';
+    this.expected = expected;
+    this.hint = hint;
+    this.detail = { authored: true, authoredValue, projected };
+  }
+}
+
 // ── Skin palette/material validation errors ────────────────────────────────
 
 /** Detail for a palette buffer that exceeds the device storage limit. */
@@ -649,6 +564,157 @@ export class MaterialSkinAttrMissingError extends Error {
 }
 
 // -- RenderFeature errors ---------------------------------------------------
+
+export type RenderFeatureErrorCode =
+  | 'render-feature-registration-conflict'
+  | 'render-feature-stage-failed'
+  | 'render-feature-capability-missing'
+  | 'render-feature-pass-order-conflict'
+  | 'render-feature-preparation-failed'
+  | 'render-feature-prepared-state-mismatch'
+  | 'render-feature-draw-recording-failed';
+
+export interface RenderFeatureRegistrationConflictDetail {
+  readonly featureIdentity: string;
+  readonly order: number;
+  readonly conflictingOrder: number;
+}
+
+export interface RenderFeatureCleanupFailure {
+  readonly featureIdentity: string;
+  readonly order: number;
+  readonly code: string;
+}
+
+export interface RenderFeatureStageFailedDetail {
+  readonly featureIdentity: string;
+  readonly order: number;
+  readonly stage: RenderFeatureStage;
+  readonly recovery: RenderFeatureRecovery;
+  readonly cleanupFailures?: readonly RenderFeatureCleanupFailure[];
+}
+
+export interface RenderFeatureCapabilityMissingDetail {
+  readonly featureIdentity: string;
+  readonly order: number;
+  readonly capability: RenderFeatureCapabilityKey;
+}
+
+export interface RenderFeaturePassOrderConflictDetail {
+  readonly featureIdentity: string;
+  readonly order: number;
+  readonly passIdentity: string;
+  readonly dependencyIdentity: string;
+}
+
+export interface RenderFeaturePreparationFailedDetail {
+  readonly featureIdentity: string;
+  readonly order: number;
+  readonly stage: 'prepare';
+  readonly operation: string;
+  readonly resourceKind: PreparedKind;
+  readonly resourceName: string;
+  readonly reason: string;
+  readonly recovery: RenderFeatureRecovery;
+}
+
+export type RenderFeaturePreparedStateMismatchDetail =
+  | {
+      readonly featureIdentity: string;
+      readonly order: number;
+      readonly stage: 'contribute';
+      readonly operation: string;
+      readonly resourceKind: PreparedKind;
+      readonly reason: 'missing-prepared-state';
+      readonly missingResource: string;
+      readonly recovery: RenderFeatureRecovery;
+    }
+  | {
+      readonly featureIdentity: string;
+      readonly order: number;
+      readonly stage: 'contribute';
+      readonly operation: string;
+      readonly resourceKind: PreparedKind;
+      readonly reason: 'foreign-feature';
+      readonly expectedFeatureIdentity: string;
+      readonly actualFeatureIdentity: string;
+      readonly recovery: RenderFeatureRecovery;
+    }
+  | {
+      readonly featureIdentity: string;
+      readonly order: number;
+      readonly stage: 'contribute';
+      readonly operation: string;
+      readonly resourceKind: PreparedKind;
+      readonly reason: 'foreign-kind';
+      readonly expectedKind: PreparedKind;
+      readonly actualKind: PreparedKind;
+      readonly recovery: RenderFeatureRecovery;
+    }
+  | {
+      readonly featureIdentity: string;
+      readonly order: number;
+      readonly stage: 'contribute';
+      readonly operation: string;
+      readonly resourceKind: PreparedKind;
+      readonly reason: 'generation-mismatch';
+      readonly expectedGeneration: number;
+      readonly actualGeneration: number;
+      readonly recovery: RenderFeatureRecovery;
+    }
+  | {
+      readonly featureIdentity: string;
+      readonly order: number;
+      readonly stage: 'contribute';
+      readonly operation: string;
+      readonly resourceKind: PreparedKind;
+      readonly reason: 'layout-mismatch';
+      readonly expectedLayout: string;
+      readonly actualLayout: string;
+      readonly recovery: RenderFeatureRecovery;
+    }
+  | {
+      readonly featureIdentity: string;
+      readonly order: number;
+      readonly stage: 'contribute';
+      readonly operation: string;
+      readonly resourceKind: PreparedKind;
+      readonly reason: 'format-mismatch';
+      readonly expectedFormat: string;
+      readonly actualFormat: string;
+      readonly recovery: RenderFeatureRecovery;
+    };
+
+export interface RenderFeatureDrawRecordingFailedDetail {
+  readonly featureIdentity: string;
+  readonly order: number;
+  readonly stage: 'record';
+  readonly operation: string;
+  readonly resourceKind: PreparedKind;
+  readonly reason: string;
+  readonly backendReason: string;
+  readonly recovery: RenderFeatureRecovery;
+}
+
+export type RenderFeatureErrorDetailByCode = {
+  'render-feature-registration-conflict': RenderFeatureRegistrationConflictDetail;
+  'render-feature-stage-failed': RenderFeatureStageFailedDetail;
+  'render-feature-capability-missing': RenderFeatureCapabilityMissingDetail;
+  'render-feature-pass-order-conflict': RenderFeaturePassOrderConflictDetail;
+  'render-feature-preparation-failed': RenderFeaturePreparationFailedDetail;
+  'render-feature-prepared-state-mismatch': RenderFeaturePreparedStateMismatchDetail;
+  'render-feature-draw-recording-failed': RenderFeatureDrawRecordingFailedDetail;
+};
+
+/** Machine-readable four-field diagnostic exposed by every feature error. */
+export type RenderFeatureErrorDescriptor = {
+  [Code in RenderFeatureErrorCode]: {
+    readonly code: Code;
+    readonly expected: string;
+    readonly hint: string;
+    readonly detail: RenderFeatureErrorDetailByCode[Code];
+  };
+}[RenderFeatureErrorCode];
 
 const renderFeatureRecoveryHintByRecovery = {
   'next-frame': (featureIdentity: string, stage: RenderFeatureStage) =>
@@ -865,49 +931,341 @@ export class ObservationUnavailableError extends Error {
   }
 }
 
+export interface FrameReceiptStaleDetail {
+  readonly frameId: number;
+  readonly receiptGeneration: number;
+  readonly currentGeneration: number;
+}
+
+/** Receipt-bound observation failed closed at a generation fence. */
+export class FrameReceiptStaleError extends Error {
+  readonly code = 'frame-receipt-stale' as const;
+  readonly expected = 'the observation receipt belongs to the active device generation';
+  readonly hint = 'draw a new frame and call observe with its returned FrameReceipt';
+  readonly detail: FrameReceiptStaleDetail;
+
+  constructor(detail: FrameReceiptStaleDetail) {
+    super('frame receipt belongs to a retired device generation');
+    this.name = 'FrameReceiptStaleError';
+    this.detail = detail;
+  }
+}
+
+export interface RendererContractFailureDetail {
+  readonly operation: 'construct' | 'attach' | 'draw' | 'observe';
+  readonly cause: string;
+}
+
+/** Structured boundary failure while adapting an owner contract. */
+export class RendererContractFailureError extends Error {
+  readonly code = 'renderer-contract-failed' as const;
+  readonly expected = 'renderer owner contracts remain valid at the public boundary';
+  readonly hint = 'repair the owner contract and retry the operation';
+  readonly detail: RendererContractFailureDetail;
+
+  constructor(operation: RendererContractFailureDetail['operation'], cause: string) {
+    super(`renderer ${operation} contract failed: ${cause}`);
+    this.name = 'RendererContractFailureError';
+    this.detail = { operation, cause };
+  }
+}
+
+export interface RendererOperationCause {
+  readonly code: string;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail?: unknown;
+}
+
+export interface RendererOperationDetailByCode {
+  readonly 'world-lease-invalid': {
+    readonly operation: 'attach' | 'draw';
+    readonly cause: RendererOperationCause;
+  };
+  readonly 'frame-input-invalid': {
+    readonly operation: 'draw' | 'set-profile';
+    readonly cause: RendererOperationCause;
+  };
+  readonly 'scene-projection-failed': {
+    readonly operation: 'draw';
+    readonly cause: RendererOperationCause;
+  };
+  readonly 'asset-binding-failed': {
+    readonly operation: 'draw';
+    readonly cause: RendererOperationCause;
+  };
+  readonly 'feature-plan-failed': {
+    readonly operation: 'draw';
+    readonly cause: RendererOperationCause;
+  };
+  readonly 'graph-build-failed': {
+    readonly operation: 'draw' | 'set-profile';
+    readonly cause: RendererOperationCause;
+  };
+  readonly 'device-operation-failed': {
+    readonly operation: 'draw' | 'complete-frame' | 'renderer-event';
+    readonly frameId?: number;
+    readonly deviceGeneration?: number;
+    readonly cause: RendererOperationCause;
+  };
+  readonly 'surface-unavailable': {
+    readonly operation: 'release-surface' | 'restore-surface';
+    readonly cause: RendererOperationCause;
+  };
+  readonly 'renderer-state-invalid': {
+    readonly operation: 'draw' | 'set-profile' | 'recover' | 'dispose';
+    readonly state: string;
+    readonly cause?: RendererOperationCause;
+  };
+  readonly 'recovery-failed': {
+    readonly operation: 'recover';
+    readonly oldGeneration: number;
+    readonly cause: RendererOperationCause;
+  };
+  readonly 'cleanup-failed': {
+    readonly operation: 'dispose';
+    readonly causes: readonly RendererOperationCause[];
+  };
+}
+
+export type RendererOperationErrorCode = keyof RendererOperationDetailByCode;
+
+const RENDERER_OPERATION_ERROR_POLICY = {
+  'world-lease-invalid': {
+    expected: 'every render World is represented by a live lease owned by this Renderer',
+    hint: 'attach the World to this Renderer and use the returned lease',
+  },
+  'frame-input-invalid': {
+    expected: 'the frame input references attached leases and a valid immutable RenderProfile',
+    hint: 'repair the frame input and retry draw or setProfile',
+  },
+  'scene-projection-failed': {
+    expected: 'the attached World projects into the renderer-owned RenderScene',
+    hint: 'inspect the structured cause, repair the World publication, and retry draw',
+  },
+  'asset-binding-failed': {
+    expected: 'all frame assets resolve to valid renderer-owned bindings',
+    hint: 'inspect the structured cause, rebuild or cold-cook the asset, and retry draw',
+  },
+  'feature-plan-failed': {
+    expected: 'every installed RenderFeature produces a valid declarative plan',
+    hint: 'inspect the feature cause, repair its plan, and retry draw',
+  },
+  'graph-build-failed': {
+    expected: 'the Standard graph builds from the active profile and feature plans',
+    hint: 'inspect the graph cause, repair the profile or plan, and retry',
+  },
+  'device-operation-failed': {
+    expected: 'the active device generation completes the renderer-owned operation',
+    hint: 'inspect renderer state and the structured cause, then retry or recover',
+  },
+  'surface-unavailable': {
+    expected: 'the presentation surface accepts the requested lifecycle operation',
+    hint: 'inspect renderer state, then restore the surface or create a new Renderer',
+  },
+  'renderer-state-invalid': {
+    expected: 'the Renderer is in a state that accepts the requested operation',
+    hint: 'inspect renderer state and choose retry, restoreSurface, recover, or stop',
+  },
+  'recovery-failed': {
+    expected: 'one recovery attempt publishes a complete replacement device generation',
+    hint: 'inspect the structured cause and retry recover after the host-selected delay',
+  },
+  'cleanup-failed': {
+    expected: 'Renderer disposal completes every registered cleanup in reverse ownership order',
+    hint: 'inspect the ordered cleanup causes; the Renderer remains disposed and must not be reused',
+  },
+} as const satisfies Readonly<
+  Record<RendererOperationErrorCode, { readonly expected: string; readonly hint: string }>
+>;
+
+/** Public renderer-operation failure with a code-narrowed structured detail. */
+export class RendererOperationError<Code extends RendererOperationErrorCode> extends Error {
+  readonly code: Code;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: RendererOperationDetailByCode[Code];
+
+  constructor(code: Code, detail: RendererOperationDetailByCode[Code]) {
+    const policy = RENDERER_OPERATION_ERROR_POLICY[code];
+    super(`${code}: ${policy.expected}`);
+    this.name = 'RendererOperationError';
+    this.code = code;
+    this.expected = policy.expected;
+    this.hint = policy.hint;
+    this.detail = detail;
+  }
+}
+
+export type RendererExpectedOperationError = {
+  readonly [Code in RendererOperationErrorCode]: RendererOperationError<Code>;
+}[RendererOperationErrorCode];
+
+// -- Points/Lines admission errors -------------------------------------------
+
+export interface PointsLinesInvalidStyleDetail {
+  readonly entity: number;
+  readonly component: 'Points' | 'Lines' | 'Points/Lines';
+  readonly field: string;
+  readonly value: number | string | undefined;
+  readonly expected: string;
+}
+
+export class PointsLinesInvalidStyleError extends Error {
+  readonly code = 'points-lines-invalid-style' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: PointsLinesInvalidStyleDetail;
+
+  constructor(detail: PointsLinesInvalidStyleDetail) {
+    super(`invalid ${detail.component} style at ${detail.field}`);
+    this.name = 'PointsLinesInvalidStyleError';
+    this.expected = detail.expected;
+    this.hint = `repair entity ${detail.entity} ${detail.component}.${detail.field} and retry admission`;
+    this.detail = detail;
+  }
+}
+
+export interface PointsLinesTopologyMismatchDetail {
+  readonly entity: number;
+  readonly submesh: number;
+  readonly expected: string;
+  readonly actual: string;
+}
+
+export class PointsLinesTopologyMismatchError extends Error {
+  readonly code = 'points-lines-topology-mismatch' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: PointsLinesTopologyMismatchDetail;
+
+  constructor(detail: PointsLinesTopologyMismatchDetail) {
+    super(`Points/Lines topology mismatch at submesh ${detail.submesh}`);
+    this.name = 'PointsLinesTopologyMismatchError';
+    this.expected = `submesh ${detail.submesh} topology is ${detail.expected}`;
+    this.hint = `rebuild entity ${detail.entity} with ${detail.expected} geometry before retrying Points/Lines admission`;
+    this.detail = detail;
+  }
+}
+
+export interface PointsLinesStyleUnsupportedDetail {
+  readonly lane: string;
+  readonly field: string;
+  readonly member: string;
+  readonly supported: readonly string[];
+}
+
+export class PointsLinesStyleUnsupportedError extends Error {
+  readonly code = 'points-lines-style-unsupported' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: PointsLinesStyleUnsupportedDetail;
+
+  constructor(detail: PointsLinesStyleUnsupportedDetail) {
+    super(`unsupported Points/Lines ${detail.field} member ${detail.member}`);
+    this.name = 'PointsLinesStyleUnsupportedError';
+    this.expected = `${detail.field} is one of ${detail.supported.join(', ')}`;
+    this.hint = `use a supported Points/Lines ${detail.field} member or wait for a later milestone`;
+    this.detail = detail;
+  }
+}
+
+export interface PointsLinesMaterialUnsupportedDetail {
+  readonly entity: number;
+  readonly material: string;
+  readonly pass: string;
+  readonly module: string;
+  readonly reason: string;
+}
+
+export class PointsLinesMaterialUnsupportedError extends Error {
+  readonly code = 'points-lines-material-unsupported' as const;
+  readonly expected = 'one engine-owned unlit forward MaterialAsset pass';
+  readonly hint: string;
+  readonly detail: PointsLinesMaterialUnsupportedDetail;
+
+  constructor(detail: PointsLinesMaterialUnsupportedDetail) {
+    super(`Points/Lines material is unsupported on entity ${detail.entity}`);
+    this.name = 'PointsLinesMaterialUnsupportedError';
+    this.hint = `use Materials.unlit without a shadow-caster pass for entity ${detail.entity}`;
+    this.detail = detail;
+  }
+}
+
+export interface PointsLinesBudgetExceededDetail {
+  readonly lane: string;
+  readonly requested: number;
+  readonly limit: number;
+  readonly unit: 'points' | 'segments' | 'vertices' | 'indices' | 'bytes' | 'draws';
+}
+
+export class PointsLinesBudgetExceededError extends Error {
+  readonly code = 'points-lines-budget-exceeded' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: PointsLinesBudgetExceededDetail;
+
+  constructor(detail: PointsLinesBudgetExceededDetail) {
+    super(`Points/Lines ${detail.unit} budget exceeded`);
+    this.name = 'PointsLinesBudgetExceededError';
+    this.expected = `${detail.unit} <= ${detail.limit}`;
+    this.hint = `reduce Points/Lines ${detail.unit} or split the entity into bounded equivalent batches`;
+    this.detail = detail;
+  }
+}
+
+export interface PointsLinesPrepareFailedDetail {
+  readonly owner: string;
+  readonly generation: number;
+  readonly stage: 'prepare';
+  readonly cause: string;
+  readonly lastKnownGood: boolean;
+}
+
+export class PointsLinesPrepareFailedError extends Error {
+  readonly code = 'points-lines-prepare-failed' as const;
+  readonly expected = 'the complete Points/Lines candidate validates before publication';
+  readonly hint: string;
+  readonly detail: PointsLinesPrepareFailedDetail;
+
+  constructor(detail: PointsLinesPrepareFailedDetail) {
+    super(`Points/Lines prepare failed at generation ${detail.generation}`);
+    this.name = 'PointsLinesPrepareFailedError';
+    this.hint = detail.lastKnownGood
+      ? 'retain the last known good candidate, repair the producer, and retry prepare'
+      : 'repair the producer and retry prepare; the failed first candidate produces zero draw';
+    this.detail = detail;
+  }
+}
+
 // -- RenderErrorCode / RenderError closed unions --------------------------------
 
 /**
  * Closed union of render-cluster error codes. AI users perform exhaustive
  * `switch (err.code)` without default; TS guards completeness.
  */
-export type RenderErrorCode =
-  | 'observation-unavailable'
-  | 'shadow-invalid-config'
-  | 'equirect-projection-failed'
-  | 'hdrp-caps-insufficient'
-  | 'hdrp-light-budget-exceeded'
-  | 'hdrp-index-list-overflow'
-  | 'hdrp-deferred-caps-insufficient'
-  | 'gbuffer-rt-alloc-failed'
-  | 'gbuffer-attachment-count-mismatch'
-  | 'point-shadow-atlas-uninitialized'
-  | 'point-shadow-atlas-bounds-violation'
-  | 'video-upload-unsupported'
-  | 'vertex-storage-buffer-unavailable'
-  | 'skin-palette-overflow'
-  | 'skin-material-mismatch'
-  | 'material-skin-attr-missing'
-  | RenderFeatureErrorCode;
+export type RenderErrorCode = RenderError['code'];
 
 /**
  * Closed union of the render-cluster structured error classes, each carrying a
  * `RenderErrorCode` discriminant on `.code`.
  */
 export type RenderError =
+  | LifecycleConstructionError
+  | RendererExpectedOperationError
+  | FrameReceiptStaleError
+  | RendererContractFailureError
   | ObservationUnavailableError
   | ShadowInvalidConfigError
   | EquirectProjectionFailedError
-  | HdrpCapsInsufficientError
   | HdrpLightBudgetExceededError
   | HdrpIndexListOverflowError
   | HdrpDeferredCapsInsufficientError
-  | GbufferRtAllocFailedError
-  | GbufferAttachmentCountMismatchError
   | PointShadowAtlasUninitializedError
   | PointShadowAtlasBoundsViolationError
   | VideoUploadUnsupportedError
   | VertexStorageBufferUnavailableError
+  | VertexColorVariantConflictError
   | SkinPaletteOverflowError
   | SkinMaterialMismatchError
   | MaterialSkinAttrMissingError
@@ -917,4 +1275,10 @@ export type RenderError =
   | RenderFeaturePassOrderConflictError
   | RenderFeaturePreparationFailedError
   | RenderFeaturePreparedStateMismatchError
-  | RenderFeatureDrawRecordingFailedError;
+  | RenderFeatureDrawRecordingFailedError
+  | PointsLinesInvalidStyleError
+  | PointsLinesTopologyMismatchError
+  | PointsLinesStyleUnsupportedError
+  | PointsLinesMaterialUnsupportedError
+  | PointsLinesBudgetExceededError
+  | PointsLinesPrepareFailedError;

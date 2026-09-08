@@ -20,20 +20,21 @@
 // Plus the multi-Skylight / multi-SkyboxBackground once-warn (w19): the warn
 // fires once, names the winning entity handle, and does NOT flood per frame.
 
-import type { Handle, World as WorldType } from '@forgeax/engine-ecs';
+import type { World as WorldType } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
+import type { RhiCaps } from '@forgeax/engine-rhi';
+import type { EquirectAsset, Handle } from '@forgeax/engine-types';
+import { toShared } from '@forgeax/engine-types';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DeviceScope } from '../../../render/src/device/device-scope';
+import { GpuResidencyCache } from '../../../render/src/device/gpu-residency';
+import { RhiErrorListenerRegistry } from '../../../render/src/lifecycle';
 import {
   driveLazyEquirectProjection,
-  GpuResourceStore,
-  RhiErrorListenerRegistry,
   selectLazyEquirectHandle,
   warnMultiSkybox,
   warnMultiSkylight,
-} from '@forgeax/engine-render/internal';
-import type { RhiCaps } from '@forgeax/engine-rhi';
-import type { EquirectAsset } from '@forgeax/engine-types';
-import { toShared } from '@forgeax/engine-types';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+} from '../../../render/src/record/helpers';
 
 // ── caps probes ──────────────────────────────────────────────────────────────
 
@@ -73,7 +74,18 @@ function makeReadyDevice(probe: DeviceProbe): any {
     createPipelineLayout: () => okShim({ __mock: 'layout' }),
     createRenderPipeline: () => okShim({ __mock: 'pipeline' }),
     createBindGroup: () => okShim({ __mock: 'bindGroup' }),
-    createCommandEncoder: () => okShim({ __mock: 'encoder', beginRenderPass: () => ({}) }),
+    createCommandEncoder: () =>
+      okShim({
+        __mock: 'encoder',
+        beginRenderPass: () => ({
+          setPipeline: () => undefined,
+          setBindGroup: () => undefined,
+          setVertexBuffer: () => undefined,
+          draw: () => undefined,
+          end: () => undefined,
+        }),
+        finish: () => okShim({ __mock: 'command-buffer' }),
+      }),
     createBuffer: (desc: { size?: number }) => okShim({ __mock: 'buffer', size: desc.size ?? 0 }),
     createTexture: () => {
       probe.textures += 1;
@@ -84,9 +96,9 @@ function makeReadyDevice(probe: DeviceProbe): any {
     },
     createTextureView: () => okShim({ __mock: 'view' }),
     queue: {
-      writeTexture: () => undefined,
-      writeBuffer: () => undefined,
-      submit: () => undefined,
+      writeTexture: () => okShim(undefined),
+      writeBuffer: () => okShim(undefined),
+      submit: () => okShim(undefined),
     },
   };
 }
@@ -98,7 +110,11 @@ function makeFailingDevice(): any {
     createShaderModule: () => okShim({ __mock: 'shader' }),
     createTexture: () => ({ ok: false as const, error: undefined }),
     createTextureView: () => ({ ok: false as const, error: undefined }),
-    queue: { writeTexture: () => undefined, writeBuffer: () => undefined, submit: () => undefined },
+    queue: {
+      writeTexture: () => okShim(undefined),
+      writeBuffer: () => okShim(undefined),
+      submit: () => okShim(undefined),
+    },
   };
 }
 
@@ -123,8 +139,8 @@ function equirectPod(width = 4, height = 2): EquirectAsset {
 // by recordMainPass off the global cache views (out of scope for this unit test,
 // covered by the dawn IBL readback test). This unit test asserts the lazy
 // trigger's launch / dedup / caps-gate / fail-once-and-no-retry bookkeeping.
-function configuredStore(device: unknown, caps: RhiCaps): GpuResourceStore {
-  const store = new GpuResourceStore();
+function configuredStore(device: unknown, caps: RhiCaps): GpuResidencyCache {
+  const store = new GpuResidencyCache();
   let next = 9000;
   store.configureGpuDevice(
     // biome-ignore lint/suspicious/noExplicitAny: mock device satisfies MipmapBlitDevice structurally
@@ -133,13 +149,18 @@ function configuredStore(device: unknown, caps: RhiCaps): GpuResourceStore {
     (() => okShim(toShared<'EquirectAsset'>(next++))) as never,
     caps,
   );
+  store.configureIblDevice(
+    device as import('@forgeax/engine-rhi').RhiDevice,
+    async (_device, desc) => okShim({ __mock: 'shader', label: desc.label ?? '' }) as never,
+  );
+  store.bindDeviceScope(DeviceScope.create(0, 'skylight-lazy-test'));
   return store;
 }
 
 // Minimal RenderSystemInternals surface driveLazyEquirectProjection touches:
 // gpuStore, errorRegistry, device.caps. Everything else is unused by the arm.
 function makeInternals(
-  store: GpuResourceStore,
+  store: GpuResidencyCache,
   errorRegistry: RhiErrorListenerRegistry,
   caps: RhiCaps,
 ) {

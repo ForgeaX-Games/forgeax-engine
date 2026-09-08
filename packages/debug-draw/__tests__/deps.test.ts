@@ -16,10 +16,11 @@ function readPkgDeps(): string[] {
 }
 
 describe('package dependency closure (AC-02)', () => {
-  it('only depends on @forgeax/engine-rhi, @forgeax/engine-math, @forgeax/engine-types', () => {
+  it('depends on the low-level vocabulary plus the RenderFeature plan contract', () => {
     const deps = readPkgDeps();
     const forgeaxDeps = deps.filter((d) => d.startsWith('@forgeax/'));
-    expect(forgeaxDeps).toHaveLength(3);
+    expect(forgeaxDeps).toHaveLength(4);
+    expect(forgeaxDeps).toContain('@forgeax/engine-render');
     expect(forgeaxDeps).toContain('@forgeax/engine-rhi');
     expect(forgeaxDeps).toContain('@forgeax/engine-math');
     expect(forgeaxDeps).toContain('@forgeax/engine-types');

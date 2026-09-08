@@ -16,17 +16,20 @@
 //
 // The fallback path is exposed as the pure helper
 // `evaluateFoldBucketUniformCap(bucket, caps, scope)` co-located with
-// `foldDispatchBuckets` in render-system-fold.ts: keeping it next to the
+// `foldDispatchBuckets` in record/mesh-ssbo.ts: keeping it next to the
 // bucket type definition lets the record-stage dispatch site (w11) call
 // one branch instead of inlining the cap arithmetic, and lets this unit
 // test drive the decision without booting recordFrame (D-9: shared
 // fallback exit with the mode-gate bypass means the helper output is
 // the SSOT for "should this bucket fold or fall back?").
 
-import type { DispatchEntry } from '@forgeax/engine-render/internal';
-import { evaluateFoldBucketUniformCap, type FoldBucket } from '@forgeax/engine-render/internal';
 import { RhiError } from '@forgeax/engine-rhi';
 import { describe, expect, it } from 'vitest';
+import {
+  evaluateFoldBucketUniformCap,
+  type FoldBucket,
+} from '../../../render/src/record/mesh-ssbo';
+import type { DispatchEntry } from '../../../render/src/render-system-extract';
 
 const FOLD_UNIFORM_CAP = 128;
 

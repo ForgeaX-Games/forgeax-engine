@@ -48,7 +48,7 @@ The `View` struct layout (784 B std140, `packages/shader/src/common.wgsl:17-52,1
 
 **Host-side lifecycle** (all engine-internal, zero user code):
 
-1. **Allocation**: the renderer allocates the uniform buffer with `VIEW_UBO_BYTES = 784` during setup (`packages/render/src/renderer/renderer-factory.ts`).
+1. **Allocation**: the renderer allocates the uniform buffer with `VIEW_UBO_BYTES = 784` during setup (`packages/render/src/assembly/factory.ts`).
 2. **Per-frame write**: `view-ubo.ts` reads the extracted `Camera` + `DirectionalLight` state and builds the 196-float payload (`packages/render/src/record/view-ubo.ts`).
 3. **Binding**: Every pipeline layout declares `@group(0) @binding(0) var<uniform> view : View`; the engine binds this buffer once and all material shaders (`pbr.wgsl`, `unlit.wgsl`, etc.) reference it via `forgeax_view::common` naga_oil import.
 
@@ -129,7 +129,7 @@ pnpm --filter "@forgeax/app-learn-render-4-advanced-opengl-7-advanced-glsl-ubo" 
 | LO concept | LO C++ / OpenGL | forgeax equivalent |
 |:--|:--|:--|
 | UBO declaration in shader | `layout(std140) uniform Matrices { mat4 view; mat4 projection; vec3 lightDir; ... }` | `struct View` in `common.wgsl:103-128` — one superset struct shared across all shaders via `#import` |
-| UBO host allocation | `glGenBuffers(1, &ubo)` + `glBufferData(GL_UNIFORM_BUFFER, size, NULL, GL_STATIC_DRAW)` | Engine allocates a 784 B uniform buffer in `renderer-factory.ts` |
+| UBO host allocation | `glGenBuffers(1, &ubo)` + `glBufferData(GL_UNIFORM_BUFFER, size, NULL, GL_STATIC_DRAW)` | Engine allocates a 784 B uniform buffer in `assembly/factory.ts` |
 | UBO host per-frame write | `glBufferSubData(GL_UNIFORM_BUFFER, 0, size, &data)` | Engine writes a 196-float payload each frame in `record/view-ubo.ts` (via `device.queue.writeBuffer`) |
 | UBO binding point | `glUniformBlockBinding(program, index, bindingPoint)` + `glBindBufferRange(GL_UNIFORM_BUFFER, bindingPoint, ...)` | Engine declares `@group(0) @binding(0) var<uniform> view : View` in every pipeline layout |
 | UBO reuse across shaders | Manual per-shader-program `glUniformBlockBinding` calls | naga_oil `#import forgeax_view::common` in every material shader — single definition, all consumers pull it |

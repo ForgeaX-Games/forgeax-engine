@@ -1,7 +1,10 @@
-import { ImporterRegistry, type ImportRunnerFs } from '@forgeax/engine-import';
+import {
+  ImporterRegistry,
+  type ImportRunnerFs,
+  produceSourcePackage,
+} from '@forgeax/engine-import';
 import type { ImportedAsset, Importer } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { produceSourcePackage } from '../producer/source-package.js';
 
 const GUID_A = '019e3969-1d48-7c3b-ac24-6d68f457065f';
 const GUID_B = '019e3969-1d48-7c3b-ac24-6d68f4570660';
@@ -51,7 +54,7 @@ describe('source package producer', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.declaredGuids).toEqual([GUID_A, GUID_B]);
-    expect(result.value.pack.assets.map((item) => item.guid)).toEqual([GUID_A, GUID_B]);
+    expect(result.value.product.assets.map((item) => item.guid)).toEqual([GUID_A, GUID_B]);
     expect(result.value.anchorGuid).toBe(GUID_A);
   });
 

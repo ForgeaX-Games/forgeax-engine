@@ -1,3 +1,5 @@
+import * as SceneOwner from '@forgeax/engine-scene';
+
 // feat-20260707-engine-world-clone-transient-for-editor-ssot M1 / m1t2:
 // Collect transient skip test (AC-02 + AC-03).
 //
@@ -9,15 +11,14 @@
 // AC-03 control: non-transient components (Transform) produce output matching
 // pre-fix baseline — boolean judgment does not falsely swallow non-transient components.
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { defineComponent, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import '@forgeax/engine-render/internal';
-import '@forgeax/engine-render/internal';
-import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { rootsToSceneAsset } from '../collect-scene-asset';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+import { registerSceneComponents } from './helpers/register-scene-components';
 
 function makeRegistry(): AssetRegistry {
   return new AssetRegistry(makeMockShaderRegistry());
@@ -44,11 +45,12 @@ describe('m1t2 — collect transient skip (AC-02 + AC-03)', () => {
     };
 
     const world = new World();
+    registerSceneComponents(world);
     const reg = makeRegistry();
     const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
     if (sg.ok) reg.catalog(sg.value, asset);
     const handle = registerSceneAsset(world, asset);
-    const res = world.instantiateScene(handle);
+    const res = SceneOwner.worldInstantiateScene(world, handle);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 
@@ -73,11 +75,12 @@ describe('m1t2 — collect transient skip (AC-02 + AC-03)', () => {
     };
 
     const world = new World();
+    registerSceneComponents(world);
     const reg = makeRegistry();
     const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
     if (sg.ok) reg.catalog(sg.value, asset);
     const handle = registerSceneAsset(world, asset);
-    const res = world.instantiateScene(handle);
+    const res = SceneOwner.worldInstantiateScene(world, handle);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 
@@ -116,11 +119,12 @@ describe('m1t2 — collect transient skip (AC-02 + AC-03)', () => {
     };
 
     const world = new World();
+    registerSceneComponents(world);
     const reg = makeRegistry();
     const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
     if (sg.ok) reg.catalog(sg.value, asset);
     const handle = registerSceneAsset(world, asset);
-    const res = world.instantiateScene(handle);
+    const res = SceneOwner.worldInstantiateScene(world, handle);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 
@@ -141,7 +145,7 @@ describe('m1t2 — collect transient skip (AC-02 + AC-03)', () => {
   });
 
   it('(d) control: non-transient component appears unchanged in output', () => {
-    defineComponent('M1T2_Ctrl', { val: 'f32', label: 'string' });
+    const Control = defineComponent('M1T2_Ctrl', { val: 'f32', label: 'string' });
 
     const asset: SceneAsset = {
       kind: 'scene',
@@ -149,11 +153,12 @@ describe('m1t2 — collect transient skip (AC-02 + AC-03)', () => {
     };
 
     const world = new World();
+    registerSceneComponents(world, [Control]);
     const reg = makeRegistry();
     const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
     if (sg.ok) reg.catalog(sg.value, asset);
     const handle = registerSceneAsset(world, asset);
-    const res = world.instantiateScene(handle);
+    const res = SceneOwner.worldInstantiateScene(world, handle);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 

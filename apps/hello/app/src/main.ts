@@ -8,10 +8,10 @@
 //   app.value.start();
 //
 // Error handling pattern (D-6 dual-layer instanceof + switch): the
-// error union is CanvasAppError (AppError | RhiError | PluginError |
+// error union is CanvasAppError (AppError | RhiError |
 // EngineEnvironmentError; SSOT in @forgeax/engine-app). The
 // outer instanceof check separates EngineEnvironmentError (which lacks
-// .code) from the structured AppError | RhiError | PluginError union; the inner
+// .code) from the structured AppError | RhiError union; the inner
 // switch (err.code) is exhaustive across 5 + 18 + 2 = 25 codes (charter P4
 // closed-union, tsc strict mode guards completeness with no default).
 //
@@ -57,6 +57,7 @@ function reportError(err: CanvasAppError): void {
     case 'app-canvas-detached':
     case 'app-system-update-failed':
     case 'app-pointer-lock-failed':
+    case 'app-plugin-activation-failed':
     case 'adapter-unavailable':
     case 'feature-not-enabled':
     case 'limit-exceeded':
@@ -75,8 +76,6 @@ function reportError(err: CanvasAppError): void {
     case 'oom':
     case 'internal-error':
     case 'hierarchy-broken':
-    case 'duplicate-plugin':
-    case 'plugin-build-failed':
       console.error(`[app] ${err.code}: ${err.hint}`);
       return;
   }

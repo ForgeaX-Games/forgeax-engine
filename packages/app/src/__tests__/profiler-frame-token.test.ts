@@ -1,6 +1,7 @@
 import { World } from '@forgeax/engine-ecs';
+import { createRenderReadLease } from '@forgeax/engine-ecs/projection';
 import { createProfiler, type ProfileCapture } from '@forgeax/engine-profiler';
-import type { DrawOwnerOptions, Renderer } from '@forgeax/engine-render';
+import type { Renderer, RenderFrameInput } from '@forgeax/engine-render';
 import { describe, expect, it } from 'vitest';
 
 import { createFrameLoop } from '../internal/frame-loop';
@@ -32,18 +33,14 @@ function makeScheduler() {
   };
 }
 
-function makeRenderer(onDraw: (options: unknown) => void = () => {}): Renderer {
+function makeRenderer(onDraw: (profileFrame: unknown) => void = () => {}): Renderer {
   return {
-    backend: 'webgpu',
-    ready: Promise.resolve({ ok: true, value: undefined }),
-    attachWorld: () => ({ ok: true, value: undefined }),
-    detachWorld: () => {},
-    draw: (_worlds: World[], options: DrawOwnerOptions) => {
-      onDraw(options);
+    attach: (world: World) => ({ ok: true, value: createRenderReadLease(world) }),
+    draw: (request: RenderFrameInput) => {
+      onDraw(request.profileFrame);
       return { ok: true, value: undefined };
     },
-    onError: () => () => {},
-    onLost: () => () => {},
+    subscribe: () => () => {},
     dispose: () => {},
   } as unknown as Renderer;
 }
@@ -118,10 +115,12 @@ describe('App profiler frame token', () => {
     ).toEqual(new Set([1, 2]));
     expect(drawOptions).toHaveLength(2);
     expect(drawOptions[0]).toMatchObject({
-      profileFrame: { captureId: 'capture-0001', frameId: 1 },
+      captureId: 'capture-0001',
+      frameId: 1,
     });
     expect(drawOptions[1]).toMatchObject({
-      profileFrame: { captureId: 'capture-0001', frameId: 2 },
+      captureId: 'capture-0001',
+      frameId: 2,
     });
   });
 

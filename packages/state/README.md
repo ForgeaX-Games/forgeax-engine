@@ -14,7 +14,8 @@
 | `setNextStateForce(world, token, variant)` | function | Like `setNextState` but `force=true` (re-fires even same-state) |
 | `getState(world, token)` | function | Read current state variant string; returns `Result<string, StateError>` |
 | `getPreviousState(world, token)` | function | Read previous-frame state variant string; returns `Result<string, StateError>` |
-| `registerStatesPlugin(world)` | function | Idempotent: inserts per-token Resources + registers `transitionStates` on `Update` |
+| `statePlugin()` | Cordis plugin | Installs `transitionStates`, projects current and later-defined tokens, and reverses the runtime with its Fiber |
+| `registerStatesPlugin(world)` | low-level function | Same reversible World adapter for hosts without a Cordis Context |
 | `despawnOnExit(world, entity, token, variant)` | function | Scope entity to auto-despawn when token leaves variant |
 | `despawnOnEnter(world, entity, token, variant)` | function | Scope entity to auto-despawn when token enters variant |
 | `OnEnter(token, variant)` | function | Return dispatch label string for enter callbacks |
@@ -61,9 +62,9 @@ Schedule anchors are scoped to `Update`: `after: ['input-frame-start-scan']`, `b
 - **Callback errors bubble**: `OnEnter`/`OnExit` callbacks are *not* wrapped in try-catch. A throwing callback aborts `transitionStatesSystem` and propagates to the ECS schedule (per requirements sec 7). The `State` flip in step 3 has already committed and is not rolled back; later tokens in the same frame do not transition. Keep callbacks total -- validate inside them and return rather than throw.
 - **Despawn tolerance**: Entities already dead at scoped-despawn time are silently skipped (ECS `world.despawn` is idempotent on already-despawned entities).
 
-## Auto-registration in createApp
+## App and late-loaded game modules
 
-Both `createApp` canvas and assemble forms call `registerStatesPlugin(world)` internally. State tokens defined with `defineState` before `createApp` are auto-wired. Manual `createRenderer` users must call `registerStatesPlugin(world)` before any state operation; otherwise `setNextState`/`getState` return `StateError { code: 'state-not-registered' }`.
+Both `createApp` forms install `statePlugin()` in their default Cordis realm. It projects tokens already defined at App creation and subscribes to later module-level `defineState()` calls, so a Preview may load an asset-resident game plugin after the App without a second registration path. Fiber disposal removes the subscription, transition system, descriptors, and resources. A lower-level host without App/Cordis may own the disposer returned by `registerStatesPlugin(world)`; otherwise `setNextState`/`getState` return `StateError { code: 'state-not-registered' }`.
 
 ## CLI plugin
 

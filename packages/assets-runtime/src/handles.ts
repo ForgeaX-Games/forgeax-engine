@@ -3,7 +3,7 @@
 // straight-cut). Pure move from asset-registry.ts; zero identifier changes.
 
 import type { Handle } from '@forgeax/engine-types';
-import { toShared } from '@forgeax/engine-types';
+import { handleSlot, toShared } from '@forgeax/engine-types';
 
 // ─── Builtin handles (D-S9 / backward compat with hello-triangle + hello-cube) ─
 
@@ -145,6 +145,12 @@ export const BUILTIN_MESH_GUIDS: ReadonlyArray<readonly [Handle<'MeshAsset', 'sh
   // (plan-strategy §5.6 builtin-guid-ssot gate)
   [HANDLE_CYLINDER, 'ab20af21-0764-55be-a7f2-b80ab3d46a0a'],
 ];
+
+/** Resolve the stable producer GUID for one process-static builtin mesh handle. */
+export function builtinMeshGuid(handle: Handle<string, 'shared'>): string | undefined {
+  const slot = handleSlot(handle);
+  return BUILTIN_MESH_GUIDS.find(([candidate]) => handleSlot(candidate) === slot)?.[1];
+}
 
 /**
  * Field names known to carry handle<> schema-vocab references (plan-strategy

@@ -7,7 +7,7 @@ export interface ReadbackProbeInput {
 }
 
 export interface ReadbackProbe {
-  readonly source: 'renderer.readPixels' | 'rhi-debug' | 'unavailable';
+  readonly source: 'frame-receipt' | 'rhi-debug' | 'unavailable';
   readonly linearReadback: boolean;
   readonly finalReadback: boolean;
   readonly namedAttachment: boolean;
@@ -19,7 +19,7 @@ export interface ReadbackProbe {
 export function probeReadback(input: ReadbackProbeInput): ReadbackProbe {
   const linearReadback = input.linearReadbackAvailable ?? false;
   const source = input.finalReadbackAvailable && linearReadback
-    ? 'renderer.readPixels'
+    ? 'frame-receipt'
     : input.namedAttachmentAvailable && input.rawHashAvailable
       ? 'rhi-debug'
       : 'unavailable';

@@ -44,7 +44,7 @@ import { defineComponent } from '@forgeax/engine-ecs';
 export const VideoPlayer = defineComponent('VideoPlayer', {
   // The host HTMLVideoElement owns the live asset/presentation binding; the
   // portable play controls remain in the simulation projection.
-  clip: { type: 'shared<VideoAsset>', simulationTransient: true },
+  clip: { type: 'shared<VideoAsset>' },
   playing: { type: 'bool', default: false },
   loop: { type: 'bool', default: false },
   currentTime: { type: 'f32', default: 0, transient: true },

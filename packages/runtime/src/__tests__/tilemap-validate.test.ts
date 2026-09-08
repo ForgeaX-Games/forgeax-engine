@@ -5,8 +5,7 @@
 // spawn:
 //   - cols / rows >= 1
 //   - chunkSize >= 1
-//   - tileset handle != 0 (shared handle resolves to a registered
-//     TilesetAsset via the per-World SharedRefStore)
+//   - tileset GUID is non-empty
 //
 // validateTileLayerAtRegister checks the TileLayer component invariants:
 //   - tiles.length === parent.Tilemap.cols * rows (M0 second-stage
@@ -22,34 +21,23 @@
 // baseline); charter P3.
 
 import { World } from '@forgeax/engine-ecs';
-import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
 import { ChildOf } from '@forgeax/engine-scene';
-import { AssetError, type TilesetAsset, toShared } from '@forgeax/engine-types';
+import { AssetError } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { TileLayer, Tilemap } from '../../../render/src/components';
 import {
   validateTileLayerAtRegister,
   validateTilemapAtRegister,
 } from '../tilemap-register-validate';
 
-function makeTilesetHandle(world: World) {
-  const tileset: TilesetAsset = {
-    kind: 'tileset',
-    guid: 'test/tileset',
-    atlases: [toShared<'TextureAsset'>(101)],
-    tileWidth: 16,
-    tileHeight: 16,
-    columns: 1,
-    rows: 1,
-    regions: [{ x: 0, y: 0, width: 16, height: 16 }],
-    tiles: [{ regionIndex: 0 }],
-  };
-  return world.allocSharedRef<'TilesetAsset', TilesetAsset>('TilesetAsset', tileset);
+function makeTilesetGuid(_world: World) {
+  return 'test/tileset';
 }
 
 describe('validateTilemapAtRegister — M0 baseline invariants', () => {
   it('valid Tilemap returns Result.ok', () => {
     const world = new World();
-    const tilesetHandle = makeTilesetHandle(world);
+    const tilesetGuid = makeTilesetGuid(world);
     const e = world
       .spawn({
         component: Tilemap,
@@ -58,7 +46,7 @@ describe('validateTilemapAtRegister — M0 baseline invariants', () => {
           rows: 2,
           tileSize: [16, 16],
           chunkSize: 8,
-          tileset: tilesetHandle,
+          tileset: tilesetGuid,
         },
       })
       .unwrap();
@@ -68,7 +56,7 @@ describe('validateTilemapAtRegister — M0 baseline invariants', () => {
 
   it('cols === 0 fails', () => {
     const world = new World();
-    const tilesetHandle = makeTilesetHandle(world);
+    const tilesetGuid = makeTilesetGuid(world);
     const e = world
       .spawn({
         component: Tilemap,
@@ -77,7 +65,7 @@ describe('validateTilemapAtRegister — M0 baseline invariants', () => {
           rows: 2,
           tileSize: [16, 16],
           chunkSize: 8,
-          tileset: tilesetHandle,
+          tileset: tilesetGuid,
         },
       })
       .unwrap();
@@ -91,7 +79,7 @@ describe('validateTilemapAtRegister — M0 baseline invariants', () => {
 
   it('rows === 0 fails', () => {
     const world = new World();
-    const tilesetHandle = makeTilesetHandle(world);
+    const tilesetGuid = makeTilesetGuid(world);
     const e = world
       .spawn({
         component: Tilemap,
@@ -100,7 +88,7 @@ describe('validateTilemapAtRegister — M0 baseline invariants', () => {
           rows: 0,
           tileSize: [16, 16],
           chunkSize: 8,
-          tileset: tilesetHandle,
+          tileset: tilesetGuid,
         },
       })
       .unwrap();
@@ -110,7 +98,7 @@ describe('validateTilemapAtRegister — M0 baseline invariants', () => {
 
   it('chunkSize === 0 fails', () => {
     const world = new World();
-    const tilesetHandle = makeTilesetHandle(world);
+    const tilesetGuid = makeTilesetGuid(world);
     const e = world
       .spawn({
         component: Tilemap,
@@ -119,7 +107,7 @@ describe('validateTilemapAtRegister — M0 baseline invariants', () => {
           rows: 2,
           tileSize: [16, 16],
           chunkSize: 0,
-          tileset: tilesetHandle,
+          tileset: tilesetGuid,
         },
       })
       .unwrap();
@@ -127,7 +115,7 @@ describe('validateTilemapAtRegister — M0 baseline invariants', () => {
     expect(r.ok).toBe(false);
   });
 
-  it('tileset handle === 0 fails', () => {
+  it('empty tileset GUID fails', () => {
     const world = new World();
     const e = world
       .spawn({
@@ -137,7 +125,7 @@ describe('validateTilemapAtRegister — M0 baseline invariants', () => {
           rows: 2,
           tileSize: [16, 16],
           chunkSize: 8,
-          tileset: toShared<'TilesetAsset'>(0),
+          tileset: '',
         },
       })
       .unwrap();
@@ -149,11 +137,11 @@ describe('validateTilemapAtRegister — M0 baseline invariants', () => {
 describe('validateTileLayerAtRegister — M0 baseline invariants', () => {
   function spawnLayered(cols: number, rows: number, tileLen: number) {
     const world = new World();
-    const tilesetHandle = makeTilesetHandle(world);
+    const tilesetGuid = makeTilesetGuid(world);
     const tilemap = world
       .spawn({
         component: Tilemap,
-        data: { cols, rows, tileSize: [16, 16], chunkSize: 8, tileset: tilesetHandle },
+        data: { cols, rows, tileSize: [16, 16], chunkSize: 8, tileset: tilesetGuid },
       })
       .unwrap();
     const layer = world

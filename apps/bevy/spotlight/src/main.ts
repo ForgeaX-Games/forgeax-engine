@@ -22,11 +22,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
   const app = appResult.value;
 
-  const ready = await app.renderer.ready;
-  if (!ready.ok) {
-    console.error('[bevy-spotlight] renderer.ready failed:', ready.error);
-    return;
-  }
 
   buildSpotlightWorld(app.world);
   const started = app.start();

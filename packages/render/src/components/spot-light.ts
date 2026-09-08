@@ -35,9 +35,7 @@
 // pre-conversion mirrors directional path's host-side `lightDir x intensity`
 // pre-multiplication).
 
-import { defineComponent, SpawnLightInvalidBoundsError } from '@forgeax/engine-ecs';
-import { ShadowInvalidConfigError } from '../errors';
-import { validateDirection } from './light-helpers';
+import { defineComponent } from '@forgeax/engine-ecs';
 
 /**
  * Cone-restricted spot light (KHR_lights_punctual `spot` type).  Casts shadows
@@ -104,66 +102,23 @@ import { validateDirection } from './light-helpers';
  *   // resolves to color=[1,1,1], intensity=1, range=10.0,
  *   // innerConeDeg=0, outerConeDeg=45 (KHR pi/4 equivalent).
  */
-export const SpotLight = defineComponent(
-  'SpotLight',
-  {
-    // direction has no default (D-5): omitting it lands the array layer-3
-    // all-zero, which validate() rejects. color carries an explicit layer-2
-    // default [1,1,1] (white); the array layer-3 fallback is all-zero.
-    direction: { type: 'array<f32, 3>' },
-    color: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
-    intensity: { type: 'f32', default: 1 },
-    range: { type: 'f32', default: 10.0 },
-    innerConeDeg: { type: 'f32', default: 0 },
-    outerConeDeg: { type: 'f32', default: 45 },
-    // Shadow opt-out gate: defaults to true so zero-config spawns cast shadows.
-    castShadow: { type: 'bool', default: true },
-    // 6 shadow fields aligned with DirectionalLight (plan-strategy D-6).
-    mapSize: { type: 'f32', default: 2048 },
-    depthBias: { type: 'f32', default: 0.005 },
-    normalBias: { type: 'f32', default: 0.05 },
-    nearPlane: { type: 'f32', default: 0.1 },
-    farPlane: { type: 'f32', default: 50 },
-    pcfKernelSize: { type: 'f32', default: 3 },
-  },
-  {
-    validate: (data) => {
-      // D-1: reject a missing or zero-vector direction (shared SSOT helper).
-      const dirErr = validateDirection(
-        'SpotLight',
-        data.direction as ArrayLike<number> | undefined,
-      );
-      if (dirErr !== null) return dirErr;
-      const cs = data.castShadow;
-      if (cs === false) {
-        return null;
-      }
-      const range = data.range as number;
-      if (typeof range !== 'number' || Number.isNaN(range) || range < 0) {
-        return new SpawnLightInvalidBoundsError('SpotLight', 'range', range);
-      }
-      const inner = data.innerConeDeg as number;
-      const outer = data.outerConeDeg as number;
-      if (outer > 90) {
-        return new SpawnLightInvalidBoundsError('SpotLight', 'outerNinety', outer);
-      }
-      if (outer <= inner) {
-        return new SpawnLightInvalidBoundsError('SpotLight', 'innerOuter', outer);
-      }
-      const ms = data.mapSize as number | undefined;
-      if (ms !== undefined && ms < 1) {
-        return new ShadowInvalidConfigError('mapSize', ms, 1);
-      }
-      const near = data.nearPlane as number | undefined;
-      const far = data.farPlane as number | undefined;
-      if (near !== undefined && far !== undefined && far <= near) {
-        return new ShadowInvalidConfigError('farPlane', far, near);
-      }
-      const pcf = data.pcfKernelSize as number | undefined;
-      if (pcf !== undefined && (pcf < 1 || pcf % 2 === 0)) {
-        return new ShadowInvalidConfigError('pcfKernelSize', pcf, 1);
-      }
-      return null;
-    },
-  },
-);
+export const SpotLight = defineComponent('SpotLight', {
+  // direction has no default (D-5): omitting it lands the array layer-3
+  // all-zero, which validate() rejects. color carries an explicit layer-2
+  // default [1,1,1] (white); the array layer-3 fallback is all-zero.
+  direction: { type: 'array<f32, 3>' },
+  color: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
+  intensity: { type: 'f32', default: 1 },
+  range: { type: 'f32', default: 10.0 },
+  innerConeDeg: { type: 'f32', default: 0 },
+  outerConeDeg: { type: 'f32', default: 45 },
+  // Shadow opt-out gate: defaults to true so zero-config spawns cast shadows.
+  castShadow: { type: 'bool', default: true },
+  // 6 shadow fields aligned with DirectionalLight (plan-strategy D-6).
+  mapSize: { type: 'f32', default: 2048 },
+  depthBias: { type: 'f32', default: 0.005 },
+  normalBias: { type: 'f32', default: 0.05 },
+  nearPlane: { type: 'f32', default: 0.1 },
+  farPlane: { type: 'f32', default: 50 },
+  pcfKernelSize: { type: 'f32', default: 3 },
+});

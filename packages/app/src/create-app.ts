@@ -23,57 +23,62 @@
 // inherits .tagName from HTMLElement, so the property test cleanly
 // separates the canvas argument from the AppAssembleArgs plain object.
 
-import { animationPlugin } from '@forgeax/engine-animation';
-import {
-  ASSET_REGISTRY_RESOURCE_KEY,
-  AUDIO_ENGINE_RESOURCE_KEY,
-  type AudioBackend,
-} from '@forgeax/engine-audio';
-import { createWebAudioBackend } from '@forgeax/engine-audio-webaudio';
+import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import type { AudioBackend } from '@forgeax/engine-audio';
 import type { DebugDraw } from '@forgeax/engine-debug-draw';
-import { err, ok, type Result, Update, World } from '@forgeax/engine-ecs';
+import { createWorldContext, Update, World } from '@forgeax/engine-ecs';
 import type { InputBackend } from '@forgeax/engine-input';
-import { INPUT_BACKEND_KEY } from '@forgeax/engine-input';
-import type { Plugin, PluginSource } from '@forgeax/engine-plugin';
-import { flattenPluginSources, runPlugins } from '@forgeax/engine-plugin';
-import type { RendererError } from '@forgeax/engine-render';
+import type { Context, Plugin } from '@forgeax/engine-plugin';
+import type { RenderError } from '@forgeax/engine-render';
 import { CAMERA_PROJECTION_PERSPECTIVE, Camera, type Renderer } from '@forgeax/engine-render';
-import { createDebugDrawOnReady } from '@forgeax/engine-render/internal';
-import { RhiError, type RhiInstance } from '@forgeax/engine-rhi';
-import type { CreateShaderModuleFn, DebugRhiInstance } from '@forgeax/engine-rhi-debug';
+import type { RendererHostAssembly } from '@forgeax/engine-render/internal/construct-renderer';
+import { RhiError } from '@forgeax/engine-rhi';
+import {
+  attachRecorder,
+  type CaptureFrameOptions,
+  type RecorderAttachment,
+} from '@forgeax/engine-rhi-debug';
 import * as engineRuntimeModule from '@forgeax/engine-runtime';
-import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
+import {
+  constructRuntimeRendererHost,
+  loadRhiPack,
+} from '@forgeax/engine-runtime/internal/renderer-host';
+import { err, ok, type Result } from '@forgeax/engine-types';
 
-import { scenePlugin } from '@forgeax/engine-scene';
-import { statePlugin } from '@forgeax/engine-state';
+import { createAnimationPayloadLookup } from './animation-asset-lookup';
+import { publishBrowserFrameSubmitted, resetBrowserFrameSubmitted } from './browser-frame-signal';
 import type { AppErrorCode, AppErrorDetailFor } from './errors';
 import { APP_ERROR_HINTS, APP_EXPECTED, AppError } from './errors';
 import {
   createExecutionReport,
   type ExecutionControl,
+  executionBootstrapHostPlugin,
   type PreparedExecutionBootstrap,
   prepareBootstrapEntry,
   probeExecutionCapabilities,
-  runPreparedBootstrap,
   selectExecutionTier,
   unavailableExecutionCapabilities,
 } from './execution';
+import { normalizeExecutionBootstrapUrl } from './execution/bootstrap-url';
 import { createLocalExecutionControl } from './execution/control';
 import { createWorkerExecutionApp } from './execution/host-controller';
-import { makeCleanupFunnel } from './internal/cleanup';
+import { assembledEngineProfile } from './internal/assembled-engine-profile';
 import { projectComponentIntrospection } from './internal/component-introspection';
 import { ErrorFanoutRegistry } from './internal/error-fanout';
 import { createFrameLoop } from './internal/frame-loop';
-import { registerCaptureHmrListener } from './internal/hmr-capture-listener';
 import { attachInputAuto } from './internal/input-attach';
+import { mainEngineProfile } from './internal/main-engine-profile';
 import { resolveRemoteServeFlag } from './internal/remote-serve-flag';
-import { resolveRhiDebugFlag } from './internal/rhi-debug-flag';
+import { remoteServerPlugin } from './internal/remote-server-plugin';
 import {
-  createSimulationInspection,
-  registerSimulationParticipants,
-  type SimulationParticipantAssembly,
-} from './internal/simulation-participants';
-import { inputPlugin } from './plugin-factories';
+  bindRhiCaptureFrameDriver,
+  createRhiCapture,
+  createRhiInstrumentation,
+  type RhiCapture,
+} from './internal/rhi-capture';
+import { resolveRhiDebugFlag } from './internal/rhi-debug-flag';
+import { createRenderFeatureHost, type RenderFeatureHost } from './renderer-plugin';
 import type {
   App,
   AppAssembleArgs,
@@ -94,6 +99,36 @@ function makeAppError<C extends AppErrorCode>(
   return new AppError({ code, expected, hint, detail }) as AppError;
 }
 
+function canvasAspectPlugin(canvas: HTMLCanvasElement): Plugin {
+  return {
+    name: 'canvas-aspect',
+    inject: ['world'],
+    apply(ctx) {
+      ctx.effect(() => {
+        const system = {
+          name: 'app-sync-camera-aspect',
+          queries: [],
+          fn: () => {
+            syncCanvasDrawingBuffer(canvas);
+            syncCameraAspect(ctx.world, canvas.width, canvas.height);
+          },
+        };
+        ctx.world.addSystem(Update, system).unwrap();
+        return () => ctx.world.removeSystem(Update, system.name).unwrap();
+      }, 'app/canvas-aspect');
+    },
+  };
+}
+
+function rhiDebugHostPlugin(dispose: () => void): Plugin {
+  return {
+    name: 'rhi-debug-host',
+    apply(ctx) {
+      ctx.effect(() => dispose, 'rhi-debug/host');
+    },
+  };
+}
+
 /**
  * createApp(canvas, opts?, bundler?) -- canvas thin wrapper SSOT (per
  * plan-strategy D-5). Resolves with Result.ok(app) on success; failure routes
@@ -104,8 +139,8 @@ function makeAppError<C extends AppErrorCode>(
  * host-injected build-tool emit knowledge. M3 demos collapse the third-arg
  * literal to `forgeaxBundlerAdapter()` exported by `virtual:forgeax/bundler`.
  *
- * M3 ships the path needed by AC-05 (auto input-attach + scan system +
- * cleanup on stop). M4 finalises the canvas-detached guard +
+ * M3 ships the path needed by AC-05 (auto input acquisition plus an ECS scan
+ * plugin). M4 finalises the canvas-detached guard +
  * EngineEnvironmentError try/catch + onError default fallback.
  *
  * The host-engine contract defines the boundary between host (DOM, canvas, UI)
@@ -127,7 +162,8 @@ export function createApp(
 ): Promise<Result<App, CanvasAppError>>;
 
 /**
- * createApp({ renderer, world, input?, schedule?, ... }) -- assemble-form
+ * Create the browser host for the single RenderScene -> FrameReceipt path.
+ * `createApp({ renderer, world, input?, schedule?, ... })` is the assemble form
  * SSOT (per plan-strategy D-5). Host already owns renderer / world; the
  * returned App holds them by reference equality (per AC-02).
  *
@@ -185,19 +221,20 @@ async function createAppFromCanvas(
   // resize remains visible to both rendering and camera policy.
   syncCanvasDrawingBuffer(canvas);
 
+  let executionBootstrapUrl: string | undefined;
   if (opts?.execution !== undefined) {
+    const normalizedBootstrap = normalizeExecutionBootstrapUrl(opts.execution.bootstrap);
+    if (!normalizedBootstrap.ok) return err(normalizedBootstrap.error);
+    executionBootstrapUrl = normalizedBootstrap.value;
     const realmBoundOption = [
       ['features', opts.features],
       ['plugins', opts.plugins],
-      ['simulationParticipants', opts.simulationParticipants],
       ['rhi', opts.rhi],
-      ['rawDeviceForContextConfigure', opts.rawDeviceForContextConfigure],
+      ['rhiInstrumentation', opts.rhiInstrumentation],
       ['drawSource', opts.drawSource],
-      ['membershipTiming', opts.membershipTiming],
       ['bundler.importTransport', bundler?.importTransport],
     ].find(([, value]) => value !== undefined)?.[0];
     if (realmBoundOption !== undefined) {
-      const moduleUrl = new URL(opts.execution.bootstrap, globalThis.location?.href).href;
       return err(
         makeAppError(
           'app-execution-bootstrap-failed',
@@ -205,7 +242,7 @@ async function createAppFromCanvas(
           APP_ERROR_HINTS['app-execution-bootstrap-failed'],
           {
             phase: 'prepare',
-            moduleUrl,
+            moduleUrl: executionBootstrapUrl,
             cause: new TypeError(
               `${realmBoundOption} must be constructed by the execution bootstrap module`,
             ),
@@ -222,7 +259,6 @@ async function createAppFromCanvas(
       }
     | undefined;
   let preparedExecutionBootstrap: PreparedExecutionBootstrap | undefined;
-  let executionBootstrapUrl: string | undefined;
   if (opts?.execution !== undefined) {
     const capabilities = await probeExecutionCapabilities(canvas);
     const selected = selectExecutionTier({
@@ -236,12 +272,15 @@ async function createAppFromCanvas(
       return createWorkerExecutionApp({
         canvas,
         appOptions: opts,
+        syncCanvas: () => measureCanvasDrawingBuffer(canvas),
         ...(bundler !== undefined ? { bundler } : {}),
         capabilities,
         selection: selected.value,
       });
     }
-    executionBootstrapUrl = new URL(opts.execution.bootstrap, globalThis.location?.href).href;
+    if (executionBootstrapUrl === undefined) {
+      throw new Error('execution bootstrap URL was not normalized');
+    }
     const prepared = await prepareBootstrapEntry(
       executionBootstrapUrl,
       opts.execution.bootstrapData,
@@ -261,35 +300,43 @@ async function createAppFromCanvas(
   //   forwarded to keep the contract honest (AI users walk the union
   //   discriminant rather than parse error.message strings).
   // feat-20260608 / M2 / D-3: CreateAppOptions stops `extends RendererOptions`,
-  // so the two RHI escape hatches (rhi / rawDeviceForContextConfigure) are
+  // so the RHI escape hatch (rhi) is
   // forwarded explicitly. Build a RendererOptions object out of just those
   // fields when present; an empty {} keeps createRenderer on its default path.
   const rendererOpts: import('@forgeax/engine-render').RendererOptions = {};
   if (opts?.rhi !== undefined) {
     Object.assign(rendererOpts, { rhi: opts.rhi });
   }
-  if (opts?.rawDeviceForContextConfigure !== undefined) {
-    Object.assign(rendererOpts, {
-      rawDeviceForContextConfigure: opts.rawDeviceForContextConfigure,
-    });
-  }
   if (opts?.profiler !== undefined) {
     Object.assign(rendererOpts, { profiler: opts.profiler });
-  }
-  if (opts?.membershipTiming !== undefined) {
-    Object.assign(rendererOpts, { membershipTiming: opts.membershipTiming });
   }
   const rendererFeatures = preparedExecutionBootstrap?.features ?? opts?.features;
   if (rendererFeatures !== undefined) {
     Object.assign(rendererOpts, { features: rendererFeatures });
   }
+  if (opts?.standardProfile !== undefined) {
+    Object.assign(rendererOpts, { standardProfile: opts.standardProfile });
+  }
+  if (opts?.rhiInstrumentation !== undefined) {
+    Object.assign(rendererOpts, { rhiInstrumentation: opts.rhiInstrumentation });
+  }
 
-  // m3-1: FORGEAX_ENGINE_RHI_DEBUG=1 RHI-debug recorder wiring.
-  // When FORGEAX_ENGINE_RHI_DEBUG=1, wrap the RHI instance and createShaderModule
-  // function before createRenderer so the proxy chain intercepts all
-  // adapter/device/shader calls. The wrap happens BEFORE createRenderer;
-  // frame-completion hookup happens AFTER (needs the renderer object).
-  let _debugInst: DebugRhiInstance | undefined;
+  // FORGEAX_ENGINE_RHI_DEBUG=1 attaches the recorder at the Runtime backend
+  // seam. Render remains the owner of device/surface lifecycle; App only owns
+  // the optional capture capability and its frame transaction.
+  let rhiAttachment: RecorderAttachment | undefined;
+  let rhiCapture: RhiCapture | undefined;
+  let rhiDebugGlobal:
+    | { captureFrame(options?: CaptureFrameOptions): ReturnType<RhiCapture['captureFrame']> }
+    | undefined;
+  const cleanupRhiDebugHost = (): void => {
+    const host = globalThis as { __forgeax?: typeof rhiDebugGlobal };
+    if (host.__forgeax === rhiDebugGlobal) delete host.__forgeax;
+    rhiDebugGlobal = undefined;
+    const attachment = rhiAttachment;
+    rhiAttachment = undefined;
+    if (attachment !== undefined) void attachment.dispose();
+  };
   // Read FORGEAX_ENGINE_RHI_DEBUG from two sources (plan-strategy D-4):
   //   - browser: import.meta.env, statically replaced by the
   //     vite-plugin-rhi-debug `define` hook. The `typeof import.meta !==
@@ -328,249 +375,52 @@ async function createAppFromCanvas(
     (browserBuildRhiDebugFlag === undefined || browserBuildRhiDebugFlag === '1') &&
     rhiDebugFlag === '1'
   ) {
-    // Select backend: same auto-detect logic as createRenderer's loadBackendPack.
-    let realBackend: Record<string, unknown>;
-    // Literal import specifiers per branch (not a computed `backendPkg`
-    // variable). vite's import-analysis can only resolve a string-literal
-    // specifier to a served module URL; a variable specifier left
-    // `globalThis.__forgeax.captureFrame` unreachable in the browser dev path
-    // (`Failed to resolve module specifier '@forgeax/engine-rhi-webgpu'`).
-    // Mirrors createRenderer's loadBackendPack (static rhiWebgpu namespace +
-    // literal `import('@forgeax/engine-rhi-wgpu')`). NO @vite-ignore here: vite
-    // must transform the literal so the browser receives a resolvable URL; the
-    // consuming demo declares both backend packages as deps. dawn-node (no vite)
-    // runs the literal through the node ESM resolver unchanged. Surfaced by the
-    // hello-cube RHI-debug browser e2e (feat-20260617 M4 / w22), the first
-    // FORGEAX_ENGINE_RHI_DEBUG=1 browser run through this guard.
-    realBackend = (hasWebGPU
+    const realBackend = (hasWebGPU
       ? await import('@forgeax/engine-rhi-webgpu')
       : await import('@forgeax/engine-rhi-wgpu')) as unknown as Record<string, unknown>;
-    // rhi-wgpu requires wasm initialisation before use.
     if (!hasWebGPU && 'ensureReady' in realBackend) {
       await (realBackend.ensureReady as () => Promise<unknown>)();
     }
-
-    const { wrap, wrapCreateShaderModule } = await import(
-      /* @vite-ignore */ '@forgeax/engine-rhi-debug'
-    );
-
-    const realRhi = realBackend.rhi as RhiInstance;
-    const debugInst = wrap(realRhi);
-    _debugInst = debugInst;
-
-    // Attach extras from the real backend so Channel-1 probe in
-    // loadBackendPack picks them up (createShaderModule /
-    // translateErrorEventToRhiError / _internal_getRawDevice).
-    const extras = debugInst as unknown as Record<string, unknown>;
-    if ('createShaderModule' in realBackend && realBackend.createShaderModule) {
-      const realCsm = realBackend.createShaderModule as CreateShaderModuleFn;
-      extras.createShaderModule = wrapCreateShaderModule(realCsm, debugInst);
+    const pack = loadRhiPack(realBackend);
+    if (pack.createShaderModule === undefined) {
+      throw new Error('RHI-debug requires a backend createShaderModule capability');
     }
-    if ('translateErrorEventToRhiError' in realBackend) {
-      extras.translateErrorEventToRhiError = realBackend.translateErrorEventToRhiError;
-    }
-    if ('_internal_getRawDevice' in realBackend) {
-      extras._internal_getRawDevice = realBackend._internal_getRawDevice;
-    }
-    // Forward acquireCanvasContext: createRenderer's Channel-1 escape hatch
-    // calls `pack.rhi.acquireCanvasContext(canvas)` (createRenderer.ts:711), but
-    // recorder.wrap() returns an explicit debug surface that does NOT carry it,
-    // so without this the wrapped-rhi injection threw a TypeError ("engine init
-    // failed (TypeError)") before any frame rendered -- the
-    // FORGEAX_ENGINE_RHI_DEBUG=1 browser path was never exercised end-to-end
-    // before the hello-cube RHI-debug browser e2e (feat-20260617 M4 / w22).
-    // acquireCanvasContext only calls canvas.getContext('webgpu') (no recorded
-    // RHI calls), so forwarding the real instance's bound method is safe and
-    // keeps the recorder proxy out of the swap-chain config path.
-    // The forwarded context's `configure({ device })` reverse-looks-up the raw
-    // GPUDevice in rhi-webgpu's RAW_DEVICE_MAP keyed on the RhiDevice that
-    // makeRhiDevice registered. The renderer threads the proxied device (from
-    // the requestAdapter -> requestDevice proxy chain) here, which is a
-    // different JS object -> the lookup misses and configure returns
-    // rhi-not-available ("CanvasConfiguration.device must be a RhiDevice
-    // produced by ..."). Unwrap the proxy to the registered device via the
-    // _realDevice escape hatch (same fix as wrapCreateShaderModule).
-    const realRhiRec = realRhi as unknown as Record<string, unknown>;
-    if (typeof realRhiRec.acquireCanvasContext === 'function') {
-      const boundAcquire = (realRhiRec.acquireCanvasContext as (c: unknown) => unknown).bind(
-        realRhi,
-      );
-      extras.acquireCanvasContext = (canvasArg: unknown): unknown => {
-        const ctxRes = boundAcquire(canvasArg) as {
-          ok: boolean;
-          value?: { configure(desc: Record<string, unknown>): unknown };
-        };
-        if (!ctxRes.ok || ctxRes.value === undefined) return ctxRes;
-        const realCtx = ctxRes.value;
-        const wrappedCtx: Record<string, unknown> = Object.create(realCtx as object);
-        wrappedCtx.configure = (desc: Record<string, unknown>): unknown => {
-          const dev = desc.device as { _realDevice?: unknown } | undefined;
-          const realDevice = dev?._realDevice;
-          const unwrapped = realDevice !== undefined ? { ...desc, device: realDevice } : desc;
-          return realCtx.configure(unwrapped);
-        };
-        return { ...ctxRes, value: wrappedCtx };
-      };
-    }
-
-    // Inject the wrapped RHI instance via the explicit rhi escape hatch.
-    // createRenderer's Channel 1 uses it verbatim; the proxied
-    // requestAdapter -> requestDevice chain intercepts all device calls.
-    Object.assign(rendererOpts, { rhi: debugInst as RhiInstance });
-
-    // w18: expose globalThis.__forgeax.captureFrame for the DevTools trigger
-    // (OOS-1/2: DevTools-only). The capture-browser subpath is imported
-    // dynamically so the FORGEAX_ENGINE_RHI_DEBUG=0 tree-shake gate stays
-    // intact (AC-03/AC-10) -- it is reached only when the flag is '1'. When the
-    // flag is unset this assignment never runs, so globalThis.__forgeax does
-    // not exist and a DevTools caller hits a TypeError (charter P3 explicit
-    // failure -- F-3 zero-injection).
-    (
-      globalThis as {
-        __forgeax?: {
-          captureFrame(
-            n: number,
-            options?: { readonly snapshotTimeoutMs?: number },
-          ): Promise<unknown>;
-        };
-      }
-    ).__forgeax = {
-      captureFrame(n: number, options?: { readonly snapshotTimeoutMs?: number }): Promise<unknown> {
-        if (import.meta.env?.DEV !== true) {
-          return Promise.reject(
-            new Error('RHI browser capture is available only in a Vite dev host'),
-          );
-        }
-        return import('@forgeax/engine-rhi-debug/capture-browser').then((m) =>
-          m.captureAndUpload(debugInst, n, undefined, options),
-        );
-      },
-    };
-
-    // M2 / t7 (W3): register HMR listener for external CLI trigger.
-    // The vite-plugin-rhi-debug trigger middleware broadcasts
-    // 'forgeax-debug:capture' custom events via server.ws.send; this
-    // handler receives them and calls captureAndUpload directly (three
-    // args: debugInst, frames, label) rather than the DevTools
-    // globalThis.__forgeax.captureFrame (which only takes n, losing
-    // the label). Dynamic import mirrors the globalThis pattern above
-    // so the FORGEAX_ENGINE_RHI_DEBUG=0 tree-shake gate stays intact.
-    // prod: import.meta.hot -> undefined -> entire block DCE'd;
-    // dawn-node: import.meta.hot undefined, guard short-circuits.
-    // research Finding 2: cb is single-param payload (NOT double-param).
-    // plan-strategy D-5: handler calls captureAndUpload directly.
-    //
-    // The handler registration is extracted into
-    // internal/hmr-capture-listener.ts so the test (create-app-hmr.test.ts)
-    // shares the SSR handler, not a copied shadow (per PR1
-    // resolveRhiDebugFlag SSOT pattern).
-    const hotMeta = import.meta as {
-      hot?: {
-        on(event: string, cb: (payload: { frames?: number; label?: string }) => void): void;
-      };
-    };
-    if (hotMeta.hot) {
-      registerCaptureHmrListener(hotMeta.hot, debugInst);
-    }
+    const attached = attachRecorder({
+      rhi: pack.rhi,
+      createShaderModule: pack.createShaderModule,
+    });
+    if (!attached.ok) throw new Error(attached.error.hint);
+    rhiAttachment = attached.value;
+    rhiCapture = createRhiCapture(attached.value);
+    const capture = rhiCapture;
+    rhiDebugGlobal = { captureFrame: (options) => capture.captureFrame(options) };
+    Object.assign(rendererOpts, {
+      rhi: attached.value.backend.rhi,
+      rhiInstrumentation: createRhiInstrumentation(attached.value),
+    });
+    (globalThis as { __forgeax?: typeof rhiDebugGlobal }).__forgeax = rhiDebugGlobal;
   }
 
   let renderer: Renderer;
+  let rendererDebugDrawHost: RendererHostAssembly['debugDrawHost'];
+  let rendererFeatureHost: RenderFeatureHost;
+  let assets: AssetRegistry;
   try {
-    renderer = await createRenderer(canvas, rendererOpts, bundler);
+    const constructed = await constructRuntimeRendererHost(canvas, rendererOpts, bundler);
+    if (!constructed.ok) throw constructed.error;
+    renderer = constructed.value.renderer;
+    rendererDebugDrawHost = constructed.value.debugDrawHost;
+    rendererFeatureHost = createRenderFeatureHost(constructed.value.featureHost);
+    assets = constructed.value.assets;
   } catch (e: unknown) {
-    if (e instanceof EngineEnvironmentError) {
-      return err(e);
-    }
-    // Unknown throw shapes (RhiError surfaced as throw, raw Error, ...).
-    // Re-raise to preserve fail-fast: the contract pins
-    // EngineEnvironmentError as the only construction-time failure
-    // shape; anything else is an engine bug, not an app-shell concern.
-    throw e;
-  }
-
-  // m3-1 (continued): hook up frame completion after createRenderer returns.
-  // The recorder receives frame-completion callbacks to inject frameMark
-  // events. Only wired when FORGEAX_ENGINE_RHI_DEBUG=1.
-  let _debugAdapter: unknown | undefined;
-  if (_debugInst !== undefined) {
-    // A real device loss invalidates every opaque handle retained by the
-    // recorder. Renderer.recover() rebuilds the GPU graph through the same
-    // wrapped RHI instance, so reset the recorder before that rebuild can
-    // repopulate its device-bound registries. Without this, a post-recovery
-    // capture tries to snapshot resources minted by the lost device.
-    renderer.onHealthChange((snapshot) => {
-      if (snapshot.reason === 'device-lost') {
-        _debugInst?._resetForDeviceLoss();
-      }
-    });
-
-    renderer.subscribeFrameEnd(() => {
-      _debugInst.onFrameEnd();
-    });
-
-    // I-2 fix (round 1 implement-review): construct the production
-    // DebugRhiAdapter so AC-18 / AC-19 / AC-20 RPC routes have a real
-    // implementation behind them. Imports the adapter subpath
-    // (`@forgeax/engine-rhi-debug/adapter`) dynamically so the FORGEAX_ENGINE_RHI_DEBUG=0
-    // tree-shake gate stays intact (AC-03). The adapter needs the live
-    // RhiDevice that the renderer drives — the recorder already
-    // captured it on the requestAdapter().requestDevice() proxy chain.
-    const debugInstWithDevice = _debugInst as DebugRhiInstance & {
-      _getCapturedDevice(): unknown;
-    };
-    const capturedDevice = debugInstWithDevice._getCapturedDevice();
-    if (capturedDevice !== undefined) {
-      if (hasWebGPU) {
-        // The Node adapter owns fs/path-backed replay and cannot run in a
-        // browser bundle. Keep the same DebugRhiAdapter capture shape, but use
-        // the browser-safe in-memory capture + dev-server upload seam here.
-        if (import.meta.env?.DEV === true) {
-          const captureMod = await import('@forgeax/engine-rhi-debug/capture-browser');
-          _debugAdapter = {
-            captureFrames: async (
-              frames: number,
-              label?: string,
-              options?: { readonly snapshotTimeoutMs?: number },
-            ) => {
-              const uploaded = await captureMod.captureAndUpload(
-                _debugInst,
-                frames,
-                label,
-                options,
-              );
-              return {
-                tapes: [
-                  {
-                    frameIdx: 0,
-                    runId: uploaded.runId,
-                    tapePath: uploaded.tapePath,
-                    reportPath: uploaded.reportPath,
-                  },
-                ],
-              };
-            },
-            inspectAt: async () => {
-              throw new Error('browser debug adapter does not expose Node-only replay inspection');
-            },
-            replayDispose: async () => ({ ok: true }),
-          };
-        }
-      } else {
-        const adapterMod = (await import(
-          /* @vite-ignore */ '@forgeax/engine-rhi-debug/adapter'
-        )) as unknown as {
-          createDebugRhiAdapter: (args: {
-            debugInst: DebugRhiInstance;
-            device: unknown;
-          }) => unknown;
-        };
-        _debugAdapter = adapterMod.createDebugRhiAdapter({
-          debugInst: _debugInst,
-          // biome-ignore lint/suspicious/noExplicitAny: RhiDevice opaque branded type round-trips through unknown
-          device: capturedDevice as any,
-        });
-      }
-    }
+    cleanupRhiDebugHost();
+    if (e instanceof EngineEnvironmentError) return err(e);
+    const detail = e instanceof Error ? e : new Error(String(e));
+    return err(
+      new EngineEnvironmentError('renderer construction failed', {
+        webgpuError: detail,
+      }),
+    );
   }
 
   // Step 2.4 decision: resolve whether the remote eval server should start
@@ -585,39 +435,17 @@ async function createAppFromCanvas(
     (globalThis as { process?: { env?: { FORGEAX_ENGINE_REMOTE_SERVE?: string } } }).process?.env,
   );
 
-  // Step 2.5: debug-draw auto-attach (feat-20260615 M5 / w31).
-  // Fire-and-forget: createDebugDrawOnReady awaits renderer.ready
-  // internally and registers the instance for graph pass closures.
-  // In non-debug-draw apps this dynamic import will fail gracefully
-  // (the render-graph pass is a silent no-op when no DebugDraw is
-  // registered). We create it here so app.debugDraw is populated
-  // before the first frame.
   let debugDraw: DebugDraw | undefined;
-  try {
-    debugDraw = await createDebugDrawOnReady(renderer);
-  } catch (_e) {
-    // DebugDraw creation failed — e.g. shader module compilation
-    // failed. The app continues without debug overlay; the error
-    // is surfaced via renderer.onError (createDebugDrawOnReady
-    // throws on creation failure, and the renderer's error registry
-    // has already captured it).
-  }
 
   // Step 3: new World() -- the canvas form owns world lifetime, in
   // contrast to the assemble form where the host owns it.
   const world = new World(opts?.time !== undefined ? { time: opts.time } : {});
-  const simulationAssembly = registerSimulationParticipants(
-    world,
-    opts?.simulationParticipants ?? [],
-  );
-  if (!simulationAssembly.ok) return err(simulationAssembly.error);
-
   // Step 3.1 (M2 plugin-system-unify / D-4): app-layer side effects that the
   // plugins consume via pre-injected world resources.
   //
-  // Animation resolves World-local asset handles in its own package. No app
-  // layer resource injection is needed, so canvas and assemble forms share one
-  // ownership path.
+  // Animation keeps durable clip GUIDs in graph payloads. The canvas default
+  // plugin receives the renderer-owned GUID catalogue as a lookup bridge; it
+  // still projects payloads into this World through the animation owner.
   // transform + animation system registration lives in the plugins (default set).
 
   // A normal canvas app owns its browser acquisition. An embedding host that
@@ -626,99 +454,61 @@ async function createAppFromCanvas(
   // second listener set. The host owns the supplied backend's lifetime.
   const inputHandle =
     opts?.input === undefined
-      ? attachInputAuto(canvas, world, {
+      ? attachInputAuto(canvas, {
           ...(opts?.uiRoot ? { uiRoot: opts.uiRoot } : {}),
           ...(opts?.pointerLockAllowed ? { pointerLockAllowed: opts.pointerLockAllowed } : {}),
           ...(opts?.virtualJoysticks ? { virtualJoysticks: opts.virtualJoysticks } : {}),
-          ...(opts?.inputMap ? { inputMap: opts.inputMap } : {}),
           ...(opts?.lockProvider ? { lockProvider: opts.lockProvider } : {}),
         })
       : undefined;
   const inputBackend = opts?.input ?? inputHandle?.backend;
-  if (opts?.input !== undefined) {
-    world.insertResource(INPUT_BACKEND_KEY, opts.input);
-  }
-  if (inputBackend !== undefined) {
-    world.registerSimulationTransientResource(INPUT_BACKEND_KEY);
-  }
-
-  // Audio backend (D-4): auto-create the WebAudioBackend when the user listed
-  // audioPlugin() in plugins[]. This preserves the M2 contract (audioPlugin
-  // only does world-registration; the backend lifecycle stays in the app layer).
-  // M3 (w15): opts.audio flag deleted — detection is by plugin name.
-  let audioBackend: AudioBackend | undefined;
-  const userPlugins: readonly PluginSource[] =
-    preparedExecutionBootstrap?.plugins ?? opts?.plugins ?? [];
-  const hasAudioPlugin = flattenPluginSources(userPlugins).some((p) => p.name === 'audio');
-  if (hasAudioPlugin) {
-    audioBackend = createWebAudioBackend();
-    world.insertResource(AUDIO_ENGINE_RESOURCE_KEY, audioBackend);
-    world.registerSimulationTransientResource(AUDIO_ENGINE_RESOURCE_KEY);
-  }
-
-  // Step 3.2 (D-2): canvas form runs the full default plugin set merged with
-  // the user plugins. runPlugins is awaited BEFORE buildApp so a duplicate-plugin /
-  // plugin-build-failed surfaces as Result.err before the frame loop is armed,
-  // and so a physics WASM load completes before createApp resolves (AC-06: no
-  // post-resolve timing gap). M3 (w15): legacy opts.physics / opts.audio bridges
-  // deleted -- demos pass plugins directly; audio backend is auto-created above
-  // when audioPlugin is detected in userPlugins.
-  const defaultSet: Plugin[] = [scenePlugin(), animationPlugin(), statePlugin(), inputPlugin()];
-  const pluginResult = await runPlugins(world, defaultSet, userPlugins);
-  if (!pluginResult.ok) {
-    return err(pluginResult.error);
-  }
-  const executionBootstrapCleanups: Array<() => void> = [];
-  const registerExecutionBootstrapCleanup = (cleanup: () => void): (() => void) => {
-    executionBootstrapCleanups.push(cleanup);
-    return () => {
-      const index = executionBootstrapCleanups.indexOf(cleanup);
-      if (index >= 0) executionBootstrapCleanups.splice(index, 1);
-    };
-  };
-  const flushExecutionBootstrapCleanups = (onErrorDispatch?: (error: AppError) => void): void => {
-    for (const cleanup of executionBootstrapCleanups.splice(0).reverse()) {
-      try {
-        cleanup();
-      } catch (cause) {
-        onErrorDispatch?.(
-          new AppError({
-            code: 'app-system-update-failed',
-            expected: APP_EXPECTED['app-system-update-failed'],
-            hint: APP_ERROR_HINTS['app-system-update-failed'],
-            detail: { cause, systemName: 'execution-bootstrap-cleanup' },
+  const userPlugins =
+    preparedExecutionBootstrap === undefined
+      ? (opts?.plugins ?? [])
+      : [
+          executionBootstrapHostPlugin({
+            ...(opts?.execution?.bootstrapPort === undefined
+              ? {}
+              : { port: opts.execution.bootstrapPort }),
+            setPointerLockAllowed: (allowed) => inputBackend?.setPointerLockAllowed?.(allowed),
           }),
-        );
-      }
-    }
-    opts?.execution?.bootstrapPort?.close();
-  };
-  if (
-    opts?.execution !== undefined &&
-    preparedExecutionBootstrap !== undefined &&
-    executionBootstrapUrl !== undefined
-  ) {
-    const bootstrapped = await runPreparedBootstrap(
-      executionBootstrapUrl,
-      preparedExecutionBootstrap,
-      {
-        world,
+          ...(preparedExecutionBootstrap.plugins ?? []),
+        ];
+  let pluginContext: Context;
+  try {
+    pluginContext = await createWorldContext(
+      world,
+      mainEngineProfile({
         renderer,
-        assets: renderer.assets,
-        data: opts.execution.bootstrapData,
-        ...(opts.execution.bootstrapPort === undefined
-          ? {}
-          : { port: opts.execution.bootstrapPort }),
-        registerCleanup: registerExecutionBootstrapCleanup,
-        setPointerLockAllowed: (allowed) => inputBackend?.setPointerLockAllowed?.(allowed),
-      },
+        rendererDebugDrawHost,
+        rendererFeatureHost,
+        assets,
+        animationPayloads: createAnimationPayloadLookup(assets),
+        ...(inputBackend === undefined ? {} : { input: inputBackend }),
+        ...(inputHandle === undefined ? {} : { inputDispose: inputHandle.cleanup }),
+        ...(opts?.inputMap === undefined ? {} : { inputMap: opts.inputMap }),
+        onDebugDrawReady: (value) => {
+          debugDraw = value;
+        },
+        extensions: [
+          rhiDebugHostPlugin(cleanupRhiDebugHost),
+          ...userPlugins,
+          canvasAspectPlugin(canvas),
+        ],
+      }),
     );
-    if (!bootstrapped.ok) {
-      flushExecutionBootstrapCleanups();
-      renderer.dispose();
-      return err(bootstrapped.error);
-    }
+  } catch (cause) {
+    cleanupRhiDebugHost();
+    return err(
+      makeAppError(
+        'app-plugin-activation-failed',
+        APP_EXPECTED['app-plugin-activation-failed'],
+        APP_ERROR_HINTS['app-plugin-activation-failed'],
+        { cause },
+      ),
+    );
   }
+  const audioBackend = pluginContext.audio;
 
   const executionControl = createLocalExecutionControl(
     executionContext === undefined
@@ -760,50 +550,34 @@ async function createAppFromCanvas(
     },
   );
 
-  const simulationInspection = createSimulationInspection(world);
-
   // Step 3.3: Remote eval server auto-start (deferred from Step 2.4 so
   // World is available). Dynamic import keeps @forgeax/engine-app free
   // of static dep on @forgeax/engine-remote. Component reflection crosses
   // this boundary as JSON-safe host data; app does not own any component.
   const remoteHandle = shouldStartRemote
-    ? await startRemoteServer(world, renderer, _debugAdapter, opts?.profiler, executionControl, {
-        inspect: simulationInspection,
-      })
+    ? await startRemoteServer(world, renderer, assets, rhiCapture, opts?.profiler, executionControl)
     : undefined;
+  if (remoteHandle !== undefined) await pluginContext.plugin(remoteServerPlugin(remoteHandle));
 
   const buildArgs: BuildAppArgs = {
     renderer,
-    rendererDispose: () => renderer.dispose(),
+    assets,
     world,
-    pluginRegistry: pluginResult.value,
+    pluginContext,
     executionControl,
-    simulationAssembly: simulationAssembly.value,
+    onFrameSubmitted: (event) => publishBrowserFrameSubmitted(canvas, event),
     ...(inputBackend !== undefined ? { inputBackend } : {}),
-    ...(inputHandle !== undefined || opts?.execution !== undefined
-      ? {
-          cleanup: (onErrorDispatch: (err: AppError) => void) => {
-            inputHandle?.cleanup({ onError: onErrorDispatch });
-            flushExecutionBootstrapCleanups(onErrorDispatch);
+    ...(inputHandle === undefined
+      ? {}
+      : {
+          wireOnLockErrorDispatch: (dispatch: (err: AppError) => void) => {
+            inputHandle.setOnErrorDispatch(dispatch);
           },
-          // The auto-attached backend's lock failures use app.onError. A supplied
-          // host backend owns its own failure/lifecycle channel.
-          ...(inputHandle === undefined
-            ? {}
-            : {
-                wireOnLockErrorDispatch: (dispatch: (err: AppError) => void) => {
-                  inputHandle.setOnErrorDispatch(dispatch);
-                },
-              }),
-        }
-      : {}),
+        }),
   };
   if (audioBackend !== undefined) {
     Object.assign(buildArgs, {
       audioBackend,
-      audioBackendDispose: () => {
-        audioBackend.destroy();
-      },
     });
   }
   if (opts?.silenceUnhandledErrors !== undefined) {
@@ -816,11 +590,8 @@ async function createAppFromCanvas(
   if (opts?.profiler !== undefined) {
     Object.assign(buildArgs, { profiler: opts.profiler });
   }
-  if (_debugInst !== undefined) {
-    Object.assign(buildArgs, { debugRhi: _debugInst });
-  }
-  if (_debugAdapter !== undefined) {
-    Object.assign(buildArgs, { debugAdapter: _debugAdapter });
+  if (rhiCapture !== undefined) {
+    Object.assign(buildArgs, { rhiCapture });
   }
   if (debugDraw !== undefined) {
     Object.assign(buildArgs, { debugDraw });
@@ -831,24 +602,18 @@ async function createAppFromCanvas(
 
   // The aspect-sync sidecar belongs to the canvas path because it owns the DOM
   // canvas. It runs as an Update system so it shares World scheduling semantics.
+  resetBrowserFrameSubmitted(canvas);
   const built = await buildApp(buildArgs);
+  if (!built.ok) {
+    await pluginContext.fiber.dispose();
+    return built;
+  }
   if (built.ok) {
-    world
-      .addSystem(Update, {
-        name: 'app-sync-camera-aspect',
-        queries: [],
-        fn: () => {
-          syncCanvasDrawingBuffer(canvas);
-          syncCameraAspect(world, canvas.width, canvas.height);
-        },
-      })
-      .unwrap();
-
     // DEV-only browser remote bridge (remote-live). A browser cannot host the
     // Node WS server that @forgeax/engine-remote/server needs, so the running
     // engine would be unreachable from a CLI in a real dev browser. Instead the
     // page dials OUT to a loopback relay and runs the ws-free eval core against
-    // the live world/renderer/assets/debugAdapter.
+    // the live world/renderer/assets/rhiCapture.
     //
     // OPT-IN via VITE_FORGEAX_ENGINE_BRIDGE=1 (set by scripts/dev-live.mjs), NOT
     // on-by-default: a page that dials a relay which is not running makes the
@@ -868,29 +633,31 @@ async function createAppFromCanvas(
       const bridgePort =
         (import.meta as { env?: { VITE_FORGEAX_ENGINE_BRIDGE_PORT?: string } }).env
           ?.VITE_FORGEAX_ENGINE_BRIDGE_PORT ?? '5733';
-      // installBrowserRemoteBridge self-registers its HMR teardown (via
-      // import.meta.hot inside browser-remote-bridge.ts) so this file carries no
-      // import.meta.hot reference — the rhi-debug guard gate (guard-gates.test.ts
-      // AC-08) requires every import.meta.hot in create-app.ts to sit inside the
-      // FORGEAX_ENGINE_RHI_DEBUG block, and the bridge is a separate concern.
-      void import('./internal/browser-remote-bridge')
-        .then((m) =>
-          m.installBrowserRemoteBridge({
-            world,
-            renderer,
-            assets: renderer.assets,
-            runtimeModule: engineRuntimeModule,
-            ...(_debugAdapter !== undefined ? { debugAdapter: _debugAdapter } : {}),
-            ...(opts?.profiler !== undefined ? { profiler: opts.profiler } : {}),
-            execution: built.value.execution,
-            port: bridgePort,
-          }),
-        )
-        .catch(() => {
-          // Bridge install failed (relay module unresolved, WS unsupported) —
-          // the engine continues without remote-live; the relay simply never
-          // sees this page.
-        });
+      await pluginContext.plugin({
+        name: 'browser-remote-bridge',
+        inject: ['world', 'renderer', 'assets'],
+        async apply(ctx) {
+          if (ctx.renderer === undefined || ctx.assets === undefined) {
+            throw new Error('browser remote bridge requires renderer and assets services');
+          }
+          try {
+            const bridge = await import('./internal/browser-remote-bridge');
+            const teardown = await bridge.installBrowserRemoteBridge({
+              world: ctx.world,
+              renderer: ctx.renderer,
+              assets: ctx.assets,
+              runtimeModule: engineRuntimeModule,
+              ...(rhiCapture !== undefined ? { rhiCapture } : {}),
+              ...(opts?.profiler !== undefined ? { profiler: opts.profiler } : {}),
+              execution: built.value.execution,
+              port: bridgePort,
+            });
+            ctx.effect(() => teardown, 'remote/browser-bridge');
+          } catch {
+            // The optional live bridge does not make App creation fail.
+          }
+        },
+      });
     }
   }
   return built;
@@ -950,6 +717,52 @@ export function syncCanvasDrawingBuffer(
   });
 }
 
+/** Measure a CSS-sized canvas without mutating its drawing buffer. */
+export function measureCanvasDrawingBuffer(
+  canvas: Pick<HTMLCanvasElement, 'clientWidth' | 'clientHeight' | 'width' | 'height'> & {
+    readonly style?: Pick<CSSStyleDeclaration, 'width' | 'height'>;
+  },
+  maxCanvasPixelRatio?: number,
+): { readonly width: number; readonly height: number } {
+  if (
+    !Number.isFinite(canvas.clientWidth) ||
+    !Number.isFinite(canvas.clientHeight) ||
+    canvas.clientWidth <= 0 ||
+    canvas.clientHeight <= 0
+  ) {
+    return { width: canvas.width, height: canvas.height };
+  }
+  const hasExplicitCssSize =
+    (canvas.style?.width ?? '') !== '' || (canvas.style?.height ?? '') !== '';
+  if (
+    !hasExplicitCssSize &&
+    canvas.clientWidth === canvas.width &&
+    canvas.clientHeight === canvas.height
+  ) {
+    return { width: canvas.width, height: canvas.height };
+  }
+  const devicePixelRatio = Math.max(1, globalThis.devicePixelRatio || 1);
+  const dpr =
+    maxCanvasPixelRatio === undefined ||
+    !Number.isFinite(maxCanvasPixelRatio) ||
+    maxCanvasPixelRatio <= 0
+      ? devicePixelRatio
+      : Math.min(devicePixelRatio, maxCanvasPixelRatio);
+  const previous = syncedCanvasSizes.get(canvas);
+  const drawingBufferIsTheLayoutMeasurement =
+    previous !== undefined &&
+    canvas.width === previous.drawingWidth &&
+    canvas.height === previous.drawingHeight &&
+    canvas.clientWidth === previous.drawingWidth &&
+    canvas.clientHeight === previous.drawingHeight;
+  const cssWidth = drawingBufferIsTheLayoutMeasurement ? previous.cssWidth : canvas.clientWidth;
+  const cssHeight = drawingBufferIsTheLayoutMeasurement ? previous.cssHeight : canvas.clientHeight;
+  return {
+    width: Math.max(1, Math.round(cssWidth * dpr)),
+    height: Math.max(1, Math.round(cssHeight * dpr)),
+  };
+}
+
 const syncedCanvasSizes = new WeakMap<
   object,
   {
@@ -1002,10 +815,10 @@ export function syncCameraAspect(world: World, canvasW: number, canvasH: number)
 async function startRemoteServer(
   world: World,
   renderer: Renderer,
-  debugAdapter: unknown | undefined,
+  assets: AssetRegistry | undefined,
+  rhiCapture: RhiCapture | undefined,
   profiler: import('@forgeax/engine-profiler').Profiler | undefined,
   execution: ExecutionControl,
-  simulation: unknown | undefined,
 ): Promise<{ readonly port: number; close(): Promise<void> } | undefined> {
   try {
     const remoteServerMod = (await import(
@@ -1017,11 +830,10 @@ async function startRemoteServer(
         world: unknown;
         renderer?: unknown;
         assets?: unknown;
-        debugAdapter?: unknown;
+        rhiCapture?: unknown;
         introspection?: readonly unknown[];
         profiler?: unknown;
         execution?: unknown;
-        simulation?: unknown;
       }) => Promise<{
         ok: boolean;
         value?: { port: number; close(): Promise<void> };
@@ -1032,12 +844,11 @@ async function startRemoteServer(
       host: '127.0.0.1',
       world,
       renderer,
-      assets: renderer.assets,
-      introspection: projectComponentIntrospection(),
-      ...(debugAdapter !== undefined ? { debugAdapter } : {}),
+      assets,
+      introspection: projectComponentIntrospection(world.components.entries()),
+      ...(rhiCapture !== undefined ? { rhiCapture } : {}),
       ...(profiler !== undefined ? { profiler } : {}),
       execution,
-      ...(simulation !== undefined ? { simulation } : {}),
     });
     if (serverResult.ok && serverResult.value !== undefined) {
       return { port: serverResult.value.port, close: serverResult.value.close };
@@ -1051,30 +862,32 @@ async function startRemoteServer(
 async function createAppFromAssemble(
   args: AppAssembleArgs,
 ): Promise<Result<App, AssembleAppError>> {
-  // Host-owned renderer / world. The assemble form does NOT auto-create any
-  // backend -- the host manages backend lifecycle (D-2).
-  //
-  // M2 plugin-system-unify / D-2: the assemble form runs ONLY the user plugins
-  // (defaultSet=[]) against the host-owned world. The host manages its own
-  // core wiring + backend resources (transform / state / audio / input etc.),
-  // so this form never auto-injects the default 5 plugins -- preserving the
-  // assemble-form byte-identity contract (R2).
-  //
-  // M3 (w15): args.input / args.audio deleted. The host pre-injects backends
-  // via world.insertResource before calling createApp; App.input / App.audio
-  // read back from world resources (buildApp).
-  const pluginResult = await runPlugins(args.world, [], args.plugins ?? []);
-  if (!pluginResult.ok) {
-    return err(pluginResult.error);
+  let pluginContext: Context;
+  try {
+    pluginContext = await createWorldContext(
+      args.world,
+      assembledEngineProfile({
+        renderer: args.renderer,
+        ...(args.assets === undefined ? {} : { assets: args.assets }),
+        extensions: args.plugins ?? [],
+      }),
+    );
+  } catch (cause) {
+    return err(
+      makeAppError(
+        'app-plugin-activation-failed',
+        APP_EXPECTED['app-plugin-activation-failed'],
+        APP_ERROR_HINTS['app-plugin-activation-failed'],
+        { cause },
+      ),
+    );
   }
 
   const shouldStartRemote = resolveRemoteServeFlag(
     undefined,
     (globalThis as { process?: { env?: { FORGEAX_ENGINE_REMOTE_SERVE?: string } } }).process?.env,
   );
-  const assembledAudioBackend = args.world.hasResource(AUDIO_ENGINE_RESOURCE_KEY)
-    ? args.world.getResource<AudioBackend>(AUDIO_ENGINE_RESOURCE_KEY)
-    : undefined;
+  const assembledAudioBackend = pluginContext.audio;
   const executionControl = createLocalExecutionControl(
     {
       ...createExecutionReport('main-serial', unavailableExecutionCapabilities('not required')),
@@ -1101,41 +914,30 @@ async function createAppFromAssemble(
       }),
     },
   );
-  const simulationAssembly = registerSimulationParticipants(
-    args.world,
-    args.simulationParticipants ?? [],
-  );
-  if (!simulationAssembly.ok) {
-    return err(simulationAssembly.error);
-  }
-  const simulationInspection = createSimulationInspection(args.world);
   const remoteHandle = shouldStartRemote
     ? await startRemoteServer(
         args.world,
         args.renderer,
+        args.assets,
         undefined,
         args.profiler,
         executionControl,
-        { inspect: simulationInspection },
       )
     : undefined;
+  if (remoteHandle !== undefined) await pluginContext.plugin(remoteServerPlugin(remoteHandle));
 
   const buildArgs: BuildAppArgs = {
     renderer: args.renderer,
     world: args.world,
-    pluginRegistry: pluginResult.value,
+    pluginContext,
     executionControl,
-    simulationAssembly: simulationAssembly.value,
     ...(remoteHandle !== undefined ? { remoteHandle } : {}),
   };
 
-  // M3 (w15): read pre-injected backends from world resources. The host
-  // pre-injected INPUT_BACKEND_KEY / AUDIO_ENGINE_RESOURCE_KEY before calling
-  // createApp; their corresponding plugins (inputPlugin / audioPlugin) registered
-  // the ECS systems because they found the resources.
-  if (args.world.hasResource(INPUT_BACKEND_KEY)) {
+  const assembledInputBackend = pluginContext.input;
+  if (assembledInputBackend !== undefined) {
     Object.assign(buildArgs, {
-      inputBackend: args.world.getResource<InputBackend>(INPUT_BACKEND_KEY),
+      inputBackend: assembledInputBackend,
     });
   }
   if (assembledAudioBackend !== undefined) {
@@ -1153,15 +955,16 @@ async function createAppFromAssemble(
   if (args.profiler !== undefined) {
     Object.assign(buildArgs, { profiler: args.profiler });
   }
-  return buildApp(buildArgs);
+  const built = await buildApp(buildArgs);
+  if (!built.ok) await pluginContext.fiber.dispose();
+  return built;
 }
 
 interface BuildAppArgs {
   readonly renderer: Renderer;
-  readonly rendererDispose?: () => void;
+  readonly assets?: AssetRegistry;
   readonly world: World;
-  /** Plugin registry from runPlugins -- exposed on App.pluginRegistry for inspector consumption. */
-  readonly pluginRegistry: Map<string, Plugin>;
+  readonly pluginContext: Context;
   readonly inputBackend?: InputBackend;
   /**
    * M2 D-4: callback that buildApp calls after creating the ErrorFanoutRegistry
@@ -1172,20 +975,9 @@ interface BuildAppArgs {
    */
   readonly wireOnLockErrorDispatch?: (dispatch: (err: AppError) => void) => void;
   readonly audioBackend?: AudioBackend;
-  readonly cleanup?: (onErrorDispatch: (err: AppError) => void) => void;
   readonly silenceUnhandledErrors?: boolean;
-  /**
-   * feat-20260619-audio-resource-ownership-deterministic-reclaim / M1 / F23:
-   * canvas form wraps createWebAudioBackend().destroy() into this callback
-   * so app.stop() chains into WebAudioEngine.destroy(); assemble form
-   * intentionally does NOT set it (host owns backend lifecycle, OOS-5).
-   * Parallel pattern to cleanup (input auto-detach).
-   */
-  readonly audioBackendDispose?: () => void;
-  /** I-2: live FORGEAX_ENGINE_RHI_DEBUG=1 recorder proxy from createAppFromCanvas. */
-  readonly debugRhi?: DebugRhiInstance;
-  /** I-2: production DebugRhiAdapter wired to the recorder + replay device. */
-  readonly debugAdapter?: unknown;
+  /** Optional App-owned RHI capture capability. */
+  readonly rhiCapture?: RhiCapture;
   /** feat-20260615 debug-draw M5: DebugDraw instance created by createDebugDrawOnReady. */
   readonly debugDraw?: DebugDraw;
   /** feat-20260629 M4 / w20: remote eval server handle from createAppFromCanvas. */
@@ -1205,65 +997,39 @@ interface BuildAppArgs {
     | undefined;
   readonly profiler?: import('@forgeax/engine-profiler').Profiler;
   readonly executionControl?: import('./execution/control').LocalExecutionControl;
-  readonly simulationAssembly: SimulationParticipantAssembly;
+  /** Canvas-form projection of the Renderer frame-submitted event. */
+  readonly onFrameSubmitted?: (event: {
+    readonly frameId: number;
+    readonly deviceGeneration: number;
+  }) => void;
 }
 
 /**
  * Internal builder shared by both overloads. Wires the frame-loop +
- * listener-registry onError + cleanup funnel; returns the App handle.
- *
- * The cleanup() callback (when provided) is invoked from inside stop()
- * so the auto-attach handle's detach + removeSystem run in the same
- * critical section as the frame-loop transition into 'idle'. Failures
- * are forwarded into the same listener registry (AC-05 / D-4).
+ * listener-registry onError and returns the App handle. Effectful ownership
+ * has already moved into pluginContext before this boundary runs.
  */
 async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiError>> {
   const {
     renderer,
-    rendererDispose,
     world,
+    pluginContext,
     inputBackend,
     audioBackend,
-    cleanup,
-    audioBackendDispose,
     silenceUnhandledErrors,
-    debugRhi,
-    debugAdapter,
+    rhiCapture,
     debugDraw,
     remoteHandle,
     profiler,
-    simulationAssembly,
   } = args;
 
-  // M2 plugin-system-unify (D-1 / D-4): audio resource injection,
-  // state-machine wiring, and physics WASM load all moved into their plugins
-  // (audioPlugin / statePlugin / physicsPlugin), run by runPlugins BEFORE this
-  // builder. buildApp no longer wires any capability directly -- it only
-  // injects the AssetRegistry resource (a renderer-derived resource, not a
-  // plugin concern), builds the frame loop, and returns the App handle.
-
-  // Inject renderer.assets as World Resource so the audio tick system's
-  // createClipResolver can resolve clip handles -> AudioBuffer (D-1). This is a
-  // renderer-derived resource (not a plugin), so it stays in the builder.
-  if (renderer.assets !== undefined) {
-    world.insertResource(ASSET_REGISTRY_RESOURCE_KEY, renderer.assets);
-    world.registerSimulationTransientResource(ASSET_REGISTRY_RESOURCE_KEY);
-  }
-
-  // physics resolver for app.physics (D-5): physicsPlugin inserts the
-  // 'PhysicsWorld' world resource on a successful build, so app.physics reads
-  // it back from the world rather than holding a private mutable slot. Because
-  // runPlugins is awaited before buildApp, the resource is already present when
-  // the getter is first read (AC-06: no post-resolve timing gap).
+  // Physics is a Context service; the App exposes the active provider without
+  // storing a second mutable slot.
   function readPhysicsWorld():
     | import('@forgeax/engine-physics').PhysicsWorld
     | import('@forgeax/engine-physics').PhysicsWorld2D
     | undefined {
-    if (!world.hasResource('PhysicsWorld')) return undefined;
-    return world.getResource<
-      | import('@forgeax/engine-physics').PhysicsWorld
-      | import('@forgeax/engine-physics').PhysicsWorld2D
-    >('PhysicsWorld');
+    return pluginContext.physics;
   }
   // M4 (w11): listener registry replaces the M3 inline Set so console.error
   // fallback + duplicate-add no-op + unsubscribe handle behaviour matches
@@ -1272,6 +1038,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
   const fanout = new ErrorFanoutRegistry(
     silenceUnhandledErrors !== undefined ? { silenceUnhandledErrors } : {},
   );
+  let lastError: AppDispatchError | undefined;
   const execution =
     args.executionControl ??
     createLocalExecutionControl(
@@ -1300,6 +1067,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     );
 
   function dispatch(e: AppDispatchError): void {
+    lastError = e;
     fanout.fire(e);
   }
 
@@ -1325,28 +1093,22 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     Object.assign(loopOpts, { profiler });
   }
   const loop = createFrameLoop(loopOpts);
-
-  // M4 (w13): triple-funnel cleanup (R-4 / D-2). stop / device-lost /
-  // exception throw all converge here. lastError is a single mutable
-  // slot so app.lastError reads the most-recent signal even when the
-  // host did not register an onError listener (charter P3 explicit
-  // failure: silent device-lost is unacceptable).
-  let lastError: AppDispatchError | undefined;
-  const cleanupFunnel = makeCleanupFunnel({
-    loop,
-    ...(cleanup !== undefined ? { inputCleanup: cleanup } : {}),
-    dispatch,
-    setLastError: (e) => {
-      lastError = e;
-    },
-    ...(rendererDispose === undefined ? {} : { rendererDispose }),
-    // feat-20260619-audio-resource-ownership-deterministic-reclaim / M1 /
-    // F23: canvas form wraps createWebAudioBackend().destroy() into
-    // audioBackendDispose; assemble form does NOT pass this (host owns
-    // backend lifecycle, OOS-5). Same shape as rendererDispose.
-    ...(audioBackendDispose !== undefined ? { audioBackendDispose } : {}),
-  });
-
+  if (rhiCapture !== undefined) {
+    bindRhiCaptureFrameDriver(rhiCapture, {
+      getState: () => loop.getState(),
+      pause: () => {
+        const result = loop.pause();
+        if (result.ok) execution.setEngineHealth('idle');
+        return result;
+      },
+      resume: () => {
+        const result = loop.resume();
+        if (result.ok) execution.setEngineHealth('running');
+        return result;
+      },
+      stepFrame: (deltaSeconds) => loop.stepFrame(deltaSeconds),
+    });
+  }
   // M4 (w13) device-lost internal subscription. R-1 timing contract:
   // app.start() arms the rAF handle BEFORE this listener subscribes, so
   // a synchronous late-attach replay of a persisted device-lost event
@@ -1354,7 +1116,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
   // hits a frame-loop with a real rAF handle to cancel (M2 setStopped
   // tolerates pendingFrameId === 0 as a no-op so even pre-rAF replays
   // do not NPE). The subscription remains active across pause / resume;
-  // unsubscribe runs only on stop / device-lost cleanup (charter P3:
+  // unsubscribe runs only on stop / disposal (charter P3:
   // device-lost is a terminal lifecycle signal, not a transient blip).
   let rendererUnsubscribe: (() => void) | undefined;
   let resumeAfterSurfaceRestore = false;
@@ -1363,32 +1125,13 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     if (rendererUnsubscribe !== undefined) {
       return;
     }
-    rendererUnsubscribe = renderer.onError((e: RendererError) => {
-      // D-3: device-lost stays in RhiError 18-member union; AppError does
-      // NOT add 'app-device-lost'. The host onError listener receives the
-      // error verbatim through the fanout dispatch below.
-      //
-      // feat-20260531-skybox-env-background F-1: the renderer onError channel
-      // now fans out RhiError | RuntimeError (e.g. 'equirect-projection-failed').
-      // Device loss is recoverable at the Renderer boundary: the frame-loop
-      // heartbeat remains armed and freezes World/update work until the host
-      // explicitly calls `renderer.recover()`. Routing it through the cleanup
-      // funnel would make the loop terminal and leave a successful recovery
-      // with no frame submitter.
-      //
-      // Note: we discriminate by .code rather than instanceof RhiError
-      // because the listener may be invoked across module boundaries
-      // (re-export from @forgeax/engine-runtime vs direct
-      // @forgeax/engine-rhi/errors import). Bundler dedup is not
-      // guaranteed on subpath exports, so an instanceof check is a
-      // false-negative trap. The union .code type still provides static
-      // safety on .code access.
-      if (e?.code === 'device-lost') {
-        lastError = e;
+    rendererUnsubscribe = renderer.subscribe((event) => {
+      if (event.kind === 'frame-submitted') {
+        args.onFrameSubmitted?.(event);
+        return;
       }
-      // Always fan out to host listeners (D-2 last bullet: device-lost
-      // error is forwarded as-is to host onError listener so the host
-      // can decide whether to rebuild the renderer).
+      if (event.kind !== 'error') return;
+      const e: RenderError = event.error;
       dispatch(e);
     });
   }
@@ -1402,9 +1145,10 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
 
   const stub: App = {
     renderer,
+    ...(args.assets === undefined ? {} : { assets: args.assets }),
     world,
     execution,
-    async releaseSurfacePreserveWorld(): Promise<Result<void, RhiError>> {
+    async releaseSurfacePreserveWorld(): Promise<Result<void, RhiError | RenderError>> {
       if (loop.getState() === 'running') {
         const paused = loop.pause();
         if (!paused.ok) {
@@ -1431,7 +1175,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
       }
       return released.ok ? ok(undefined) : err(released.error);
     },
-    async restoreSurface(): Promise<Result<void, RhiError>> {
+    async restoreSurface(): Promise<Result<void, RhiError | RenderError>> {
       const restored = renderer.restoreSurface();
       if (!restored.ok) return err(restored.error);
       if (resumeAfterSurfaceRestore) {
@@ -1450,8 +1194,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
       }
       return ok(undefined);
     },
-    pluginRegistry: args.pluginRegistry,
-    simulationInspection: createSimulationInspection(world),
+    pluginContext,
     ...(inputBackend !== undefined ? { input: inputBackend } : {}),
     ...(audioBackend !== undefined ? { audio: audioBackend } : {}),
     get physics():
@@ -1462,10 +1205,9 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     },
     start(): Result<void, AppError> {
       // R-1: arm the rAF handle FIRST (loop.start schedules raf(tick))
-      // and only THEN subscribe to renderer.onError. If the renderer
+      // and only THEN subscribe to renderer events. If the renderer
       // late-attach replays a persisted device-lost event during the
-      // subscribe call, the cleanup funnel finds a non-zero rafHandle
-      // (or zero, which setStopped no-ops on) and there is no NPE.
+      // subscribe call, the loop is already armed and can retain the error.
       const r = loop.start();
       if (r.ok) {
         execution.setEngineHealth('running');
@@ -1476,15 +1218,17 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     stop(): Result<void, AppError> {
       const r = loop.stop();
       if (r.ok) execution.setEngineHealth('stopped');
-      // R-4 stop path: even if loop.stop returned err (e.g. paused state
-      // or double-stop), input cleanup still runs (input-attach.ts:97-104
-      // is idempotent). Unsubscribe the device-lost listener so a host
-      // restart -- which will create a NEW App with a NEW listener -- is
-      // not double-counted by the renderer's listener registry.
-      cleanupFunnel({ reason: 'stop' });
-      simulationAssembly.dispose();
       unsubscribeRendererErrors();
       return r;
+    },
+    async dispose(): Promise<Result<void, AppError>> {
+      const state = loop.getState();
+      if (state === 'running' || state === 'paused') loop.stop();
+      else if (state !== 'stopped') loop.setStopped();
+      await pluginContext.fiber.dispose();
+      unsubscribeRendererErrors();
+      execution.setEngineHealth('stopped');
+      return ok(undefined);
     },
     pause(): Result<void, AppError> {
       const r = loop.pause();
@@ -1506,42 +1250,15 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
       loop.setDrawSource(drawSource);
     },
     /**
-     * Last error captured by the cleanup funnel. Useful for host
-     * self-inspection on device-lost without requiring an onError
-     * listener up-front (charter P3 explicit failure: AI users get the
-     * latest signal; reading once is informative even when no listener
-     * was registered).
+     * Most recent dispatched error retained for host self-inspection.
      */
     get lastError(): AppDispatchError | undefined {
       return lastError;
     },
-    // I-2 fix (round 1 implement-review): expose the live recorder
-    // proxy + adapter so demo code can drive arm/finalize/inspect
-    // without going through WS:5732. Both are undefined when
-    // FORGEAX_ENGINE_RHI_DEBUG !== '1' (createAppFromCanvas only forwards them
-    // through buildArgs when wrap was actually invoked).
-    ...(debugRhi !== undefined ? { _debugRhi: debugRhi } : {}),
-    ...(debugAdapter !== undefined ? { _debugAdapter: debugAdapter } : {}),
+    ...(rhiCapture !== undefined ? { rhiCapture } : {}),
     ...(debugDraw !== undefined ? { debugDraw } : {}),
     ...(remoteHandle !== undefined ? { remote: remoteHandle } : {}),
   };
-
-  // Readiness barrier (charter Fail Fast). createRenderer resolves before
-  // its `ready` Promise (manifest -> pipeline -> asset upload three-step
-  // chain) settles, so a host that calls app.start() immediately would arm
-  // the rAF loop while renderer.draw(world) still returns 'rhi-not-available'
-  // every frame -- a startup race that surfaces as intermittent console.error
-  // spam on cold loads. Awaiting ready here makes "App ready" mean "renderer
-  // ready": start() never observes a pre-ready frame, and a genuine pipeline
-  // build failure fail-fasts as Result.err(rhiError) (caught by the canonical
-  // `if (!app.ok) reportError(app.error)` takeoff) instead of per-frame noise.
-  // M2 plugin-system-unify (D-1 / D-4): the audio tick system is now registered
-  // by audioPlugin (run by runPlugins before buildApp) as the 'audio-tick'
-  // world system, so there is no buildApp-side Update system anymore.
-  const readyResult = await renderer.ready;
-  if (!readyResult.ok) {
-    return err(readyResult.error);
-  }
 
   return ok(stub);
 }

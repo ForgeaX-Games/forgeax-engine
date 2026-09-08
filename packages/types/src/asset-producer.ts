@@ -15,6 +15,111 @@ export type CookExecution = 'direct' | 'cooked';
 /** Derived lifecycle states exposed by the catalog. */
 export type CatalogLifecycle = 'missing' | 'cooking' | 'current' | 'stale' | 'failed';
 
+/** Usage derived from producer refs and build-time content reads. */
+export type AssetPublicationEvidenceUsage = 'reference' | 'content' | 'both';
+
+/** One external dependency observed while publishing a source package. */
+export interface AssetPublicationExternalEvidence {
+  readonly guid: string;
+  readonly usage: AssetPublicationEvidenceUsage;
+  readonly generation?: number;
+  readonly digest?: string;
+}
+
+/** One ordinary asset output in an atomic source-package publication. */
+export interface AssetPublicationOutput {
+  readonly guid: string;
+  readonly sourceKey: string;
+  readonly kind: string;
+  readonly digest: string;
+  /** GUIDs emitted by the owning ordinary producer, in stable order. */
+  readonly refs: readonly string[];
+}
+
+/** Receipt facts that prove the complete output set and dependency closure. */
+export interface AssetPublicationReceipt {
+  readonly schemaVersion: 'asset-publication-receipt/1';
+  readonly sourcePath: string;
+  readonly sourceRevision: string;
+  readonly inputFingerprint: string;
+  readonly outputDigest: string;
+  readonly outputSetDigest: string;
+  readonly externalEvidence: readonly AssetPublicationExternalEvidence[];
+}
+
+/** Stable locator for current or last-known-good publication recovery. */
+export interface AssetPublicationLocator {
+  readonly generation: number;
+  readonly digest: string;
+  readonly outputSetDigest: string;
+  readonly packageUrl: string;
+  readonly receiptKey: string;
+}
+
+export type AssetPublicationFailureStage =
+  | 'source'
+  | 'output'
+  | 'receipt'
+  | 'route'
+  | 'catalog'
+  | 'cancelled';
+
+/** Machine-readable failure and recovery facts; messages are not a protocol. */
+export interface AssetPublicationFailure {
+  readonly code: string;
+  readonly stage: AssetPublicationFailureStage;
+  readonly sourcePath: string;
+  readonly sourceRevision?: string;
+  readonly generation?: number;
+  readonly outputGuid?: string;
+  readonly reason: string;
+}
+
+/** Actions a consumer can execute after a candidate publication is rejected. */
+export interface AssetPublicationRecovery {
+  readonly retryable: boolean;
+  readonly preserveCurrent: boolean;
+  readonly useLastKnownGood: boolean;
+  readonly actions: readonly string[];
+}
+
+/**
+ * Engine-owned publication SSOT shared by pack, import, Catalog, and consumers.
+ * A publication is valid only when receipt and every output belong to one
+ * source revision, generation, digest, and output-set digest tuple.
+ */
+export interface AssetPublicationEnvelope {
+  readonly schemaVersion: 'asset-publication/1';
+  readonly sourcePath: string;
+  readonly sourceRevision: string;
+  readonly generation: number;
+  readonly digest: string;
+  readonly outputSetDigest: string;
+  readonly outputs: readonly AssetPublicationOutput[];
+  readonly receipt: AssetPublicationReceipt;
+  readonly externalEvidence: readonly AssetPublicationExternalEvidence[];
+  readonly failureStage?: AssetPublicationFailureStage;
+  readonly failure?: AssetPublicationFailure;
+  readonly current?: AssetPublicationLocator;
+  readonly lastKnownGood?: AssetPublicationLocator;
+  readonly recovery?: AssetPublicationRecovery;
+}
+
+/**
+ * Immutable source-level identity carried by an authored generated Scene mount.
+ * A mount is consumable only when every member resolves from this complete
+ * publication tuple; no single output GUID or generation number is sufficient.
+ */
+export interface ScenePublicationFence {
+  readonly schemaVersion: 'scene-publication-fence/1';
+  readonly sourcePath: string;
+  readonly sourceRevision: string;
+  readonly publicationGeneration: number;
+  readonly outputDigest: string;
+  readonly outputSetDigest: string;
+  readonly receiptIdentity: string;
+}
+
 export type CatalogOperationName =
   | 'preview'
   | 'save'
@@ -116,13 +221,8 @@ export function isCatalogProjectionValid(input: CatalogProjection): boolean {
   );
 }
 
-/** Structured reason for an authoring capability that is not available. */
-export type AssetAuthoringUnavailableCode =
-  | 'unsupported-asset-kind'
-  | 'missing-producer-capability';
-
 export interface AssetAuthoringUnavailableReason {
-  readonly code: AssetAuthoringUnavailableCode;
+  readonly code: 'unsupported-asset-kind' | 'missing-producer-capability';
   readonly hint: string;
 }
 
@@ -363,8 +463,35 @@ export type SourceOverrideMap = Readonly<Record<string, SourceOverridePayload>>;
 
 export interface SourceOverrideDescriptor {
   readonly sourceKey: string;
+  /** Producer-owned semantic used by authoring hosts for catalog-aware validation. */
+  readonly semantic?: 'mesh-material-slot-defaults';
   readonly payloadSchema?: unknown;
 }
+
+/** Shared payload contract explicitly published by Mesh-producing importers. */
+export const MESH_MATERIAL_SLOT_SOURCE_OVERRIDE_PAYLOAD_SCHEMA = {
+  type: 'object',
+  properties: {
+    materialSlots: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          slotName: { type: 'string', minLength: 1 },
+          sourceKey: { type: 'string', minLength: 1 },
+          defaultMaterialGuid: { type: 'string' },
+        },
+        required: ['slotName'],
+        additionalProperties: true,
+      },
+    },
+    materialSlotDefaultOverrides: {
+      type: 'object',
+      additionalProperties: { type: 'string', nullable: true },
+    },
+  },
+  additionalProperties: true,
+} as const;
 
 export type SourceOverrideErrorCode =
   | 'unknown-source-key'

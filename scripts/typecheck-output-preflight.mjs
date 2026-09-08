@@ -23,7 +23,7 @@ function sourceFiles(directory) {
     else if (
       entry.isFile() &&
       /\.(?:ts|tsx|mts|cts)$/.test(entry.name) &&
-      !entry.name.endsWith('.d.ts') &&
+      !/\.d\.(?:ts|mts|cts)$/.test(entry.name) &&
       !/\.(?:test|spec)\.(?:ts|tsx|mts|cts)$/.test(entry.name)
     )
       result.push(path);
@@ -49,22 +49,30 @@ function projects() {
     );
 }
 
-const missing = [];
-for (const project of projects()) {
-  const options = project.config.compilerOptions ?? {};
-  const sourceRoot = resolve(project.directory, options.rootDir ?? 'src');
-  const outputRoot = resolve(project.directory, options.declarationDir ?? options.outDir ?? 'dist');
-  for (const source of sourceFiles(sourceRoot)) {
-    const output = resolve(
-      outputRoot,
-      relative(sourceRoot, source).replace(/\.(?:tsx|mts|cts|ts)$/, '.d.ts'),
+function missingDeclarations() {
+  const missing = [];
+  for (const project of projects()) {
+    const options = project.config.compilerOptions ?? {};
+    const sourceRoot = resolve(project.directory, options.rootDir ?? 'src');
+    const outputRoot = resolve(
+      project.directory,
+      options.declarationDir ?? options.outDir ?? 'dist',
     );
-    if (!existsSync(output)) {
-      missing.push({ project: project.tsconfig, output });
-      break;
+    for (const source of sourceFiles(sourceRoot)) {
+      const output = resolve(
+        outputRoot,
+        relative(sourceRoot, source).replace(/\.(?:tsx|mts|cts|ts)$/, '.d.ts'),
+      );
+      if (!existsSync(output)) {
+        missing.push({ project: project.tsconfig, output });
+        break;
+      }
     }
   }
+  return missing;
 }
+
+const missing = missingDeclarations();
 
 if (missing.length === 0) {
   console.error('[types-preflight] declaration inventory complete');
@@ -81,10 +89,27 @@ const args =
   missing.length > 3
     ? ['exec', 'tsc', '-b', '--force']
     : ['exec', 'tsc', '-b', ...missing.map((item) => relative(root, item.project)), '--force'];
-const result = spawnSync('pnpm', args, {
-  cwd: root,
-  stdio: 'inherit',
-  shell: process.platform === 'win32',
-  env: process.env,
-});
-process.exit(result.status ?? 1);
+function buildDeclarations() {
+  return spawnSync('pnpm', args, {
+    cwd: root,
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+    env: process.env,
+  });
+}
+
+const first = buildDeclarations();
+if (first.status === 0) process.exit(0);
+
+// A source-only archive begins without any package declaration outputs. With
+// package exports resolving through dist/, one cold solution build can emit
+// dependency declarations yet report transient consumer inference errors from
+// the pre-emit view. Retry only when that failed pass materially closed the
+// missing-output inventory; the second pass still reports every real error.
+const remaining = missingDeclarations();
+if (remaining.length >= missing.length) process.exit(first.status ?? 1);
+console.error(
+  `[types-preflight] cold build produced ${missing.length - remaining.length} declaration project(s); retrying with complete dependency outputs`,
+);
+const second = buildDeclarations();
+process.exit(second.status ?? 1);

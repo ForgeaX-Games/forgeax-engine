@@ -7,12 +7,12 @@
 // - RenderGraphError extends Error { readonly code; readonly expected;
 //   readonly hint; readonly detail } — four-field structured error surface,
 //   aligned with RhiError (research Finding 8).
-// - RenderGraphErrorDetail = six-shape union projected from that map; the
+// - RenderGraphErrorDetail is projected from that map; the
 //   constructor arguments correlate each code with its accepted detail:
 //   - 'dangling-read' / 'unknown-resource' -> { resourceKey, passName }
 //   - 'cap-missing' -> { cap, passName }
-//   - 'cyclic-dependency' -> { cycle: string[] }
 //   - 'duplicate-resource' -> { resourceKey }
+//   - 'alias-source-missing' -> { aliasKey, sourceKey }
 // - Result<T, E=RenderGraphError> = binary tag union ('ok' / 'err') +
 //   ok() / err() factories, aligned with RhiError Result (research Finding 8).
 //
@@ -23,14 +23,14 @@
  *
  * The two resource-key errors intentionally share DanglingReadDetail. Keeping
  * that fact in this map lets the public code and detail unions, plus the
- * constructor arguments, derive from one seven-code authority without
+ * constructor arguments, derive from one authority without
  * exporting a framework or runtime registry.
  */
 interface RenderGraphErrorDetailByCode {
   'dangling-read': DanglingReadDetail;
   'cap-missing': CapMissingDetail;
-  'cyclic-dependency': CyclicDependencyDetail;
   'duplicate-resource': DuplicateResourceDetail;
+  'alias-source-missing': AliasSourceDetail;
   'unknown-resource': DanglingReadDetail;
   'resource-alloc-failed': ResourceAllocFailedDetail;
   'invalid-format': InvalidFormatDetail;
@@ -43,6 +43,21 @@ interface RenderGraphErrorDetailByCode {
   'invalid-color-domain': ColorDomainDetail;
   'missing-color-domain': ColorDomainDetail;
   'color-domain-mismatch': ColorDomainDetail;
+  'duplicate-pass-name': DeclarationDetail;
+  'duplicate-resource-label': DeclarationDetail;
+  'builder-sealed': DeclarationDetail;
+  'foreign-resource-handle': ResourceAccessDetail;
+  'resource-not-declared-by-pass': ResourceAccessDetail;
+  'uninitialized-read': ResourceAccessDetail;
+  'access-conflict': ResourceAccessDetail;
+  'capability-missing': CapabilityDetail;
+  'resource-descriptor-invalid': DescriptorDetail;
+  'import-usage-mismatch': DescriptorDetail;
+  'resource-allocation-failed': ResourceAllocFailedDetail;
+  'resource-resolution-failed': ResourceAccessDetail;
+  'pass-encode-failed': PassFailureDetail;
+  'compiled-graph-retired': LifecycleDetail;
+  'resource-retire-failed': LifecycleDetail;
 }
 
 /** Closed RenderGraphErrorCode union derived from the private detail map. */
@@ -77,14 +92,15 @@ export interface CapMissingDetail {
   readonly passName: string;
 }
 
-/** Detail variant for cyclic-dependency errors. */
-export interface CyclicDependencyDetail {
-  readonly cycle: readonly string[];
-}
-
 /** Detail variant for duplicate-resource errors. */
 export interface DuplicateResourceDetail {
   readonly resourceKey: string;
+}
+
+/** Detail variant for aliases whose source is not a registered color target. */
+export interface AliasSourceDetail {
+  readonly aliasKey: string;
+  readonly sourceKey: string;
 }
 
 /** Detail variant for resource-alloc-failed errors. */
@@ -112,6 +128,41 @@ export interface ColorDomainDetail {
   readonly resourceKey?: string | undefined;
   readonly sourceDomain?: string | undefined;
   readonly destinationDomain?: string | undefined;
+}
+
+export interface DeclarationDetail {
+  readonly passName?: string | undefined;
+  readonly resourceLabel?: string | undefined;
+}
+
+export interface ResourceAccessDetail {
+  readonly passName?: string | undefined;
+  readonly resourceLabel?: string | undefined;
+  readonly usage?: string | undefined;
+  readonly accesses?: readonly string[] | undefined;
+}
+
+export interface CapabilityDetail extends ResourceAccessDetail {
+  readonly capability: 'compute' | 'storage-buffer' | 'storage-texture' | 'indirect';
+}
+
+export interface DescriptorDetail {
+  readonly resourceLabel: string;
+  readonly field: string;
+  readonly expected: string;
+  readonly actual?: string | number | undefined;
+}
+
+export interface PassFailureDetail {
+  readonly passName: string;
+  readonly passKind: 'raster' | 'compute' | 'copy';
+  readonly cause: unknown;
+}
+
+export interface LifecycleDetail {
+  readonly generation: number;
+  readonly resourceLabel?: string | undefined;
+  readonly cause?: unknown;
 }
 
 /**

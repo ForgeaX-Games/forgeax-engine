@@ -1,6 +1,6 @@
 // f32-to-f16-bytes.ts — IEEE 754 binary16 half-float conversion.
 //
-// Pure arithmetic codec extracted from runtime/gpu-resource-store.ts (D-3)
+// Pure arithmetic codec extracted from runtime/render-resource-table.ts (D-3)
 // so build-time image-importer and runtime uploadCubemapFromEquirect share
 // a single SSOT. Takes a Uint8Array view over packed Float32 RGBA pixels
 // and returns a Uint8Array with half the byte length of the equivalent

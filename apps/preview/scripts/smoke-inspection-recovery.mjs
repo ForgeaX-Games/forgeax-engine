@@ -2,11 +2,12 @@
 // P7 Preview contract smoke: the host transports only game-owned projections,
 // renderer health/recovery, and the existing RHI capture path. The browser
 // global is intentionally cleared by the normal Preview dispose message.
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { chromium } from 'playwright';
+import { decodeTape } from '@forgeax/engine-rhi-debug';
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..');
 const ARTIFACT_DIR = resolve(process.env.FORGEAX_INSPECTION_DIR ?? resolve(ROOT, '.forgeax-debug/inspection-recovery'));
@@ -524,17 +525,21 @@ try {
   if (recoverHealthy.ok || recoverHealthy.error.code !== 'recover-not-needed') throw new Error(`healthy recover did not refuse structurally: ${JSON.stringify(recoverHealthy)}`);
 
   const capture = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.captureFrame(1));
-  if (!capture.ok || typeof capture.value?.runId !== 'string') throw new Error(`RHI capture failed: ${JSON.stringify(capture)}`);
-  const capturedRun = capture.value.runId;
-  const tapeResponse = await fetch(`http://127.0.0.1:${PORT}/__forgeax-debug/artifact?runId=${encodeURIComponent(capturedRun)}&file=frame-0.tape.bin`);
-  const reportResponse = await fetch(`http://127.0.0.1:${PORT}/__forgeax-debug/artifact?runId=${encodeURIComponent(capturedRun)}&file=frame-0.report.json`);
-  if (!tapeResponse.ok || !reportResponse.ok) throw new Error(`capture artifacts unavailable: tape=${tapeResponse.status} report=${reportResponse.status}`);
-  writeFileSync(resolve(ARTIFACT_DIR, 'frame-0.tape.bin'), Buffer.from(await tapeResponse.arrayBuffer()));
-  const capturedReportText = await reportResponse.text();
-  writeFileSync(resolve(ARTIFACT_DIR, 'frame-0.report.json'), capturedReportText);
-  const capturedReport = JSON.parse(capturedReportText);
+  if (
+    !capture.ok ||
+    capture.value?.kind !== 'rhi-tape' ||
+    typeof capture.value.path !== 'string' ||
+    typeof capture.value.digest !== 'string'
+  ) throw new Error(`RHI capture failed: ${JSON.stringify(capture)}`);
+  const tapeSource = [capture.value.path, resolve(ROOT, capture.value.path)].find((path) => existsSync(path));
+  if (tapeSource === undefined) throw new Error(`single Preview tape artifact is missing: ${capture.value.path}`);
+  const artifactPath = resolve(ARTIFACT_DIR, 'frame.rhitape');
+  copyFileSync(tapeSource, artifactPath);
+  const decodedTape = decodeTape(new Uint8Array(readFileSync(artifactPath)));
+  if (!decodedTape.ok) throw new Error(`captured tape decode failed: ${decodedTape.error.code} (${decodedTape.error.hint})`);
+  const capturedEvents = decodedTape.value.events;
   const skinPipelines = new Set(
-    capturedReport.events
+    capturedEvents
       .filter((event) => event.kind === 'createRenderPipeline')
       .filter((event) => {
         const buffer = event.desc?.vertex?.buffers?.[0];
@@ -548,7 +553,7 @@ try {
       .map((event) => event.handleId),
   );
   let activePipeline;
-  const hasVisibleFbxDraw = capturedReport.events.some((event) => {
+  const hasVisibleFbxDraw = capturedEvents.some((event) => {
     if (event.kind === 'setPipeline') activePipeline = event.pipelineHandleId;
     return event.kind === 'drawIndexed' && event.indexCount >= 9000 && skinPipelines.has(activePipeline);
   });
@@ -560,13 +565,13 @@ try {
   const cleared = await page.evaluate(() => globalThis.__forgeaxPreviewInspection === undefined);
   if (!cleared) throw new Error('Preview inspection global survived Stop');
 
-  const report = { listed, before, hudTargetStatus, assetLabReset, vfxBefore, vfxTrigger, afterVfx, videoBefore, videoToggle, afterVideo, videoOrbit, videoRestore, afterVideoRestore, afterVideoKey, afterVideoKeyRestore, profileCatalog, profileBefore, profileToggle, afterProfile, afterProfileKey, atlasBefore, atlasToggle, atlasFrame1, atlasFrame2, atlasRestoreKey, fontCatalog, fontBefore, fontToggle, afterFontToggle, fontScore, afterFontScore, fontRestoreKey, jpegBefore, jpegToggle, afterJpeg, jpegRestore, afterJpegRestore, visibilityToggle, afterVisibilityAction, visibilityRestore, afterVisibilityRestore, orbit, afterOrbit, hit, afterHit, invalidState, missingRead, resetRequest, afterReset, health, recoverHealthy, capture, cleared, pageErrors, consoleErrors, badResponses, serverOutput };
+  const report = { listed, before, hudTargetStatus, assetLabReset, vfxBefore, vfxTrigger, afterVfx, videoBefore, videoToggle, afterVideo, videoOrbit, videoRestore, afterVideoRestore, afterVideoKey, afterVideoKeyRestore, profileCatalog, profileBefore, profileToggle, afterProfile, afterProfileKey, atlasBefore, atlasToggle, atlasFrame1, atlasFrame2, atlasRestoreKey, fontCatalog, fontBefore, fontToggle, afterFontToggle, fontScore, afterFontScore, fontRestoreKey, jpegBefore, jpegToggle, afterJpeg, jpegRestore, afterJpegRestore, visibilityToggle, afterVisibilityAction, visibilityRestore, afterVisibilityRestore, orbit, afterOrbit, hit, afterHit, invalidState, missingRead, resetRequest, afterReset, health, recoverHealthy, capture, artifactPath, cleared, pageErrors, consoleErrors, badResponses, serverOutput };
   writeFileSync(resolve(ARTIFACT_DIR, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
   if (pageErrors.length > 0) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
   if (badResponses.length > 0) throw new Error(`bad responses: ${badResponses.join(' | ')}`);
   const actionableConsoleErrors = consoleErrors.filter((line) => !line.includes('favicon') && !line.includes('Failed to load resource'));
   if (actionableConsoleErrors.length > 0) throw new Error(`console errors: ${actionableConsoleErrors.join(' | ')}`);
-  console.log(`[inspection-recovery] PASS actions=${listed.actions.length} reads=${listed.reads.length} phase=${afterReset.value.state.phase} resetTransitions=${afterReset.value.state.resetTransitions} capture=${capture.value.runId} cleared=${cleared}`);
+  console.log(`[inspection-recovery] PASS actions=${listed.actions.length} reads=${listed.reads.length} phase=${afterReset.value.state.phase} resetTransitions=${afterReset.value.state.resetTransitions} artifact=${artifactPath} cleared=${cleared}`);
   console.log(`[inspection-recovery] artifacts=${ARTIFACT_DIR}`);
 } finally {
   await browser.close();

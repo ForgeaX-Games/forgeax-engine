@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // Dawn smoke for Bevy `sprite`: one image-backed Sprite must produce varied visible pixels.
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -63,28 +64,22 @@ gpu.requestAdapter = async (options) => {
   };
   return adapter;
 };
-const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: manifestUrl });
+const renderer = await createSmokeRenderer(createRenderer, canvas, {}, { shaderManifestUrl: manifestUrl });
 gpu.requestAdapter = originalRequestAdapter;
 const errors = [];
-renderer.onError((error) => errors.push(error));
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
+subscribeSmokeErrors(renderer, (error) => errors.push(error));
 
 const pixels = makeSpritePixels();
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const texture = { kind: 'texture', width: SPRITE_SIZE, height: SPRITE_SIZE, format: 'rgba8unorm-srgb', data: pixels, colorSpace: 'srgb', mipmap: false };
 const handle = world.allocSharedRef('TextureAsset', texture);
-const upload = await renderer.store.uploadTexture(handle, texture, {
-  bytes: pixels, width: SPRITE_SIZE, height: SPRITE_SIZE, mime: 'image/png', colorSpace: 'srgb', mipmap: false,
-});
-if (!upload.ok) throw new Error(`${upload.error.code}: ${upload.error.hint}`);
 buildSpriteWorld(world, unwrapHandle(handle));
 
 for (let frame = 0; frame < FRAMES; frame++) {
   world.update().unwrap();
-  const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const result = drawSmokeFrame(renderer, world);
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.hint}`);
 }
 await device.queue.onSubmittedWorkDone();
@@ -118,7 +113,7 @@ const pngPath = process.env.SMOKE_PNG_OUT ?? resolve(here, '..', 'artifacts', 's
 mkdirSync(dirname(pngPath), { recursive: true });
 writeFileSync(pngPath, writeReferencePng(png, WIDTH, HEIGHT));
 console.log(`[smoke] frames=${FRAMES} visiblePixels=${visiblePixels} channelSpreadPixels=${channelSpreadPixels} errors=${errors.length} png=${pngPath}`);
-if (renderer.backend !== 'webgpu' || visiblePixels < 500 || channelSpreadPixels < 500 || errors.length > 0) {
+if (rendererBackend(renderer) !== 'webgpu' || visiblePixels < 500 || channelSpreadPixels < 500 || errors.length > 0) {
   console.error('[smoke] FAIL - backend/visibility/color/error criterion failed');
   process.exit(1);
 }

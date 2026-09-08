@@ -2,7 +2,6 @@ import {
   FixedTime,
   FixedUpdate,
   Update,
-  defineRecoverableResource,
   type World,
 } from '@forgeax/engine-ecs';
 import {
@@ -10,10 +9,10 @@ import {
   defineState,
   getState,
   inState,
-  registerStatesPlugin,
   setNextState,
   type StateErrorCode,
 } from '@forgeax/engine-state';
+import type { Context } from '@forgeax/engine-plugin';
 
 export const GameState = defineState('GameDefaultPhase', ['Play', 'Victory', 'Defeat', 'Reset'] as const);
 export const GAMEPLAY_STATE_WITNESS_KEY = 'gameDefaultStateWitness';
@@ -40,6 +39,7 @@ export interface GameplayStateHandle {
 }
 
 export interface GameplayStateContext {
+  context: Context;
   world: World;
   reset: () => void;
   onTerminal?: () => void;
@@ -47,9 +47,6 @@ export interface GameplayStateContext {
 }
 
 export function installGameplayState(ctx: GameplayStateContext): GameplayStateHandle {
-  // Preview loads the game entry after createApp has assembled its world. The
-  // explicit idempotent call wires this late-defined token into that world.
-  registerStatesPlugin(ctx.world);
   const initialWitness: GameplayStateWitness = {
     phase: 'Play',
     updateTicks: 0,
@@ -59,13 +56,12 @@ export function installGameplayState(ctx: GameplayStateContext): GameplayStateHa
     defeatTransitions: 0,
     resetTransitions: 0,
   };
-  ctx.world.insertResource(GAMEPLAY_STATE_WITNESS_KEY, initialWitness);
-  ctx.world.registerRecoverableResource(
-    defineRecoverableResource<GameplayStateWitness>(GAMEPLAY_STATE_WITNESS_KEY, {
-      schemaFingerprint: 'game-default.gameplay-state-witness.v1',
-      clone: (value) => ({ ...value }),
-    }),
-  );
+  ctx.context.effect(() => {
+    ctx.world.insertResource(GAMEPLAY_STATE_WITNESS_KEY, initialWitness);
+    return () => {
+      ctx.world.removeResource(GAMEPLAY_STATE_WITNESS_KEY);
+    };
+  }, 'game-default/state-witness');
 
   const witness = (): GameplayStateWitness => ctx.world.getResource<GameplayStateWitness>(GAMEPLAY_STATE_WITNESS_KEY);
   const patchWitness = (patch: Partial<GameplayStateWitness>): void => {
@@ -78,52 +74,61 @@ export function installGameplayState(ctx: GameplayStateContext): GameplayStateHa
   };
 
   ctx.onPhaseChange?.('Play');
-  addOnEnter(GameState, 'Play', () => ctx.onPhaseChange?.('Play'));
-  addOnEnter(GameState, 'Victory', () => {
-    ctx.onTerminal?.();
-    patchWitness({ victoryTransitions: witness().victoryTransitions + 1 });
-    ctx.onPhaseChange?.('Victory');
-  });
-  addOnEnter(GameState, 'Defeat', () => {
-    ctx.onTerminal?.();
-    patchWitness({ defeatTransitions: witness().defeatTransitions + 1 });
-    ctx.onPhaseChange?.('Defeat');
-  });
+  ctx.context.effect(() => {
+    const disposers = [
+      addOnEnter(GameState, 'Play', () => ctx.onPhaseChange?.('Play')),
+      addOnEnter(GameState, 'Victory', () => {
+        ctx.onTerminal?.();
+        patchWitness({ victoryTransitions: witness().victoryTransitions + 1 });
+        ctx.onPhaseChange?.('Victory');
+      }),
+      addOnEnter(GameState, 'Defeat', () => {
+        ctx.onTerminal?.();
+        patchWitness({ defeatTransitions: witness().defeatTransitions + 1 });
+        ctx.onPhaseChange?.('Defeat');
+      }),
+      addOnEnter(GameState, 'Reset', (world) => {
+        patchWitness({ resetTransitions: witness().resetTransitions + 1 });
+        ctx.onPhaseChange?.('Reset');
+        ctx.reset();
+        const result = setNextState(world, GameState, 'Play');
+        if (!result.ok) patchWitness({ lastErrorCode: result.error.code });
+      }),
+    ];
+    return () => {
+      for (const dispose of disposers.reverse()) dispose();
+    };
+  }, 'game-default/state-hooks');
 
-  // Reset is a real state transition: cleanup is performed by the enter hook,
-  // then the state returns to Play on the following transition tick.
-  addOnEnter(GameState, 'Reset', (world) => {
-    patchWitness({ resetTransitions: witness().resetTransitions + 1 });
-    ctx.onPhaseChange?.('Reset');
-    ctx.reset();
-    const result = setNextState(world, GameState, 'Play');
-    if (!result.ok) patchWitness({ lastErrorCode: result.error.code });
-  });
-
-  ctx.world.addSystem(Update, {
-    name: 'game-state-witness',
-    queries: [],
-    after: ['transitionStates'],
-    before: [FixedUpdate],
-    fn: () => {
-      const current = getState(ctx.world, GameState);
-      patchWitness({
-        updateTicks: witness().updateTicks + 1,
-        phase: current.ok && (current.value === 'Play' || current.value === 'Victory' || current.value === 'Defeat' || current.value === 'Reset') ? current.value : 'unknown',
-      });
-    },
-  }).unwrap();
-
-  ctx.world.addSystem(FixedUpdate, {
-    name: 'game-fixed-simulation',
-    queries: [],
-    runIf: inState(GameState, 'Play'),
-    fn: (world) => {
-      const fixed = world.getResource(FixedTime);
-      const current = witness();
-      patchWitness({ fixedTicks: fixed.tick, simulationSeconds: current.simulationSeconds + fixed.delta });
-    },
-  }).unwrap();
+  ctx.context.effect(() => {
+    ctx.world.addSystem(Update, {
+      name: 'game-state-witness',
+      queries: [],
+      after: ['transitionStates'],
+      before: [FixedUpdate],
+      fn: () => {
+        const current = getState(ctx.world, GameState);
+        patchWitness({
+          updateTicks: witness().updateTicks + 1,
+          phase: current.ok && (current.value === 'Play' || current.value === 'Victory' || current.value === 'Defeat' || current.value === 'Reset') ? current.value : 'unknown',
+        });
+      },
+    }).unwrap();
+    ctx.world.addSystem(FixedUpdate, {
+      name: 'game-fixed-simulation',
+      queries: [],
+      runIf: inState(GameState, 'Play'),
+      fn: (world) => {
+        const fixed = world.getResource(FixedTime);
+        const current = witness();
+        patchWitness({ fixedTicks: fixed.tick, simulationSeconds: current.simulationSeconds + fixed.delta });
+      },
+    }).unwrap();
+    return () => {
+      ctx.world.removeSystem(FixedUpdate, 'game-fixed-simulation');
+      ctx.world.removeSystem(Update, 'game-state-witness');
+    };
+  }, 'game-default/state-systems');
 
   return {
     requestVictory() { request('Victory'); },

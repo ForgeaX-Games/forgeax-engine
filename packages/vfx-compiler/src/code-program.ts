@@ -1,9 +1,13 @@
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import type { NativeCooker } from '@forgeax/engine-pack/native-cooker';
 import { compileShader } from '@forgeax/engine-shader-compiler';
-import type { BindGroupLayoutDescriptor, Result } from '@forgeax/engine-types';
+import type {
+  BindGroupLayoutDescriptor,
+  ParticleEffectProgram,
+  Result,
+} from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
 import {
   PARTICLE_CODE_DEFAULT_MODULE_ID,
@@ -637,6 +641,7 @@ export interface ParticleCodeEffectPayload {
   readonly schemaVersion: 2;
   readonly programFingerprint: string;
   readonly emitters: readonly { readonly id: string; readonly capacity: number }[];
+  readonly program: ParticleEffectProgram;
 }
 
 export interface ParticleCodeCookProduct {
@@ -652,6 +657,13 @@ export interface ParticleCodeNativeCookInput {
 
 function readParticleCodeModules(root: string): Record<string, ParticleCodeModuleSet> {
   const modules: Record<string, ParticleCodeModuleSet> = {};
+  const rootInfo = statSync(root);
+  if (rootInfo.isFile()) {
+    if (root.endsWith('.vfx.wgsl')) {
+      modules[basename(root)] = { entry: readFileSync(root, 'utf8') };
+    }
+    return modules;
+  }
   const visit = (directory: string): void => {
     for (const entry of readdirSync(directory, { withFileTypes: true }).sort((left, right) =>
       left.name.localeCompare(right.name),
@@ -914,7 +926,7 @@ export async function cookParticleCodeProgram(
     artifactKey: PARTICLE_CODE_PROGRAM_ARTIFACT_KEY,
     mimeType: 'application/vnd.forgeax.vfx-program+json',
     bytes,
-    fingerprint: createHash('sha256').update(bytes).digest('hex'),
+    fingerprint: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
     program,
   });
 }
@@ -938,6 +950,11 @@ export async function cookParticleCodeEffect(
       schemaVersion: 2,
       programFingerprint: artifact.value.fingerprint,
       emitters: artifact.value.program.emitters.map(({ id, capacity }) => ({ id, capacity })),
+      program: {
+        format: 'forgeax-vfx-program-2',
+        fingerprint: artifact.value.fingerprint,
+        emitters: artifact.value.program.emitters,
+      },
     },
     artifact: artifact.value,
     refs: Object.freeze([...refs].sort()),

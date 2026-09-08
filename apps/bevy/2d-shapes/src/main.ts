@@ -4,6 +4,11 @@ import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { build2dShapesWorld, step2dShapes } from './2d-shapes.js';
 
+type EvidenceGlobal = typeof globalThis & {
+  __bevy2dShapesReady?: boolean;
+  __prepare2dShapesCapture?: () => Promise<void>;
+};
+
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('bevy-2d-shapes: missing <canvas id="app"> in index.html');
 
@@ -24,5 +29,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
   const started = app.start();
   if (!started.ok) return console.error('[bevy-2d-shapes] app.start failed:', started.error);
-  (globalThis as { __bevy2dShapesReady?: boolean }).__bevy2dShapesReady = true;
+  const evidenceGlobal = globalThis as EvidenceGlobal;
+  evidenceGlobal.__prepare2dShapesCapture = async () => {
+    const updated = app.world.update(1 / 60);
+    if (!updated.ok) throw updated.error;
+  };
+  evidenceGlobal.__bevy2dShapesReady = true;
 }

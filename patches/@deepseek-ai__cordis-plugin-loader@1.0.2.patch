@@ -1,0 +1,98 @@
+diff --git a/lib/index.js b/lib/index.js
+index 6f4c7136fb54af909a638bf2f61c7c8caefc41a9..d2abd08528020a4ca79834cdf2eed79fbd97ff07 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -1,4 +1,3 @@
+-import { createRequire } from "node:module";
+ import { Context, Inject, Service, composeError } from "@deepseek-ai/cordis";
+ import { deepEqual, defineProperty, isNonNullable, isNullable, valueMap } from "@deepseek-ai/cosmokit";
+ //#region lib/types/internal.js
+@@ -6,25 +5,8 @@ import { deepEqual, defineProperty, isNonNullable, isNullable, valueMap } from "
+ var ModuleLoader;
+ (function(ModuleLoader) {
+ 	let _cachedLoader;
+-	function requireInternal(id) {
+-		const require = createRequire(import.meta.url);
+-		if (process.execArgv.includes("--expose-internals")) try {
+-			return require(id);
+-		} catch {}
+-		try {
+-			return require("node-addon-require-builtin").requireBuiltin(id);
+-		} catch {}
+-	}
+ 	function fromInternal() {
+ 		if (_cachedLoader) return _cachedLoader;
+-		const [major] = process.versions.node.split(".").map(Number);
+-		if (major >= 24) {
+-			const raw = requireInternal("internal/modules/esm/loader")?.getOrInitializeCascadedLoader();
+-			if (raw) return _cachedLoader = Object.assign(raw, { version: "v2" });
+-		} else if (major >= 22) {
+-			const raw = requireInternal("internal/modules/esm/loader")?.getOrInitializeCascadedLoader();
+-			if (raw) return _cachedLoader = Object.assign(raw, { version: "v1" });
+-		}
+ 	}
+ 	ModuleLoader.fromInternal = fromInternal;
+ })(ModuleLoader || (ModuleLoader = {}));
+@@ -657,7 +639,7 @@ function isolate(ctx) {
+ */
+ var Loader = class extends EntryTree {
+ 	config;
+-	envData = process.env.CORDIS_SHARED ? JSON.parse(process.env.CORDIS_SHARED) : { startTime: Date.now() };
++	envData = { startTime: Date.now() };
+ 	name = "loader";
+ 	internal = ModuleLoader.fromInternal();
+ 	builtins = Object.create(null);
+diff --git a/src/index.ts b/src/index.ts
+index 781353b983cf81d576537c6cd6643f5727f4ac02..d3613e3aa4c824cb82235e4bd9727da31f4041b8 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -65,9 +65,7 @@ export namespace Loader {
+ export class Loader extends EntryTree {
+   declare [Service.config]: Loader.Intercept
+ 
+-  public envData = process.env.CORDIS_SHARED
+-    ? JSON.parse(process.env.CORDIS_SHARED)
+-    : { startTime: Date.now() }
++  public envData = { startTime: Date.now() }
+ 
+   public name = 'loader'
+   public internal = ModuleLoader.fromInternal()
+diff --git a/src/internal.ts b/src/internal.ts
+index ccf08debc643c8f733ce65855c59eb1c243f29ae..4d31d35bb1e28bb7c864852733d2dff69864ecd1 100644
+--- a/src/internal.ts
++++ b/src/internal.ts
+@@ -1,4 +1,4 @@
+-import { createRequire, type LoadHookContext } from 'node:module'
++import type { LoadHookContext } from 'node:module'
+ import type { Dict } from '@deepseek-ai/cosmokit'
+ 
+ /** Node internal module format names handled by loader hooks. */
+@@ -105,28 +105,7 @@ export type ModuleLoader = ModuleLoaderV1 | ModuleLoaderV2
+ export namespace ModuleLoader {
+   let _cachedLoader: ModuleLoader | undefined
+ 
+-  function requireInternal(id: string): any {
+-    const require = createRequire(import.meta.url)
+-    if (process.execArgv.includes('--expose-internals')) {
+-      try {
+-        return require(id)
+-      } catch {}
+-    }
+-    try {
+-      return require('node-addon-require-builtin').requireBuiltin(id)
+-    } catch {}
+-  }
+-
+   export function fromInternal(): ModuleLoader | undefined {
+     if (_cachedLoader) return _cachedLoader
+-    const [major] = process.versions.node.split('.').map(Number)
+-
+-    if (major >= 24) {
+-      const raw = requireInternal('internal/modules/esm/loader')?.getOrInitializeCascadedLoader()
+-      if (raw) return _cachedLoader = Object.assign(raw, { version: 'v2' })
+-    } else if (major >= 22) {
+-      const raw = requireInternal('internal/modules/esm/loader')?.getOrInitializeCascadedLoader()
+-      if (raw) return _cachedLoader = Object.assign(raw, { version: 'v1' })
+-    }
+   }
+ }

@@ -90,4 +90,27 @@ describe('MaterialAsset specialization key', () => {
       new Set([undefinedKey.digest, falseKey.digest, zeroKey.digest, stateKey.digest]).size,
     ).toBe(4);
   });
+
+  it('characterizes the current specialization identity boundary', () => {
+    const baseline = createMaterialSpecializationKey(input);
+    const withPathAndGeneration = createMaterialSpecializationKey({
+      ...input,
+      path: '/different/source.wgsl',
+      generation: 42,
+    });
+
+    expect(withPathAndGeneration).toEqual(baseline);
+    expect(baseline.preimage).toContain('forgeax.material.specialization.v1');
+    expect(baseline.preimage).not.toContain('/different/source.wgsl');
+  });
+
+  it('does not include module slots in the material layout identity', () => {
+    const withoutSlot = createMaterialSpecializationKey({
+      ...input,
+      passes: [{ name: basePass.name, module: basePass.module }],
+    });
+    const withSlot = createMaterialSpecializationKey(input);
+    expect(withSlot.digest).not.toBe(withoutSlot.digest);
+    expect(withSlot.preimage).toContain('moduleSlots');
+  });
 });

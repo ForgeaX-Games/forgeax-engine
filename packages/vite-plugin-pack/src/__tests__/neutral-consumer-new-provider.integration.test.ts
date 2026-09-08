@@ -2,10 +2,11 @@ import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCatalogSource } from '@forgeax/engine-assets-runtime';
+import { buildCatalogResult } from '@forgeax/engine-import';
+import { calculateCatalogDelta } from '@forgeax/engine-pack/build';
 import type { CatalogEntry, CookProduct } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildCatalogResult } from '../build-catalog.js';
-import { calculateCatalogDelta } from '../catalog-watch.js';
+import { createProductionSession } from '../production/session.js';
 
 const ENGINE_ROOT = join(import.meta.dirname, '..', '..', '..', '..');
 const EDITOR_ROOT = join(ENGINE_ROOT, '..', '..');
@@ -20,10 +21,8 @@ const EXTRA_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d403';
 const legacyConsumerEvidence = {
   tsModules: [
     'packages/core/src/__tests__/asset-io-meta-sidecar.test.ts',
-    'packages/core/src/__tests__/mesh-material-resolve.test.ts',
     'packages/core/src/assets/fbx-cook.ts',
     'packages/core/src/io/asset-io-primitives.ts',
-    'packages/core/src/scene/mesh-original-materials.ts',
     'packages/core/src/session/import-ops.ts',
     'packages/play-runtime/src/main.ts',
     'packages/play-runtime/vite.config.ts',
@@ -207,5 +206,35 @@ describe('neutral consumer with a registered host provider', () => {
       typeErasedModules: [],
       jsonLiterals: [],
     });
+  });
+
+  it('accepts a new provider through the neutral ProductionSession boundary', async () => {
+    type ProviderProduct = {
+      readonly guid: string;
+      readonly payload: { readonly provider: string; readonly bytes: Uint8Array };
+    };
+    const session = createProductionSession<{ readonly products: ProviderProduct[] }>({
+      createState: () => ({ products: [] }),
+      inventory: async () => [{ sourceKey: 'source-new-provider', guids: ['guid-new'] }],
+      produce: async ({ declaration, state }) => {
+        state.products.push(
+          ...declaration.guids.map((guid) => ({
+            guid,
+            payload: { provider: 'new-provider', bytes: new Uint8Array([1, 2, 3]) },
+          })),
+        );
+      },
+      publish: async ({ state }) => {
+        expect(state.products[0]?.payload).toEqual({
+          provider: 'new-provider',
+          bytes: new Uint8Array([1, 2, 3]),
+        });
+      },
+    });
+
+    const result = await session.start();
+
+    expect(result.status).toBe('accepted');
+    await session.close();
   });
 });

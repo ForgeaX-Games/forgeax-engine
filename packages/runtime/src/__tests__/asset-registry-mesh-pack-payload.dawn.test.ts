@@ -32,13 +32,13 @@
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { GpuResourceStore } from '@forgeax/engine-render/internal';
 import { ok } from '@forgeax/engine-rhi';
 import type { EquirectAsset, MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { GpuResidencyCache } from '../../../render/src/device/gpu-residency';
 
-// feat-20260601-gpu-resource-store-extraction M1: configureGpuDevice moved to
-// GpuResourceStore (D-3 registerCube relay). These tests exercise registry-side
+// feat-20260601-device/gpu-residency-extraction M1: configureGpuDevice moved to
+// GpuResidencyCache (D-3 registerCube relay). These tests exercise registry-side
 // catalog + the stride gate; they wire the device onto the store
 // to keep the dawn device-acquisition path covered.
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
@@ -81,8 +81,11 @@ function makeNon12FAsset(): TypesMeshAsset {
         indexCount: 3,
         vertexCount: 0,
         topology: 'triangle-list',
+        materialSlot: 0,
       },
     ],
+
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 
@@ -95,7 +98,7 @@ describe('t9 - pack deserialization non-12F mesh gate trigger (dawn)', () => {
       const device = await adapter.requestDevice();
 
       const reg = new AssetRegistry(makeMockShaderRegistry());
-      const gpuStore = new GpuResourceStore();
+      const gpuStore = new GpuResidencyCache();
       gpuStore.configureGpuDevice(
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
         device as any,
@@ -162,8 +165,11 @@ describe('t9 - pack deserialization non-12F mesh gate trigger (dawn)', () => {
           indexCount: 3,
           vertexCount: 0,
           topology: 'triangle-list',
+          materialSlot: 0,
         },
       ],
+
+      materialSlots: [{ slotName: 'Default' }],
     };
 
     const result = reg.catalog<TypesMeshAsset>(guid, nonDivisibleAsset);
@@ -185,7 +191,7 @@ describe('t9 - pack deserialization non-12F mesh gate trigger (dawn)', () => {
       const device = await adapter.requestDevice();
 
       const reg = new AssetRegistry(makeMockShaderRegistry());
-      const gpuStore = new GpuResourceStore();
+      const gpuStore = new GpuResidencyCache();
       gpuStore.configureGpuDevice(
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
         device as any,
@@ -209,8 +215,11 @@ describe('t9 - pack deserialization non-12F mesh gate trigger (dawn)', () => {
             indexCount: 3,
             vertexCount: 0,
             topology: 'triangle-list',
+            materialSlot: 0,
           },
         ],
+
+        materialSlots: [{ slotName: 'Default' }],
       };
       reg.catalog<TypesMeshAsset>(guid, validAsset);
 

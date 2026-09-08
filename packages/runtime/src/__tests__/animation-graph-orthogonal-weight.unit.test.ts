@@ -24,6 +24,12 @@ function registerClip(world: World, duration: number) {
   return world.allocSharedRef('AnimationClip', clip);
 }
 
+const lookupClip = (_guid: string): AnimationClip => ({
+  kind: 'animation-clip',
+  duration: 10,
+  channels: [],
+});
+
 function readWeight0(world: World, e: EntityHandle): number {
   const weights = (world.get(e, AnimationPlayer).unwrap() as unknown as { weights: Float32Array })
     .weights;
@@ -33,10 +39,10 @@ function readWeight0(world: World, e: EntityHandle): number {
 describe('evaluateAnimationGraph — orthogonal product weight (M3 / w20)', () => {
   it('effective weight = runtime x static (0.5 x 0.4 = 0.2)', () => {
     const world = new World();
-    const clipH = registerClip(world, 10);
+    registerClip(world, 10);
 
     // Single clip node with STATIC weight 0.4.
-    const built = defineAnimationGraph((b) => b.clip(clipH, 0.4));
+    const built = defineAnimationGraph((b) => b.clip('test/animation-clip-h', 0.4));
     expect(built.ok).toBe(true);
     if (!built.ok) return;
     const graphH = world.allocSharedRef('AnimationGraph', built.value);
@@ -49,23 +55,23 @@ describe('evaluateAnimationGraph — orthogonal product weight (M3 / w20)', () =
       })
       .unwrap() as EntityHandle;
 
-    evaluateAnimationGraph(world, 0);
+    evaluateAnimationGraph(world, 0, lookupClip);
     expect(readWeight0(world, e)).toBeCloseTo(0.2, 5); // 0.5 x 0.4
 
     // Change ONLY the runtime factor to 1.0 -> effective tracks the product 0.4.
     world.set(e, AnimationPlayer, { nodeWeights: new Float32Array([1]) });
-    evaluateAnimationGraph(world, 0);
+    evaluateAnimationGraph(world, 0, lookupClip);
     expect(readWeight0(world, e)).toBeCloseTo(0.4, 5); // 1.0 x 0.4
   });
 
   it('changing ONLY the static factor scales the effective weight by the product', () => {
     const world = new World();
-    const clipA = registerClip(world, 10);
-    const clipB = registerClip(world, 10);
+    registerClip(world, 10);
+    registerClip(world, 10);
 
     // Two graphs differing only in the static weight (0.4 vs 0.8).
-    const gA = defineAnimationGraph((b) => b.clip(clipA, 0.4));
-    const gB = defineAnimationGraph((b) => b.clip(clipB, 0.8));
+    const gA = defineAnimationGraph((b) => b.clip('test/animation-clip-a', 0.4));
+    const gB = defineAnimationGraph((b) => b.clip('test/animation-clip-b', 0.8));
     expect(gA.ok && gB.ok).toBe(true);
     if (!gA.ok || !gB.ok) return;
     const hA = world.allocSharedRef('AnimationGraph', gA.value);
@@ -85,7 +91,7 @@ describe('evaluateAnimationGraph — orthogonal product weight (M3 / w20)', () =
       })
       .unwrap() as EntityHandle;
 
-    evaluateAnimationGraph(world, 0);
+    evaluateAnimationGraph(world, 0, lookupClip);
     expect(readWeight0(world, eA)).toBeCloseTo(0.2, 5); // 0.5 x 0.4
     expect(readWeight0(world, eB)).toBeCloseTo(0.4, 5); // 0.5 x 0.8
   });

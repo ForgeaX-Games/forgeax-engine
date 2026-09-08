@@ -12,7 +12,7 @@
 
 import { deriveAnimationTargetId } from '@forgeax/engine-animation/target-id';
 import type { AnimationTargetIdValue } from '@forgeax/engine-types';
-import { decodeF32Accessor } from './decode-accessor.js';
+import { decodeF32Accessor } from './accessor/decode-accessor.js';
 import { err, type GltfError, gltfErr, ok, type Result } from './errors.js';
 import { buildNodeParentMap, resolveNamedNodePath } from './node-path.js';
 
@@ -58,8 +58,8 @@ interface BufferViewJson {
 export interface GltfAnimationChannelRecord {
   readonly targetId: AnimationTargetIdValue;
   readonly targetNodeIndex: number;
-  /** 'translation' | 'rotation' | 'scale'. */
-  readonly property: string;
+  /** 'translation' | 'rotation' | 'scale' | 'weights'. */
+  readonly property: 'translation' | 'rotation' | 'scale' | 'weights';
   /** Sampler driving this channel. */
   readonly sampler: GltfAnimationSamplerRecord;
 }
@@ -86,9 +86,8 @@ export interface GltfAnimationClipRecord {
  * Parse glTF animations[] array into GltfAnimationClipRecord[].
  *
  * Only LINEAR and STEP interpolation are supported. CUBICSPLINE triggers
- * fail-fast with 'gltf-animation-cubicspline-unsupported'. Channels
- * targeting morph weights (path === 'weights') trigger fail-fast with
- * 'gltf-morph-unsupported'.
+ * fail-fast with 'gltf-animation-cubicspline-unsupported'. Channels targeting
+ * morph weights preserve their element-major sampler output for playback.
  */
 export function parseAnimation(
   animationsJson: readonly AnimationJson[] | undefined,
@@ -187,16 +186,6 @@ export function parseAnimation(
       const ch = anim.channels[chIdx];
       if (ch === undefined) continue;
 
-      if (ch.target.path === 'weights') {
-        return err(
-          gltfErr('gltf-morph-unsupported', {
-            animationIndex: animIdx,
-            channelIndex: chIdx,
-            nodeIndex: ch.target.node ?? -1,
-          }),
-        );
-      }
-
       const samplerRecord = decodedSamplers[ch.sampler];
       if (samplerRecord === undefined) {
         return err(
@@ -221,6 +210,20 @@ export function parseAnimation(
             animationIndex: animIdx,
             channelIndex: chIdx,
             nodeIndex: path.nodeIndex,
+          }),
+        );
+      }
+      if (
+        ch.target.path !== 'weights' &&
+        ch.target.path !== 'translation' &&
+        ch.target.path !== 'rotation' &&
+        ch.target.path !== 'scale'
+      ) {
+        return err(
+          gltfErr('gltf-morph-unsupported', {
+            animationIndex: animIdx,
+            channelIndex: chIdx,
+            nodeIndex: ch.target.node ?? -1,
           }),
         );
       }

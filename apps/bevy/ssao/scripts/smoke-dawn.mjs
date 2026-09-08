@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// bevy-ssao headless dawn smoke (structural + pixel falsifier).
-// The same occlusion-heavy scene is rendered with HDRP SSAO disabled and
-// enabled. The readbacks must differ, while the enabled graph exposes both
-// SSAO passes and completes the 300-frame gate without renderer errors.
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
+// bevy-ssao headless Dawn smoke (receipt-bound structural + pixel falsifier).
+// The same occlusion-heavy scene is rendered with Standard SSAO disabled and
+// enabled. The readbacks must differ and both runs must complete the 300-frame
+// gate without renderer errors.
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -50,16 +51,18 @@ globalThis.navigator.gpu.requestAdapter = async (opts) => {
   return adapter;
 };
 
-let renderTarget;
-function ensureRenderTarget(device, format) {
-  if (renderTarget) return renderTarget;
-  renderTarget = device.createTexture({
+const renderTargets = new Map();
+function ensureRenderTarget(device, format, label = 'default') {
+  const existing = renderTargets.get(label);
+  if (existing !== undefined) return existing.texture;
+  const texture = device.createTexture({
     size: { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
     format,
     usage: 0x10 | 0x04 | 0x01,
     viewFormats: ['rgba8unorm-srgb'],
   });
-  return renderTarget;
+  renderTargets.set(label, { device, texture });
+  return texture;
 }
 
 const mockCanvas = {
@@ -73,11 +76,11 @@ const mockCanvas = {
       configure(desc) { ensureRenderTarget(desc.device, desc.format ?? 'rgba8unorm'); },
       unconfigure() {},
       getCurrentTexture() {
-        if (!renderTarget) {
+        if (!renderTargets.has('default')) {
           if (!sharedDevice) throw new Error('no shared device captured');
           ensureRenderTarget(sharedDevice, 'rgba8unorm');
         }
-        return renderTarget;
+        return renderTargets.get('default').texture;
       },
     };
   },
@@ -89,58 +92,60 @@ const here = dirname(fileURLToPath(import.meta.url));
 const manifestPath = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const manifestUrl = `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}`;
 const { World } = await import('@forgeax/engine-ecs');
+const { DEFAULT_STANDARD_PROFILE } = await import('@forgeax/engine-render');
 const { createRenderer } = await import('@forgeax/engine-runtime');
-const { HDRP_PIPELINE_ID } = await import('@forgeax/engine-render/internal');
+const { rhi } = await import('@forgeax/engine-rhi-webgpu');
 const { buildSsaoWorld } = await import(resolve(here, '..', 'src', 'ssao.ts'));
 
-let renderer;
-try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: manifestUrl });
-} catch (err) {
-  console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
-  process.exit(1);
-} finally {
-  globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
-}
-
-console.log(`[bevy-ssao] backend=${renderer.backend}`);
-const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
-
-const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
-if (!worldAttachment1.ok) throw worldAttachment1.error;
-const scene = buildSsaoWorld(world, WIDTH / HEIGHT);
-console.log(`[bevy-ssao] scene meshes=${scene.meshCount}`);
-
-function installSsao(enabled) {
-  const result = renderer.installPipeline({
-    kind: 'render-pipeline',
-    pipelineId: HDRP_PIPELINE_ID,
-    config: {
-      clusterGrid: { x: 16, y: 9, z: 24 },
-      ssao: enabled ? { enabled: true, radius: 0.65, bias: 0.025, intensity: 1.4 } : { enabled: false },
+async function createStandardRenderer(ssao, label) {
+  let configuredDevice;
+  const canvas = {
+    ...mockCanvas,
+    getContext(kind) {
+      const context = mockCanvas.getContext(kind);
+      if (context === null) return null;
+      return {
+        ...context,
+        configure(desc) {
+          configuredDevice = desc.device;
+          ensureRenderTarget(desc.device, desc.format ?? 'rgba8unorm', label);
+        },
+        getCurrentTexture() {
+          if (!configuredDevice) throw new Error(`canvas ${label} is not configured`);
+          return ensureRenderTarget(configuredDevice, 'rgba8unorm', label);
+        },
+      };
     },
-  });
-  if (!result.ok) throw new Error(`installPipeline(${enabled ? 'on' : 'off'}): ${result.error.code} - ${result.error.hint}`);
+  };
+  return {
+    ok: true,
+    value: await createSmokeRenderer(
+      createRenderer,
+      canvas,
+      {
+        rhi,
+        standardProfile: {
+          ...DEFAULT_STANDARD_PROFILE,
+          lighting: 'clustered',
+          ssao,
+        },
+      },
+      { shaderManifestUrl: manifestUrl },
+    ),
+  };
 }
 
-async function capturePixels() {
-  await sharedDevice.queue.onSubmittedWorkDone();
+async function capturePixels(entry) {
+  await entry.device.queue.onSubmittedWorkDone();
   const bytesPerRow = Math.ceil((WIDTH * 4) / 256) * 256;
-  const readback = sharedDevice.createBuffer({ size: bytesPerRow * HEIGHT, usage: 0x01 | 0x08 });
-  const encoder = sharedDevice.createCommandEncoder();
+  const readback = entry.device.createBuffer({ size: bytesPerRow * HEIGHT, usage: 0x01 | 0x08 });
+  const encoder = entry.device.createCommandEncoder();
   encoder.copyTextureToBuffer(
-    { texture: renderTarget },
+    { texture: entry.texture },
     { buffer: readback, bytesPerRow, rowsPerImage: HEIGHT },
     { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
   );
-  sharedDevice.queue.submit([encoder.finish()]);
+  entry.device.queue.submit([encoder.finish()]);
   await readback.mapAsync(0x01);
   const mapped = new Uint8Array(readback.getMappedRange().slice(0));
   readback.unmap();
@@ -164,28 +169,49 @@ function meanByteDiff(left, right) {
 }
 
 const targetFrames = Math.max(SMOKE_MIN_FRAMES, 300);
-let framesObserved = 0;
-let drawErrors = 0;
-function drawFrames(count) {
-  for (let i = 0; i < count; i += 1) {
+async function runVariant(ssao, label) {
+  const constructed = await createStandardRenderer(ssao, label);
+  if (!constructed.ok) throw constructed.error;
+  const renderer = constructed.value;
+  const errors = [];
+  subscribeSmokeErrors(renderer, (err) => errors.push({ code: err.code, hint: err.hint }));
+  const world = new World();
+  const attached = renderer.attach(world);
+  if (!attached.ok) throw attached.error;
+  const scene = buildSsaoWorld(world, WIDTH / HEIGHT);
+  console.log(`[bevy-ssao] ${label} scene meshes=${scene.meshCount}`);
+  let framesObserved = 0;
+  let drawErrors = 0;
+  let latestReceipt;
+  for (let i = 0; i < targetFrames; i += 1) {
     world.update().unwrap();
-    const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const result = renderer.draw({
+      leases: [attached.value],
+      camera: { lease: attached.value },
+      environment: { lease: attached.value },
+    });
     if (!result.ok) {
       drawErrors += 1;
       console.error(`[smoke] draw frame ${framesObserved} error: ${result.error.code}`);
-    }
+    } else latestReceipt = result.value;
     framesObserved += 1;
   }
+  if (latestReceipt === undefined) throw new Error(`${label} produced no FrameReceipt`);
+  const observed = await renderer.observe(latestReceipt, { include: ['timings', 'draws', 'bindings'] });
+  if (!observed.ok) throw observed.error;
+  const inspection = renderer.inspect();
+  const entry = renderTargets.get(label);
+  if (entry === undefined) throw new Error(`${label} render target was not configured`);
+  const pixels = await capturePixels(entry);
+  attached.value.dispose();
+  renderer.dispose();
+  return { pixels, errors, drawErrors, framesObserved, observed: observed.value, inspection };
 }
 
-installSsao(false);
-drawFrames(Math.floor(targetFrames / 3));
-const ssaoOffPixels = await capturePixels();
-installSsao(true);
-drawFrames(Math.floor(targetFrames / 3));
-const ssaoOnPixels = await capturePixels();
-const passNames = renderer.perFramePassNames;
-drawFrames(targetFrames - 2 * Math.floor(targetFrames / 3));
+const off = await runVariant(false, 'ssao-off');
+const on = await runVariant(true, 'ssao-on');
+const ssaoOffPixels = off.pixels;
+const ssaoOnPixels = on.pixels;
 
 const diff = meanByteDiff(ssaoOffPixels, ssaoOnPixels);
 const artifactDir = resolve(here, '..', 'artifacts');
@@ -195,18 +221,14 @@ const onPng = resolve(artifactDir, 'ssao-on.png');
 writeFileSync(offPng, writeReferencePng(ssaoOffPixels, WIDTH, HEIGHT));
 writeFileSync(onPng, writeReferencePng(ssaoOnPixels, WIDTH, HEIGHT));
 
-await sharedDevice.queue.onSubmittedWorkDone();
-console.log(`[smoke] frames observed=${framesObserved} ssaoDiffMean=${diff.mean.toFixed(4)} changedPixels=${diff.changedPixels} passes=${passNames.join(',')} off=${offPng} on=${onPng}`);
+console.log(`[smoke] frames observed=${off.framesObserved + on.framesObserved} ssaoDiffMean=${diff.mean.toFixed(4)} changedPixels=${diff.changedPixels} receiptFrames=${off.observed.frameId},${on.observed.frameId} off=${offPng} on=${onPng}`);
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
-if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
-if (errors.length > 0) failures.push(`(c) Renderer.onError fired ${errors.length} times: [${errors.map((e) => e.code).join(', ')}]`);
-if (drawErrors > 0) failures.push(`(c) draw returned ${drawErrors} errors`);
+if (off.inspection.capabilities.backendKind !== 'webgpu' || on.inspection.capabilities.backendKind !== 'webgpu') failures.push('(a) Standard host backend is not webgpu');
+if (off.framesObserved < SMOKE_MIN_FRAMES || on.framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${off.framesObserved},${on.framesObserved} < ${SMOKE_MIN_FRAMES}`);
+if (off.errors.length > 0 || on.errors.length > 0) failures.push(`(c) Renderer.onError fired ${off.errors.length + on.errors.length} times`);
+if (off.drawErrors > 0 || on.drawErrors > 0) failures.push(`(c) draw returned ${off.drawErrors + on.drawErrors} errors`);
 if (diff.mean <= 0.05 || diff.changedPixels <= 20) failures.push(`(d) SSAO on/off diff too small: mean=${diff.mean.toFixed(4)}, changedPixels=${diff.changedPixels}`);
-for (const pass of ['ssao-calc', 'ssao-blur']) {
-  if (!passNames.includes(pass)) failures.push(`(e) missing SSAO pass ${pass}; actual=${passNames.join(',')}`);
-}
 
 if (failures.length > 0) {
   console.error(`[smoke] FAIL - ${failures.length} criteria failed:`);
@@ -215,7 +237,8 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log('[smoke] PASS - backend, 300 frames, zero errors, SSAO graph, and pixel discrimination are GREEN');
+console.log('[smoke] PASS - Standard backend, 300 frames per lane, receipt observation, zero errors, and SSAO pixel discrimination are GREEN');
 sharedDevice.destroy?.();
 delete globalThis.navigator.gpu;
 await delay(0);
+process.exit(0);

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // check-test-perf-budget.mjs — CI regression guard for vitest per-file timing.
 // Reads vitest `--reporter=json` output (single JSON object or ndjson) from
-// stdin. Computes ms/it per file from `testResults[].duration` and
+// stdin. Computes ms/it per file from `testResults[].duration` (or the
+// file-level endTime-startTime interval when Vitest omits duration) and
 // `assertionResults.length`. Fails when ms/it > 200 && it < 3 — a single
 // slow test in a near-empty file signals a merge candidate.
 // To falsify: add a `.only` on a slow-case-rich describe in a new test file.
@@ -24,49 +25,100 @@ function hasSkipComment(fileName) {
   }
 }
 
-/** Parse ndjson or single JSON from stdin. Returns array of vitest report objects. */
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function invalidShape(path, expected) {
+  throw new Error(`Vitest report shape invalid at ${path}: expected ${expected}`);
+}
+
+function validateReport(report, index) {
+  if (!isRecord(report)) invalidShape(`report[${index}]`, 'an object');
+  if (!Array.isArray(report.testResults)) invalidShape(`report[${index}].testResults`, 'an array');
+  return report;
+}
+
+/** Parse ndjson or single JSON from stdin. Returns only complete vitest report objects. */
 function parseInput(raw) {
   const trimmed = raw.trim();
-  if (!trimmed) return [];
+  if (!trimmed) invalidShape('stdin', 'a non-empty JSON report');
 
   // Try single JSON object (vitest --reporter=json produces one object).
   try {
-    const obj = JSON.parse(trimmed);
-    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
-      return [obj];
-    }
-  } catch {
+    const parsed = JSON.parse(trimmed);
+    if (!isRecord(parsed)) invalidShape('root', 'an object or newline-delimited objects');
+    return [validateReport(parsed, 0)];
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('Vitest report shape invalid'))
+      throw error;
     // Not single JSON, fall through to ndjson.
   }
 
-  // Try ndjson: one JSON object per line.
+  // Try ndjson: one complete JSON object per line.
   const reports = [];
-  for (const line of trimmed.split('\n')) {
+  for (const [index, line] of trimmed.split('\n').entries()) {
     const lt = line.trim();
     if (!lt) continue;
+    let parsed;
     try {
-      reports.push(JSON.parse(lt));
-    } catch (err) {
-      process.stderr.write(`[parse-error] Failed to parse JSON line: ${err.message}\n`);
-      process.exit(2);
+      parsed = JSON.parse(lt);
+    } catch (error) {
+      throw new Error(`Failed to parse JSON line ${index + 1}: ${error.message}`);
     }
+    reports.push(validateReport(parsed, index));
   }
+  if (reports.length === 0) invalidShape('stdin', 'at least one JSON report');
   return reports;
 }
 
 /** Extract per-file metrics from vitest reports. */
 function extractFiles(reports) {
   const files = [];
-  for (const report of reports) {
-    const testResults = report?.testResults;
-    if (!Array.isArray(testResults)) continue;
-    for (const tr of testResults) {
+  for (const [reportIndex, report] of reports.entries()) {
+    const testResults = report.testResults;
+    if (!Array.isArray(testResults)) invalidShape(`report[${reportIndex}].testResults`, 'an array');
+    for (const [resultIndex, tr] of testResults.entries()) {
+      if (!isRecord(tr))
+        invalidShape(`report[${reportIndex}].testResults[${resultIndex}]`, 'an object');
       const name = tr.name;
-      const duration = typeof tr.duration === 'number' ? tr.duration : 0;
+      if (typeof name !== 'string' || name.trim() === '')
+        invalidShape(
+          `report[${reportIndex}].testResults[${resultIndex}].name`,
+          'a non-empty string',
+        );
+      let duration = tr.duration;
+      if (duration === undefined) {
+        const startTime = tr.startTime;
+        const endTime = tr.endTime;
+        if (Number.isFinite(startTime) && Number.isFinite(endTime) && endTime >= startTime) {
+          duration = endTime - startTime;
+        }
+      }
+      if (!Number.isFinite(duration) || duration < 0)
+        invalidShape(
+          `report[${reportIndex}].testResults[${resultIndex}].duration`,
+          'a non-negative number',
+        );
       const assertionResults = tr.assertionResults;
-      const itCount = Array.isArray(assertionResults)
-        ? assertionResults.filter((a) => a.status !== 'todo').length
-        : 0;
+      if (!Array.isArray(assertionResults))
+        invalidShape(
+          `report[${reportIndex}].testResults[${resultIndex}].assertionResults`,
+          'an array',
+        );
+      for (const [assertionIndex, assertion] of assertionResults.entries()) {
+        if (!isRecord(assertion))
+          invalidShape(
+            `report[${reportIndex}].testResults[${resultIndex}].assertionResults[${assertionIndex}]`,
+            'an object',
+          );
+        if (typeof assertion.status !== 'string' || assertion.status.length === 0)
+          invalidShape(
+            `report[${reportIndex}].testResults[${resultIndex}].assertionResults[${assertionIndex}].status`,
+            'a non-empty string',
+          );
+      }
+      const itCount = assertionResults.filter((a) => a.status !== 'todo').length;
       files.push({ name, duration, itCount });
     }
   }
@@ -78,19 +130,16 @@ function main() {
   process.stdin.on('data', (chunk) => chunks.push(chunk));
   process.stdin.on('end', () => {
     const raw = Buffer.concat(chunks).toString('utf-8');
-    let reports;
+    let files;
     try {
-      reports = parseInput(raw);
+      const reports = parseInput(raw);
+      files = extractFiles(reports);
     } catch (err) {
       process.stderr.write(`[parse-error] ${err.message}\n`);
       process.exit(2);
     }
 
-    const files = extractFiles(reports);
-
     for (const file of files) {
-      if (!file.name) continue;
-
       // @perf-budget-skip exemption.
       if (hasSkipComment(file.name)) continue;
 

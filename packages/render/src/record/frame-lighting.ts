@@ -2,13 +2,14 @@
 // feat-20260704 M5/w31: further-split from frame.ts (AC-05 <=1500 lines/file).
 // Pure leaf helpers invoked once each from recordFrame; behavior verbatim.
 
-import { mat4, vec3 } from '@forgeax/engine-math';
+import { mat4, type Vec3, vec3 } from '@forgeax/engine-math';
 import {
   type BindGroup,
   type BindGroupLayout,
   RhiError,
   type TextureView,
 } from '@forgeax/engine-rhi';
+import { toShared } from '@forgeax/engine-types';
 import { bin, type ClusterBinProfilePhase, type ClusterBinProfileRunner } from '../cluster-binner';
 import {
   HdrpIndexListOverflowError,
@@ -23,7 +24,6 @@ import {
   HDRP_UNIFORM_LIGHT_CAPACITY,
   packClusterUniform,
 } from '../hdrp-buffers';
-import { DEFAULT_CLUSTER_GRID, LIGHT_INDEX_LIST_CAPACITY } from '../hdrp-pipeline';
 import {
   LIGHT_ARRAY_HEADER_BYTES,
   LIGHT_ARRAY_MAX_SLOTS,
@@ -34,19 +34,18 @@ import {
   packSpotLight,
   SPOT_LIGHT_STD430_BYTES,
 } from '../light-buffer-layout';
-import type { PipelineState, RenderSystemInternals } from '../render-system';
+import { DEFAULT_CLUSTER_GRID, LIGHT_INDEX_LIST_CAPACITY } from '../pipeline/standard-profile';
+import type { CameraSnapshot, RenderHdrpClusterPhase } from '../render-contract';
 import type {
-  CameraSnapshot,
   DirectionalLightSnapshot,
   ExtractedLights,
   RenderableSnapshot,
   SkyboxSnapshot,
   SkylightSnapshot,
 } from '../render-system-extract';
-import type { RenderHdrpClusterPhase } from '../renderer';
 import { ShadowAtlas } from '../shadow-atlas';
 import { getOrCreateSsaoBuffers } from '../ssao-buffers';
-import type { RecordProfileRunner } from './frame';
+import { getSsaoParameters } from '../ssao-config';
 import type { BindGroupCounts, RenderFrameState } from './frame-snapshot';
 import {
   computeProjectionMatrix,
@@ -57,6 +56,8 @@ import {
   warnMultiLightSpot,
 } from './helpers';
 import { getOrCreateFromChain, MESH_SSBO_BYTES, MESH_UBO_FULL_ARRAY_BYTES } from './mesh-ssbo';
+import type { PipelineState, RecordProfileRunner, RenderSystemInternals } from './render-context';
+import { POINTS_LINES_VIEW_BYTES, VIEW_UNIFORM_BYTES } from './view-ubo';
 
 function runHdrpClusterProfilePhase<T>(
   runner: RecordProfileRunner | undefined,
@@ -83,6 +84,11 @@ export function buildPerFrameBindGroups(
   pipelineState: PipelineState,
   hasValidated: boolean,
   bindGroupCounts: BindGroupCounts,
+  graphTargets?: {
+    readonly directionalShadow?: TextureView | undefined;
+    readonly spotShadow?: TextureView | undefined;
+  },
+  includeView = true,
 ): {
   viewBindGroup: BindGroup | null;
   meshBindGroup: BindGroup | null;
@@ -104,148 +110,168 @@ export function buildPerFrameBindGroups(
     ? frameState.hdrpClusterMembershipBindGroup
     : null;
   if (hasValidated) {
-    // M5-T1: shadow atlas view sourced directly from render-graph
-    // (`addColorTarget('shadowDepth', ...)` declared in `urp-pipeline.ts`).
+    // Shadow atlas view comes from the typed graph target.
     // Graph owns the texture lifecycle; record-stage reads the resolved
     // view each frame (D-2 SSOT). When the graph has not allocated the
     // target (castShadow:false or shadowMapSize=0),
     // `getColorTargetView` returns undefined and we fall through to the
     // 1x1 fallback view that keeps the BGL satisfied.
-    const graphShadowView = frameState.perFrameGraph?.getColorTargetView('shadowDepth') as
-      | TextureView
-      | undefined;
-    const b3View =
-      graphShadowView !== undefined ? graphShadowView : pipelineState.shadowFallbackTextureView;
-    // feat-20260612-point-light-shadows-urp-hdrp Round-2 F-1: bind the real
-    // ShadowAtlas cube_array view when point shadows are active in this
-    // frame; otherwise the 1x1x6 fallback (cleared to 1.0 = fully lit).
-    const pointShadowAtlas = frameState.pointShadowAtlas;
-    const atlasViewMaybe = pointShadowAtlas?.isAllocated() ? pointShadowAtlas.getAtlasView() : null;
-    const b5View =
-      atlasViewMaybe !== null ? atlasViewMaybe : pipelineState.shadowAtlasFallbackTextureView;
-    // feat-20260625-spot-light-shadow-mapping M2 / w21 (D-1 fragment side +
-    // D-5): bind the real `spotShadowDepth` 2D atlas view (graph-owned) when
-    // spot shadows run this frame; otherwise the 1x1 depth fallback cleared to
-    // 1.0 (fully lit) — same `texture_depth_2d` shape as binding 3, so it
-    // satisfies the BGL without a dedicated spot fallback allocation. binding
-    // 9 always binds the real spotLightViewProj UBO (zeroed lanes are safe via
-    // the shadowAtlasTile >= 0 shader gate).
-    const graphSpotShadowView = frameState.perFrameGraph?.getColorTargetView('spotShadowDepth') as
-      | TextureView
-      | undefined;
-    const b8View =
-      graphSpotShadowView !== undefined
-        ? graphSpotShadowView
-        : pipelineState.shadowFallbackTextureView;
-    viewBindGroup = getOrCreateFromChain(
-      frameState.viewBindGroupCache,
-      [
-        pipelineState.viewUniformBuffer,
-        pipelineState.pointLightsBuffer,
-        pipelineState.spotLightsBuffer,
-        b3View,
-        pipelineState.perPassResources.shadowSampler,
-        b5View,
-        pipelineState.shadowParamsBuffer,
-        b8View,
-      ],
-      'view-main',
-      () => {
-        const viewBindGroupResult = internals.device.createBindGroup({
-          label: 'pbr-view-bg',
-          layout: pipelineState.viewBindGroupLayout,
-          entries: [
-            {
-              binding: 0,
-              resource: {
-                kind: 'buffer',
-                value: { buffer: pipelineState.viewUniformBuffer },
+    if (includeView) {
+      const shadowSampler = pipelineState.perPassResources.shadowSampler;
+      if (shadowSampler === null) {
+        return {
+          viewBindGroup: null,
+          meshBindGroup: null,
+          hdrpClusterBindGroup: null,
+          hdrpClusterMembershipBindGroup,
+        };
+      }
+      const graphShadowView = graphTargets?.directionalShadow;
+      const b3View =
+        graphShadowView !== undefined ? graphShadowView : pipelineState.shadowFallbackTextureView;
+      // feat-20260612-point-light-shadows-urp-hdrp Round-2 F-1: bind the real
+      // ShadowAtlas cube_array view when point shadows are active in this
+      // frame; otherwise the 1x1x6 fallback (cleared to 1.0 = fully lit).
+      const pointShadowAtlas = frameState.pointShadowAtlas;
+      const atlasViewMaybe = pointShadowAtlas?.isAllocated()
+        ? pointShadowAtlas.getAtlasView()
+        : null;
+      const b5View =
+        atlasViewMaybe !== null ? atlasViewMaybe : pipelineState.shadowAtlasFallbackTextureView;
+      // feat-20260625-spot-light-shadow-mapping M2 / w21 (D-1 fragment side +
+      // D-5): bind the real `spotShadowDepth` 2D atlas view (graph-owned) when
+      // spot shadows run this frame; otherwise the 1x1 depth fallback cleared to
+      // 1.0 (fully lit) — same `texture_depth_2d` shape as binding 3, so it
+      // satisfies the BGL without a dedicated spot fallback allocation. binding
+      // 9 always binds the real spotLightViewProj UBO (zeroed lanes are safe via
+      // the shadowAtlasTile >= 0 shader gate).
+      const graphSpotShadowView = graphTargets?.spotShadow;
+      const b8View =
+        graphSpotShadowView !== undefined
+          ? graphSpotShadowView
+          : pipelineState.shadowFallbackTextureView;
+      viewBindGroup = getOrCreateFromChain(
+        frameState.viewBindGroupCache,
+        [
+          pipelineState.viewUniformBuffer,
+          pipelineState.pointLightsBuffer,
+          pipelineState.spotLightsBuffer,
+          b3View,
+          shadowSampler,
+          b5View,
+          pipelineState.shadowParamsBuffer,
+          b8View,
+          pipelineState.pointsLinesViewBuffer ?? pipelineState.viewUniformBuffer,
+        ],
+        'view-main',
+        () => {
+          const viewBindGroupResult = internals.device.createBindGroup({
+            label: 'pbr-view-bg',
+            layout: pipelineState.viewBindGroupLayout,
+            entries: [
+              {
+                binding: 0,
+                resource: {
+                  kind: 'buffer',
+                  value: { buffer: pipelineState.viewUniformBuffer, size: VIEW_UNIFORM_BYTES },
+                },
               },
-            },
-            {
-              binding: 1,
-              resource: {
-                kind: 'buffer',
-                value: { buffer: pipelineState.pointLightsBuffer },
+              {
+                binding: 1,
+                resource: {
+                  kind: 'buffer',
+                  value: { buffer: pipelineState.pointLightsBuffer },
+                },
               },
-            },
-            {
-              binding: 2,
-              resource: {
-                kind: 'buffer',
-                value: { buffer: pipelineState.spotLightsBuffer },
+              {
+                binding: 2,
+                resource: {
+                  kind: 'buffer',
+                  value: { buffer: pipelineState.spotLightsBuffer },
+                },
               },
-            },
-            {
-              binding: 3,
-              resource: {
-                kind: 'textureView',
-                value: b3View,
+              {
+                binding: 3,
+                resource: {
+                  kind: 'textureView',
+                  value: b3View,
+                },
               },
-            },
-            {
-              binding: 4,
-              resource: {
-                kind: 'sampler',
-                value: pipelineState.perPassResources.shadowSampler,
+              {
+                binding: 4,
+                resource: {
+                  kind: 'sampler',
+                  value: shadowSampler,
+                },
               },
-            },
-            // feat-20260612-point-light-shadows-urp-hdrp Round-2 F-1:
-            // cube_array shadow atlas view (real ShadowAtlas when point
-            // shadows are active; else 1x1x6 fallback).
-            {
-              binding: 5,
-              resource: {
-                kind: 'textureView',
-                value: b5View,
+              // feat-20260612-point-light-shadows-urp-hdrp Round-2 F-1:
+              // cube_array shadow atlas view (real ShadowAtlas when point
+              // shadows are active; else 1x1x6 fallback).
+              {
+                binding: 5,
+                resource: {
+                  kind: 'textureView',
+                  value: b5View,
+                },
               },
-            },
-            // feat-20260612-point-light-shadows-urp-hdrp Round-2 F-1:
-            // shadowParams UBO (`array<vec4<f32>, 4>` = 64 B). Lane N
-            // stores `(near, far, 1/(far-near), 0)` for the point light
-            // with shadowAtlasLayer === N. Updated per frame from
-            // `pointShadowSnapshots` below.
-            {
-              binding: 6,
-              resource: {
-                kind: 'buffer',
-                value: { buffer: pipelineState.shadowParamsBuffer },
+              // feat-20260612-point-light-shadows-urp-hdrp Round-2 F-1:
+              // shadowParams UBO (`array<vec4<f32>, 4>` = 64 B). Lane N
+              // stores `(near, far, 1/(far-near), 0)` for the point light
+              // with shadowAtlasLayer === N. Updated per frame from
+              // `pointShadowSnapshots` below.
+              {
+                binding: 6,
+                resource: {
+                  kind: 'buffer',
+                  value: { buffer: pipelineState.shadowParamsBuffer },
+                },
               },
-            },
-            // feat-20260613-csm-cascaded-shadow-maps M5 / w28 (rebased to
-            // binding 7 on 2026-06-13 to make room for point-shadow 5/6):
-            // forward shaders declare binding 7 in common.wgsl (shared
-            // view BGL) but never reference it; only shadow_caster.wgsl
-            // reads it. Host writes a stable singleton buffer so every
-            // forward bind group entry stays populated.
-            {
-              binding: 7,
-              resource: {
-                kind: 'buffer',
-                value: { buffer: pipelineState.shadowCasterCascadeBuffer },
+              // feat-20260613-csm-cascaded-shadow-maps M5 / w28 (rebased to
+              // binding 7 on 2026-06-13 to make room for point-shadow 5/6):
+              // forward shaders declare binding 7 in common.wgsl (shared
+              // view BGL) but never reference it; only shadow_caster.wgsl
+              // reads it. Host writes a stable singleton buffer so every
+              // forward bind group entry stays populated.
+              {
+                binding: 7,
+                resource: {
+                  kind: 'buffer',
+                  value: { buffer: pipelineState.shadowCasterCascadeBuffer },
+                },
               },
-            },
-            // feat-20260625-spot-light-shadow-mapping M3 / w21 (D-5):
-            // spot shadow 2D atlas (real spotShadowDepth view when spot
-            // shadows run this frame, else the 1x1 depth fallback). Always-on.
-            {
-              binding: 8,
-              resource: {
-                kind: 'textureView',
-                value: b8View,
+              // feat-20260625-spot-light-shadow-mapping M3 / w21 (D-5):
+              // spot shadow 2D atlas (real spotShadowDepth view when spot
+              // shadows run this frame, else the 1x1 depth fallback). Always-on.
+              {
+                binding: 8,
+                resource: {
+                  kind: 'textureView',
+                  value: b8View,
+                },
               },
-            },
-            // feat-20260625-spot-light-shadow-mapping w25: the per-spot
-            // fragment-read lightViewProj matrices fold into the View UBO
-            // (binding 0, `view.spotLightViewProj`) — no standalone binding 9
-            // (WebGL2 fragment uniform-buffer budget). binding 8 is the last.
-          ],
-        });
-        if (!viewBindGroupResult.ok) throw viewBindGroupResult.error;
-        return viewBindGroupResult.value;
-      },
-      bindGroupCounts,
-    );
+              {
+                binding: 10,
+                resource: {
+                  kind: 'buffer',
+                  value: {
+                    buffer: pipelineState.pointsLinesViewBuffer ?? pipelineState.viewUniformBuffer,
+                    size: POINTS_LINES_VIEW_BYTES,
+                  },
+                },
+              },
+              // feat-20260625-spot-light-shadow-mapping w25: the per-spot
+              // fragment-read lightViewProj matrices fold into the View UBO
+              // (binding 0, `view.spotLightViewProj`) — no standalone binding 9
+              // (WebGL2 fragment uniform-buffer budget). binding 10 is the
+              // dedicated vertex-only Points/Lines viewport UBO.
+            ],
+          });
+          if (!viewBindGroupResult.ok) throw viewBindGroupResult.error;
+          return viewBindGroupResult.value;
+        },
+        bindGroupCounts,
+      );
+    }
 
     // M3 / w10 (D-3 hard constraint): use the inner `.buffer` as the
     // WeakMap chain key so the cache tracks the underlying GPU buffer
@@ -388,15 +414,12 @@ export function prepareFrameLighting(
   // pass can read the snapshot list during graph execute. Lazy-allocate the
   // cube_array atlas on first non-empty frame; zero-shadow scenes never
   // touch the GPU here (AC-09). The snapshot list is stable for the
-  // duration of recordFrame; the URP `addPointShadowPass` gate at
-  // buildGraph time reads the same list to decide whether to insert the
-  // shadow pass declaration into the graph.
+  // duration of recordFrame; its count is part of the typed topology key.
   frameState.pointShadowSnapshots = lights.pointShadow;
   // feat-20260625-spot-light-shadow-mapping M2 / w9 (D-2): pin the spot
   // snapshots for the spotShadowDepth caster pass closure. The spot atlas is
-  // a graph-owned color target (declared in urp-pipeline buildGraph), not a
-  // runtime ShadowAtlas, so no allocation happens here — the graph compile
-  // owns the depth texture lifetime. recordSpotShadowPass reads this list.
+  // a graph-owned typed target, not a runtime ShadowAtlas, so graph compilation
+  // owns the depth texture lifetime.
   frameState.spotShadowSnapshots = lights.spot;
   if (lights.pointShadow.length > 0) {
     if (frameState.pointShadowAtlas === null) {
@@ -593,7 +616,7 @@ export function warnZeroLightStandard(
     const env = (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process;
     if (env?.env?.NODE_ENV !== 'production') {
       console.warn(
-        '[forgeax] standard material renders black with 0 lights of any type (no Skylight, and directional + point + spot all empty); spawn at least one light (Skylight, DirectionalLight, PointLight, or SpotLight) or switch material to an unlit shader (Materials.unlit(...)). See AGENTS.md section Breaking changes 2026-05-19.',
+        '[forgeax] standard material renders black with 0 lights of every type (no Skylight, and directional + point + spot all empty); spawn at least one light (Skylight, DirectionalLight, PointLight, or SpotLight) or switch material to an unlit shader (Materials.unlit(...)). See AGENTS.md section Breaking changes 2026-05-19.',
       );
     }
   }
@@ -603,8 +626,9 @@ export function warnZeroLightStandard(
  * feat-20260704 M3/w18: HDRP per-frame CPU cluster binning + light-data /
  * cluster-grid / light-index-list / cluster-uniform / SSAO uniform buffer
  * uploads. Extracted verbatim from `recordFrame`. Runs only when the HDRP
- * pipeline is active and there is at least one punctual light; otherwise it is
- * a no-op (URP / SSAO-off paths untouched).
+ * pipeline is active. A zero-punctual frame explicitly clears the persistent
+ * cluster buffers so stale membership cannot leak across frames; direct and
+ * non-clustered paths remain untouched.
  *
  * feat-20260608-cluster-lighting M5 / w21 + M6 / w23 + r2 fix-up: fail-soft
  * semantics preserved verbatim — index-list-overflow and light-budget-exceeded
@@ -624,7 +648,45 @@ export function writeHdrpClusterAndSsaoBuffers(
   membershipBindGroupLayout: BindGroupLayout | null = null,
 ): void {
   const hdrpLightCount = pointLights.length + spotLights.length;
-  if (!(frameState.isHdrpActive && hdrpLightCount > 0)) return;
+  if (!frameState.isHdrpActive) return;
+  if (hdrpLightCount === 0) {
+    const grid = frameState.installedPipelineConfig?.clusterGrid ?? DEFAULT_CLUSTER_GRID;
+    const hdrpBuffers = getOrCreateHdrpBuffers(internals, grid);
+    if (hdrpBuffers === null) return;
+    const lightCapacity = hdrpBuffers.storageBuffer ? 256 : HDRP_UNIFORM_LIGHT_CAPACITY;
+    const clusterSsaoConfig = frameState.installedPipelineConfig?.ssao;
+    const clusterSsaoIntensity =
+      clusterSsaoConfig !== undefined && clusterSsaoConfig.enabled === true
+        ? (clusterSsaoConfig.intensity ?? 1.0)
+        : 0;
+    const clusterUniformPayload = packClusterUniform(
+      grid,
+      camera.near,
+      camera.far,
+      clusterSsaoIntensity,
+      0,
+      lightCapacity,
+    );
+    const clusterUniformUpload = internals.device.queue.writeBuffer(
+      hdrpBuffers.clusterUniformBuffer,
+      0,
+      new Uint8Array(clusterUniformPayload),
+    );
+    if (!clusterUniformUpload.ok) internals.errorRegistry.fire(clusterUniformUpload.error);
+    const clusterGridClear = internals.device.queue.writeBuffer(
+      hdrpBuffers.clusterGridBuffer,
+      0,
+      new Uint8Array(hdrpBuffers.clusterGridBytes),
+    );
+    if (!clusterGridClear.ok) internals.errorRegistry.fire(clusterGridClear.error);
+    const lightIndexListClear = internals.device.queue.writeBuffer(
+      hdrpBuffers.lightIndexListBuffer,
+      0,
+      new Uint8Array(hdrpBuffers.lightIndexListBytes),
+    );
+    if (!lightIndexListClear.ok) internals.errorRegistry.fire(lightIndexListClear.error);
+    return;
+  }
   const HDRP_LIGHT_BUDGET = 256;
   let effectivePointLights = pointLights;
   let effectiveSpotLights = spotLights;
@@ -663,8 +725,6 @@ export function writeHdrpClusterAndSsaoBuffers(
     gpuMembership = frameState.hdrpClusterMembershipBindGroup !== null;
   }
 
-  let attemptedTotal = 0;
-  let overflow = false;
   const { clusterGrid, gridX, gridY, gridZ, clusterGridBuf, lightIndexListBuf, lightIndexCount } =
     runHdrpClusterProfilePhase(profilePhase, 'record/scene-state/hdrp-cluster/binner', () => {
       const binnerProfile: ClusterBinProfileRunner | undefined =
@@ -690,20 +750,20 @@ export function writeHdrpClusterAndSsaoBuffers(
         profilePhase,
         'record/scene-state/hdrp-cluster/binner/input-preparation',
         () => {
-          const hdrpLights: Array<{ position: Float32Array; range: number }> = [];
+          const hdrpLights: Array<{ position: Vec3; range: number }> = [];
           for (const pl of effectivePointLights) {
             const range =
               Number.isFinite(pl.invRangeSquared) && pl.invRangeSquared > 0
                 ? Math.sqrt(1 / pl.invRangeSquared)
                 : 1000;
-            hdrpLights.push({ position: pl.position as unknown as Float32Array, range });
+            hdrpLights.push({ position: pl.position, range });
           }
           for (const sl of effectiveSpotLights) {
             const range =
               Number.isFinite(sl.invRangeSquared) && sl.invRangeSquared > 0
                 ? Math.sqrt(1 / sl.invRangeSquared)
                 : 1000;
-            hdrpLights.push({ position: sl.position as unknown as Float32Array, range });
+            hdrpLights.push({ position: sl.position, range });
           }
 
           const clusterGrid =
@@ -748,10 +808,7 @@ export function writeHdrpClusterAndSsaoBuffers(
         'record/scene-state/hdrp-cluster/binner/bin-core',
         () =>
           bin(
-            hdrpLights as unknown as Array<{
-              position: import('@forgeax/engine-math').Vec3;
-              range: number;
-            }>,
+            hdrpLights,
             viewMatrix,
             projMatrix,
             { x: gridX, y: gridY, z: gridZ },
@@ -785,8 +842,6 @@ export function writeHdrpClusterAndSsaoBuffers(
         clusterGridBuf.fill(0);
       }
 
-      attemptedTotal = binResult.ok ? binResult.value : binResult.error.detail.actual;
-      overflow = !binResult.ok;
       return {
         clusterGrid,
         gridX,
@@ -797,21 +852,6 @@ export function writeHdrpClusterAndSsaoBuffers(
         lightIndexCount: binResult.ok ? binResult.value : 0,
       };
     });
-
-  if (internals.membershipTiming?.usesCpuControl() === true) {
-    const clusterValueCount = gridX * gridY * gridZ * 2;
-    internals.membershipTiming.recordMembershipOutput({
-      schemaVersion: 1,
-      lightCount: effectiveLightCount,
-      grid: { x: gridX, y: gridY, z: gridZ },
-      clusterOffsetsAndCounts: Array.from(clusterGridBuf.subarray(0, clusterValueCount)),
-      attemptedTotal,
-      writtenTotal: lightIndexCount,
-      capacity: LIGHT_INDEX_LIST_CAPACITY,
-      overflow,
-      lightIndexPrefix: Array.from(lightIndexListBuf.subarray(0, lightIndexCount)),
-    });
-  }
 
   const hdrpPayload = runHdrpClusterProfilePhase(
     profilePhase,
@@ -883,20 +923,6 @@ export function writeHdrpClusterAndSsaoBuffers(
   runHdrpClusterProfilePhase(profilePhase, 'record/scene-state/hdrp-cluster/buffer-upload', () => {
     if (hdrpPayload !== null) {
       const { hdrpBuffers, lightDataUploadPayload, clusterUniformPayload } = hdrpPayload;
-      if (gpuMembership) {
-        internals.membershipTiming?.recordGpuMembershipSource({
-          clusterGridBuffer: hdrpBuffers.clusterGridBuffer,
-          clusterGridBytes: gridX * gridY * gridZ * 2 * 4,
-          lightIndexListBuffer: hdrpBuffers.lightIndexListBuffer,
-          lightIndexListBytes: Math.max(4, lightIndexCount * 4),
-          lightCount: effectiveLightCount,
-          grid: { x: gridX, y: gridY, z: gridZ },
-          attemptedTotal,
-          writtenTotal: lightIndexCount,
-          capacity: LIGHT_INDEX_LIST_CAPACITY,
-          overflow,
-        });
-      }
       const lightDataUpload = internals.device.queue.writeBuffer(
         hdrpBuffers.lightDataBuffer,
         0,
@@ -941,7 +967,7 @@ export function writeHdrpClusterAndSsaoBuffers(
     // ── feat-20260612-hdrp-ssao M1 / w6 + M7 / w33 ───────────────
     // Per-frame SSAO uniform write (plan-strategy D-1 + D-C):
     //   view + projection + inverseProjection at offsets 0/64/128 +
-    //   intensityPad (vec4 — x=intensity, yzw padding) at offset 192;
+    //   intensityPad (vec4 — x=intensity, y=radius, z=bias) at offset 192;
     //   total 256 B (matches host SSAO_UNIFORM_BYTES + WGSL struct).
     // Single writeBuffer covers all four fields so one queue entry
     // updates the entire UBO.
@@ -962,17 +988,19 @@ export function writeHdrpClusterAndSsaoBuffers(
         // Float32Array of 64 (256 B): 3 mat4 (48) + intensityPad vec4 (4)
         // + 12 trailing padding floats. We only fill the declared region.
         const ssaoUniformPayload = new Float32Array(64);
-        ssaoUniformPayload.set(sView as unknown as Float32Array, 0);
-        ssaoUniformPayload.set(sProj as unknown as Float32Array, 16);
-        ssaoUniformPayload.set(invProjOnly as unknown as Float32Array, 32);
-        // intensityPad.x = config.ssao.intensity ?? 1.0 (LO 5.9 default).
-        // yzw remain 0 from Float32Array zero-init.
+        ssaoUniformPayload.set(sView, 0);
+        ssaoUniformPayload.set(sProj, 16);
+        ssaoUniformPayload.set(invProjOnly, 32);
+        // intensityPad carries the same resolved values as the graph SSAO
+        // calc pass; this early write keeps the shared UBO valid before the
+        // typed fullscreen pass executes.
         const ssaoConfig = frameState.installedPipelineConfig?.ssao;
-        const intensity =
-          ssaoConfig !== undefined && ssaoConfig.enabled === true
-            ? (ssaoConfig.intensity ?? 1.0)
-            : 1.0;
-        ssaoUniformPayload[48] = intensity;
+        const parameters = getSsaoParameters(
+          ssaoConfig !== undefined && ssaoConfig.enabled === true ? ssaoConfig : undefined,
+        );
+        ssaoUniformPayload[48] = parameters.intensity;
+        ssaoUniformPayload[49] = parameters.radius;
+        ssaoUniformPayload[50] = parameters.bias;
 
         const ssaoUniformRes = internals.device.queue.writeBuffer(
           ssaoBufs.uniformBuffer,
@@ -1025,8 +1053,9 @@ export function resolveSkyboxActive(
   // GPU view is not ready. getCubemapGpuView returns undefined if the
   // equirect-to-cube upload has not completed yet.
   if (skybox !== undefined && tonemapActive) {
-    // biome-ignore lint/suspicious/noExplicitAny: branded Handle cast from snapshot raw number
-    const cubemapView = internals.gpuStore.getCubemapGpuView(skybox.equirectHandle as any);
+    const cubemapView = internals.gpuStore.getCubemapGpuView(
+      toShared<'EquirectAsset'>(skybox.equirectHandle),
+    );
     if (cubemapView === undefined) {
       // The skybox reuses the Skylight's equirect handle; the cubemap
       // projection is driven lazily by the single trigger in `driveLazy

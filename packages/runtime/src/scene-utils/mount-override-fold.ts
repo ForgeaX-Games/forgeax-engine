@@ -42,13 +42,13 @@
 
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import {
+  componentDefinition,
   type Component as EcsComponent,
   type EntityHandle,
-  fillComponentDefaults,
-  getRegisteredComponents,
-  RELATIONSHIP_COMPONENTS,
   type World,
 } from '@forgeax/engine-ecs';
+import { componentSchema } from '@forgeax/engine-ecs/internal';
+import { fillComponentDefaults } from '@forgeax/engine-ecs/projection';
 import type {
   Handle,
   LocalEntityId,
@@ -65,18 +65,11 @@ export interface FoldSceneInstanceState {
 }
 
 /** Component names that never participate in an authored baseline diff: the
- * essential row-identity column, and structural relationship holders/mirrors
- * (ChildOf/Children) whose live values are re-wired by instantiate, not
- * authored. Relationship components are added dynamically at module-eval time,
- * so the set is computed per call from RELATIONSHIP_COMPONENTS + Entity. */
+ * essential row-identity column, and structural hierarchy relationship
+ * holders/mirrors (ChildOf/Children) whose live values are re-wired by
+ * instantiate, not authored. */
 function excludedComponentNames(): Set<string> {
-  const excluded = new Set<string>(['Entity']);
-  for (const holder of RELATIONSHIP_COMPONENTS) {
-    excluded.add(holder.name);
-    const mirror = holder.relationship?.mirror;
-    if (mirror !== undefined) excluded.add(mirror);
-  }
-  return excluded;
+  return new Set<string>(['Entity', 'ChildOf', 'Children']);
 }
 
 /** Normalize an array-like (typed array or Array) to a plain array for
@@ -112,8 +105,9 @@ function baselineFields(
 ): Record<string, unknown> {
   const filled = fillComponentDefaults(comp, sourceRaw ?? {});
   const out: Record<string, unknown> = {};
-  for (const fieldName of Object.keys(comp.schema)) {
-    if (comp.fields[fieldName]?.transient) continue;
+  const fields = componentDefinition(comp).fields;
+  for (const fieldName of Object.keys(componentSchema(comp))) {
+    if (fields[fieldName]?.transient) continue;
     out[fieldName] = filled[fieldName];
   }
   return out;
@@ -133,9 +127,10 @@ function liveFields(
   if (!res.ok) return undefined;
   const val = res.value as Record<string, unknown>;
   const out: Record<string, unknown> = {};
-  const schema = comp.schema as Record<string, string>;
+  const fields = componentDefinition(comp).fields;
+  const schema = componentSchema(comp) as Record<string, string>;
   for (const fieldName of Object.keys(schema)) {
-    if (comp.fields[fieldName]?.transient) continue;
+    if (fields[fieldName]?.transient) continue;
     const fieldType = schema[fieldName];
     if (fieldType === 'entity' || fieldType === 'array<entity>') continue;
     out[fieldName] = normalize(val[fieldName]);
@@ -163,7 +158,7 @@ export function foldMountOverrides(world: World, state: FoldSceneInstanceState):
   }
 
   const excluded = excludedComponentNames();
-  const registered = getRegisteredComponents();
+  const registered = world.components.entries();
   const overrides: MountOverride[] = [];
 
   // Deterministic member order (localId ascending) so collect output is a pure
@@ -180,9 +175,9 @@ export function foldMountOverrides(world: World, state: FoldSceneInstanceState):
 
     for (const [compName, compToken] of registered) {
       if (excluded.has(compName)) continue;
-      if (compToken.transient) continue;
+      if (componentDefinition(compToken).policy.transient) continue;
       const comp = compToken as EcsComponent<string>;
-      if (Object.keys(comp.schema).length === 0) continue;
+      if (Object.keys(componentSchema(comp)).length === 0) continue;
 
       const live = liveFields(world, entity, comp);
       if (live === undefined) continue; // component absent live

@@ -1,5 +1,5 @@
 import type { EntityHandle } from '@forgeax/engine-ecs';
-import { World } from '@forgeax/engine-ecs';
+import { createWorldContext, World } from '@forgeax/engine-ecs';
 import { ChildOf, Name, scenePlugin, Transform } from '@forgeax/engine-scene';
 import type { AnimationClip, AnimationTargetIdValue, Handle } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
@@ -51,15 +51,15 @@ async function setupPlayer(
   graph: boolean,
 ): Promise<{ world: World; player: EntityHandle; target: EntityHandle }> {
   const world = new World();
-  expect((await scenePlugin().build(world)).ok).toBe(true);
-  expect((await animationPlugin().build(world)).ok).toBe(true);
+  await createWorldContext(world, [scenePlugin()]);
+  await createWorldContext(world, [animationPlugin(graph ? () => clip : undefined)]);
   const clipHandle = world.allocSharedRef('AnimationClip', clip);
   const player = world
     .spawn({ component: Transform, data: { pos: [10, 0, 0] } })
     .unwrap() as EntityHandle;
   world.addComponent(player, { component: Name, data: { value: 'Root' } }).unwrap();
   if (graph) {
-    const built = defineAnimationGraph((builder) => builder.clip(clipHandle));
+    const built = defineAnimationGraph((builder) => builder.clip('test/animation-clip-target'));
     expect(built.ok).toBe(true);
     if (!built.ok) throw built.error;
     const graphHandle = world.allocSharedRef('AnimationGraph', built.value);

@@ -1,13 +1,7 @@
 #define_import_path game_default::hit_flash
 
 #import forgeax_view::common::{view, meshes}
-
-struct HitFlashUniforms {
-  baseColor : vec4<f32>,
-  intensity : f32,
-};
-
-@group(1) @binding(0) var<uniform> hit_flash : HitFlashUniforms;
+#import forgeax_material::parameters::{material}
 
 struct VsIn {
   @location(0) pos : vec3<f32>,
@@ -30,5 +24,5 @@ fn fs_main() -> @location(0) vec4<f32> {
   // MaterialAsset uses the public premultiplied-alpha preset. Keep the
   // emitted RGB premultiplied so the blend equation remains correct for
   // arbitrary hit opacity values.
-  return vec4<f32>(hit_flash.baseColor.rgb * hit_flash.intensity * hit_flash.baseColor.a, hit_flash.baseColor.a);
+  return vec4<f32>(material.baseColor.rgb * material.intensity * material.baseColor.a, material.baseColor.a);
 }

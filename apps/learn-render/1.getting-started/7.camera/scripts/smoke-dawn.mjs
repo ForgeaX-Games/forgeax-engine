@@ -31,14 +31,14 @@ import { Update } from '@forgeax/engine-ecs';
 //          InputSnapshot from world.getResource('InputSnapshot') and
 //          accumulates yaw/pitch (+/-89 deg clamp) + reconstructs the
 //          camera direction (sphere -> Cartesian).
-//      (f) renderer.draw 300x with the synthetic input pump.
+//      (f) lease-bound renderer.draw 300x with the synthetic input pump.
 //   4. copyTextureToBuffer + mapAsync multi-pixel grid (5 sites) +
-//      verdict: (a) backend=webgpu (b) frames>=300 (c) at least one
+//      verdict: (a) Dawn device (b) frames>=300 (c) at least one
 //      meshed site distance to clear-color > eps (d) Renderer.onError
 //      RhiError count == 0.
 //
 // Output literals (preserved byte-for-byte for grep tooling):
-//   - `[learn-render-camera] backend=webgpu`
+//   - `[learn-render-camera] Standard pipeline active`
 //   - `[smoke] frames observed=<N>`
 //   - `[smoke] pixelSamples=<json>`
 //   - `[smoke] yawPitchFinal=<json>`
@@ -193,8 +193,7 @@ const ecsPkg = await import('@forgeax/engine-ecs');
 const { World } = ecsPkg;
 const inputPkg = await import('@forgeax/engine-input');
 const { INPUT_BACKEND_KEY, InputFrameStartScan, INPUT_SNAPSHOT_RESOURCE_KEY } = inputPkg;
-const enginePkg = await import('@forgeax/engine-runtime');
-const { createRenderer } = enginePkg;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Materials } = await import('@forgeax/engine-render');
 const { Camera, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
@@ -210,33 +209,30 @@ const ENGINE_MANIFEST = await buildEngineShaderManifest();
 const EMPTY_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
 
 let renderer;
+let assets;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: EMPTY_MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: EMPTY_MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  assets = constructed.value.assets;
 } catch (err) {
   console.error(
-    `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
+    `[smoke] FAIL - constructRuntimeRendererHost failed: ${err instanceof Error ? err.message : String(err)}`,
   );
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[learn-render-camera] backend=${renderer.backend}`);
-
-const assets = renderer.assets;
+console.log('[learn-render-camera] Standard pipeline active');
 if (!assets) {
-  console.error('[smoke] FAIL - AssetRegistry is null (renderer construction did not complete successfully)');
+  console.error('[smoke] FAIL - host assets are unavailable');
   process.exit(1);
 }
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => { if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint }); });
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 // The cube enters the world via the engine builtin HANDLE_CUBE directly
 // (no GUID round-trip); matHandle is minted from a user-tier column after
@@ -321,8 +317,9 @@ const cameraSystem = {
 };
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const lease = worldAttachment1.value;
 // LO 1.7 unlit material: mint a user-tier column handle from the unlit
 // MaterialAsset POD (M8 D-17). orange teaching colour (1, 0.5, 0.2).
 const matHandle = world.allocSharedRef('MaterialAsset', Materials.unlit([1.0, 0.5, 0.2, 1.0]));
@@ -380,8 +377,17 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
   // Note: world.update(1 / 60).unwrap() runs the frame-start scan system (refreshing
   // InputSnapshot) + the camera system (consuming it) in DAG order.
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-  if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  const r = renderer.draw({
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  });
+  if (!r.ok) {
+    console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  } else {
+    const completed = await r.value.completed;
+    if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+  }
   framesObserved++;
 }
 const device = sharedDevice;
@@ -470,8 +476,8 @@ const wallTotalMs = Date.now() - frameStart;
 console.log(`[smoke] wallTotalMs=${wallTotalMs} (budget=${SMOKE_WALL_BUDGET_MS})`);
 
 const failures = [];
-if (renderer.backend !== 'webgpu')
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (!sharedDevice)
+  failures.push('(a) Dawn device was not created by the host-owned Standard pipeline');
 if (framesObserved < SMOKE_MIN_FRAMES)
   failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (meshedRenderCount < 1) {
@@ -499,7 +505,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 4 criteria GREEN: backend=webgpu, frames=${framesObserved}, first-person sites above threshold=${meshedRenderCount}/${meshSiteNames.length}, RhiError count=0, wallTotalMs=${wallTotalMs}`,
+  `[smoke] PASS - 4 criteria GREEN: Standard pipeline, frames=${framesObserved}, first-person sites above threshold=${meshedRenderCount}/${meshSiteNames.length}, RhiError count=0, wallTotalMs=${wallTotalMs}`,
 );
 
 device.destroy?.();

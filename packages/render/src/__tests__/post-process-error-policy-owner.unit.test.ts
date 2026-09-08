@@ -1,9 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
-  PostProcessError as PublicPostProcessError,
-  type PostProcessErrorCode as PublicPostProcessErrorCode,
-} from '../index';
-import {
   PostProcessError,
   type PostProcessErrorCode,
   type PostProcessErrorDetail,
@@ -41,10 +37,10 @@ const evidence = [
       code: 'post-process-not-found',
       detail: { id: 'pkg::missing' },
     }),
-    expected: 'addFullscreenPass references a registered post-process id',
-    hint: "no post-process is registered for id 'pkg::missing'. First call renderer.postProcess.register('pkg::missing', {source, reads?}), then reference it via addFullscreenPass({shader: id}).",
+    expected: 'typed fullscreen plan references a registered post-process id',
+    hint: "no post-process is registered for id 'pkg::missing'. Register 'pkg::missing' with the feature host ({source, reads?}), then reference it from a typed fullscreen RenderFeaturePlan.",
     message:
-      "post-process: post-process-not-found (no post-process is registered for id 'pkg::missing'. First call renderer.postProcess.register('pkg::missing', {source, reads?}), then reference it via addFullscreenPass({shader: id}).)",
+      "post-process: post-process-not-found (no post-process is registered for id 'pkg::missing'. Register 'pkg::missing' with the feature host ({source, reads?}), then reference it from a typed fullscreen RenderFeaturePlan.)",
   },
   {
     code: 'fullscreen-input-not-found',
@@ -53,9 +49,9 @@ const evidence = [
       detail: { readsKey: 'hdrColor', passName: 'post-pass' },
     }),
     expected: 'reads key must be a graph-declared colorTarget with TEXTURE_BINDING',
-    hint: "fullscreen pass 'post-pass' references reads key 'hdrColor' but that key is not declared as a graph color target, or the target is not sampleable as a texture. First call graph.addColorTarget('hdrColor', {format, size}) (or check spelling) before addFullscreenPass(g, 'post-pass', { shader, color, reads: ['hdrColor'] }). If 'hdrColor' is a depth target, ensure it has TEXTURE_BINDING usage (0x04) and is declared via graph.addColorTarget. Consider switching pipeline if your pipeline does not expose a sampleable depth target.",
+    hint: "fullscreen pass 'post-pass' references reads key 'hdrColor' but that key is not declared as a graph color target, or the target is not sampleable as a texture. First declare graph color target 'hdrColor' with its format and size (or check spelling) before the typed fullscreen pass 'post-pass' reads it. If 'hdrColor' is a depth target, ensure it has TEXTURE_BINDING usage (0x04) and is declared via graph.addColorTarget. Consider switching pipeline if your pipeline does not expose a sampleable depth target.",
     message:
-      "post-process: fullscreen-input-not-found (fullscreen pass 'post-pass' references reads key 'hdrColor' but that key is not declared as a graph color target, or the target is not sampleable as a texture. First call graph.addColorTarget('hdrColor', {format, size}) (or check spelling) before addFullscreenPass(g, 'post-pass', { shader, color, reads: ['hdrColor'] }). If 'hdrColor' is a depth target, ensure it has TEXTURE_BINDING usage (0x04) and is declared via graph.addColorTarget. Consider switching pipeline if your pipeline does not expose a sampleable depth target.)",
+      "post-process: fullscreen-input-not-found (fullscreen pass 'post-pass' references reads key 'hdrColor' but that key is not declared as a graph color target, or the target is not sampleable as a texture. First declare graph color target 'hdrColor' with its format and size (or check spelling) before the typed fullscreen pass 'post-pass' reads it. If 'hdrColor' is a depth target, ensure it has TEXTURE_BINDING usage (0x04) and is declared via graph.addColorTarget. Consider switching pipeline if your pipeline does not expose a sampleable depth target.)",
   },
   {
     code: 'ssao-radius-non-positive',
@@ -104,14 +100,11 @@ const evidence = [
 ];
 
 describe('PostProcessError policy ownership', () => {
-  it('preserves the exact seven-code vocabulary and public type', () => {
+  it('preserves the exact seven-code vocabulary owned by this policy', () => {
     expect(expectedCodes).toHaveLength(7);
     expect(new Set(expectedCodes).size).toBe(7);
     expectTypeOf<PostProcessErrorCode>().toEqualTypeOf<ExpectedCodeUnion>();
     expectTypeOf<ExpectedCodeUnion>().toEqualTypeOf<PostProcessErrorCode>();
-    expectTypeOf<PublicPostProcessErrorCode>().toEqualTypeOf<PostProcessErrorCode>();
-    expect(PublicPostProcessError).toBe(PostProcessError);
-
     const acceptsCode = (code: PostProcessErrorCode): PostProcessErrorCode => code;
     // @ts-expect-error -- the policy-derived closed union rejects unknown codes.
     acceptsCode('post-process-not-real');

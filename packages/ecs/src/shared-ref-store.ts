@@ -5,9 +5,8 @@
 // by retain/release on the holder side - allocators (typically the asset
 // registry) call `alloc` once and let consumers retain/release as the asset
 // flows through ECS components and external systems. When rc transitions
-// 1 -> 0 the optional per-handle `onLastRelease` deleter fires (signal only -
-// the deleter observes; it does not own the lifecycle, so e.g. the asset
-// registry can drop GPU resources lazily).
+// 1 -> 0 the store publishes release evidence. External owners dispose their
+// payloads from their own lifecycle effects; ECS does not invoke callbacks.
 //
 // Companion to UniqueRefStore (1-holder-direct-release semantics). The two
 // stores share storage shape and code patterns; only the lifecycle differs:
@@ -31,8 +30,8 @@
 //
 // §tier boundary (feat-20260614 M6 D-15)
 //   This store manages ONLY user-tier slots (`slot >= BUILTIN_BASE`). Builtin
-//   asset payloads (HANDLE_CUBE=1 .. HANDLE_NINESLICE_QUAD=5) are process-
-//   static and live in `BuiltinAssetRegistry` (@forgeax/engine-runtime); they
+//   asset payloads in the builtin range are process-static and live in their
+//   authoring package; they
 //   are never reference-counted. `nextSlot` starts at `BUILTIN_BASE` so minted
 //   handles never collide with builtin slots, and alloc/retain/release/resolve
 //   fail-fast with `BuiltinSlotNotOwnedError` when handed a builtin slot.
@@ -44,8 +43,6 @@
 //                                  so resolve / retain can detect the
 //                                  released state via `payloads.has(raw)`.
 //   - `freeSlots: number[]`        - LIFO stack of recyclable slot indices.
-//   - `releaseCallbacks: Map<number, cb?>` - per-slot onLastRelease deleter,
-//                                  cleared before fire (mirrors UniqueRefStore).
 //   - `nextSlot`                   - bump counter for the never-recycled tail
 //                                  (starts at BUILTIN_BASE; user tier only).
 //
@@ -55,6 +52,7 @@
 //
 // Release path (D-1 codes):
 //   - resolve(h): err(SharedRefReleasedError)        if payload absent.
+//   - markChanged(h): publish an in-place payload mutation to subscribers.
 //   - retain(h):  err(SharedRefReleasedError)        if payload absent.
 //   - release(h): err(SharedRefDoubleReleaseError, rc=0) on rc=0 input.
 //   - any(builtin slot): err(BuiltinSlotNotOwnedError) (D-15).
@@ -81,9 +79,36 @@ import {
 import {
   BuiltinSlotNotOwnedError,
   SharedRefDoubleReleaseError,
+  SharedRefPayloadInvalidError,
   SharedRefReleasedError,
   SharedRefStaleError,
 } from './errors';
+
+const SHARED_REF_MUTATION_JOURNAL_CAPACITY = 4096;
+
+export interface SharedRefMutation {
+  readonly epoch: number;
+  readonly handle: number;
+}
+
+export interface SharedRefReleaseEvidence {
+  readonly payload: unknown;
+  readonly refcount: 0;
+  readonly generation: number;
+  readonly evidence: 'released';
+}
+
+export type SharedRefMutationRead =
+  | {
+      readonly status: 'ok';
+      readonly cursor: number;
+      readonly records: readonly SharedRefMutation[];
+    }
+  | {
+      readonly status: 'overflow';
+      readonly cursor: number;
+      readonly oldestAvailable: number;
+    };
 
 // MAX_SLOT is now imported from @forgeax/engine-types (codec SSOT, D-1).
 // The local constant is removed to avoid drift (AC-15).
@@ -94,19 +119,20 @@ import {
  * The producer (typically AssetRegistry) calls `alloc` once and owns the
  * "alloc-grant" rc=1; consumers (ECS schema fields, external systems) call
  * `retain` on each new holder and `release` when the holder drops. When rc
- * transitions 1 -> 0 the per-handle `onLastRelease` deleter (the third alloc
- * argument) fires once; the deleter observes the signal but does not
- * implicitly resurrect the slot (a fresh `alloc` returns a new handle).
+ * transitions 1 -> 0 the store publishes one structured release-evidence
+ * record; it does not invoke a user callback or own payload disposal.
  *
  * D-15: manages ONLY user-tier slots (`slot >= BUILTIN_BASE`). Builtin slots
  * (`< BUILTIN_BASE`) fail-fast with `BuiltinSlotNotOwnedError`.
  *
  * Public API:
- *   - alloc(target, payload, onLastRelease?) -> Handle<T, 'shared'> (rc=1)
+ *   - alloc(target, payload)        -> Handle<T, 'shared'> (rc=1)
  *   - intern(target, payload)        -> stable producer handle per target + object identity
  *   - resolve(handle)             -> Result<T, SharedRefReleasedError | SharedRefStaleError | BuiltinSlotNotOwnedError>
+ *   - markChanged(handle)         -> Result<void, SharedRefReleasedError | SharedRefStaleError | BuiltinSlotNotOwnedError>
+ *   - getMutationEpoch()          -> monotonic payload-mutation cursor
  *   - retain(handle)              -> Result<void, SharedRefReleasedError | SharedRefStaleError | BuiltinSlotNotOwnedError>
- *   - release(handle)             -> Result<void, SharedRefDoubleReleaseError | SharedRefStaleError | BuiltinSlotNotOwnedError>
+ *   - release(handle)             -> Result<release evidence | undefined, ...>
  *   - refcount(handle)            -> number (0 == released; debug + tests)
  *   - _liveCount()                -> live slot count (debug + inspector)
  */
@@ -114,13 +140,15 @@ export class SharedRefStore {
   private readonly payloads = new Map<number, unknown>();
   private readonly refcounts = new Map<number, number>();
   private readonly freeSlots: number[] = [];
-  private readonly releaseCallbacks = new Map<number, ((payload: unknown) => void) | undefined>();
   private readonly internedByTarget = new Map<string, WeakMap<object, number>>();
   private readonly internedKeys = new Map<
     number,
     { readonly target: string; readonly payload: object }
   >();
   private nextSlot = BUILTIN_BASE;
+  private mutationEpoch = 0;
+  private readonly mutationJournal: SharedRefMutation[] = [];
+  private readonly releaseJournal: SharedRefReleaseEvidence[] = [];
 
   /**
    * Generation table indexed by slot (D-6). Each entry tracks the current
@@ -134,9 +162,8 @@ export class SharedRefStore {
 
   /**
    * Allocate a fresh shared handle for `payload`, branded against `target`.
-   * Refcount starts at 1 (the alloc-grant). The optional `onLastRelease`
-   * per-handle deleter (D-10, mirrors UniqueRefStore.alloc) fires once when
-   * this handle's rc transitions 1 -> 0.
+   * Refcount starts at 1 (the alloc-grant). Nullish payloads are rejected
+   * before a slot or free-list is touched.
    *
    * The returned handle carries a generation tag welded via codec.pack
    * (D-8, OOS-2): first allocation gen=0 (AC-06), reused slot gen = the
@@ -147,12 +174,11 @@ export class SharedRefStore {
    * Minted slots are user-tier (`>= BUILTIN_BASE`); builtin slots are never
    * produced here (D-15).
    */
-  alloc<Target extends string, T = unknown>(
-    target: Target,
-    payload: T,
-    onLastRelease?: (payload: T) => void,
-  ): Handle<Target, 'shared'> {
+  alloc<Target extends string, T = unknown>(target: Target, payload: T): Handle<Target, 'shared'> {
     void target; // target is a phantom - tag flows only at the type level via Handle<Target,_>.
+    if (payload === null || payload === undefined) {
+      throw new SharedRefPayloadInvalidError(target, payload === null ? 'null' : 'undefined');
+    }
     const slot = this.freeSlots.pop() ?? this.nextSlot++;
     if (slot > MAX_SLOT) {
       throw new RangeError(
@@ -164,9 +190,6 @@ export class SharedRefStore {
     const raw = pack(slot, gen);
     this.payloads.set(raw, payload);
     this.refcounts.set(raw, 1);
-    if (onLastRelease !== undefined) {
-      this.releaseCallbacks.set(raw, onLastRelease as (payload: unknown) => void);
-    }
     return toShared(raw);
   }
 
@@ -235,6 +258,45 @@ export class SharedRefStore {
   }
 
   /**
+   * Publish that a live payload was mutated in place. Consumers that retain
+   * projections of shared payload data compare the monotonic epoch and
+   * explicitly refresh instead of rescanning every payload each frame.
+   */
+  markChanged<Target extends string>(
+    handle: Handle<Target, 'shared'>,
+  ): Result<void, SharedRefReleasedError | SharedRefStaleError | BuiltinSlotNotOwnedError> {
+    const resolved = this.resolve(handle);
+    if (!resolved.ok) return resolved;
+    if (this.mutationEpoch >= Number.MAX_SAFE_INTEGER) {
+      throw new RangeError('SharedRefStore mutation epoch exhausted');
+    }
+    this.mutationEpoch += 1;
+    this.mutationJournal.push({ epoch: this.mutationEpoch, handle: unwrapHandle(handle) });
+    if (this.mutationJournal.length > SHARED_REF_MUTATION_JOURNAL_CAPACITY) {
+      this.mutationJournal.shift();
+    }
+    return ok(undefined);
+  }
+
+  /** Current upper bound for explicitly published payload mutations. */
+  getMutationEpoch(): number {
+    return this.mutationEpoch;
+  }
+
+  /** Read exact changed handles after `cursor`; overflow requires consumer resync. */
+  readChangesSince(cursor: number): SharedRefMutationRead {
+    const oldestAvailable = this.mutationJournal[0]?.epoch ?? this.mutationEpoch + 1;
+    if (cursor < oldestAvailable - 1) {
+      return { status: 'overflow', cursor: this.mutationEpoch, oldestAvailable };
+    }
+    return {
+      status: 'ok',
+      cursor: this.mutationEpoch,
+      records: this.mutationJournal.filter((record) => record.epoch > cursor),
+    };
+  }
+
+  /**
    * Increment the refcount of a live shared handle. Returns
    * `err(shared-ref-released)` when the handle is not live - retain MUST
    * NOT resurrect a released slot (charter P3 explicit failure; would
@@ -262,12 +324,10 @@ export class SharedRefStore {
   }
 
   /**
-   * Decrement the refcount. When rc transitions 1 -> 0, the slot is dropped:
-   * payload + refcount entries removed, freelist gets the slot back, and the
-   * per-handle `onLastRelease` deleter (if any) fires once. Order mirrors
-   * UniqueRefStore.release: clean up ALL store state (including deleting the
-   * callback entry) BEFORE invoking the deleter, so a deleter that re-allocs
-   * gets a fresh slot and observes the post-drop refcount=0 for this handle.
+   * Decrement the refcount. When rc transitions 1 -> 0, the slot is dropped
+   * and one structured release-evidence record is published. The evidence
+   * captures the payload, zero refcount, next generation and `released` marker
+   * after the store has removed the live slot.
    *
    * Returns `err(shared-ref-double-release, rc=0)` when the handle has
    * already reached rc=0 (or was never live); `err(builtin-slot-not-owned)`
@@ -277,7 +337,10 @@ export class SharedRefStore {
    */
   release<Target extends string>(
     handle: Handle<Target, 'shared'>,
-  ): Result<void, SharedRefDoubleReleaseError | SharedRefStaleError | BuiltinSlotNotOwnedError> {
+  ): Result<
+    SharedRefReleaseEvidence | undefined,
+    SharedRefDoubleReleaseError | SharedRefStaleError | BuiltinSlotNotOwnedError
+  > {
     const raw = unwrapHandle(handle);
     if (raw < BUILTIN_BASE) return err(new BuiltinSlotNotOwnedError(raw));
     // Gen comparison runs FIRST — before rc read, before any mutation (q12).
@@ -296,15 +359,8 @@ export class SharedRefStore {
       this.refcounts.set(raw, rc - 1);
       return ok(undefined);
     }
-    // rc === 1 -> drop. Order (mirrors UniqueRefStore §release): the payload
-    // is captured on the stack so the deleter still observes the value; the
-    // callback + refcount + payload entries are dropped and the slot pushed to
-    // the freelist BEFORE the deleter fires. A re-entrant alloc inside the
-    // deleter gets a stable freelist + cannot overwrite this slot's (already
-    // deleted) callback. OOS-5: multi-callback ordering is not specified;
-    // per-handle deleter makes it moot (at most one deleter per slot).
-    const cb = this.releaseCallbacks.get(raw);
-    this.releaseCallbacks.delete(raw);
+    // rc === 1 -> drop. Capture the payload for release evidence before
+    // clearing the live slot; nullish payloads never enter the store.
     const payload = this.payloads.get(raw);
     const internedKey = this.internedKeys.get(raw);
     if (internedKey !== undefined) {
@@ -320,15 +376,28 @@ export class SharedRefStore {
     // (gen 255 is still usable; the bump to 256 triggers retire) the slot is
     // permanently retired — NOT pushed to freeSlots. This prevents handle
     // aliasing. Shares the isRetiredSlot SSOT predicate with EntityHandle.
-    this._generations[slot] = storeGen + 1;
-    if (!isRetiredSlot(this._generations[slot])) {
+    const generation = storeGen + 1;
+    this._generations[slot] = generation;
+    if (!isRetiredSlot(generation)) {
       this.freeSlots.push(slot);
     }
-    // else: slot retired (gen exceeded MAX_GEN) — never returns to freeSlots.
-    if (cb !== undefined) {
-      cb(payload);
+    // else: slot retired (gen exceeded MAX_GEN) - never returns to freeSlots.
+    const evidence = Object.freeze({
+      payload,
+      refcount: 0 as const,
+      generation,
+      evidence: 'released' as const,
+    });
+    this.releaseJournal.push(evidence);
+    if (this.releaseJournal.length > SHARED_REF_MUTATION_JOURNAL_CAPACITY) {
+      this.releaseJournal.shift();
     }
-    return ok(undefined);
+    return ok(evidence);
+  }
+
+  /** Read the bounded release evidence owned by this store. */
+  readReleaseEvidence(): readonly SharedRefReleaseEvidence[] {
+    return this.releaseJournal;
   }
 
   /**

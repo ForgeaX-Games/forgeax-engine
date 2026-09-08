@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,18 +54,16 @@ const { BLOOM_DISABLED, BLOOM_ENABLED, Camera } = await import('@forgeax/engine-
 const { buildBloom2dWorld } = await import(resolve(here, '..', 'dist', 'bloom-2d.mjs')).catch(async () => import(resolve(here, '..', 'src', 'bloom-2d.ts')));
 const manifestPath = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const manifestUrl = `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}`;
-const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: manifestUrl });
+const renderer = await createSmokeRenderer(createRenderer, canvas, {}, { shaderManifestUrl: manifestUrl });
 gpu.requestAdapter = originalRequestAdapter;
 const errors = [];
-renderer.onError((error) => errors.push(error));
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
+subscribeSmokeErrors(renderer, (error) => errors.push(error));
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const scene = buildBloom2dWorld(world);
-console.log(`[bloom-2d] backend=${renderer.backend} quads=${scene.quadCount} bright=${scene.brightCount}`);
+console.log(`[bloom-2d] backend=${rendererBackend(renderer)} quads=${scene.quadCount} bright=${scene.brightCount}`);
 
 async function capture() {
   await device.queue.onSubmittedWorkDone();
@@ -85,7 +84,7 @@ function draw(count) {
   let drawErrors = 0;
   for (let i = 0; i < count; i += 1) {
     world.update().unwrap();
-    if (!renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok) drawErrors += 1;
+    if (!drawSmokeFrame(renderer, world).ok) drawErrors += 1;
   }
   return drawErrors;
 }
@@ -98,7 +97,7 @@ const onErrors = draw(Math.max(1, Math.floor(frames / 3)));
 const onPixels = await capture();
 const remaining = frames - Math.floor(frames / 3) * 2;
 const tailErrors = draw(Math.max(0, remaining));
-const passNames = renderer.perFramePassNames;
+const passNames = renderer.inspect().perFramePassNames;
 
 let totalDiff = 0;
 let changedPixels = 0;
@@ -117,7 +116,7 @@ writeFileSync(resolve(artifactDir, 'bloom-2d-on.png'), writeReferencePng(onPixel
 console.log(`[smoke] frames=${frames} visiblePixels=${visiblePixels} bloomDiffMean=${diffMean.toFixed(4)} changedPixels=${changedPixels} errors=${errors.length + offErrors + onErrors + tailErrors} passes=${passNames.join(',')}`);
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`backend=${renderer.backend}`);
+if (rendererBackend(renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(renderer)}`);
 if (frames < 100) failures.push(`frames=${frames}`);
 if (visiblePixels < 100) failures.push(`visiblePixels=${visiblePixels}`);
 if (diffMean <= 0.25 || changedPixels <= 20) failures.push(`bloomDiffMean=${diffMean.toFixed(4)} changedPixels=${changedPixels}`);

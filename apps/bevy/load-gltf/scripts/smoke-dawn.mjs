@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, rendererBackend, subscribeSmokeErrors } from '../../scripts/renderer-smoke.mjs';
 // Dawn smoke for the Bevy load_gltf reproduction.
 
 import { readFileSync } from 'node:fs';
@@ -58,42 +59,33 @@ const canvas = {
 };
 
 const manifest = readFileSync(resolve(appRoot, 'dist', 'shaders', 'manifest.json'), 'utf8');
-const { World } = await import('@forgeax/engine-ecs');
+const { World, createWorldContext } = await import('@forgeax/engine-ecs');
 const { createRenderer } = await import('@forgeax/engine-runtime');
-const { DirectionalLight } = await import('@forgeax/engine-render');
-const { Transform } = await import('@forgeax/engine-scene');
-const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+const { DirectionalLight, renderComponentsPlugin } = await import('@forgeax/engine-render');
+const { Transform, scenePlugin, worldInstantiateScene } = await import('@forgeax/engine-scene');
 const { gltfDocToSceneAsset, meshIrToMeshAsset, parseGltf, toMaterialAsset } = await import('@forgeax/engine-gltf');
 
-const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: `data:application/json,${encodeURIComponent(manifest)}` });
-renderer.onError((error) => errors.push(error));
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
-const assets = renderer.assets;
-if (!assets) throw new Error('AssetRegistry is null');
-
+const renderer = await createSmokeRenderer(
+  createRenderer,
+  canvas,
+  {},
+  { shaderManifestUrl: `data:application/json,${encodeURIComponent(manifest)}` },
+);
+subscribeSmokeErrors(renderer, (error) => errors.push(error));
 const gltfPath = resolve(root, 'apps/hello/gltf/assets/box.gltf');
-const metaPath = resolve(root, 'apps/hello/gltf/assets/box.gltf.meta.json');
 const docResult = await parseGltf(JSON.parse(readFileSync(gltfPath, 'utf8')), async () => {
   throw new Error('unexpected external buffer');
 }, gltfPath);
 if (!docResult.ok) throw new Error(`parseGltf failed: ${docResult.error.code}`);
-const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
-const guidFor = (kind) => {
-  const raw = meta.subAssets.find((entry) => entry.kind === kind)?.guid;
-  if (!raw) throw new Error(`missing ${kind} GUID`);
-  const result = AssetGuid.parse(raw);
-  if (!result.ok) throw new Error(`invalid ${kind} GUID`);
-  return result.value;
-};
-const mesh = meshIrToMeshAsset(docResult.value.meshes);
+const meshResult = meshIrToMeshAsset(docResult.value.meshes);
+if (!meshResult.ok) throw meshResult.error;
+const mesh = meshResult.value;
 const materialIr = docResult.value.materials[0];
 if (!materialIr) throw new Error('glTF has no material');
 const material = toMaterialAsset(materialIr);
-assets.catalog(guidFor('mesh'), mesh);
-assets.catalog(guidFor('material'), material);
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+await createWorldContext(world, [renderComponentsPlugin(), scenePlugin()]);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const meshHandle = world.allocSharedRef('MeshAsset', mesh);
 const materialHandle = world.allocSharedRef('MaterialAsset', material);
@@ -101,10 +93,7 @@ const scene = gltfDocToSceneAsset(docResult.value, {
   meshHandles: new Map([[0, meshHandle]]),
   materialHandles: new Map([[0, materialHandle]]),
 });
-assets.catalog(guidFor('scene'), scene);
-const sceneResult = await assets.loadByGuid(guidFor('scene'));
-if (!sceneResult.ok) throw new Error(`loadByGuid failed: ${sceneResult.error.code}`);
-const instanceResult = assets.instantiate(world.allocSharedRef('SceneAsset', sceneResult.value), world);
+const instanceResult = worldInstantiateScene(world, world.allocSharedRef('SceneAsset', scene));
 if (!instanceResult.ok) throw new Error(`instantiate failed: ${instanceResult.error.code}`);
 world.spawn(
   { component: Transform, data: { pos: [1.5, 2.5, 2.5], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
@@ -137,14 +126,18 @@ async function meanLuma() {
 let frames = 0;
 for (; frames < minFrames; frames += 1) {
   world.update().unwrap();
-  const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const result = renderer.draw({
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  });
   if (!result.ok) errors.push(result.error);
 }
 const luma = await meanLuma();
-console.log(`[bevy-load-gltf] backend=${renderer.backend}`);
+console.log(`[bevy-load-gltf] backend=${rendererBackend(renderer)}`);
 console.log(`[smoke] frames observed=${frames} meanLuma=${luma.toFixed(4)} sceneEntities=${scene.entities.length}`);
-if (renderer.backend !== 'webgpu' || frames < minFrames || luma <= 0.02 || errors.length > 0) {
-  console.error(`[smoke] FAIL - backend=${renderer.backend} frames=${frames} meanLuma=${luma.toFixed(4)} errors=${errors.map((error) => error.code).join(',')}`);
+if (rendererBackend(renderer) !== 'webgpu' || frames < minFrames || luma <= 0.02 || errors.length > 0) {
+  console.error(`[smoke] FAIL - backend=${rendererBackend(renderer)} frames=${frames} meanLuma=${luma.toFixed(4)} errors=${errors.map((error) => error.code).join(',')}`);
   process.exit(1);
 }
 console.log('[smoke] PASS - real glTF parsed, SceneAsset instantiated, and rendered for the full frame gate');

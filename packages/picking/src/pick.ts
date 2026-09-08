@@ -27,25 +27,19 @@
 // always exists on a Transform-bearing entity). The camera view is
 // `mat4.invert(Transform.world)`; the candidate AABB is the local AABB
 // transformed by `Transform.world` directly. The world mat4 is read through the
-// M1 column-level array view (`_getArrayView`), zero `{}` materialization.
+// M1 row-level access, zero `{}` materialization.
 //
 // Related: requirements in-scope #5/#6/#7 + AC-05..AC-11; plan-strategy D-3 / D-6 / 5.3;
-//          research Finding 4 (local->world AABB) + Finding 5 (entity-id via _getGraph).
+//          research Finding 4 (local->world AABB) + Finding 5 (entity-id via query rows).
 
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
-import { Entity } from '@forgeax/engine-ecs';
 import { box3, ray, type Vec3Like, vec3 } from '@forgeax/engine-math';
 import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
-import {
-  computeScreenRay,
-  readWorldMatrix,
-  type TableLike,
-  type WorldInternalView,
-} from './pick-core';
+import { computeScreenRay, readWorldMatrix } from './pick-core';
 
 /**
  * Result of a successful screen-to-entity pick.
@@ -100,62 +94,40 @@ export function pick(
   if (screenRay === undefined) return undefined;
   const r = screenRay.ray;
 
-  const worldInternal = world as WorldInternalView;
-
-  // --- walk renderable archetypes (Transform + MeshFilter + MeshRenderer) ---
-  // The ids are the global token.id; archetypes lacking the column are skipped
-  // by the `componentIds.includes` guards below, so unregistered components
-  // naturally yield an empty walk (D-2).
-
-  const graph = (worldInternal as unknown as { _getGraph(): { tables: TableLike[] } })._getGraph();
+  const query = world.query({ read: [Transform, MeshFilter, MeshRenderer] }).unwrap();
 
   const worldAabb = box3.create();
   let bestDistance = Number.POSITIVE_INFINITY;
   let bestEntity: EntityHandle | undefined;
 
-  for (const table of graph.tables) {
-    if (!table || table.size === 0) continue;
-    if (!table.components.some((c) => c.id === MeshRenderer.id)) continue;
-    if (!table.components.some((c) => c.id === MeshFilter.id)) continue;
-    if (!table.components.some((c) => c.id === Transform.id)) continue;
+  for (const row of query) {
+    const assetHandleRaw = Math.round(row.get(MeshFilter).assetHandle as number);
+    if (assetHandleRaw === 0) continue;
+    const meshRes = resolveAssetHandle<MeshAsset>(world, toShared<'MeshAsset'>(assetHandleRaw));
+    if (!meshRes.ok) continue;
+    const localAabb = meshRes.value.aabb;
+    if (localAabb === undefined) continue;
+    // Inverted-infinity empty box (mesh without positions): not pickable.
+    if ((localAabb[0] as number) > (localAabb[3] as number)) continue;
 
-    const mfCols = table.storage.get(MeshFilter.id)?.fields;
-    if (!mfCols) continue;
-    const assetHandleView = mfCols.get('assetHandle')?.view as Uint32Array | undefined;
-    if (!assetHandleView) continue;
+    // read the packed Entity for this row from the essential id=0 Entity
+    // column (`self` field); the column exists on every archetype.
+    const entity = row.entity;
 
-    for (let i = 0; i < table.size; i++) {
-      const assetHandleRaw = Math.round(assetHandleView[i] ?? 0);
-      if (assetHandleRaw === 0) continue;
-      const meshRes = resolveAssetHandle<MeshAsset>(world, toShared<'MeshAsset'>(assetHandleRaw));
-      if (!meshRes.ok) continue;
-      const localAabb = meshRes.value.aabb;
-      if (localAabb === undefined) continue;
-      // Inverted-infinity empty box (mesh without positions): not pickable.
-      if ((localAabb[0] as number) > (localAabb[3] as number)) continue;
+    // local AABB -> world AABB using the resolved Transform.world mat4
+    // directly (feat-20260601 D-3: no compose from decomposed TRS).
+    const entityWorld = readWorldMatrix(world, entity);
+    if (entityWorld === undefined) continue;
+    box3.transformBox3(
+      worldAabb,
+      localAabb,
+      entityWorld as unknown as Parameters<typeof box3.transformBox3>[2],
+    );
 
-      // read the packed Entity for this row from the essential id=0 Entity
-      // column (`self` field); the column exists on every archetype.
-      const entitySelfView = table.storage.get(Entity.id)?.fields.get('self')?.view as
-        | Uint32Array
-        | undefined;
-      const entity = (entitySelfView?.[i] ?? 0) as EntityHandle;
-
-      // local AABB -> world AABB using the resolved Transform.world mat4
-      // directly (feat-20260601 D-3: no compose from decomposed TRS).
-      const entityWorld = readWorldMatrix(worldInternal, entity);
-      if (entityWorld === undefined) continue;
-      box3.transformBox3(
-        worldAabb,
-        localAabb,
-        entityWorld as unknown as Parameters<typeof box3.transformBox3>[2],
-      );
-
-      const result = ray.rayAabbIntersects(r, worldAabb);
-      if (result.hit && result.tmin < bestDistance) {
-        bestDistance = result.tmin;
-        bestEntity = entity;
-      }
+    const result = ray.rayAabbIntersects(r, worldAabb);
+    if (result.hit && result.tmin < bestDistance) {
+      bestDistance = result.tmin;
+      bestEntity = entity;
     }
   }
 

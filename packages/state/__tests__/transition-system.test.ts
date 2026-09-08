@@ -17,20 +17,33 @@ import { Update } from '@forgeax/engine-ecs';
 // - plan-strategy D-6: anchor constant literals
 
 import { describe, expect, it } from 'vitest';
-import { defineComponent, type EntityHandle, resolveComponent, World } from '@forgeax/engine-ecs';
+import { defineComponent, Entity, type EntityHandle, World } from '@forgeax/engine-ecs';
+import { ChildOf, Children, worldInstantiateScene } from '@forgeax/engine-scene';
 import { defineState } from '../src/define-state';
 import { stateResourceKey, nextStateResourceKey, previousStateResourceKey } from '../src/resources';
 import { registerStatesPlugin } from '../src/register-plugin';
 import { setNextState, setNextStateForce, getState, getPreviousState } from '../src/set-next-state';
+import { addOnEnter } from '../src/on-enter-on-exit';
 import { despawnOnExit, despawnOnEnter } from '../src/scoped-component';
 
 const LevelId = defineState('LevelId', ['main-menu', 'tutorial', 'street-a'] as const);
 const GameMode = defineState('GameMode', ['menu', 'playing'] as const);
+const M29Primary = defineState('M29Primary', ['idle', 'ready'] as const);
+const M29Later = defineState('M29Later', ['cold', 'hot'] as const);
+const M41Primary = defineState('M41Primary', ['main-menu', 'tutorial'] as const);
+const M41Independent = defineState('M41Independent', ['cold', 'warm'] as const);
 
 function makeWorld(): World {
   const world = new World();
   registerStatesPlugin(world);
   return world;
+}
+
+function resolveWorldComponent(world: World, name: string) {
+  if (name === 'Entity') return Entity;
+  const component = world.components.resolve(name);
+  if (component === undefined) throw new Error(`Component ${name} is not registered`);
+  return component;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -85,9 +98,9 @@ describe('transitionStatesSystem', () => {
     expect(s.ok && s.value).toBe('main-menu');
 
     // Entities are still alive (world.get succeeds without StaleEntityError)
-    const r1 = world.get(e1, resolveComponent('Entity')!);
+    const r1 = world.get(e1, resolveWorldComponent(world, 'Entity'));
     expect(r1.ok).toBe(true);
-    const r2 = world.get(e2, resolveComponent('Entity')!);
+    const r2 = world.get(e2, resolveWorldComponent(world, 'Entity'));
     expect(r2.ok).toBe(true);
 
     // NextState remains undefined
@@ -112,7 +125,7 @@ describe('transitionStatesSystem', () => {
     expect(s.ok && s.value).toBe('main-menu');
 
     // Entity NOT despawned — same-state no-op
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
     const eData = world.get(entity, LevelScoped);
     expect(eData.ok).toBe(true);
 
@@ -143,7 +156,7 @@ describe('transitionStatesSystem', () => {
 
     // Entity with despawnOnExit(main-menu) IS despawned because force=true
     // runs the full transition logic including scope-despawn
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
     const eData = world.get(entity, LevelScoped);
     expect(eData.ok).toBe(false);
 
@@ -165,7 +178,7 @@ describe('transitionStatesSystem', () => {
     world.update(1 / 60).unwrap();
 
     // Entity should be despawned
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
     const result = world.get(entity, LevelScoped);
     expect(result.ok).toBe(false);
   });
@@ -182,7 +195,7 @@ describe('transitionStatesSystem', () => {
     world.update(1 / 60).unwrap();
 
     // Entity survives — we entered 'tutorial', not left it
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
     const result = world.get(entity, LevelScoped);
     expect(result.ok).toBe(true);
   });
@@ -199,7 +212,7 @@ describe('transitionStatesSystem', () => {
     world.update(1 / 60).unwrap();
 
     // Entity should be despawned
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
     const result = world.get(entity, LevelScoped);
     expect(result.ok).toBe(false);
   });
@@ -216,7 +229,7 @@ describe('transitionStatesSystem', () => {
     world.update(1 / 60).unwrap();
 
     // Entity survives — we left 'main-menu' but scoped to 'tutorial'-enter
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
     const result = world.get(entity, LevelScoped);
     expect(result.ok).toBe(true);
   });
@@ -227,12 +240,12 @@ describe('transitionStatesSystem', () => {
     // Entity A: despawn when leaving 'main-menu'
     const eA = world.spawn().unwrap();
     despawnOnExit(world, eA, LevelId, 'main-menu');
-    expect(world.get(eA, resolveComponent('__scopedTo__LevelId')!).ok).toBe(true);
+    expect(world.get(eA, resolveWorldComponent(world, '__scopedTo__LevelId')).ok).toBe(true);
 
     // Entity B: despawn when entering 'tutorial'
     const eB = world.spawn().unwrap();
     despawnOnEnter(world, eB, LevelId, 'tutorial');
-    expect(world.get(eB, resolveComponent('__scopedTo__LevelId')!).ok).toBe(true);
+    expect(world.get(eB, resolveWorldComponent(world, '__scopedTo__LevelId')).ok).toBe(true);
 
     // Entity C: no scope (should always survive)
     const eC = world.spawn().unwrap();
@@ -241,7 +254,7 @@ describe('transitionStatesSystem', () => {
     setNextState(world, LevelId, 'tutorial');
     world.update(1 / 60).unwrap();
 
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
 
     // A: despawned (exit main-menu)
     expect(world.get(eA, LevelScoped).ok).toBe(false);
@@ -250,7 +263,7 @@ describe('transitionStatesSystem', () => {
     expect(world.get(eB, LevelScoped).ok).toBe(false);
 
     // C: alive (no scope)
-    expect(world.get(eC, resolveComponent('Entity')!).ok).toBe(true);
+    expect(world.get(eC, resolveWorldComponent(world, 'Entity')).ok).toBe(true);
   });
 
   it('transition ordering: PreviousState written BEFORE State flipped', () => {
@@ -345,8 +358,8 @@ describe('AC-18: multi-token independence', () => {
     setNextState(world, LevelId, 'tutorial');
     world.update(1 / 60).unwrap();
 
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
-    const ModeScoped = resolveComponent('__scopedTo__GameMode')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
+    const ModeScoped = resolveWorldComponent(world, '__scopedTo__GameMode');
 
     // Entity A (LevelId scoped) — despawned
     expect(world.get(eA, LevelScoped).ok).toBe(false);
@@ -388,7 +401,7 @@ describe('AC-18: multi-token independence', () => {
     world.update(1 / 60).unwrap();
 
     // Entity survives — same-state no-op
-    const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
+    const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
     expect(world.get(entity, LevelScoped).ok).toBe(true);
 
     // Both states at their defaults
@@ -396,6 +409,151 @@ describe('AC-18: multi-token independence', () => {
     expect(s1.ok && s1.value).toBe('main-menu');
     const s2 = getState(world, GameMode);
     expect(s2.ok && s2.value).toBe('menu');
+  });
+});
+
+describe('M29: callback partial commit poisons the World', () => {
+  it('keeps the committed first token, aborts the later token, and rejects future frames', () => {
+    const world = makeWorld();
+    const primaryExit = world.spawn().unwrap();
+    const primaryEnter = world.spawn().unwrap();
+    despawnOnExit(world, primaryExit, M29Primary, 'idle');
+    despawnOnEnter(world, primaryEnter, M29Primary, 'ready');
+
+    const fault = new Error('m29 callback fault');
+    let faultRuns = 0;
+    const removeFault = addOnEnter(M29Primary, 'ready', () => {
+      faultRuns += 1;
+      throw fault;
+    });
+
+    setNextState(world, M29Primary, 'ready');
+    setNextState(world, M29Later, 'hot');
+
+    let thrown: unknown;
+    try {
+      world.update(1 / 60).unwrap();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toMatchObject({
+      code: 'system-failed',
+      detail: { cause: fault, systemName: 'transitionStates', schedule: 'Update' },
+    });
+    expect(faultRuns).toBe(1);
+    expect(getState(world, M29Primary)).toMatchObject({ ok: true, value: 'ready' });
+    expect(getPreviousState(world, M29Primary)).toMatchObject({ ok: true, value: 'idle' });
+    expect(getState(world, M29Later)).toMatchObject({ ok: true, value: 'cold' });
+    expect(world.get(primaryExit, Entity).ok).toBe(false);
+    expect(world.get(primaryEnter, Entity).ok).toBe(false);
+
+    expect(world.execution.health).toBe('poisoned');
+    const rejected = world.update(1 / 60);
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe('world-poisoned');
+    removeFault();
+  });
+});
+
+describe('M41: invalid variant atomic refusal', () => {
+  it('leaves the same World unchanged, then permits one valid transition and cleanup', () => {
+    const world = makeWorld();
+    const exitEntity = world.spawn().unwrap();
+    const enterEntity = world.spawn().unwrap();
+    despawnOnExit(world, exitEntity, M41Primary, 'main-menu');
+    despawnOnEnter(world, enterEntity, M41Primary, 'tutorial');
+
+    let callbackRuns = 0;
+    let repairedEntity: EntityHandle | undefined;
+    const removeCallback = addOnEnter(M41Primary, 'tutorial', (w) => {
+      callbackRuns += 1;
+      repairedEntity = w.spawn().unwrap();
+      despawnOnExit(w, repairedEntity, M41Primary, 'tutorial');
+    });
+
+    const executionSignature = () => {
+      const inspection = world.inspect();
+      return {
+        systems: inspection.systems.map((system) => ({ name: system.name, sets: [...system.sets] })),
+        schedules: inspection.schedules.map((schedule) => ({
+          name: schedule.schedule.name,
+          systems: schedule.systems.map((system) => ({ name: system.name, sets: [...system.sets] })),
+        })),
+        resourceKeys: [...inspection.resourceKeys].sort(),
+      };
+    };
+
+    const before = {
+      entityCount: world.inspect().entityCount,
+      execution: executionSignature(),
+      level: getState(world, M41Primary),
+      previousLevel: getPreviousState(world, M41Primary),
+      independent: getState(world, M41Independent),
+      previousIndependent: getPreviousState(world, M41Independent),
+    };
+    const invalid = String('m41-runtime-invalid');
+    const refused = setNextState(world, M41Primary, invalid as never);
+    const refusedForce = setNextStateForce(world, M41Primary, invalid as never);
+
+    expect(refused.ok).toBe(false);
+    expect(refusedForce.ok).toBe(false);
+    expect((refused.error as { code: string; detail: unknown }).code).toBe('invalid-variant');
+    expect((refused.error as { code: string; detail: unknown }).detail).toEqual({
+      code: 'invalid-variant',
+      name: 'M41Primary',
+      got: invalid,
+      valid: ['main-menu', 'tutorial'],
+    });
+    expect((refusedForce.error as { code: string; detail: unknown }).detail).toEqual({
+      code: 'invalid-variant',
+      name: 'M41Primary',
+      got: invalid,
+      valid: ['main-menu', 'tutorial'],
+    });
+    expect(world.getResource<{ value: number; force: boolean } | undefined>(nextStateResourceKey(M41Primary))).toBeUndefined();
+    expect(world.inspect().entityCount).toBe(before.entityCount);
+    expect(executionSignature()).toEqual(before.execution);
+    expect(getState(world, M41Primary)).toEqual(before.level);
+    expect(getPreviousState(world, M41Primary)).toEqual(before.previousLevel);
+    expect(getState(world, M41Independent)).toEqual(before.independent);
+    expect(getPreviousState(world, M41Independent)).toEqual(before.previousIndependent);
+    expect(callbackRuns).toBe(0);
+    expect(world.get(exitEntity, Entity).ok).toBe(true);
+    expect(world.get(enterEntity, Entity).ok).toBe(true);
+
+    world.update(1 / 60).unwrap();
+    expect(world.getResource<{ value: number; force: boolean } | undefined>(nextStateResourceKey(M41Primary))).toBeUndefined();
+    expect(getState(world, M41Primary)).toMatchObject({ ok: true, value: 'main-menu' });
+    expect(getPreviousState(world, M41Primary)).toMatchObject({ ok: true, value: 'main-menu' });
+    expect(callbackRuns).toBe(0);
+    expect(world.get(exitEntity, Entity).ok).toBe(true);
+    expect(world.get(enterEntity, Entity).ok).toBe(true);
+
+    setNextState(world, M41Primary, 'tutorial');
+    setNextState(world, M41Independent, 'warm');
+    world.update(1 / 60).unwrap();
+    expect(getState(world, M41Primary)).toMatchObject({ ok: true, value: 'tutorial' });
+    expect(getPreviousState(world, M41Primary)).toMatchObject({ ok: true, value: 'main-menu' });
+    expect(getState(world, M41Independent)).toMatchObject({ ok: true, value: 'warm' });
+    expect(getPreviousState(world, M41Independent)).toMatchObject({ ok: true, value: 'cold' });
+    expect(callbackRuns).toBe(1);
+    expect(world.get(exitEntity, Entity).ok).toBe(false);
+    expect(world.get(enterEntity, Entity).ok).toBe(false);
+    expect(repairedEntity).toBeDefined();
+    expect(repairedEntity === undefined ? false : world.get(repairedEntity, Entity).ok).toBe(true);
+    expect(world.getResource<{ value: number; force: boolean } | undefined>(nextStateResourceKey(M41Primary))).toBeUndefined();
+
+    setNextState(world, M41Primary, 'main-menu');
+    world.update(1 / 60).unwrap();
+    expect(repairedEntity === undefined ? false : world.get(repairedEntity, Entity).ok).toBe(false);
+    setNextStateForce(world, M41Primary, 'main-menu');
+    world.update(1 / 60).unwrap();
+    expect(repairedEntity === undefined ? false : world.get(repairedEntity, Entity).ok).toBe(false);
+    expect(callbackRuns).toBe(1);
+    expect(world.getResource<{ value: number; force: boolean } | undefined>(nextStateResourceKey(M41Primary))).toBeUndefined();
+
+    removeCallback();
   });
 });
 
@@ -412,41 +570,6 @@ describe('AC-18: multi-token independence', () => {
 //      linkedSpawn cascade per plan-strategy D-2.
 // ──────────────────────────────────────────────────────────────────────────────
 
-// Define ChildOf/Children components locally (state package has no runtime dep).
-// instantiateScene resolves 'ChildOf' by name; linkedSpawn=true enables cascade.
-const Children = defineComponent('Children', { entities: { type: 'array<entity>' } });
-const ChildOf = defineComponent(
-  'ChildOf',
-  { parent: { type: 'entity' } },
-  {
-    relationship: {
-      mirror: 'Children',
-      field: 'entities',
-      exclusive: true,
-      linkedSpawn: true,
-    },
-  },
-);
-
-// Mirror must be defined before holder per relationship component order rule.
-const TestChildren = defineComponent('TestChildren', { entities: { type: 'array<entity>' } });
-
-// Define a test-local relationship component mirroring ChildOf semantics: the
-// holder points to `parent`, and the engine mirrors the holder into the parent's
-// TestChildren.entities field. linkedSpawn=true (post-M0 flip default).
-const TestChild = defineComponent(
-  'TestChild',
-  { parent: { type: 'entity' } },
-  {
-    relationship: {
-      mirror: 'TestChildren',
-      field: 'entities',
-      exclusive: true,
-      linkedSpawn: true,
-    },
-  },
-);
-
 describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
   it('scene root with despawnOnExit -> all ChildOf children cascade-despawned', () => {
     const world = new World();
@@ -455,7 +578,7 @@ describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
     // Build and instantiate a simple scene.
     const nodes: SceneEntity[] = [{ localId: localId(0), components: {} }];
     const handle = registerSceneAsset(world, buildScene(nodes));
-    const r = world.instantiateScene(handle);
+    const r = worldInstantiateScene(world, handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const root = r.value.root;
@@ -474,7 +597,7 @@ describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
     despawnOnExit(world, root, LevelId, 'main-menu');
 
     // Verify all entities are alive before transition.
-    const EntityToken = resolveComponent('Entity')!;
+    const EntityToken = resolveWorldComponent(world, 'Entity');
     expect(world.get(root, EntityToken).ok).toBe(true);
     expect(world.get(child1, EntityToken).ok).toBe(true);
     expect(world.get(child2, EntityToken).ok).toBe(true);
@@ -519,7 +642,7 @@ describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
       { localId: localId(2), components: {} },
     ];
     const handle = registerSceneAsset(world, buildScene(nodes));
-    const r = world.instantiateScene(handle);
+    const r = worldInstantiateScene(world, handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const root = r.value.root;
@@ -535,7 +658,7 @@ describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
     world.update(1 / 60).unwrap();
 
     // Root despawned.
-    const EntityToken = resolveComponent('Entity')!;
+    const EntityToken = resolveWorldComponent(world, 'Entity');
     expect(world.get(root, EntityToken).ok).toBe(false);
 
     // Mapping members cascade-despawned (linkedSpawn=default-true
@@ -553,14 +676,14 @@ describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
 
     const nodes: SceneEntity[] = [{ localId: localId(0), components: {} }];
     const handle = registerSceneAsset(world, buildScene(nodes));
-    const r = world.instantiateScene(handle);
+    const r = worldInstantiateScene(world, handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const root1 = r.value.root;
 
     // Spawn a second scene (simulating tutorial variant).
     const handle2 = registerSceneAsset(world, buildScene(nodes));
-    const r2 = world.instantiateScene(handle2);
+    const r2 = worldInstantiateScene(world, handle2);
     expect(r2.ok).toBe(true);
     if (!r2.ok) return;
     const root2 = r2.value.root;
@@ -575,7 +698,7 @@ describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
     setNextState(world, LevelId, 'tutorial');
     world.update(1 / 60).unwrap();
 
-    const EntityToken = resolveComponent('Entity')!;
+    const EntityToken = resolveWorldComponent(world, 'Entity');
 
     // Root1 despawned.
     expect(world.get(root1, EntityToken).ok).toBe(false);
@@ -584,7 +707,7 @@ describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
     expect(world.get(player, EntityToken).ok).toBe(true);
 
     // Spawn a fresh scene for 'main-menu'.
-    const r3 = world.instantiateScene(handle);
+    const r3 = worldInstantiateScene(world, handle);
     expect(r3.ok).toBe(true);
     if (!r3.ok) return;
     const root3 = r3.value.root;
@@ -669,7 +792,7 @@ import type { Handle, LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/en
 // SceneInstance must be registered for instantiateScene to resolve it.
 // Schema mirrors the runtime definition in @forgeax/engine-runtime
 // (feat-20260614: handle<T> -> shared<T>, ref<T> -> unique<T>).
-defineComponent('SceneInstance', {
+const SceneInstance = defineComponent('SceneInstance', {
   source: { type: 'shared<SceneAsset>' },
   mapping: { type: 'array<entity>' },
   state: { type: 'unique<SceneInstanceState>' },
@@ -684,14 +807,17 @@ function buildScene(nodes: readonly SceneEntity[]): SceneAsset {
 }
 
 function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
+  for (const component of [Children, ChildOf, SceneInstance]) {
+    if (world.components.resolve(component.name) === undefined) {
+      world.components.register(component).unwrap();
+    }
+  }
   return world.allocSharedRef('SceneAsset', asset);
 }
 
 /** Read mapping from root's SceneInstance component. */
 function readMapping(world: World, root: EntityHandle): Uint32Array {
-  const token = resolveComponent('SceneInstance');
-  if (token === undefined) throw new Error('SceneInstance not registered');
-  return (world.get(root, token).unwrap() as unknown as { mapping: Uint32Array }).mapping;
+  return (world.get(root, SceneInstance).unwrap() as unknown as { mapping: Uint32Array }).mapping;
 }
 
 describe('SceneInstance transition survival (m5w1)', () => {
@@ -715,7 +841,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
       },
     ];
     const handle = registerSceneAsset(world, buildScene(nodes));
-    const r = world.instantiateScene(handle);
+    const r = worldInstantiateScene(world, handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const root = r.value.root;
@@ -732,7 +858,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
     expect(getState(world, LevelId).ok && getState(world, LevelId).value).toBe('tutorial');
 
     // All scene members are still alive
-    const EntityToken = resolveComponent('Entity')!;
+    const EntityToken = resolveWorldComponent(world, 'Entity');
     for (let i = 0; i < mapping.length; i++) {
       const member = mapping[i];
       if (member === 0) continue; // skip root
@@ -748,7 +874,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
       { localId: localId(0), components: {} },
     ];
     const handle = registerSceneAsset(world, buildScene(nodes));
-    const r = world.instantiateScene(handle);
+    const r = worldInstantiateScene(world, handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const root = r.value.root;
@@ -759,7 +885,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
     expect(getState(world, LevelId).ok && getState(world, LevelId).value).toBe('street-a');
 
     // Root still carries the SceneInstance component
-    const SceneInstanceToken = resolveComponent('SceneInstance')!;
+    const SceneInstanceToken = SceneInstance;
     expect(world.get(root, SceneInstanceToken).ok).toBe(true);
   });
 
@@ -772,7 +898,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
       { localId: localId(1), components: {} },
     ];
     const handle = registerSceneAsset(world, buildScene(nodes));
-    const r = world.instantiateScene(handle);
+    const r = worldInstantiateScene(world, handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const root = r.value.root;
@@ -784,7 +910,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
     setNextStateForce(world, LevelId, 'main-menu');
     world.update(1 / 60).unwrap();
 
-    const EntityToken = resolveComponent('Entity')!;
+    const EntityToken = resolveWorldComponent(world, 'Entity');
     for (let i = 0; i < mapping.length; i++) {
       const member = mapping[i];
       if (member === 0) continue;
@@ -801,7 +927,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
       { localId: localId(1), components: {} },
     ];
     const handle = registerSceneAsset(world, buildScene(nodes));
-    const r = world.instantiateScene(handle);
+    const r = worldInstantiateScene(world, handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const root = r.value.root;
@@ -820,11 +946,11 @@ describe('SceneInstance transition survival (m5w1)', () => {
     expect(getState(world, GameMode).ok && getState(world, GameMode).value).toBe('playing');
 
     // strayEntity is despawned by the scoped-despawn
-    const ModeScoped = resolveComponent('__scopedTo__GameMode')!;
+    const ModeScoped = resolveWorldComponent(world, '__scopedTo__GameMode');
     expect(world.get(strayEntity, ModeScoped).ok).toBe(false);
 
     // But scene members are untouched
-    const EntityToken = resolveComponent('Entity')!;
+    const EntityToken = resolveWorldComponent(world, 'Entity');
     for (let i = 0; i < mapping.length; i++) {
       const member = mapping[i];
       if (member === 0) continue;
@@ -841,7 +967,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
       { localId: localId(1), components: {} },
     ];
     const handle = registerSceneAsset(world, buildScene(nodes));
-    const r = world.instantiateScene(handle);
+    const r = worldInstantiateScene(world, handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const root = r.value.root;
@@ -856,7 +982,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
     setNextState(world, LevelId, 'main-menu');
     world.update(1 / 60).unwrap();
 
-    const EntityToken = resolveComponent('Entity')!;
+    const EntityToken = resolveWorldComponent(world, 'Entity');
     for (let i = 0; i < mapping.length; i++) {
       const member = mapping[i];
       if (member === 0) continue;
@@ -874,7 +1000,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
       { localId: localId(2), components: {} },
     ];
     const handle = registerSceneAsset(world, buildScene(nodes));
-    const r = world.instantiateScene(handle);
+    const r = worldInstantiateScene(world, handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const root = r.value.root;
@@ -909,8 +1035,9 @@ describe('SceneInstance transition survival (m5w1)', () => {
         components: { Transform_test_m5w1: { pos: [1, 2, 3]} },
       },
     ];
+    world.components.register(Transform).unwrap();
     const handle = registerSceneAsset(world, buildScene(nodes));
-    const r = world.instantiateScene(handle);
+    const r = worldInstantiateScene(world, handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
 
@@ -930,22 +1057,14 @@ describe('SceneInstance transition survival (m5w1)', () => {
     expect(Array.from(dataAfter.pos)).toEqual([1, 2, 3]);
   });
 
-  // Regression (verify round 1, B2): a token defined AFTER registerStatesPlugin
-  // has no Resources inserted. transitionStatesSystem must skip it via the
-  // hasResource guard, not crash world.update(1 / 60).unwrap() with ResourceNotFoundError.
-  it('B2: defineState after registerStatesPlugin does not crash world.update(1 / 60).unwrap()', () => {
+  it('registers a token defined after the state runtime is active', () => {
     const world = makeWorld();
-    // Define a brand-new token only now — registerStatesPlugin already ran in
-    // makeWorld, so no Resources exist for this token.
     const LateToken = defineState('LateTokenB2', ['a', 'b'] as const);
 
-    // The unrelated late token must not abort the per-frame transition loop.
-    expect(world.update(1 / 60).ok).toBe(true);
-
-    // And operating on the late token returns a structured error, not a throw.
-    const r = setNextState(world, LateToken, 'b');
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error.code).toBe('state-not-registered');
+    expect(setNextState(world, LateToken, 'b').ok).toBe(true);
+    world.update(1 / 60).unwrap();
+    const current = getState(world, LateToken);
+    expect(current.ok && current.value).toBe('b');
   });
 });
 
@@ -997,7 +1116,7 @@ describe('scoped despawn cascades SceneInstance roots fully (regression)', () =>
       { localId: localId(3), components: {} },
     ];
     const handle = registerSceneAsset(world, buildScene(nodes));
-    const r = world.instantiateScene(handle);
+    const r = worldInstantiateScene(world, handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const root = r.value.root;
@@ -1012,7 +1131,7 @@ describe('scoped despawn cascades SceneInstance roots fully (regression)', () =>
     setNextState(world, LevelId, 'tutorial');
     world.update(1 / 60).unwrap();
 
-    const EntityToken = resolveComponent('Entity')!;
+    const EntityToken = resolveWorldComponent(world, 'Entity');
     // Root gone.
     expect(world.get(root, EntityToken).ok).toBe(false);
     // EVERY mapping member gone -- no orphan left with a stale ChildOf -> dead root.
@@ -1037,21 +1156,21 @@ describe('scoped despawn cascades SceneInstance roots fully (regression)', () =>
       { localId: localId(1), components: {} },
     ];
     const handle = registerSceneAsset(world, buildScene(nodes));
-    const r = world.instantiateScene(handle);
+    const r = worldInstantiateScene(world, handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const root = r.value.root;
     const mapping = Array.from(readMapping(world, root));
 
     // Parent the scene root under the KCC body, then scope the root too.
-    const ChildOfToken = resolveComponent('ChildOf')!;
+    const ChildOfToken = resolveWorldComponent(world, 'ChildOf');
     world.addComponent(root, { component: ChildOfToken, data: { parent: kccParent } });
     despawnOnExit(world, root, LevelId, 'main-menu');
 
     setNextState(world, LevelId, 'tutorial');
     world.update(1 / 60).unwrap();
 
-    const EntityToken = resolveComponent('Entity')!;
+    const EntityToken = resolveWorldComponent(world, 'Entity');
     expect(world.get(kccParent, EntityToken).ok).toBe(false);
     expect(world.get(root, EntityToken).ok).toBe(false);
     for (const m of mapping) {

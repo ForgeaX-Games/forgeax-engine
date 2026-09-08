@@ -14,12 +14,12 @@
 
 import { AssetRegistry, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
-import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render/internal';
-import { createRenderer } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset, SamplerAsset, TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { constructRuntimeRendererHost } from '../../renderer-host';
 import { drawPublished } from '../draw-published';
 
 const WIDTH = 64;
@@ -93,19 +93,22 @@ describe('feat-20260527-sprite-nineslice w13 dawn smoke (HANDLE_NINESLICE_QUAD b
       removeEventListener() {},
     } as unknown as HTMLCanvasElement;
 
-    let renderer: Awaited<ReturnType<typeof createRenderer>>;
+    let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
     try {
-      renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+      host = await constructRuntimeRendererHost(
+        mockCanvas,
+        {},
+        {
+          shaderManifestUrl: ENGINE_MANIFEST_URL,
+        },
+      );
     } finally {
       globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
     }
-    expect(renderer.backend).toBe('webgpu');
-
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
-    if (!ready.ok) return;
-
-    const assets = renderer.assets;
+    expect(host.ok).toBe(true);
+    if (!host.ok) throw host.error;
+    const { renderer, assets } = host.value;
+    expect(renderer.inspect().state).toBe('alive');
     expect(assets).toBeInstanceOf(AssetRegistry);
 
     const world = new World();
@@ -131,18 +134,6 @@ describe('feat-20260527-sprite-nineslice w13 dawn smoke (HANDLE_NINESLICE_QUAD b
       data: pixels,
     };
     const texHandle = world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', texAsset);
-    // feat-20260601-gpu-resource-store-extraction M1: explicit texture GPU upload.
-    const texUploadRes = await renderer.store.uploadTexture(texHandle, texAsset, {
-      bytes: pixels,
-      width: 4,
-      height: 4,
-      mime: 'image/png',
-      colorSpace: 'srgb',
-      mipmap: false,
-    });
-    expect(texUploadRes.ok).toBe(true);
-    if (!texUploadRes.ok) return;
-
     const samplerAsset: SamplerAsset = {
       kind: 'sampler',
       addressModeU: 'repeat',
@@ -197,8 +188,9 @@ describe('feat-20260527-sprite-nineslice w13 dawn smoke (HANDLE_NINESLICE_QUAD b
     });
 
     const errors: unknown[] = [];
-    renderer.onError((e) => {
-      errors.push(e);
+    renderer.subscribe((event) => {
+      if (event.kind !== 'error') return;
+      errors.push(event.error);
     });
 
     world.spawn(

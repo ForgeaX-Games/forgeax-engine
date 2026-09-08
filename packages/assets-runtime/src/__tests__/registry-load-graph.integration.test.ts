@@ -3,8 +3,92 @@ import { AssetRegistry } from '../asset-registry';
 
 const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const C = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+const D = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 
 describe('registry load graph', () => {
+  it('restores descriptor payloads through the production Pack path', async () => {
+    const registry = new AssetRegistry({} as never);
+    registry.configurePackIndex('/pack-index.json');
+    const pack = {
+      schemaVersion: '2.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: C,
+          kind: 'render-pipeline',
+          payload: { kind: 'render-pipeline', pipelineId: 'forgeax::urp' },
+          refs: [],
+          artifacts: {},
+        },
+      ],
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url.endsWith('pack-index.json')) {
+          return new Response(
+            JSON.stringify([
+              {
+                guid: C,
+                packageUrl: '/descriptor.pack.json',
+                kind: 'render-pipeline',
+                sourcePath: 'pipeline',
+              },
+            ]),
+          );
+        }
+        return new Response(JSON.stringify(pack));
+      }),
+    );
+
+    const result = await registry.loadByGuid(registry.parseGuid(C));
+    expect(result).toMatchObject({ ok: true, value: { kind: 'render-pipeline' } });
+  });
+
+  it('keeps a parent asset out of lookup when a recursive dependency is not ready', async () => {
+    const registry = new AssetRegistry({} as never);
+    registry.loaders.register({
+      kind: 'parent-node',
+      load: (payload) => ({ kind: 'parent-node', ...payload }),
+    });
+    registry.configurePackIndex('/pack-index.json');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url.endsWith('pack-index.json')) {
+          return new Response(
+            JSON.stringify([
+              { guid: A, packageUrl: '/parent.pack.json', kind: 'parent-node', sourcePath: 'a' },
+            ]),
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            schemaVersion: '2.0.0',
+            kind: 'internal-text-package',
+            assets: [
+              {
+                guid: A,
+                kind: 'parent-node',
+                payload: { name: 'parent' },
+                refs: [B],
+                artifacts: {},
+              },
+            ],
+          }),
+        );
+      }),
+    );
+
+    const result = await registry.loadByGuid(registry.parseGuid(A));
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: expect.any(String), hint: expect.any(String) },
+    });
+    expect(registry.lookup(A)).toBeUndefined();
+  });
+
   it('terminates a cycle without exposing either provisional asset early', async () => {
     const registry = new AssetRegistry({} as never);
     registry.loaders.register({
@@ -114,5 +198,49 @@ describe('registry load graph', () => {
     const [firstResult, concurrentResult] = await Promise.all([first, concurrent]);
     expect(firstResult.ok).toBe(true);
     expect(concurrentResult).toEqual(firstResult);
+  });
+
+  it('waits for a shared sibling dependency while preserving SCC back-edges', async () => {
+    const registry = new AssetRegistry({} as never);
+    registry.loaders.register({
+      kind: 'shared-node',
+      load: (payload) => ({ kind: 'shared-node', ...payload }),
+    });
+    registry.configurePackIndex('/pack-index.json');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url.endsWith('pack-index.json')) {
+          return new Response(
+            JSON.stringify([
+              { guid: A, packageUrl: '/shared.pack.json', kind: 'shared-node', sourcePath: 'a' },
+              { guid: B, packageUrl: '/shared.pack.json', kind: 'shared-node', sourcePath: 'b' },
+              { guid: C, packageUrl: '/shared.pack.json', kind: 'shared-node', sourcePath: 'c' },
+              { guid: D, packageUrl: '/shared.pack.json', kind: 'shared-node', sourcePath: 'd' },
+            ]),
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            schemaVersion: '2.0.0',
+            kind: 'internal-text-package',
+            assets: [
+              { guid: A, kind: 'shared-node', payload: { name: 'a' }, refs: [B, C], artifacts: {} },
+              { guid: B, kind: 'shared-node', payload: { name: 'b' }, refs: [D], artifacts: {} },
+              { guid: C, kind: 'shared-node', payload: { name: 'c' }, refs: [D], artifacts: {} },
+              { guid: D, kind: 'shared-node', payload: { name: 'd' }, refs: [], artifacts: {} },
+            ],
+          }),
+        );
+      }),
+    );
+
+    const result = await registry.loadByGuid(registry.parseGuid(A));
+
+    expect(result.ok).toBe(true);
+    expect(registry.lookup(A)).toBeDefined();
+    expect(registry.lookup(B)).toBeDefined();
+    expect(registry.lookup(C)).toBeDefined();
+    expect(registry.lookup(D)).toBeDefined();
   });
 });

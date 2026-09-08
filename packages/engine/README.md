@@ -1,40 +1,53 @@
 # @forgeax/engine
 
-Placeholder for the `@forgeax/engine-*` family of packages. This package
-publishes nothing on its own. To use the engine, install the runtime entry
-`@forgeax/engine-runtime` and the family members you need.
+`@forgeax/engine` is the one package a game author installs. Its root is the
+runtime entry, its focused subpaths expose every Engine capability, and its
+`forgeax` binary owns project creation, validation, development, build, preview,
+and SDK installation.
 
-```ts
-import { Engine } from '@forgeax/engine-runtime'
-import { World } from '@forgeax/engine-ecs'
+```bash
+pnpm add @forgeax/engine
+pnpm exec forgeax doctor
 ```
 
-## Family members
+pnpm projects that use Vite should keep
+`public-hoist-pattern[]=@forgeax/engine-*` in `.npmrc`. Generated ForgeaX games
+already include it; the focused hoist lets package-owned dynamic imports resolve
+from Vite's project-level optimization cache without exposing extra declared
+dependencies.
 
-| Package | Role |
-|---------|------|
-| `@forgeax/engine-runtime` | Renderer + Backend (WebGPU) async factory entry |
-| `@forgeax/engine-math` | Pure-function Vec/Mat/Quat/Color, branded ABI |
-| `@forgeax/engine-ecs` | Archetype ECS: World / Entity / Component / Query / System / Schedule / Commands / Resource |
-| `@forgeax/engine-types` | POD types + union aliases SSOT (math-free) |
-| `@forgeax/engine-rhi` | Pure-interface RHI (spec-aligned with `@webgpu/types`) |
-| `@forgeax/engine-rhi-webgpu` | WebGPU thin shim |
-| `@forgeax/engine-rhi-wgpu` | wgpu native thin shell |
-| `@forgeax/engine-wgpu-wasm` | Single wasm artefact (wgpu + naga bindings); private |
-| `@forgeax/engine-naga` | TS shell over naga bindings; private (build-time only) |
-| `@forgeax/engine-shader` | Runtime shader registry |
-| `@forgeax/engine-shader-compiler` | Build-time shader compiler |
-| `@forgeax/engine-vite-plugin-shader` | Vite plugin forwarding to shader-compiler |
-| `@forgeax/engine-console` | Inspector P0 server + CLI (`forgeax-engine-console`) |
+```ts
+import { Engine } from '@forgeax/engine';
+import { World } from '@forgeax/engine/ecs';
+import { Transform } from '@forgeax/engine/scene';
+```
 
-## Family rules
+## Import model
 
-- All public packages share the `@forgeax/engine-` prefix. IDE autocomplete
-  on `@forgeax/engine-` lists every family member.
-- The bare `@forgeax/engine` name (this package) is a placeholder and not
-  intended to be installed by users directly.
+| Import | Meaning |
+|:--|:--|
+| `@forgeax/engine` | Runtime renderer assembly and the usual game entry |
+| `@forgeax/engine/app` | App and frame-loop assembly |
+| `@forgeax/engine/ecs` | ECS world, components, queries, and systems |
+| `@forgeax/engine/<package-directory>` | The matching focused Engine package |
 
-## Why this rename?
+The focused `@forgeax/engine-*` packages remain the physical ownership and
+release units inside the Engine repository. They are published automatically at
+the same version because the umbrella depends on them, but game authors do not
+need to discover or install them individually.
 
-See `.forgeax-harness/forgeax-loop/feat-20260511-engine-package-family-rename/`
-for the closed-loop history and decisions.
+## SDK
+
+The ordinary npm package is the connected, incremental development path. The
+full SDK adds offline templates, Engine skills, a pnpm store, and the complete
+public Engine source snapshot:
+
+```bash
+pnpm dlx @forgeax/engine sdk install ~/ForgeaX/1.2.3
+node ~/ForgeaX/1.2.3/bin/forgeax.mjs init
+node ~/ForgeaX/1.2.3/bin/forgeax.mjs new ~/Games/my-game
+```
+
+The SDK is fetched on demand from the public npm registry at the exact same
+version. A private GitHub Release is an internal archive, not a user download
+dependency.

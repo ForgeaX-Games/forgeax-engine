@@ -40,11 +40,13 @@ import type {
   ComputePassDescriptor,
   ComputePipeline,
   ComputePipelineDescriptor,
+  ExternalImageTextureDestination,
   MappedBuffer,
   PipelineLayout,
   PipelineLayoutDescriptor,
   QuerySet,
   QuerySetDescriptor,
+  RenderPassDescriptor,
   RenderPipeline,
   RenderPipelineDescriptor,
   Result,
@@ -64,6 +66,7 @@ import type {
   TextureDescriptor,
   TextureView,
   TextureViewDescriptor,
+  TextureWriteDestination,
 } from '@forgeax/engine-rhi';
 import { err, ok, RhiError as RhiErrorClass } from '@forgeax/engine-rhi';
 import {
@@ -132,15 +135,6 @@ const BGL_KEYS = ['label', 'entries'] as const;
 // BG_KEYS removed in w20 — createBindGroup now uses tagged-union dispatch
 // over RhiBindingResource 4 kinds (not field-mirror passthrough).
 const PL_KEYS = ['label', 'bindGroupLayouts'] as const;
-const RPP_KEYS = [
-  'label',
-  'layout',
-  'vertex',
-  'primitive',
-  'depthStencil',
-  'multisample',
-  'fragment',
-] as const;
 const ENC_KEYS = ['label'] as const;
 const TEXTURE_VIEW_KEYS = [
   'label',
@@ -174,6 +168,7 @@ const QUERY_SET_COUNT_LIMIT = 4096;
  */
 const RAW_DEVICE_MAP: WeakMap<RhiDevice, GPUDevice> = new WeakMap();
 const BUFFER_RAW_MAP: WeakMap<Buffer, GPUBuffer> = new WeakMap();
+const TEXTURE_VIEW_RAW_MAP: WeakMap<TextureView, GPUTextureView> = new WeakMap();
 const ENCODER_STATE: WeakMap<RhiCommandEncoder, EncoderState> = new WeakMap();
 const PASS_STATE: WeakMap<RhiRenderPassEncoder, PassState> = new WeakMap();
 const COMMAND_BUFFER_RAW_MAP: WeakMap<CommandBuffer, GPUCommandBuffer> = new WeakMap();
@@ -271,7 +266,7 @@ const QUERY_RESOLVE_ALIGNMENT = 256;
  * The `_internal_` prefix + `@internal` JSDoc tag mark this as engine-internal
  * plumbing; the only sanctioned consumer is
  * `apps/hello/triangle/src/main.ts:96` which threads the raw GPUDevice into
- * `RendererOptions.rawDeviceForContextConfigure` so the canvas
+ * the host's internal canvas-device configuration slot so the canvas
  * `GPUCanvasContext.configure({device})` slot keeps working
  * (GPUCanvasContext is outside the RHI surface). Every other engine path
  * goes through the RHI interface.
@@ -687,6 +682,123 @@ function throwIfFinished(state: EncoderState | undefined): void {
   }
 }
 
+function rawTextureView(view: TextureView): GPUTextureView {
+  return TEXTURE_VIEW_RAW_MAP.get(view) ?? (view as unknown as GPUTextureView);
+}
+
+function mirrorRenderPassDescriptor(desc: RenderPassDescriptor): GPURenderPassDescriptor {
+  const colorAttachments: Array<GPURenderPassColorAttachment | null> = [];
+  for (const attachment of desc.colorAttachments) {
+    if (attachment === null || attachment === undefined) {
+      colorAttachments.push(null);
+      continue;
+    }
+    if (attachment.loadOp === undefined || attachment.storeOp === undefined) {
+      throw new TypeError('RHI render-pass color attachments require loadOp and storeOp');
+    }
+    colorAttachments.push({
+      view: rawTextureView(attachment.view),
+      ...(attachment.depthSlice === undefined ? {} : { depthSlice: attachment.depthSlice }),
+      ...(attachment.resolveTarget === undefined
+        ? {}
+        : { resolveTarget: rawTextureView(attachment.resolveTarget) }),
+      ...(attachment.clearValue === undefined ? {} : { clearValue: attachment.clearValue }),
+      loadOp: attachment.loadOp,
+      storeOp: attachment.storeOp,
+    });
+  }
+
+  return {
+    ...(desc.label === undefined ? {} : { label: desc.label }),
+    colorAttachments,
+    ...(desc.depthStencilAttachment === undefined
+      ? {}
+      : {
+          depthStencilAttachment: {
+            view: rawTextureView(desc.depthStencilAttachment.view),
+            ...(desc.depthStencilAttachment.depthClearValue === undefined
+              ? {}
+              : { depthClearValue: desc.depthStencilAttachment.depthClearValue }),
+            ...(desc.depthStencilAttachment.depthLoadOp === undefined
+              ? {}
+              : { depthLoadOp: desc.depthStencilAttachment.depthLoadOp }),
+            ...(desc.depthStencilAttachment.depthStoreOp === undefined
+              ? {}
+              : { depthStoreOp: desc.depthStencilAttachment.depthStoreOp }),
+            ...(desc.depthStencilAttachment.depthReadOnly === undefined
+              ? {}
+              : { depthReadOnly: desc.depthStencilAttachment.depthReadOnly }),
+            ...(desc.depthStencilAttachment.stencilClearValue === undefined
+              ? {}
+              : { stencilClearValue: desc.depthStencilAttachment.stencilClearValue }),
+            ...(desc.depthStencilAttachment.stencilLoadOp === undefined
+              ? {}
+              : { stencilLoadOp: desc.depthStencilAttachment.stencilLoadOp }),
+            ...(desc.depthStencilAttachment.stencilStoreOp === undefined
+              ? {}
+              : { stencilStoreOp: desc.depthStencilAttachment.stencilStoreOp }),
+            ...(desc.depthStencilAttachment.stencilReadOnly === undefined
+              ? {}
+              : { stencilReadOnly: desc.depthStencilAttachment.stencilReadOnly }),
+          },
+        }),
+    ...(desc.occlusionQuerySet === undefined
+      ? {}
+      : {
+          occlusionQuerySet:
+            QUERY_SET_RAW_MAP.get(desc.occlusionQuerySet) ??
+            (desc.occlusionQuerySet as unknown as GPUQuerySet),
+        }),
+    ...(desc.timestampWrites === undefined
+      ? {}
+      : {
+          timestampWrites: {
+            querySet:
+              QUERY_SET_RAW_MAP.get(desc.timestampWrites.querySet) ??
+              (desc.timestampWrites.querySet as unknown as GPUQuerySet),
+            ...(desc.timestampWrites.beginningOfPassWriteIndex === undefined
+              ? {}
+              : { beginningOfPassWriteIndex: desc.timestampWrites.beginningOfPassWriteIndex }),
+            ...(desc.timestampWrites.endOfPassWriteIndex === undefined
+              ? {}
+              : { endOfPassWriteIndex: desc.timestampWrites.endOfPassWriteIndex }),
+          },
+        }),
+    ...(desc.maxDrawCount === undefined ? {} : { maxDrawCount: desc.maxDrawCount }),
+  };
+}
+
+function mirrorRenderPipelineDescriptor(
+  desc: RenderPipelineDescriptor,
+): GPURenderPipelineDescriptor {
+  const vertex: GPUVertexState = {
+    module: desc.vertex.module as unknown as GPUShaderModule,
+    ...(desc.vertex.buffers === undefined ? {} : { buffers: Array.from(desc.vertex.buffers) }),
+    ...(desc.vertex.entryPoint === undefined ? {} : { entryPoint: desc.vertex.entryPoint }),
+    ...(desc.vertex.constants === undefined ? {} : { constants: desc.vertex.constants }),
+  };
+  const fragment: GPUFragmentState | undefined =
+    desc.fragment === undefined
+      ? undefined
+      : {
+          module: desc.fragment.module as unknown as GPUShaderModule,
+          targets: Array.from(desc.fragment.targets),
+          ...(desc.fragment.entryPoint === undefined
+            ? {}
+            : { entryPoint: desc.fragment.entryPoint }),
+          ...(desc.fragment.constants === undefined ? {} : { constants: desc.fragment.constants }),
+        };
+  return {
+    ...(desc.label === undefined ? {} : { label: desc.label }),
+    layout: desc.layout === 'auto' ? 'auto' : (desc.layout as unknown as GPUPipelineLayout),
+    vertex,
+    ...(desc.primitive === undefined ? {} : { primitive: desc.primitive }),
+    ...(desc.depthStencil === undefined ? {} : { depthStencil: desc.depthStencil }),
+    ...(desc.multisample === undefined ? {} : { multisample: desc.multisample }),
+    ...(fragment === undefined ? {} : { fragment }),
+  };
+}
+
 /**
  * Build a RhiCommandEncoder around a raw GPUCommandEncoder (w3).
  *
@@ -731,17 +843,16 @@ function makeCommandEncoder(
   }
 
   const enc: RhiCommandEncoder = {
-    beginRenderPass(desc: GPURenderPassDescriptor): RhiRenderPassEncoder {
+    beginRenderPass(desc: RenderPassDescriptor): RhiRenderPassEncoder {
       const state = ENCODER_STATE.get(enc);
       throwIfFinished(state);
-      const rawPass = rawEncoder.beginRenderPass(desc);
+      const rawPass = rawEncoder.beginRenderPass(mirrorRenderPassDescriptor(desc));
       // Extract occlusionQuerySet from the descriptor (research §2.2:
       // RPDesc.occlusionQuerySet is the injection point; the render pass
       // PassState.[[occlusion_query_set]] mirrors it). The forgeax
       // RenderPassDescriptor declares occlusionQuerySet as `QuerySet |
       // undefined`; the raw GPU descriptor is structurally compatible.
-      const occQs = (desc as unknown as { occlusionQuerySet?: unknown }).occlusionQuerySet;
-      const occlusionQuerySet = occQs === undefined || occQs === null ? null : (occQs as QuerySet);
+      const occlusionQuerySet = desc.occlusionQuerySet ?? null;
       const pass = makeRenderPassEncoder(rawPass, enc, occlusionQuerySet);
       if (state !== undefined) state.activePass = pass;
       return pass;
@@ -1287,7 +1398,7 @@ function makeQueue(rawQueue: GPUQueue): RhiQueue {
       }
     },
     writeTexture(
-      destination: GPUTexelCopyTextureInfo,
+      destination: TextureWriteDestination,
       data: ArrayBufferView | ArrayBuffer,
       dataLayout: GPUTexelCopyBufferLayout,
       size: GPUExtent3DStrict,
@@ -1307,8 +1418,14 @@ function makeQueue(rawQueue: GPUQueue): RhiQueue {
         // structural compatibility lets us forward verbatim with a cast.
         // The data + size casts cover @webgpu/types polymorphism that the
         // forgeax form normalises to the strict spec subset.
+        const rawDestination: GPUTexelCopyTextureInfo = {
+          texture: destination.texture as unknown as GPUTexture,
+        };
+        if (destination.mipLevel !== undefined) rawDestination.mipLevel = destination.mipLevel;
+        if (destination.origin !== undefined) rawDestination.origin = destination.origin;
+        if (destination.aspect !== undefined) rawDestination.aspect = destination.aspect;
         rawQueue.writeTexture(
-          destination,
+          rawDestination,
           data as unknown as GPUAllowSharedBufferSource,
           dataLayout,
           size as unknown as GPUExtent3D,
@@ -1327,11 +1444,24 @@ function makeQueue(rawQueue: GPUQueue): RhiQueue {
     },
     copyExternalImageToTexture(
       source: GPUCopyExternalImageSourceInfo,
-      destination: GPUCopyExternalImageDestInfo,
+      destination: ExternalImageTextureDestination,
       copySize: GPUExtent3DStrict,
     ): Result<void, RhiError> {
       try {
-        rawQueue.copyExternalImageToTexture(source, destination, copySize);
+        rawQueue.copyExternalImageToTexture(
+          source,
+          {
+            texture: destination.texture as unknown as GPUTexture,
+            ...(destination.mipLevel === undefined ? {} : { mipLevel: destination.mipLevel }),
+            ...(destination.origin === undefined ? {} : { origin: destination.origin }),
+            ...(destination.aspect === undefined ? {} : { aspect: destination.aspect }),
+            ...(destination.colorSpace === undefined ? {} : { colorSpace: destination.colorSpace }),
+            ...(destination.premultipliedAlpha === undefined
+              ? {}
+              : { premultipliedAlpha: destination.premultipliedAlpha }),
+          },
+          copySize,
+        );
         return ok(undefined);
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
@@ -1536,7 +1666,9 @@ export function makeRhiDevice(rawDevice: GPUDevice): {
         const rawView = rawTexture.createView(
           mirror(desc, TEXTURE_VIEW_KEYS) as unknown as GPUTextureViewDescriptor,
         );
-        return ok(rawView as unknown as TextureView);
+        const handle = rawView as unknown as TextureView;
+        TEXTURE_VIEW_RAW_MAP.set(handle, rawView);
+        return ok(handle);
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         return err(
@@ -1636,9 +1768,7 @@ export function makeRhiDevice(rawDevice: GPUDevice): {
     },
     createRenderPipeline(desc: RenderPipelineDescriptor): Result<RenderPipeline, RhiError> {
       try {
-        const out = rawDevice.createRenderPipeline(
-          mirror(desc, RPP_KEYS) as unknown as GPURenderPipelineDescriptor,
-        );
+        const out = rawDevice.createRenderPipeline(mirrorRenderPipelineDescriptor(desc));
         return ok(out as unknown as RenderPipeline);
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);

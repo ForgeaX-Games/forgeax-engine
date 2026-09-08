@@ -110,10 +110,10 @@ describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () =
 
     const { World } = await import('@forgeax/engine-ecs');
     const { AssetRegistry, HANDLE_CUBE } = await import('@forgeax/engine-assets-runtime');
-    const { Camera, MeshRenderer } = await import('@forgeax/engine-render/internal');
-    const { Instances } = await import('@forgeax/engine-render/internal');
-    const { createRenderer } = await import('@forgeax/engine-runtime');
-    const { MeshFilter } = await import('@forgeax/engine-render/internal');
+    const { Camera, MeshRenderer } = await import('@forgeax/engine-render');
+    const { Instances } = await import('@forgeax/engine-render');
+    const { constructRuntimeRendererHost } = await import('../../renderer-host');
+    const { MeshFilter } = await import('@forgeax/engine-render');
     const { Transform } = await import('@forgeax/engine-scene');
     const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
     const ENGINE_MANIFEST_W6 = await buildEngineShaderManifest();
@@ -173,9 +173,9 @@ describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () =
       removeEventListener() {},
     } as unknown as HTMLCanvasElement;
 
-    let renderer: Awaited<ReturnType<typeof createRenderer>>;
+    let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
     try {
-      renderer = await createRenderer(
+      host = await constructRuntimeRendererHost(
         mockCanvas,
         {},
         { shaderManifestUrl: ENGINE_MANIFEST_URL_W6 },
@@ -183,15 +183,11 @@ describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () =
     } finally {
       globalThis.navigator.gpu.requestAdapter = origReq;
     }
-    expect(renderer.backend).toBe('webgpu');
-
-    const assets = renderer.assets;
-    if (assets === null) throw new Error('AssetRegistry null');
+    expect(host.ok).toBe(true);
+    if (!host.ok) throw host.error;
+    const { renderer, assets } = host.value;
+    expect(renderer.inspect().state).toBe('alive');
     expect(assets).toBeInstanceOf(AssetRegistry);
-
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
-    if (!ready.ok) return;
 
     const matAsset: MaterialAsset = {
       kind: 'material',

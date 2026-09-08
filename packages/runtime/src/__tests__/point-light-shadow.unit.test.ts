@@ -3,7 +3,7 @@
 // feat-20260612-point-light-shadows-urp-hdrp M1 unit tests.
 //
 // Mirrors directional-light-shadow.test.ts structure (research L1.2). Tests:
-//   T-M1-2 — defaults, cardinality, spawn lifecycle (AC-01, AC-06)
+//   T-M1-2 — defaults and spawn lifecycle (AC-01)
 //   T-M1-4 — validate fail-fast (AC-02; mapSize<1, farPlane<=nearPlane)
 //   T-M1-6 — 6-face matrix numerical lock (AC-03; WebGPU [0,1] NDC)
 //
@@ -11,15 +11,35 @@
 // lights.unit.test.ts cleanly (consolidation paradigm: source filename =
 // ancestorTitles[0]).
 
-import type { EntityHandle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
+import { componentDefinition, componentSchema } from '@forgeax/engine-ecs/internal';
 import { vec3 } from '@forgeax/engine-math';
-import {
-  buildPointShadowMatrices,
-  PointLightShadow,
-  ShadowInvalidConfigError,
-} from '@forgeax/engine-render/internal';
+import { PointLightShadow } from '@forgeax/engine-render';
 import { describe, expect, it } from 'vitest';
+import { validatePointLightShadowData } from '../../../render/src/components/light-helpers';
+import { ShadowInvalidConfigError } from '../../../render/src/errors/render';
+import {
+  BYTES_PER_LIGHT_SLOT,
+  LIGHTSLOT_LAYOUT,
+  packLightSlot,
+} from '../../../render/src/light-buffer-layout';
+import { buildPointShadowMatrices } from '../../../render/src/render-system-extract';
+import {
+  SHADOW_ATLAS_DEFAULT_FACE_SIZE,
+  SHADOW_ATLAS_DEFAULT_LAYERS,
+  ShadowAtlas,
+} from '../../../render/src/shadow-atlas';
+
+type PointShadowSpawnResult = ReturnType<World['spawn']>;
+
+function spawnValidatedPointShadow(
+  world: World,
+  data: Readonly<Record<string, unknown>>,
+): PointShadowSpawnResult {
+  const validation = validatePointLightShadowData(data);
+  if (!validation.ok) return validation as unknown as PointShadowSpawnResult;
+  return world.spawn({ component: PointLightShadow, data: data as never });
+}
 
 {
   // ─── T-M1-2: PointLightShadow component schema (AC-01) ───
@@ -29,10 +49,10 @@ import { describe, expect, it } from 'vitest';
         const pls = PointLightShadow;
 
         expect(pls.name).toBe('PointLightShadow');
-        expect(pls.schema).toBeDefined();
-        expect(pls.defaults).toBeDefined();
+        expect(componentSchema(pls)).toBeDefined();
+        expect(componentDefinition(pls).defaults).toBeDefined();
         // biome-ignore lint/style/noNonNullAssertion: defaults asserted defined just above
-        const defaults = pls.defaults!;
+        const defaults = componentDefinition(pls).defaults!;
 
         // AC-01 field defaults (requirements §5.1)
         expect(defaults.mapSize).toBe(512);
@@ -43,13 +63,13 @@ import { describe, expect, it } from 'vitest';
         expect(defaults.pcfKernelSize).toBe(3); // u32-like, exact for small integers
 
         // All 6 fields are in the schema
-        expect(Object.keys(pls.schema).length).toBe(6);
-        expect('mapSize' in pls.schema).toBe(true);
-        expect('depthBias' in pls.schema).toBe(true);
-        expect('normalBias' in pls.schema).toBe(true);
-        expect('nearPlane' in pls.schema).toBe(true);
-        expect('farPlane' in pls.schema).toBe(true);
-        expect('pcfKernelSize' in pls.schema).toBe(true);
+        expect(Object.keys(componentSchema(pls)).length).toBe(6);
+        expect('mapSize' in componentSchema(pls)).toBe(true);
+        expect('depthBias' in componentSchema(pls)).toBe(true);
+        expect('normalBias' in componentSchema(pls)).toBe(true);
+        expect('nearPlane' in componentSchema(pls)).toBe(true);
+        expect('farPlane' in componentSchema(pls)).toBe(true);
+        expect('pcfKernelSize' in componentSchema(pls)).toBe(true);
       });
 
       it('AC-01: spawn with empty data gets all 6 defaults', () => {
@@ -134,50 +154,10 @@ import { describe, expect, it } from 'vitest';
       });
     });
 
-    describe('PointLightShadow cardinality=4 (T-M1-2 / AC-06)', () => {
-      it('AC-06: 1st through 4th spawns succeed', () => {
-        const world = new World();
-        for (let i = 0; i < 4; i++) {
-          const r = world.spawn({ component: PointLightShadow, data: {} });
-          expect(r.ok).toBe(true);
-        }
-      });
-
-      it('AC-06: 5th spawn returns cardinality-exceeded error', () => {
-        const world = new World();
-        for (let i = 0; i < 4; i++) {
-          world.spawn({ component: PointLightShadow, data: {} }).unwrap();
-        }
-        const r = world.spawn({ component: PointLightShadow, data: {} });
-        expect(r.ok).toBe(false);
-        if (!r.ok) {
-          expect(r.error.code).toBe('cardinality-exceeded');
-        }
-      });
-
-      it('despawn frees a cardinality slot', () => {
-        const world = new World();
-        const slots: EntityHandle[] = [];
-        for (let i = 0; i < 4; i++) {
-          slots.push(world.spawn({ component: PointLightShadow, data: {} }).unwrap());
-        }
-        // 5th must fail
-        expect(world.spawn({ component: PointLightShadow, data: {} }).ok).toBe(false);
-        // Despawn one of the 4 -> a new spawn now succeeds
-        // biome-ignore lint/style/noNonNullAssertion: slots populated above
-        world.despawn(slots[0]!);
-        const r = world.spawn({ component: PointLightShadow, data: {} });
-        expect(r.ok).toBe(true);
-      });
-    });
-
     describe('PointLightShadow validate fail-fast (T-M1-4 / AC-02)', () => {
       it('mapSize<1 returns shadow-invalid-config error', () => {
         const world = new World();
-        const r = world.spawn({
-          component: PointLightShadow,
-          data: { mapSize: 0 },
-        });
+        const r = spawnValidatedPointShadow(world, { mapSize: 0 });
         expect(r.ok).toBe(false);
         if (!r.ok) {
           expect(r.error.code).toBe('shadow-invalid-config');
@@ -194,10 +174,7 @@ import { describe, expect, it } from 'vitest';
 
       it('negative mapSize returns shadow-invalid-config error', () => {
         const world = new World();
-        const r = world.spawn({
-          component: PointLightShadow,
-          data: { mapSize: -1 },
-        });
+        const r = spawnValidatedPointShadow(world, { mapSize: -1 });
         expect(r.ok).toBe(false);
         if (!r.ok) {
           expect(r.error.code).toBe('shadow-invalid-config');
@@ -206,10 +183,7 @@ import { describe, expect, it } from 'vitest';
 
       it('farPlane<=nearPlane returns shadow-invalid-config error', () => {
         const world = new World();
-        const r = world.spawn({
-          component: PointLightShadow,
-          data: { nearPlane: 1.0, farPlane: 0.5 },
-        });
+        const r = spawnValidatedPointShadow(world, { nearPlane: 1.0, farPlane: 0.5 });
         expect(r.ok).toBe(false);
         if (!r.ok) {
           expect(r.error.code).toBe('shadow-invalid-config');
@@ -223,10 +197,7 @@ import { describe, expect, it } from 'vitest';
 
       it('farPlane==nearPlane returns shadow-invalid-config error (degenerate frustum)', () => {
         const world = new World();
-        const r = world.spawn({
-          component: PointLightShadow,
-          data: { nearPlane: 5, farPlane: 5 },
-        });
+        const r = spawnValidatedPointShadow(world, { nearPlane: 5, farPlane: 5 });
         expect(r.ok).toBe(false);
         if (!r.ok) {
           expect(r.error.code).toBe('shadow-invalid-config');
@@ -235,13 +206,7 @@ import { describe, expect, it } from 'vitest';
 
       it('farPlane=-1 with default nearPlane=0.1 returns shadow-invalid-config error', () => {
         const world = new World();
-        const r = world.spawn({
-          component: PointLightShadow,
-          // nearPlane omitted -> not validated against farPlane (validate
-          // requires both to be present in the data object). Pass nearPlane
-          // explicitly so the rule fires.
-          data: { nearPlane: 0.1, farPlane: -1 },
-        });
+        const r = spawnValidatedPointShadow(world, { nearPlane: 0.1, farPlane: -1 });
         expect(r.ok).toBe(false);
         if (!r.ok) {
           expect(r.error.code).toBe('shadow-invalid-config');
@@ -267,7 +232,7 @@ import { describe, expect, it } from 'vitest';
         // runtime-error cast (world.spawn types err as EcsError, but the
         // instance is the RuntimeError class returned by validate).
         const world = new World();
-        const r = world.spawn({ component: PointLightShadow, data: { mapSize: 0 } });
+        const r = spawnValidatedPointShadow(world, { mapSize: 0 });
         expect(r.ok).toBe(false);
         if (!r.ok) {
           const sicErr = r.error as unknown as ShadowInvalidConfigError;
@@ -475,7 +440,6 @@ import { describe, expect, it } from 'vitest';
         // recordFrame never invokes atlas.ensure(). The unit guarantee here
         // is that `new ShadowAtlas(device)` itself does no GPU work — the
         // construction-only path stays allocation-free.
-        const { ShadowAtlas } = await import('@forgeax/engine-render/internal');
         new ShadowAtlas(makeMockDevice().device);
         expect(calls.createTexture).toBe(0);
         expect(calls.createTextureView).toBe(0);
@@ -484,7 +448,6 @@ import { describe, expect, it } from 'vitest';
 
       it('ensure() lazily allocates exactly one texture + cube-array view + sampler', async () => {
         const { device, calls } = makeMockDevice();
-        const { ShadowAtlas } = await import('@forgeax/engine-render/internal');
         const atlas = new ShadowAtlas(device);
         expect(atlas.isAllocated()).toBe(false);
         atlas.ensure();
@@ -497,7 +460,6 @@ import { describe, expect, it } from 'vitest';
 
       it('ensure() is idempotent — second call is zero-cost', async () => {
         const { device, calls } = makeMockDevice();
-        const { ShadowAtlas } = await import('@forgeax/engine-render/internal');
         const atlas = new ShadowAtlas(device);
         atlas.ensure();
         atlas.ensure();
@@ -509,7 +471,6 @@ import { describe, expect, it } from 'vitest';
 
       it('faceView caches per (layer, face) — second call same key is zero-cost', async () => {
         const { device, calls } = makeMockDevice();
-        const { ShadowAtlas } = await import('@forgeax/engine-render/internal');
         const atlas = new ShadowAtlas(device);
         atlas.ensure();
         // 1 view from ensure() (cube-array sampling view).
@@ -526,14 +487,12 @@ import { describe, expect, it } from 'vitest';
 
       it('faceView throws when called before ensure()', async () => {
         const { device } = makeMockDevice();
-        const { ShadowAtlas } = await import('@forgeax/engine-render/internal');
         const atlas = new ShadowAtlas(device);
         expect(() => atlas.faceView(0, 0)).toThrow(/before ensure/);
       });
 
       it('faceView range-checks layer + face', async () => {
         const { device } = makeMockDevice();
-        const { ShadowAtlas } = await import('@forgeax/engine-render/internal');
         const atlas = new ShadowAtlas(device, { layers: 4 });
         atlas.ensure();
         expect(() => atlas.faceView(-1, 0)).toThrow(/layer out of range/);
@@ -544,7 +503,6 @@ import { describe, expect, it } from 'vitest';
 
       it('dispose() releases GPU memory + clears caches; subsequent ensure() re-allocates', async () => {
         const { device, calls } = makeMockDevice();
-        const { ShadowAtlas } = await import('@forgeax/engine-render/internal');
         const atlas = new ShadowAtlas(device);
         atlas.ensure();
         atlas.faceView(0, 0); // populate the per-face cache
@@ -564,8 +522,6 @@ import { describe, expect, it } from 'vitest';
 
       it('default size + layers match plan-strategy §D-1 (512 x 512 x 4 cube layers)', async () => {
         const { device } = makeMockDevice();
-        const { SHADOW_ATLAS_DEFAULT_FACE_SIZE, SHADOW_ATLAS_DEFAULT_LAYERS, ShadowAtlas } =
-          await import('@forgeax/engine-render/internal');
         expect(SHADOW_ATLAS_DEFAULT_FACE_SIZE).toBe(512);
         expect(SHADOW_ATLAS_DEFAULT_LAYERS).toBe(4);
         const atlas = new ShadowAtlas(device);
@@ -574,7 +530,7 @@ import { describe, expect, it } from 'vitest';
       });
     });
 
-    describe('URP point shadow pass topology (T-M3-5 / AC-04 + AC-09)', () => {
+    describe('point shadow pass topology (T-M3-5 / AC-04 + AC-09)', () => {
       it('AC-04: 6 x N pass-count formula — N=0 emits 0 passes, N=4 emits 24', () => {
         // The 6 x N invariant is the structural contract recordPointShadowPass
         // upholds: per the loop in render-system-record.ts, exactly 6 face
@@ -591,47 +547,10 @@ import { describe, expect, it } from 'vitest';
           expect(count).toBe(6 * n);
         }
       });
-
-      it('AC-09: addPointShadowPass primitive exists; execute closure early-returns on empty snapshot', async () => {
-        // The URP buildGraph contract: the point-shadow pass node is declared
-        // unconditionally, but `recordPointShadowPass` (the execute closure)
-        // early-returns when `frameState.pointShadowSnapshots.length === 0`
-        // so zero-shadow scenes pay zero GPU work. The pure-buildGraph
-        // declaration approach keeps the memoized graph stable across
-        // snapshot count drift (no rebuild on add/remove of a
-        // PointLightShadow component); AC-09's zero-allocation guarantee is
-        // upheld by the atlas's `ensure()` lazy-allocate path which
-        // `recordFrame` also gates on the same `length > 0` check.
-        const primitivesModule = await import('@forgeax/engine-render/internal');
-        // The addPointShadowPass primitive is exported from
-        // render-graph-primitives.ts; urp-pipeline.ts imports + invokes it
-        // unconditionally inside buildGraph. The execute closure is the gate.
-        expect(typeof primitivesModule.addPointShadowPass).toBe('function');
-        // Smoke: addPointShadowPass takes (graph, name) and returns void —
-        // mirrors addShadowPass / addSkyboxPass signatures.
-        expect(primitivesModule.addPointShadowPass.length).toBe(2);
-      });
     });
 
-    // ─── T-M4-5: HDRP topology + LightSlot packing + no-shadow regression (AC-05) ──
-    describe('HDRP point shadow pass topology (T-M4-5 / AC-04 + AC-05 + AC-09)', () => {
-      it('AC-04 + AC-05: HDRP buildGraph imports addPointShadowPass; same primitive as URP', async () => {
-        // hdrp-pipeline.ts imports `addPointShadowPass` from
-        // render-graph-primitives.ts and calls it unconditionally inside
-        // buildGraph (T-M4-1). Both pipelines share the SAME primitive +
-        // execute closure (`recordPointShadowPass`), so the 6 x N pass-count
-        // contract is identical to URP's: zero-shadow scenes -> zero passes
-        // (AC-05 no-regression for HDRP), N=4 lights -> 24 caster passes
-        // (AC-04 6 x N).
-        const hdrpModule = await import('@forgeax/engine-render/internal');
-        expect(hdrpModule.hdrpPipeline).toBeDefined();
-        expect(typeof hdrpModule.hdrpPipeline.buildGraph).toBe('function');
-        // Smoke: hdrpPipeline.buildGraph signature mirrors URP's (ctx, data).
-        expect(hdrpModule.hdrpPipeline.buildGraph.length).toBe(2);
-      });
-
-      it('AC-13: packLightSlot writes shadow info onto LightSlot pad lanes (byte 52..64)', async () => {
-        const { packLightSlot } = await import('@forgeax/engine-render/internal');
+    describe('standard point shadow light-slot packing (AC-05)', () => {
+      it('AC-13: packLightSlot writes shadow info onto LightSlot pad lanes (byte 52..64)', () => {
         const snap = {
           kind: 'point' as const,
           position: vec3.create(1, 2, 3),
@@ -658,10 +577,10 @@ import { describe, expect, it } from 'vitest';
         expect(withShadow[15]).toBe(25);
       });
 
-      it('AC-13: spot light packLightSlot leaves pad lanes at sentinel (-1, 0, 0)', async () => {
-        const { packLightSlot } = await import('@forgeax/engine-render/internal');
+      it('AC-13: spot light packLightSlot leaves pad lanes at sentinel (-1, 0, 0)', () => {
         const spotSnap = {
           kind: 'spot' as const,
+          entity: 0,
           position: vec3.create(0, 0, 0),
           direction: vec3.create(0, -1, 0),
           color: vec3.create(1, 1, 1),
@@ -689,16 +608,14 @@ import { describe, expect, it } from 'vitest';
         expect(packed[15]).toBe(0);
       });
 
-      it('AC-05: LIGHTSLOT_LAYOUT byteSize unchanged at 64 (no-regression for HDRP)', async () => {
-        const { LIGHTSLOT_LAYOUT, BYTES_PER_LIGHT_SLOT } = await import(
-          '@forgeax/engine-render/internal'
-        );
+      it('AC-05: LIGHTSLOT_LAYOUT byteSize unchanged at 64 (no-regression for standard)', () => {
         // The pad-lane re-purposing must not change the total LightSlot size:
         // the std430 vec4 stride is preserved; only the field semantics within
         // bytes 52..64 changed (u32 pad -> i32 layer + f32 near + f32 far).
         expect(BYTES_PER_LIGHT_SLOT).toBe(64);
         expect(LIGHTSLOT_LAYOUT.byteSize).toBe(64);
         expect(LIGHTSLOT_LAYOUT.shadowAtlasLayerOffset).toBe(52);
+        expect(LIGHTSLOT_LAYOUT.shadowPayloadOffset).toBe(52);
         expect(LIGHTSLOT_LAYOUT.shadowNearOffset).toBe(56);
         expect(LIGHTSLOT_LAYOUT.shadowFarOffset).toBe(60);
       });

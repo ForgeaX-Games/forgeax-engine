@@ -1,12 +1,12 @@
 export type {
   ExecutionBootstrapEntry,
-  ExecutionRealmBootstrapContext,
+  ExecutionBootstrapHost,
   PreparedExecutionBootstrap,
 } from './bootstrap-entry';
 export {
+  executionBootstrapHostPlugin,
   loadBootstrapEntry,
   prepareBootstrapEntry,
-  runPreparedBootstrap,
   validateExecutionBootstrapData,
 } from './bootstrap-entry';
 export {
@@ -19,6 +19,7 @@ export { createExecutionReport } from './report';
 export { EXECUTION_REPORT_SCHEMA_VERSION, isExecutionReport } from './schema';
 export { type ExecutionSelectionInput, selectExecutionTier } from './selector';
 export type {
+  ExecutionAssetCatalog,
   ExecutionBootstrapValue,
   ExecutionCapabilities,
   ExecutionCapabilityFact,

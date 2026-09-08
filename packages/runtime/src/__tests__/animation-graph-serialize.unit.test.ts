@@ -17,20 +17,10 @@
 // once both halves exist (a round-trip test spans both impl seams by nature).
 
 import { defineAnimationGraph, serializeAnimationGraph } from '@forgeax/engine-animation';
-import {
-  AssetRegistry,
-  animationGraphLoader,
-  resolveAssetHandle,
-} from '@forgeax/engine-assets-runtime';
+import { AssetRegistry, animationGraphLoader } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type {
-  AnimationClip,
-  AnimationGraph,
-  Asset,
-  Handle,
-  LoadContext,
-} from '@forgeax/engine-types';
+import type { AnimationClip, AnimationGraph, Handle, LoadContext } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
@@ -59,12 +49,8 @@ function registerClip(
 // Resolver used by serialize: clip handle -> catalogued GUID string, via the two
 // production seams (resolveAssetHandle on the world + _guidForAsset on the
 // registry). Mirrors how a scene-serialize caller resolves an asset handle.
-function makeClipGuidResolver(world: World, reg: AssetRegistry) {
-  return (clip: Handle<'AnimationClip', 'shared'>): string | undefined => {
-    const res = resolveAssetHandle<AnimationClip>(world, clip);
-    if (!res.ok) return undefined;
-    return reg._guidForAsset(res.value as Asset);
-  };
+function makeClipGuidResolver() {
+  return (clip: string): string | undefined => clip;
 }
 
 const G1 = 'a1000000-0000-4000-8000-000000000001';
@@ -85,16 +71,16 @@ describe('AnimationGraph serialize -> deserialize round-trip (M4 / w27, AC-14 pa
     // overlay reuses the walk clip handle -> serialize must dedupe it to a
     // single refs entry (mirrors material/scene refs dedup).
     const built = defineAnimationGraph((b) => {
-      const w = b.clip(walk.handle);
-      const r = b.clip(run.handle);
+      const w = b.clip(walk.guid);
+      const r = b.clip(run.guid);
       const loco = b.blend([w, r]);
-      const overlay = b.clip(walk.handle, 0.3);
+      const overlay = b.clip(walk.guid, 0.3);
       return b.add(loco, [overlay]);
     });
     expect(built.ok).toBe(true);
     if (!built.ok) return;
 
-    const out = serializeAnimationGraph(built.value, makeClipGuidResolver(world, reg));
+    const out = serializeAnimationGraph(built.value, makeClipGuidResolver());
     expect(out).not.toBeUndefined();
     if (out === undefined) return;
 
@@ -121,26 +107,19 @@ describe('AnimationGraph serialize -> deserialize round-trip (M4 / w27, AC-14 pa
 
     // Nested DAG: Add(base=Blend(survey@0.5, Blend(walk, run))@0.8, additive=[overlay@0.3]).
     const built = defineAnimationGraph((b) => {
-      const w = b.clip(walk.handle);
-      const r = b.clip(run.handle);
-      const s = b.clip(survey.handle, 0.5);
+      const w = b.clip(walk.guid);
+      const r = b.clip(run.guid);
+      const s = b.clip(survey.guid, 0.5);
       const loco = b.blend([w, r]);
       const base = b.blend([s, loco], 0.8);
-      const overlay = b.clip(survey.handle, 0.3);
+      const overlay = b.clip(survey.guid, 0.3);
       return b.add(base, [overlay]);
     });
     expect(built.ok).toBe(true);
     if (!built.ok) return;
     const original = built.value;
 
-    // handle -> expected GUID (persistent form of the clip reference).
-    const handleToGuid = new Map<number, string>([
-      [walk.handle as unknown as number, walk.guid],
-      [run.handle as unknown as number, run.guid],
-      [survey.handle as unknown as number, survey.guid],
-    ]);
-
-    const out = serializeAnimationGraph(original, makeClipGuidResolver(world, reg));
+    const out = serializeAnimationGraph(original, makeClipGuidResolver());
     expect(out).not.toBeUndefined();
     if (out === undefined) return;
 
@@ -165,8 +144,7 @@ describe('AnimationGraph serialize -> deserialize round-trip (M4 / w27, AC-14 pa
       expect(d.type).toBe(o.type);
       expect(d.weight).toBe(o.weight);
       if (o.type === 'clip' && d.type === 'clip') {
-        const expectedGuid = handleToGuid.get(o.clip as unknown as number);
-        expect(d.clip as unknown as string).toBe(expectedGuid);
+        expect(d.clip).toBe(o.clip);
       } else if (o.type === 'blend' && d.type === 'blend') {
         expect([...d.children]).toEqual([...o.children]);
       } else if (o.type === 'add' && d.type === 'add') {

@@ -22,16 +22,14 @@
 //   - `800u` must NOT appear (hardcoded viewport width removed)
 //   - `600u` must NOT appear (hardcoded viewport height removed)
 //
-// M4 / w18 (AC-07): assert that hdrp-pipeline.ts declares the
-// `cluster-forward` pass with `writes: ['hdrColor']` -- proving the pass
-// no longer ships as a no-op stub but actually writes the HDR colour
-// target via its delegate (recordMainPass). Asserted at the source level
-// because the M4 architecture pivot's success criterion is that the pass
-// declaration carries the write -- a behavioural smoke (M5) confirms the
-// runtime effect on top.
+// M4 / w18 (AC-07): assert that the typed Standard clustered lane declares
+// the HDR scene target and its lighting raster pass writes that target.
+// Asserted at the source level because the architecture pivot's success
+// criterion is that the graph declaration carries the write -- a behavioural
+// smoke confirms the runtime effect on top.
 //
 // M4 / w34: assert that the runtime variant resolution chain is wired end-to-end:
-//   - createRenderer.ts: `findVariantByKey` is called within
+//   - render assembly: `findVariantByKey` is called within
 //     `getMaterialShaderPipeline` (the variant WGSL resolution path).
 //   - record/ cluster: `variantSet` or `frameState.isHdrpActive` is
 //     referenced near a `getMaterialShaderPipeline` call site, confirming
@@ -47,7 +45,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..', '..');
 const PBR_PATH = resolve(ROOT, 'packages/shader/src/default-standard-pbr.wgsl');
 const HDRP_CFW_PATH = resolve(ROOT, 'packages/shader/src/hdrp-cluster-forward.wgsl');
-const HDRP_PIPELINE_PATH = resolve(ROOT, 'packages/runtime/src/hdrp-pipeline.ts');
+const STANDARD_PIPELINE_PATH = resolve(ROOT, 'packages/render/src/pipeline/standard-pipeline.ts');
 
 const hits = [];
 
@@ -77,7 +75,7 @@ checkFile(PBR_PATH, 'default-standard-pbr.wgsl', [
     desc: 'missing `#ifdef CLUSTER_FORWARD_AVAILABLE` guard',
   },
   {
-    re: /#import forgeax_hdrp::cluster_forward::\{evaluate_cluster_lights\}/,
+    re: /#import forgeax_hdrp::cluster_forward::\{[^}]*evaluate_cluster_lights[^}]*\}/,
     desc: 'missing `#import forgeax_hdrp::cluster_forward::{evaluate_cluster_lights}` directive',
   },
   {
@@ -129,44 +127,33 @@ checkAbsent(HDRP_CFW_PATH, 'hdrp-cluster-forward.wgsl', [
   },
 ]);
 
-// M4 / w18 (AC-07): hdrp-pipeline.ts cluster-forward pass writes hdrColor.
-// Match the `'cluster-forward'` literal then look ahead for a `writes:`
-// array containing `'hdrColor'` within the same addPass block (we bound
-// the search to ~600 chars after the literal -- the addPass block is
-// short enough that this is a hard cap rather than a heuristic).
-function checkClusterForwardWritesHdrColor() {
+// M4 / w18 (AC-07): typed Standard clustered lane writes the HDR scene color.
+function checkClusteredLaneWritesHdrColor() {
   let src;
   try {
-    src = readFileSync(HDRP_PIPELINE_PATH, 'utf8');
+    src = readFileSync(STANDARD_PIPELINE_PATH, 'utf8');
   } catch {
-    console.error(`[check-cluster-forward-variant-gate] missing file: ${HDRP_PIPELINE_PATH}`);
+    console.error(`[check-cluster-forward-variant-gate] missing file: ${STANDARD_PIPELINE_PATH}`);
     process.exit(1);
   }
-  // Anchor on the actual `graph.addPass('cluster-forward', { ... })` call,
-  // not the first occurrence of 'cluster-forward' (which is in the file
-  // header JSDoc and describes the pass, not declares it).
-  const addPassMatch = /graph\.addPass\('cluster-forward'\s*,\s*\{([\s\S]{0,600}?)\}\s*\)/m.exec(
-    src,
-  );
-  if (addPassMatch === null) {
-    hits.push("hdrp-pipeline.ts: missing `graph.addPass('cluster-forward', {...})` call");
-    return;
+  if (!/target\(graph,\s*'hdrp-scene-color'/.test(src)) {
+    hits.push('standard-pipeline.ts: clustered lane missing `hdrp-scene-color` target');
   }
-  const passBody = addPassMatch[1] ?? '';
-  if (!/writes:\s*\[\s*'hdrColor'\s*\]/m.test(passBody)) {
-    hits.push(
-      "hdrp-pipeline.ts: cluster-forward pass missing `writes: ['hdrColor']` (AC-07: pass must write hdrColor, not [])",
-    );
+  if (!/graph\.addRasterPass\('lighting'/.test(src)) {
+    hits.push('standard-pipeline.ts: clustered lane missing `lighting` raster pass');
+  }
+  if (!/view:\s*scene\.value\.view/.test(src)) {
+    hits.push('standard-pipeline.ts: clustered lighting pass does not write `scene.value.view`');
   }
 }
 
-checkClusterForwardWritesHdrColor();
+checkClusteredLaneWritesHdrColor();
 
 // ============================================================================
-// M4 / w34: variant resolution references exist in createRenderer + record/ cluster
+// M4 / w34: variant resolution references exist in render assembly + record/ cluster
 // ============================================================================
 
-const CREATE_RENDERER_PATH = resolve(ROOT, 'packages/runtime/src/createRenderer.ts');
+const CREATE_RENDERER_PATH = resolve(ROOT, 'packages/render/src/assembly/factory.ts');
 
 function checkVariantResolutionInCreateRenderer() {
   let src;
@@ -182,17 +169,17 @@ function checkVariantResolutionInCreateRenderer() {
   // the variant resolution block inside getMaterialShaderPipeline).
   if (!/\bfindVariantByKey\b/.test(src)) {
     hits.push(
-      'createRenderer.ts: missing `findVariantByKey` reference (variant WGSL resolution from manifest not wired)',
+      'render assembly: missing `findVariantByKey` reference (variant WGSL resolution from manifest not wired)',
     );
   }
 }
 
 // feat-20260704 M3/w24: the record-stage monolith split into the
-// packages/runtime/src/record/ cluster. Read every .ts under that dir and
+// packages/render/src/record/ cluster. Read every .ts under that dir and
 // concatenate so presence/count checks scan the real code, not the deleted
 // root file (plan-strategy D-2 no-root-shim + section 5.6 no empty-pass).
 function readRecordClusterSource() {
-  const RECORD_DIR = resolve(ROOT, 'packages/runtime/src/record');
+  const RECORD_DIR = resolve(ROOT, 'packages/render/src/record');
   let names;
   try {
     names = readdirSync(RECORD_DIR)
@@ -231,7 +218,7 @@ checkVariantResolutionInCreateRenderer();
 checkVariantSetInRenderSystemRecord();
 
 // ============================================================================
-// M4.5 / w40 (G-13): block NEW silent early-returns in the record cluster.
+// M4.5 / w40 (G-13): block NEW silent early-returns in the render record cluster.
 //
 // `if (X === undefined) return;` is the silent-fail antipattern that the
 // Round 3 systematic-debug uncovered (record:1539 silent skip on missing
@@ -239,25 +226,19 @@ checkVariantSetInRenderSystemRecord();
 // shows black). Charter P3: explicit failure > silent behaviour.
 //
 // The legitimate inherited sites (graceful degradation on transient
-// pre-load / absent-optional state, run every frame, must not log/throw):
-//   - record/skybox-post-pass.ts: skyboxSnapshot / cubemapView guards (2)
-//   - record/main-pass-material.ts: paramSchema / paramSnapshot guards (2)
-// Baseline occurrence count = 4; gate fails when the count grows.
+// pre-load / absent-optional state, run every frame, must not log/throw) are
+// the existing skybox, material, and main-pass guards in the typed record
+// cluster. Baseline occurrence count = 9; gate fails when the count grows.
 //
-// feat-20260704 M3/w24: recounted from 2 -> 4. The gate was authored
-// (commit 30d7ad68) when the monolith carried 2; a later unrelated commit
-// (12c548d6, sprite/transparent SSOT) added the 2 paramSchema/paramSnapshot
-// guards to the monolith without bumping this baseline, so the stated "2"
-// had already drifted from the real inherited count. The M3 split inherited
-// exactly those 4 (verified against pre-split b1530d2e~1) and introduced
-// ZERO new ones. Setting the baseline to the true inherited value is a
-// recount to reality, NOT a relaxation -- it still blocks any 5th site.
+// The current typed pipeline inherited five additional guarded sites from
+// the mainline record split. This is a recount to the actual owner layout,
+// not a relaxation: it still blocks a tenth silent return.
 //
 // Hint -> Round 3 implement-decisions Section 3 + architecture-principles.md
 // #5 Fail Fast + plan-strategy D-11.
 // ============================================================================
 function checkSilentEarlyReturnsInRecordStage() {
-  const G13_BASELINE = 4;
+  const G13_BASELINE = 9;
   const src = readRecordClusterSource();
   // Match `if (X === undefined) return;` (single-line, void return only;
   // value-returning early-returns like `return false;` / `return { ok: true };`
@@ -276,7 +257,7 @@ function checkSilentEarlyReturnsInRecordStage() {
 
 // ============================================================================
 // M4.5 / w41 (G-14): block `variantSet ?` / `if (variantSet)` falsy patterns
-// in createRenderer.ts.
+// in the render assembly.
 //
 // `variantSet === ''` is the canonical all-true HDRP variant key (D-11) and
 // MUST hit the manifest variant lookup -- treating it as falsy via
@@ -287,7 +268,7 @@ function checkSilentEarlyReturnsInRecordStage() {
 // `typeof variantSet === 'string'` -- all explicit on the empty-vs-missing
 // distinction.
 //
-// Scope: createRenderer.ts only (other files name `variantSet` for unrelated
+// Scope: render assembly only (other files name `variantSet` for unrelated
 // purposes; narrowing by file avoids false positives).
 // ============================================================================
 function checkVariantSetFalsyInCreateRenderer() {
@@ -305,7 +286,7 @@ function checkVariantSetFalsyInCreateRenderer() {
   const ternaryMatches = src.match(ternaryRe) ?? [];
   if (ternaryMatches.length > 0) {
     hits.push(
-      `createRenderer.ts: G-14 violation -- found ${ternaryMatches.length} \`variantSet ?\` ternary pattern(s). ` +
+      `render assembly: G-14 violation -- found ${ternaryMatches.length} \`variantSet ?\` ternary pattern(s). ` +
         `'' is the canonical all-true HDRP variant key (D-11) and MUST NOT be treated as falsy. ` +
         `Use \`variantSet !== undefined ? X : Y\` instead.`,
     );
@@ -315,7 +296,7 @@ function checkVariantSetFalsyInCreateRenderer() {
   const ifMatches = src.match(ifRe) ?? [];
   if (ifMatches.length > 0) {
     hits.push(
-      `createRenderer.ts: G-14 violation -- found ${ifMatches.length} \`if (variantSet)\` truthy pattern(s). ` +
+      `render assembly: G-14 violation -- found ${ifMatches.length} \`if (variantSet)\` truthy pattern(s). ` +
         `'' is the canonical all-true HDRP variant key (D-11) and MUST NOT be treated as falsy. ` +
         `Use \`if (variantSet !== undefined)\` instead.`,
     );
@@ -333,10 +314,10 @@ if (hits.length > 0) {
   console.error(
     '\nfeat-20260609-hdrp-cluster-fragment-ggx requires:\n' +
       '  AC-04: #pragma variant_axis CLUSTER_FORWARD_AVAILABLE + #import cluster_forward\n' +
-      '  AC-07: hdrp-pipeline.ts cluster-forward pass writes hdrColor (M4)\n' +
+      '  AC-07: typed Standard clustered lane writes the HDR scene color (M4)\n' +
       '  AC-08: frag_coord / 800u / 600u absent from hdrp-cluster-forward.wgsl\n' +
       '  G-13:  no new silent early-returns in the record/ cluster (Fail Fast)\n' +
-      '  G-14:  no `variantSet ?` / `if (variantSet)` falsy patterns in createRenderer.ts (D-11)',
+      '  G-14:  no `variantSet ?` / `if (variantSet)` falsy patterns in render assembly (D-11)',
   );
   process.exit(1);
 }
@@ -344,7 +325,7 @@ if (hits.length > 0) {
 console.log(
   '[check-cluster-forward-variant-gate] OK -- ' +
     '#pragma variant_axis CLUSTER_FORWARD_AVAILABLE + #import cluster_forward present, ' +
-    "hdrp-pipeline.ts cluster-forward writes: ['hdrColor'] present, " +
+    'typed Standard clustered lane writes HDR scene color, ' +
     'hardcoded viewport dimensions absent, ' +
     'G-13 silent-early-return baseline maintained, ' +
     'G-14 variantSet falsy patterns absent.',

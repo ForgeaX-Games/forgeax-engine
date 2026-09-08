@@ -135,13 +135,14 @@ const { Transform } = await import('@forgeax/engine-scene');
 
 const audioPkg = await import('@forgeax/engine-audio');
 const { AUDIO_ENGINE_RESOURCE_KEY, audioPlugin } = audioPkg;
+const { webAudioPlugin } = await import('@forgeax/engine-audio-webaudio');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
 
 const appResult = await createApp(mockCanvas, {
-  plugins: [audioPlugin()],
+  plugins: [webAudioPlugin(), audioPlugin()],
 }, { shaderManifestUrl: MANIFEST_URL }).catch((err) => {
   originalConsoleError(`[smoke] FAIL - createApp threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
@@ -153,7 +154,7 @@ if (!appResult.ok) {
   process.exit(1);
 }
 const app = appResult.value;
-console.log(`[hello-audio] backend=${app.renderer.backend}`);
+console.log(`[hello-audio] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
 app.world.spawn(
   { component: Transform, data: { pos: [0, 0, 3]} },
@@ -167,11 +168,6 @@ app.world.spawn({
 const onErrorEvents = [];
 app.onError((err) => onErrorEvents.push({ code: err.code, hint: err.hint }));
 
-const ready = await app.renderer.ready;
-if (!ready.ok) {
-  originalConsoleError(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 // Monkey-patch performance.now BEFORE app.start() so the frame-loop's
 // initial lastTimestamp reads the fake value, not a large real timestamp.

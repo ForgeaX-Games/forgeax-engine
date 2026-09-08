@@ -65,12 +65,105 @@ Run the full browser proof. It starts a temporary authority, a Vite dev server, 
 pnpm --filter @forgeax/multiplayer-snake e2e:browser
 ```
 
+Run the real-socket process proof, including same-session reconnect and fresh-epoch resync:
+
+```bash
+pnpm --filter @forgeax/multiplayer-snake test:process-e2e
+```
+
 Run the unit and integration gates:
 
 ```bash
 pnpm --filter @forgeax/multiplayer-snake test
 pnpm --filter @forgeax/multiplayer-snake typecheck
 ```
+
+### M17 real-WebSocket chaos gauntlet
+
+The `gauntlet` command is the acceptance driver for reconnect chaos. It uses public Node and
+browser WebSocket clients through a bounded TCP `ws` proxy; it does not inject a `MemoryEndpoint`
+or add retry policy to the app. The positive matrix runs three complete repeats with these controls:
+
+| Control | Required proof |
+|:--|:--|
+| `disconnect` | The same logical session recovers through a replacement peer. |
+| `duplicate` | A duplicated baseline does not duplicate accepted replica identities. |
+| `out-of-order` | A stale old-epoch baseline after the fresh baseline is ignored safely. |
+| `delayed-delivery` | The first delta is delayed by a fixed bounded 40 ms and still converges. |
+| `late-join` | A newly connected peer accepts a sequence-one baseline before deltas. |
+
+Run it with:
+
+```bash
+pnpm --filter @forgeax/multiplayer-snake gauntlet
+```
+
+Each control has a named sabotage. The gauntlet expects each sabotage to fail its one intended
+invariant and records the child output under its artifact directory:
+
+```text
+m17-disconnect-recovery
+m17-duplicate-exactly-once
+m17-out-of-order-baseline
+m17-delayed-delivery
+m17-late-join-baseline
+```
+
+The process proof records fresh-epoch packet order, duplicate wire identities, convergence,
+ACK/retry bounds and drain, and authority/client/proxy resource cleanup. The browser proof also
+requires post-recovery interaction and the authority-derived visible roster. `M17_CHAOS_MODE=all`
+is the positive mode; `M17_SABOTAGE=<name>` is reserved for the named negative cases.
+
+## Recovery owner and browser evidence
+
+`@forgeax/engine-net` is the sole owner of application-session recovery. `NetSession` owns the
+logical session, endpoint replacement, bounded ACK/retry accounting, epoch and sequence gating,
+and terminal cleanup. `@forgeax/engine-net-websocket` supplies only browser/Node endpoint and
+connector mechanics. This app owns Snake commands and presentation; it does not reconnect a
+socket, retain an ACK ledger, or treat socket-open as authority.
+
+| Identity or state | Meaning in this demo |
+|:--|:--|
+| `SessionId` | Stable logical application identity across a replacement socket. |
+| `PeerId` | Transport attachment identity; it can change when the socket is replaced and never identifies the player. |
+| `recovering` / `resyncing` | The old projection is frozen and commands are rejected until a fresh authoritative baseline is accepted. |
+| `active` | The current epoch and ordered projection are accepted; commands may be sent. |
+| `baseline` | Complete authority projection at `sequence: 1`, always the first data packet of a new epoch. |
+| `delta` | Ordered projection published only after that epoch's baseline. |
+
+The public recovery journey is `recover()` → `recovering` → replacement endpoint → `resyncing` →
+fresh protocol-v2 baseline → `active`. `getRecoverySnapshot()` is the observation surface. A
+client calls `sendToAuthority(sessionId, bytes)` only while `active`; a structured failure during
+recovery is expected and must not be replaced with an app-local queue or retry loop. `dispose()`
+retires the session and clears its endpoint, timers, pending connects, ledgers, and callbacks.
+
+```ts
+const beforeLoss = session.getRecoverySnapshot();
+if (beforeLoss.state.kind === 'active')
+  session.sendToAuthority(beforeLoss.sessionId, directionCommand);
+
+const outcome = session.recover();
+// Observe getRecoverySnapshot() until the same SessionId is active again.
+```
+
+The browser proof publishes structured trace, visual report, and PNG artifacts under
+`.forgeax-harness/forgeax-loop/feat-20260826-m16-network-reconnect-resync-protocol/artifacts/browser-reconnect/`.
+Its visual target is `multiplayer-snake-reconnect` with these expectations:
+
+- `authority-derived-convergence`: the post-resync canvas contains the authority-derived roster without stale or duplicate replicated entities;
+- `continued-browser-operation`: rendering and input continue after the fresh baseline instead of freezing or going blank.
+
+The two deliberate visual falsifiers are required evidence too:
+
+```bash
+SNAKE_SABOTAGE=visual-hide-body pnpm --filter @forgeax/multiplayer-snake e2e:browser
+SNAKE_SABOTAGE=freeze-after-recover pnpm --filter @forgeax/multiplayer-snake e2e:browser
+```
+
+The first must fail `authority-derived-convergence`; the second must fail
+`continued-browser-operation`. The structured recovery trace must still show
+`recovering` → `resyncing` → `active`, a fresh epoch baseline at sequence 1, rejected
+pre-baseline input, post-recovery interaction, and zero resources after disposal.
 
 ## Engine and game: where the boundary is
 
@@ -115,8 +208,8 @@ flowchart TB
 |:--|:--|:--|
 | `engine-app` | Creates the app and drives `Update` / `FixedUpdate` plus rendering | The frame loop, delta handling, renderer lifecycle, and structured app errors |
 | `engine-ecs` | Stores `Snake`, `GridPosition`, `SnakeBody`, and `SnakeSession` components in a `World` | Schema-defined entities, systems, resources, scheduling, spawn/despawn, and typed component access |
-| `engine-net` | Attaches an authority on the server and a replica in each browser | Peer identity, command/message queues, replication profiles, baselines, deltas, snapshots, and entity-reference remapping |
-| `engine-net-websocket` | Connects the browser to the Node authority | WebSocket lifecycle, binary frames, browser client endpoint, and Node listener |
+| `engine-net` | Attaches an authority on the server and a replica in each browser | `NetSession` recovery ownership, stable `SessionId`, transport `PeerId` mapping, bounded ACK/retry accounting, protocol-v2 baselines/deltas, snapshots, and entity-reference remapping |
+| `engine-net-websocket` | Connects the browser to the Node authority | WebSocket endpoint/connector mechanics, binary frames, browser client endpoint, and Node listener; no application recovery policy |
 | `engine-runtime` | Renders cubes, materials, camera, and transforms | Camera/render extraction, mesh/material resources, render graph execution, and WebGPU backend integration |
 | `engine-types` | Supplies shared `Result`-style contracts and typed failures | Cross-package POD types and explicit success/failure handling |
 
@@ -130,13 +223,14 @@ flowchart TB
 | Networked data selection | [`src/shared/components.ts`](src/shared/components.ts) | The engine can replicate a profile; the game decides which components describe a Snake match |
 | Authority-to-ECS projection | [`src/server.ts`](src/server.ts) | Mapping a plain `SnakeState` into heads, segments, food, and session entities is game-specific |
 | Presentation | [`src/client.ts`](src/client.ts), [`index.html`](index.html) | Player colors, board bounds, HUD copy, keyboard mapping, and grid-to-world coordinates are product decisions |
-| Proof scenarios | [`src/__tests__/`](src/__tests__/) and [`scripts/`](scripts/) | Join, growth, death, late join, and disconnect are acceptance scenarios for this game |
+| Proof scenarios | [`src/__tests__/`](src/__tests__/) and [`scripts/`](scripts/) | Join, growth, death, late join, disconnect, reconnect/resync, and visual falsifiers are acceptance scenarios for this game |
 
 ### How to decide which side a change belongs to
 
 Ask one question: **could another game use the same code without knowing anything about Snake?**
 
 - If yes, it belongs to an engine package or an engine adapter. For example, `createReplicaCoordinator()` can replicate any profile, and `connectWebSocketClientEndpoint()` does not know the payload means “turn left”.
+- Recovery state, ACK/retry bounds, epoch/baseline admission, and `SessionId`/`PeerId` mapping belong to `@forgeax/engine-net`; the WebSocket adapter only supplies endpoint mechanics.
 - If no, it belongs to this demo. For example, `isOpposite()`, `spawnFood()`, `initialSnakeCells()`, `playerNetworkId % 2`, and `gridToWorldPosition()` encode Snake or this demo's presentation.
 
 The boundary is also visible in the data flow:
@@ -306,6 +400,12 @@ Every client receives the authority's replicated result, so convergence is measu
 
 When a new peer joins after gameplay has started, the authority sends a full baseline containing the admitted roster. The new replica reconstructs the same snakes and remapped body references before continuing with later deltas. Disconnect cleanup removes both the authority-side snake and its replicated head/segment entities.
 
+When an existing client loses its socket, the same logical `SessionId` is retained while the
+replacement attachment receives a new `PeerId`. The replica stays frozen and non-authoritative
+until the authority sends a complete baseline for a new epoch at `sequence: 1`; only subsequent
+publication cycles may carry deltas. Pre-baseline commands are rejected by `NetSession`, so the
+Snake client does not need a second recovery lifecycle.
+
 ## Source map
 
 | Concern | Source of truth |
@@ -328,8 +428,9 @@ When a new peer joins after gameplay has started, the authority sends a full bas
 | `server-integration.test.ts` | Authority lifecycle, fixed ticks, admission, projection, and disconnect behavior |
 | `convergence.test.ts` | Body-reference remapping, full baselines, and replica convergence |
 | `write-contract.test.ts` | Read-only replica writes and local render-entity derivation |
-| `process-e2e.test.ts` | Real WebSocket clients across join, growth, death, respawn, late join, and disconnect |
-| `e2e:browser` | Vite + Chrome/WebGPU lifecycle and visual entity-count evidence |
+| `process-e2e.test.ts` | Real WebSocket clients across join, growth, death, respawn, late join, disconnect, same-session reconnect, fresh-epoch baseline, chaos controls, ACK drain, and cleanup |
+| `gauntlet` | Three-repeat Node/browser real-WebSocket chaos matrix plus five named control sabotages |
+| `e2e:browser` | Vite + Chrome/WebGPU reconnect journey, structured lifecycle trace, visual target `multiplayer-snake-reconnect`, and post-resync entity-count evidence |
 
 > [!NOTE]
 > The browser e2e intentionally supports visual falsification with `SNAKE_SABOTAGE=visual-hide-body`. If body rendering is disabled, the state replica can still be correct while the render-entity assertion fails. This keeps network correctness and presentation correctness as separate, testable contracts.

@@ -21,7 +21,17 @@ export {
   type Result,
 } from '@forgeax/engine-types';
 
-// === Per-code detail shapes (16 interfaces, 1 discriminated union) ===
+import type { VertexAttributePackDetail } from '@forgeax/engine-types';
+
+// === Meshopt vocabulary owner ===
+
+export const GLTF_MESHOPT_MODES = ['ATTRIBUTES', 'TRIANGLES', 'INDICES'] as const;
+export type GltfMeshoptMode = (typeof GLTF_MESHOPT_MODES)[number];
+
+export const GLTF_MESHOPT_FILTERS = ['NONE', 'OCTAHEDRAL', 'QUATERNION', 'EXPONENTIAL'] as const;
+export type GltfMeshoptFilter = (typeof GLTF_MESHOPT_FILTERS)[number];
+
+// === Per-code detail shapes (22 interfaces, 1 discriminated union) ===
 
 /** `gltf-malformed-header` payload: GLB magic / chunk header surface. */
 export interface GltfMalformedHeaderDetail {
@@ -136,7 +146,79 @@ export interface GltfAnimationTargetInvalidDetail {
   readonly nodeIndex: number;
 }
 
-/** Discriminated detail family unifying all 16 GltfError variants. */
+export interface GltfMeshoptDecoderRequiredDetail {
+  readonly bufferView: number;
+  readonly actual: 'required' | 'compressed-only';
+  readonly hasCoreFallback: boolean;
+}
+
+export interface GltfMeshoptDecodeFailedDetail {
+  readonly bufferView: number;
+  readonly actual: string;
+  readonly mode: GltfMeshoptMode;
+  readonly filter: GltfMeshoptFilter;
+}
+
+export interface GltfMorphInvalidDetail {
+  readonly meshIndex: number;
+  readonly primitiveIndex: number;
+  readonly reason:
+    | 'target-count-exceeded'
+    | 'attribute-count-exceeded'
+    | 'attribute-length-mismatch'
+    | 'weights-length-mismatch'
+    | 'sparse-or-unsupported-accessor';
+  readonly targetCount: number;
+  readonly attributeCount: number;
+  readonly vertexCount: number;
+}
+
+export interface GltfColorAccessorUnsupportedDetail {
+  readonly semantic: 'COLOR_0';
+  readonly accessorIndex: number;
+  readonly reason: 'component' | 'type' | 'normalized' | 'sparse' | 'morph';
+  readonly expectedType?: string;
+  readonly expectedComponent?: string;
+  readonly expectedNormalized?: boolean;
+}
+
+export interface GltfColorAccessorMalformedDetail {
+  readonly semantic: 'COLOR_0';
+  readonly accessorIndex: number;
+  readonly reason: 'count' | 'bounds' | 'finite' | 'range' | 'reference';
+  readonly expectedCount?: string;
+  readonly expectedRange?: string;
+}
+
+/** Bridge-side mesh merge failure after the parser has produced a GltfMeshIr. */
+export type GltfMeshBridgeInvalidDetail =
+  | {
+      readonly reason: 'empty-input';
+      readonly primitiveCount: 0;
+    }
+  | {
+      readonly reason: 'morph-count-mismatch';
+      readonly meshIndex: number;
+      readonly primitiveIndex: number;
+      readonly expectedTargetCount: number;
+      readonly actualTargetCount: number;
+    }
+  | {
+      readonly reason: 'color-cardinality';
+      readonly semantic: 'COLOR_0';
+      readonly meshIndex: number;
+      readonly primitiveIndex: number;
+      readonly vertexCount: number;
+      readonly expectedLength: number;
+      readonly actualLength: number;
+    }
+  | {
+      readonly reason: 'layout-invalid';
+      readonly meshIndex: number;
+      readonly cause: VertexAttributePackDetail;
+    };
+
+/** Discriminated detail family unifying all 19 GltfError variants. */
 export type GltfErrorDetail = DetailFor[GltfErrorCode];
 
 // === GltfErrorCode and GltfError discriminated union ===
@@ -203,8 +285,8 @@ const gltfErrorPolicy = {
     hint: 'see OOS-skin-cubicspline; convert CUBICSPLINE to LINEAR/STEP in DCC tool',
   },
   'gltf-morph-unsupported': {
-    expected: 'no animation channel targets morph weights (path !== "weights")',
-    hint: 'see OOS-skin-morph-anim; remove morph targets from animation channels in DCC tool',
+    expected: 'animation channel target path is one of translation, rotation, scale, or weights',
+    hint: 'animation target path must be translation, rotation, scale, or weights',
   },
   'gltf-skin-joint-name-missing': {
     expected: 'every joint node has a non-empty name and belongs to an acyclic hierarchy',
@@ -224,6 +306,32 @@ const gltfErrorPolicy = {
     expected:
       'every animation channel resolves to one uniquely named scene node and stable target ID',
     hint: 'name every node in the animated hierarchy and ensure each animated full path is unique',
+  },
+  'gltf-meshopt-decoder-required': {
+    expected:
+      'a required or compressed-only EXT_meshopt_compression bufferView has a ready decoder capability',
+    hint: 'provide the build-only EXT_meshopt_compression decoder or author a valid core fallback bufferView',
+  },
+  'gltf-meshopt-decode-failed': {
+    expected: 'the EXT_meshopt_compression declaration and decoder output are structurally valid',
+    hint: 'the meshopt decoder accepts the declared compressed range and produces the declared byte count',
+  },
+  'gltf-morph-invalid': {
+    expected:
+      'morph target and default-weight arrays are dense, bounded, and match the base vertex count',
+    hint: 're-export dense morph targets with at most eight targets/attributes and matching vertex/default-weight lengths',
+  },
+  'gltf-color-accessor-unsupported': {
+    expected: 'COLOR_0 dense accessor uses VEC3/VEC4 FLOAT or normalized UBYTE/USHORT',
+    hint: 're-export COLOR_0 with a supported type/component/normalized combination; morph and sparse COLOR_0 remain deferred',
+  },
+  'gltf-color-accessor-malformed': {
+    expected: 'COLOR_0 accessor is non-empty, finite, in range, and fully addressable',
+    hint: 'repair the COLOR_0 accessor count, reference, range, or buffer bounds, then re-import the glTF source',
+  },
+  'gltf-mesh-bridge-invalid': {
+    expected: 'a non-empty merged mesh with consistent morph and COLOR_0 cardinality',
+    hint: 'repair the source primitive and re-import; inspect detail.reason and its typed facts',
   },
 } satisfies Record<GltfErrorCode, GltfErrorPolicy>;
 
@@ -250,6 +358,12 @@ interface DetailFor {
   readonly 'gltf-image-extract-failed': GltfImageExtractFailedDetail;
   readonly 'gltf-skin-attr-asymmetric': GltfSkinAttrAsymmetricDetail;
   readonly 'gltf-animation-target-invalid': GltfAnimationTargetInvalidDetail;
+  readonly 'gltf-meshopt-decoder-required': GltfMeshoptDecoderRequiredDetail;
+  readonly 'gltf-meshopt-decode-failed': GltfMeshoptDecodeFailedDetail;
+  readonly 'gltf-morph-invalid': GltfMorphInvalidDetail;
+  readonly 'gltf-color-accessor-unsupported': GltfColorAccessorUnsupportedDetail;
+  readonly 'gltf-color-accessor-malformed': GltfColorAccessorMalformedDetail;
+  readonly 'gltf-mesh-bridge-invalid': GltfMeshBridgeInvalidDetail;
 }
 
 /**

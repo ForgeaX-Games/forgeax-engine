@@ -1,7 +1,9 @@
 #define_import_path forgeax_material::unlit
-#import forgeax_view::common::{View, Mesh, InstanceData, view, meshes, instances, sampleMaterialTextureLinear}
+#import forgeax_view::common::{View, FogViewParams, FogRay, Mesh, InstanceData, view, meshes, instances, sampleMaterialTextureLinear, packSceneTemporal}
+#import forgeax_view::fog::{apply_fog}
 
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
+#pragma variant_axis VERTEX_COLOR_AVAILABLE
 
 // @forgeax/engine-shader - unlit.wgsl (M5 feat-20260511-asset-system-v1;
 // refactored M5 T-18 feat-20260512-naga-oil-composition-hmr to pull View +
@@ -22,20 +24,6 @@
 //                                                               unused on this path)
 //   @group(1) @binding(1) baseColorSampler           sampler
 //   @group(1) @binding(2) baseColorTexture           texture_2d<f32>
-//   @group(1) @binding(3) metallicRoughnessSampler   sampler   (occupied by
-//                                                               default linear
-//                                                               sampler in unlit;
-//                                                               not consumed)
-//   @group(1) @binding(4) metallicRoughnessTexture   texture_2d<f32> (occupied
-//                                                               by default 1x1
-//                                                               white texture in
-//                                                               unlit; not consumed)
-//   @group(1) @binding(5) normalSampler              sampler   (default linear
-//                                                               sampler; not
-//                                                               consumed)
-//   @group(1) @binding(6) normalTexture              texture_2d<f32> (default
-//                                                               1x1 white texture;
-//                                                               not consumed)
 //   @group(2) @binding(0) meshes                     storage   (see common.wgsl;
 //                                                               normalMatrix not
 //                                                               consumed in unlit)
@@ -45,9 +33,8 @@
 //                                                               (instance_index);
 //                                                               see common.wgsl)
 //
-// Shared 0-6 binding layout mirrors pbr.wgsl byte-for-byte (D-4) so both
-// pipelines can swap material BindGroup without re-creating BindGroupLayout
-// per frame. Procedural geometry (M4) emits 12-floats vertex stride
+// Material bindings are derived from the built-in paramSchema. Procedural
+// geometry (M4) emits 12-floats vertex stride
 // (pos+normal+uv+tangent); BUILTIN_CUBE / TRIANGLE keep 6-floats stride and
 // route to a dedicated unlit pipeline branch wired by RenderSystem (M3 w22).
 // This shader file consumes the 12-floats path; the 6-floats path is the
@@ -56,21 +43,13 @@
 struct Material {
   baseColor : vec4<f32>,
   alphaCutoff : f32,
-  textureScalePadding : array<vec4<f32>, 3>,
-  baseColorUvScale : vec2<f32>,
-  metallicRoughnessUvScale : vec2<f32>,
-  normalUvScale : vec2<f32>,
-  emissiveUvScale : vec2<f32>,
-  occlusionUvScale : vec2<f32>,
+  baseColorTextureCoordinatesTransform : vec4<f32>,
+  baseColorTextureCoordinatesMetadata : vec4<f32>,
 };
 
 @group(1) @binding(0) var<uniform> material : Material;
 @group(1) @binding(1) var baseColorSampler : sampler;
 @group(1) @binding(2) var baseColorTexture : texture_2d<f32>;
-@group(1) @binding(3) var metallicRoughnessSampler : sampler;
-@group(1) @binding(4) var metallicRoughnessTexture : texture_2d<f32>;
-@group(1) @binding(5) var normalSampler : sampler;
-@group(1) @binding(6) var normalTexture : texture_2d<f32>;
 
 // Preserve filtering reflection for the bound texture passed to the helper.
 fn materialTextureFilteringWitness() {
@@ -83,10 +62,17 @@ struct VsIn {
   @location(1) normal  : vec3<f32>,
   @location(2) uv      : vec2<f32>,
   @location(3) tangent : vec4<f32>,
+#ifdef VERTEX_COLOR_AVAILABLE
+  @location(13) color : vec4<f32>,
+#endif
 };
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
   @location(0) uv : vec2<f32>,
+  @location(1) worldPos : vec3<f32>,
+#ifdef VERTEX_COLOR_AVAILABLE
+  @location(14) color : vec4<f32>,
+#endif
 };
 
 @vertex
@@ -99,14 +85,102 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   var out : VsOut;
   out.clip = view.worldViewProj * world;
   out.uv = in.uv;
+  out.worldPos = world.xyz;
+#ifdef VERTEX_COLOR_AVAILABLE
+  out.color = in.color;
+#endif
   return out;
+}
+
+fn materialVertexColor(in : VsOut) -> vec4<f32> {
+#ifdef VERTEX_COLOR_AVAILABLE
+  return in.color;
+#else
+  return vec4<f32>(1.0);
+#endif
+}
+
+fn applySceneFog(viewParams : View, color : vec3<f32>, alpha : f32, worldPos : vec3<f32>) -> vec4<f32> {
+  var origin = viewParams.cameraPos;
+  var direction = normalize(worldPos - origin);
+  var rayDistance = length(worldPos - origin);
+  if (viewParams.temporalProjection.z >= 0.5) {
+    let nearH = viewParams.inverseViewProj * vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    let farH = viewParams.inverseViewProj * vec4<f32>(0.0, 0.0, 1.0, 1.0);
+    let nearPoint = nearH.xyz / nearH.w;
+    let farPoint = farH.xyz / farH.w;
+    direction = normalize(farPoint - nearPoint);
+    origin = worldPos - direction * dot(worldPos - viewParams.cameraPos, direction);
+    rayDistance = max(dot(worldPos - origin, direction), 0.0);
+  }
+  return apply_fog(viewParams.fog, FogRay(origin, direction, rayDistance), vec4<f32>(color, alpha));
 }
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  let texSample = sampleMaterialTextureLinear(baseColorTexture, baseColorSampler, in.uv, material.baseColorUvScale);
-  if (material.alphaCutoff > 0.0 && material.baseColor.a * texSample.a < material.alphaCutoff) {
+  let texSample = sampleMaterialTextureLinear(baseColorTexture, baseColorSampler, in.uv, material.baseColorTextureCoordinatesMetadata.zw);
+  let vertexColor = materialVertexColor(in);
+  let alpha = material.baseColor.a * texSample.a * vertexColor.a;
+  if (material.alphaCutoff > 0.0 && alpha < material.alphaCutoff) {
     discard;
   }
-  return vec4<f32>(material.baseColor.rgb * texSample.rgb, material.baseColor.a * texSample.a);
+  return applySceneFog(
+    view,
+    material.baseColor.rgb * texSample.rgb * vertexColor.rgb,
+    alpha,
+    in.worldPos,
+  );
+}
+
+struct TemporalVsOut {
+  @builtin(position) clip : vec4<f32>,
+  @location(0) uv : vec2<f32>,
+  @location(1) @interpolate(linear) currentClip : vec4<f32>,
+  @location(2) @interpolate(linear) previousClip : vec4<f32>,
+#ifdef VERTEX_COLOR_AVAILABLE
+  @location(14) color : vec4<f32>,
+#endif
+};
+
+@vertex
+fn vs_temporal(in : VsIn, @builtin(instance_index) idx : u32) -> TemporalVsOut {
+  let currentWorld =
+    meshes[0].worldFromLocal * instances[idx].localFromInstance * vec4<f32>(in.pos, 1.0);
+  var previousWorld = currentWorld;
+#if STORAGE_BUFFER_AVAILABLE == true
+  previousWorld = meshes[0].previousWorldFromLocal *
+    instances[idx].previousLocalFromInstance * vec4<f32>(in.pos, 1.0);
+#endif
+  var out : TemporalVsOut;
+  out.currentClip = view.temporalCurrentViewProj * currentWorld;
+  out.clip = out.currentClip;
+  out.previousClip = view.temporalPreviousViewProj * previousWorld;
+  out.uv = in.uv;
+#ifdef VERTEX_COLOR_AVAILABLE
+  out.color = in.color;
+#endif
+  return out;
+}
+
+fn temporalVertexColor(in : TemporalVsOut) -> vec4<f32> {
+#ifdef VERTEX_COLOR_AVAILABLE
+  return in.color;
+#else
+  return vec4<f32>(1.0);
+#endif
+}
+
+@fragment
+fn fs_temporal(in : TemporalVsOut) -> @location(0) vec4<f32> {
+  let texSample = sampleMaterialTextureLinear(baseColorTexture, baseColorSampler, in.uv, material.baseColorTextureCoordinatesMetadata.zw);
+  let vertexColor = temporalVertexColor(in);
+  let alpha = material.baseColor.a * texSample.a * vertexColor.a;
+  if (material.alphaCutoff > 0.0 && alpha < material.alphaCutoff) {
+    discard;
+  }
+  var reactive = 1.0;
+#if STORAGE_BUFFER_AVAILABLE == true
+  reactive = meshes[0].temporal.x;
+#endif
+  return packSceneTemporal(in.currentClip, in.previousClip, reactive);
 }

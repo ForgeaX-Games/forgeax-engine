@@ -23,11 +23,18 @@
 //   1. non-boolean `#define NAME VALUE` literal scan -> shader-compile-failed (D-05 OOS-1)
 //   2. scanDefineConflicts (T-12) -> shader-define-conflict (D-07)
 //   3. detectCycle (T-11) -> shader-circular-import (D-04)
-//   4. composeShader (naga_oil) -> shader-import-not-found / shader-compile-failed (via T-13 mapper)
-//   5. naga parse/validate/emit_reflection (legacy path) on the composed WGSL
+//   4. composeShader (naga_oil) -> one portable WGSL canonicalization facade ->
+//      shader-import-not-found / shader-compile-failed (via T-13 mapper)
+//   5. naga parse/validate/emit_reflection (legacy path) on the canonical WGSL
 // - options.id missing -> fromModuleId placeholder `<anonymous-entry-<hash8>>` (D-11).
 
-import { composeShader, emit_reflection, parse, validate } from '@forgeax/engine-naga';
+import {
+  composeShader,
+  emit_reflection,
+  parse,
+  type ShaderReflection,
+  validate,
+} from '@forgeax/engine-naga';
 import type { BindGroupLayoutDescriptor, ManifestEntry } from '@forgeax/engine-types';
 import { detectCycle } from './cycle-detect.js';
 import { scanDefineConflicts } from './define-scan.js';
@@ -42,6 +49,7 @@ import {
   type ShaderError as ShaderErrorType,
 } from './errors.js';
 import { parseReflection } from './reflection.js';
+import { canonicalizePortableWgsl } from './wgsl-compat.js';
 
 // === Public types ===================================================================
 
@@ -98,6 +106,8 @@ export interface CompileResult {
    * deriveVertexBufferLayout for clamp-to-last alias (M3).
    */
   readonly uvSetCount: number;
+  /** Business-neutral raw Naga reflection facts, kept build-time only. */
+  readonly reflection: ShaderReflection;
 }
 
 // === Main API =======================================================================
@@ -107,9 +117,61 @@ const DEFINE_WITH_VALUE_RE = /^\s*#define\s+\w+\s+(\S.*)$/;
 const IMPORT_DIRECTIVE_RE = /^\s*#import\s+([A-Za-z0-9_:-]+)/;
 const MODULE_ID_PREFIX_RE = /^([A-Za-z0-9_-]+(?:::[A-Za-z0-9_-]+)*)/;
 const DEFINE_IMPORT_PATH_RE = /^\s*#define_import_path\s+([A-Za-z0-9_:-]+)/;
+function resolveOmittedVertexColorBranch(source: string, available: boolean): string {
+  const lines = source.split(/\r?\n/);
+  const resolveRange = (range: readonly string[]): string[] => {
+    const result: string[] = [];
+    for (let index = 0; index < range.length; index++) {
+      const line = range[index] ?? '';
+      if (line.trim() !== '#ifdef VERTEX_COLOR_AVAILABLE') {
+        result.push(line);
+        continue;
+      }
+      let depth = 1;
+      let elseIndex = -1;
+      let endIndex = index + 1;
+      for (; endIndex < range.length; endIndex++) {
+        const directive = (range[endIndex] ?? '').trim();
+        if (/^#if(n?def)?\b/.test(directive)) depth++;
+        else if (directive === '#else' && depth === 1) elseIndex = endIndex;
+        else if (directive === '#endif') {
+          depth--;
+          if (depth === 0) break;
+        }
+      }
+      const branchStart = index + 1;
+      const branch = available
+        ? range.slice(branchStart, elseIndex < 0 ? endIndex : elseIndex)
+        : elseIndex < 0
+          ? []
+          : range.slice(elseIndex + 1, endIndex);
+      result.push(...resolveRange(branch));
+      index = endIndex;
+    }
+    return result;
+  };
+  return resolveRange(lines).join('\n');
+}
 
 function stripPragmas(source: string): string {
   return source.replace(PRAGMA_RE, '');
+}
+
+function stripComposerDirectives(source: string): string {
+  return source.replace(/^\s*#.*$/gm, (line) => line.replace(/[^\r\n]/g, ' '));
+}
+
+async function locateSourceSyntaxError(
+  source: string,
+  imports: Readonly<Record<string, string>>,
+): Promise<ShaderErrorType | undefined> {
+  for (const candidate of [source, ...Object.values(imports)]) {
+    const parsed = await parse(stripComposerDirectives(candidate));
+    if (!parsed.ok && parsed.error.lineNum !== undefined && parsed.error.linePos !== undefined) {
+      return parsed.error;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -121,9 +183,10 @@ function stripPragmas(source: string): string {
  *    -> shader-compile-failed (OOS-1, D-05).
  * 3. scanDefineConflicts -> shader-define-conflict (D-07).
  * 4. detectCycle on the import graph -> shader-circular-import (D-04).
- * 5. composeShader (naga_oil) -> post-link WGSL + resolved deps. Errors from
- *    the wasm layer flow through mapWasmError (T-13) as structured ShaderError.
- * 6. naga parse / validate / emit_reflection on the composed WGSL.
+ * 5. composeShader (naga_oil) -> canonicalizePortableWgsl -> post-link WGSL +
+ *    resolved deps. Errors from the wasm layer flow through mapWasmError (T-13)
+ *    as structured ShaderError.
+ * 6. naga parse / validate / emit_reflection on the canonical WGSL.
  * 7. Assemble triplet + Result.ok.
  *
  * All error paths return Result.err — never throw (AGENTS.md "Errors are structured").
@@ -132,9 +195,12 @@ export async function compileShader(
   rawSource: string,
   options: CompileOptions = {},
 ): Promise<Result<CompileResult, ShaderErrorType>> {
-  const source = stripPragmas(rawSource);
+  const requestedVertexColor = options.defines?.VERTEX_COLOR_AVAILABLE === true;
+  const source = resolveOmittedVertexColorBranch(stripPragmas(rawSource), requestedVertexColor);
   const imports = options.imports ?? {};
-  const defines = options.defines ?? {};
+  const defines = { ...(options.defines ?? {}) };
+  delete defines.VERTEX_COLOR_AVAILABLE;
+  if (requestedVertexColor) defines.VERTEX_COLOR_AVAILABLE = true;
   const fromModuleId = options.id ?? `<anonymous-entry-${computeHash(source)}>`;
 
   // Stage 0a: non-boolean #define value pre-scan (D-05 OOS-1).
@@ -195,12 +261,18 @@ export async function compileShader(
   const importResolveErr = checkImportsResolvable(source, imports, fromModuleId, defines);
   if (importResolveErr !== null) return err(importResolveErr);
 
-  // Stage 1: compose via naga_oil (wasm boundary). Errors flow through mapWasmError.
+  // Stage 1: compose via naga_oil, then canonicalize portable WGSL. Errors from
+  // the wasm boundary flow through mapWasmError as structured ShaderError data.
   let composed: string;
   try {
-    composed = await composeShader(source, imports, defines);
+    composed = canonicalizePortableWgsl(await composeShader(source, imports, defines));
   } catch (e) {
-    return err(mapWasmError(e, { fromModuleId }));
+    const mapped = mapWasmError(e, { fromModuleId });
+    if (mapped.code === 'shader-compile-failed' && mapped.lineNum === undefined) {
+      const located = await locateSourceSyntaxError(source, imports);
+      if (located !== undefined) return err(located);
+    }
+    return err(mapped);
   }
 
   // Collect deps: keys of options.imports that are referenced from the entry
@@ -212,6 +284,8 @@ export async function compileShader(
   // Stage 2: parse composed WGSL.
   const parsedResult = await parse(composed);
   if (!parsedResult.ok) {
+    const located = await locateSourceSyntaxError(source, imports);
+    if (located !== undefined) return err(located);
     return err(parsedResult.error);
   }
 
@@ -274,6 +348,7 @@ export async function compileShader(
     },
     deps,
     uvSetCount,
+    reflection: reflectionParsed.wire,
   };
   return ok(result);
 }
@@ -556,11 +631,27 @@ export {
 } from './material/compose.js';
 export {
   cookMaterialAsset,
+  type GeneratedMaterialParameterProjection,
+  generateParameterModule,
   type MaterialCookError,
   type MaterialCookedAsset,
   type MaterialCookedPass,
   type MaterialCookRequest,
 } from './material/cook.js';
+export {
+  type CookedMaterialRecord,
+  collectMaterialCookRefs,
+  createMaterialArtifactDigest,
+  createMaterialNativeCooker,
+  type MaterialCookArtifact,
+  type MaterialCookCatalogEntry,
+  type MaterialCookPublication,
+  type MaterialCookReceipt,
+  type MaterialCookRefs,
+  type MaterialNativeCookerOptions,
+  materialCookPublication,
+} from './material/native-cooker.js';
+export { createMaterialPackCooker } from './material/pack-cooker.js';
 export {
   characterizeMaterialWgslProfile,
   MATERIAL_WGSL_PROFILE,
@@ -592,7 +683,20 @@ export {
   type MaterialSpecializationPassInput,
 } from './material/specialization-key.js';
 export {
-  type MaterialReflection,
-  type MaterialReflectionInput,
-  reflectMaterial,
+  createMaterialVariantContext,
+  lowerMaterialVariantContext,
+  type MaterialBackend,
+  type MaterialCapability,
+  type MaterialGeometry,
+  type MaterialInstrumentation,
+  type MaterialPass,
+  type MaterialPipeline,
+  type MaterialVariantContext,
+  type MaterialVariantContextError,
+  type MaterialVariantContextInput,
+} from './material/variant-context.js';
+export {
+  compareDerivedMaterialInterface,
+  type ParsedReflection,
+  parseReflection,
 } from './reflection.js';

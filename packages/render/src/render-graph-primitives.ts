@@ -1,594 +1,62 @@
-// @forgeax/engine-runtime - public render-graph primitives
-// (feat-20260604-resource-owning-render-graph-and-fullscreen-postpr M3 / w19).
+// @forgeax/engine-render - low-level record/encode graph primitives.
 //
-// These factory functions are the AI-user-facing public vocabulary for assembling
-// a render pipeline's per-frame graph. The urp pipeline (the engine
-// builtin) and any custom pipeline use the SAME functions — the dogfood proof
-// (AC-12 / AC-18). The internal recordXxxPass closures that do the actual GPU
-// recording are package-private (no longer exported from
-// `render-system-record.ts`); they are referenced here as the implementation
-// detail of addScenePass / addFullscreenPass etc., satisfying plan-strategy D-5
-// "per-entity logic stays as the addScenePass implementation detail; do NOT
-// migrate it into the render-graph package (that would pollute its RHI-pure
-// boundary)".
+// Standard owns pass topology through typed-render-graph-primitives. This module
+// retains the RHI-facing record helpers used by that typed graph: SSAO record
+// closures, fullscreen dispatch, depth resolution, and encoding.
 //
-// API surface (the only nouns/verbs a pipeline author touches):
-//   - addColorTarget(name, desc)       — allocate a graph-owned RT (M1)
-//   - addColorTargetAlias(name, src)   — fold a logical key onto an existing RT
-//   - addScenePass(g, name, opts)      — render the ECS scene into a colour target
-//   - addShadowPass(g, name, opts)     — render shadow casters into a depth target
-//   - addSkyboxPass(g, name, opts)     — render the skybox cube into a colour target
-//   - addBloomPasses(g, opts)          — bloom bright + 2 blur + composite chain
-//   - addSsaoPasses(g, opts)           — SSAO calc + blur chain (feat-20260612-hdrp-ssao)
-//   - addTonemapPass(g, name, opts)    — HDR -> LDR tonemap
-//   - addFullscreenPass(g, name, opts) — generic fullscreen post-process
-//
-// PIPELINE ROLE: urp-pipeline.buildGraph composes these in the
-// canonical 9-pass order; a custom pipeline picks any subset / order.
-//
-// ─── EXTENSION-POINT MAP (F-5 doc-clarify) ───────────────────────────────
-//
-// Of the eight primitives above, EXACTLY ONE is an AI-user extension point;
-// the other seven are engine-built-ins that DO NOT accept user-supplied
-// execute closures.
-//
-//   addScenePass     | engine-built-in | execute = recordMainPass (private)
-//   addShadowPass    | engine-built-in | execute = recordShadowPass (private)
-//   addSkyboxPass    | engine-built-in | execute = recordSkyboxPass (private)
-//   addBloomPasses   | engine-built-in | execute = 4× private record* closures
-//   addSsaoPasses    | engine-built-in | execute = 2× private record* closures
-//   addTonemapPass   | engine-built-in | execute = dispatchFullscreenPass('forgeax::tonemap')
-//   addColorTarget    | engine-built-in (resource decl)
-//   addColorTargetAlias | engine-built-in (resource decl)
-//   addFullscreenPass | EXTENSION POINT (the only one)
-//
-// AI users wanting to add a CUSTOM SCENE pass (a per-entity geometry walk
-// with their own shading model) write `graph.addPass(name, {reads, writes,
-// execute: theirOwnClosure})` directly through the `@forgeax/engine-render-graph`
-// `RenderGraph` API. addScenePass is intentionally NOT a customisation
-// hook — it is the engine's urp main pass, full stop.
-//
-// AI users wanting to add a FULLSCREEN POST-PROCESS pass (e.g. a custom
-// vignette, chromatic aberration, color grading LUT) take the two-step
-// extension idiom:
-//
-//   // 1. Register the shader's WGSL source under a unique id (engine
-//   //    builtins use `forgeax::` prefix; AI users use `<package>::<id>`).
-//   //    Same-id re-register THROWS (programmer error, fail-fast).
-//   renderer.postProcess.register('mypkg::vignette', {
-//     source: vignetteWGSL,        // composed WGSL fragment stage
-//     params: { byteSize: 16, defaultValue: ... }, // optional UBO
-//     reads: ['hdrComposited'],    // optional graph resource keys
-//   });
-//
-//   // 2. Reference the registered id from a custom pipeline's buildGraph.
-//   //    The dispatcher looks the id up via runtime.lookupPostProcess;
-//   //    a stale id THROWS PostProcessError{code:'post-process-not-found'}
-//   //    inside the per-frame execute closure (charter P3 fail-fast).
-//   addFullscreenPass(graph, 'vignette', {
-//     program: { module: 'mypkg::vignette' },
-//     color: 'rt',                 // graph-owned scratch target
-//     reads: ['hdrComposited'],
-//   });
-//
-// The `'fxaa'` id is the engine-built-in special case: dispatcher delegates
-// to `recordFxaaPass`, which samples graph-owned LDR and writes the surface.
-// `addFullscreenPass(g, 'fxaa', ...)` is the
-// canonical engine call site (used by urp-pipeline.buildGraph),
-// not an AI user customisation lever.
-
+// Public graph assembly does not depend on legacy add* wrappers.
 import { mat4 } from '@forgeax/engine-math';
-import type { RenderGraph, ResolveContext } from '@forgeax/engine-render-graph';
-import {
-  type Buffer,
-  RhiError,
-  type RhiRenderPassEncoder,
-  type Sampler,
-  type TextureView,
+import type { ResolveContext } from '@forgeax/engine-render-graph';
+import type {
+  Buffer,
+  RhiRenderPassEncoder,
+  Sampler,
+  Texture,
+  TextureFormat,
+  TextureView,
 } from '@forgeax/engine-rhi';
-import type { PassSelector } from '@forgeax/engine-types';
 import {
   buildFullscreenPostProcessPass,
   createFullscreenBindGroup,
   entryHasDepthRead,
 } from './fullscreen-post-process-pass';
-import { getOrCreateSsaoFallbackTexture } from './hdrp-buffers';
 import { buildBeginRenderPassDescriptor } from './pipeline-spec';
 import { PostProcessError } from './post-process-errors';
-import {
-  computeProjectionMatrix,
-  computeViewMatrix,
-  getOrCreateFromChain,
-  recordBloomBlurHPass,
-  recordBloomBlurVPass,
-  recordBloomBrightPass,
-  recordBloomCompositePass,
-  recordFxaaPass,
-  recordMainPass,
-  recordPointShadowPass,
-  recordShadowPass,
-  recordSkyboxPass,
-  recordSpotShadowPass,
-  resolveGraphColorAttachmentView,
-} from './record';
-import type {
-  _InternalRenderPipelineContext,
-  RenderPipelineContext,
-} from './render-pipeline-context';
-import { getOrCreateSsaoBuffers } from './ssao-buffers';
+import { computeProjectionMatrix, computeViewMatrix } from './record/helpers';
+import { getOrCreateFromChain } from './record/mesh-ssbo';
+import type { _InternalRenderPipelineContext } from './record/render-context';
+import { recordFxaaPass } from './record/skybox-post-pass';
+import type { RenderPipelineContext } from './render-contract';
+import { getOrCreateSsaoBuffers, getOrCreateSsaoFallbackTexture } from './ssao-buffers';
+import { getSsaoParameters } from './ssao-config';
 
-/**
- * Selects which passes of a material asset are rendered by addScenePass / addShadowPass.
- *
- * An empty selector `{}` matches every pass. The selector is pipeline-specific:
- * the built-in URP uses `{ LightMode: ['Forward'] }` / `{ LightMode: ['ShadowCaster'] }`;
- * a custom pipeline can define its own tag keys and values.
- *
- * Matching rule: every key in the selector must exist in the pass's `tags` and the
- * pass's tag value must be in the selector's value list.
- */
+type DepthResolutionContext = Pick<_InternalRenderPipelineContext, 'runtime'> & {
+  readonly frameState: {
+    readonly perFrameGraph?: {
+      readonly getColorTargetTexture: (key: string) => Texture | undefined;
+    } | null;
+  };
+};
 
-export interface AddScenePassOptions {
-  /** Graph colour target to write (declared via g.addColorTarget). */
-  readonly color: string;
-  /** Graph depth target to write (declared via g.addColorTarget). */
-  readonly depth: string;
-  /**
-   * Optional single-sample resolve target for a multisample colour target.
-   * When `_routeFromOpts` is true and the active camera has MSAA enabled,
-   * `recordMainPass` resolves `color` into this graph-owned target before a
-   * downstream fullscreen pass samples it. Pass `null` to explicitly disable
-   * the default resolve in a custom-pipeline falsifier; omit it for
-   * single-sample scenes or to preserve the URP-owned resolve.
-   */
-  readonly resolve?: string | null | undefined;
-  /** Resource keys this pass samples (typically 'shadowDepth' + an upstream colour). */
-  readonly reads?: readonly string[] | undefined;
-  /**
-   * Pass selector — a pipeline-specific filter for which material passes are
-   * rendered. An empty selector `{}` matches every pass. The built-in URP uses
-   * `{ LightMode: ['Forward'] }`; a custom pipeline defines its own tag keys.
-   */
-  readonly selector: PassSelector;
-  /**
-   * @internal — feat-20260609 framebuffers demo M5 / T-12-a opt-in flag.
-   *
-   * When `true`, the pass execute closure resolves `opts.color` / `opts.depth`
-   * through the graph's resolveCtx and overrides the recordMainPass ctx so
-   * the geometry pass renders into those graph-owned views. When `false` (or
-   * unset, the default), recordMainPass picks the per-frame
-   * `geometryColorView` / `geometryDepthView` set by recordFrame's URP
-   * state-machine — this preserves byte-equivalence for urp-pipeline,
-   * which encodes its own MSAA / LDR-no-MSAA / HDR routing in recordFrame
-   * (where opts.color is a logical ordering token, not the physical write
-   * target).
-   *
-   * AI-user-defined custom pipelines declaring their own offscreen RT (the
-   * AC-11 "render scene to graph-owned colour + depth" contract) MUST set
-   * this flag to opt out of the URP state-machine and route opts.color
-   * directly. A future feat that migrates urp-pipeline off the recordFrame
-   * state-machine flips the default and removes this flag.
-   */
-  readonly _routeFromOpts?: boolean | undefined;
-}
+type RenderGraphRecordContext = _InternalRenderPipelineContext & {
+  readonly frameState: _InternalRenderPipelineContext['frameState'] & {
+    readonly perFrameGraph?: {
+      readonly getColorTargetDescriptor: (
+        key: string,
+      ) => { readonly format: TextureFormat } | undefined;
+      readonly getColorTargetView: (key: string) => TextureView | undefined;
+      readonly getColorTargetTexture: (key: string) => Texture | undefined;
+    } | null;
+  };
+};
 
-/**
- * AC-11: render the ECS scene into a graph-owned colour + depth target.
- *
- * Adds a graph pass that, when executed, walks the per-frame validated
- * renderable list and dispatches geometry into `opts.color` (with `opts.depth`
- * as the depth attachment). The implementation detail (4-BGL chain, per-entity
- * material UBO packing, pipeline cache lookup, MSAA variant selection) is
- * package-private (`recordMainPass`); plan-strategy D-5 keeps it inside runtime
- * so the render-graph package stays RHI-pure.
- *
- * The `reads` array threads dependency edges into the graph (so shadow ->
- * skybox -> main is enforced topologically). The two writes are `opts.color`
- * and `opts.depth`.
- */
-export function addScenePass(
-  graph: RenderGraph<RenderPipelineContext>,
-  name: string,
-  opts: AddScenePassOptions,
-): void {
-  graph.addPass(name, {
-    reads: opts.reads ?? [],
-    writes: [
-      opts.color,
-      opts.depth,
-      ...(opts.resolve === undefined || opts.resolve === null ? [] : [opts.resolve]),
-    ],
-    // feat-20260609 framebuffers demo M5 / T-12-a: route opts.color/opts.depth
-    // through the resolveCtx and override the geometry view fields on the ctx
-    // handed to recordMainPass when the caller is a non-URP custom pipeline.
-    // Without this routing, recordMainPass picks `c.geometryColorView` whose
-    // default (set by recordFrame) is the swap-chain `view`, only re-routed
-    // onto graph-owned targets via the URP state-machine
-    // (tonemapActive -> 'hdrColor' / msaaActive -> 'msaaColor' / etc.).
-    //
-    // URP byte-equivalence: urp-pipeline passes opts.color values that are
-    // logical ordering tokens whose actual physical view is selected per
-    // frame by recordFrame's state-machine (e.g. opts.color='hdrColor' but
-    // recordFrame may select hdrColorMsaa, msaaColor, or the swap-chain
-    // depending on tonemap+MSAA flags). Overriding from opts.color would
-    // drop those MSAA-specific / LDR-swap-chain RT picks. The discriminator
-    // is: URP keeps its state-machine because urp-pipeline does NOT pass
-    // `_routeFromOpts: true`; a non-URP custom pipeline declaring its own
-    // graph-owned RT opts in via the internal flag below.
-    //
-    // feat-20260609 selector: opts.selector is forwarded to recordMainPass for
-    // pass-tag filtering (e.g. URP's `{ LightMode: ['Forward'] }`).
-    execute: (ctx: RenderPipelineContext, resolveCtx?: ResolveContext) => {
-      const internalCtx = ctx as _InternalRenderPipelineContext;
-      if (!opts._routeFromOpts) {
-        recordMainPass(internalCtx, opts.selector);
-        return;
-      }
-      const colorView = resolveCtx?.resolve(opts.color) as TextureView | undefined;
-      const depthView = resolveCtx?.resolve(opts.depth) as TextureView | undefined;
-      const resolveView =
-        opts.resolve === undefined
-          ? undefined
-          : opts.resolve === null
-            ? null
-            : (resolveCtx?.resolve(opts.resolve) as TextureView | undefined);
-      const overridden: _InternalRenderPipelineContext = {
-        ...internalCtx,
-        geometryColorView: colorView ?? internalCtx.geometryColorView,
-        geometryDepthView: depthView ?? internalCtx.geometryDepthView,
-        ...(resolveView !== undefined ? { geometryColorResolveView: resolveView } : {}),
-      };
-      recordMainPass(overridden, opts.selector);
-    },
-  });
-}
-
-export interface AddShadowPassOptions {
-  /** Graph depth target to write (declared via g.addColorTarget with depth format). */
-  readonly depth: string;
-  /**
-   * Pass selector — a pipeline-specific filter for which material passes are
-   * rendered as shadow casters. The built-in URP uses
-   * `{ LightMode: ['ShadowCaster'] }`.
-   */
-  readonly selector: PassSelector;
-  /**
-   * Optional viewport for the shadow render pass. When set, the pass calls
-   * `setViewport(x, y, w, h, 0, 1)` before dispatch so the depth rasterization
-   * is clipped to the given sub-rectangle of the depth target. Undefined
-   * preserves the pre-CSM behavior (full-RT viewport). Used by the cascaded
-   * shadow map atlas: each cascade pass writes to one tile.
-   *
-   * @example viewport: { x: 0, y: 0, w: 2048, h: 2048 }
-   */
-  readonly viewport?:
-    | { readonly x: number; readonly y: number; readonly w: number; readonly h: number }
-    | undefined;
-  /**
-   * Cascade index this pass renders into (0..3). The runtime writes the
-   * value to `shadowCasterCascadeBuffer` immediately before submit; the
-   * shadow_caster vertex shader reads it to pick the matching
-   * `view.lightViewProj_X`. Defaults to 0 when unset (preserves the
-   * single-cascade pre-CSM behaviour for any caller still calling
-   * addShadowPass without the field; the URP per-cascade loop sets it
-   * explicitly).
-   *
-   * @example cascadeIndex: 0  // first cascade (lightViewProj_A)
-   */
-  readonly cascadeIndex?: number;
-}
-
-/**
- * Render shadow casters into a depth-only graph target. Implementation detail:
- * `recordShadowPass` (package-private) iterates DirectionalLight + caster
- * renderables under their light-view + light-proj and writes the depth-32-float
- * target consumed by `addScenePass.reads`.
- */
-export function addShadowPass(
-  graph: RenderGraph<RenderPipelineContext>,
-  name: string,
-  opts: AddShadowPassOptions,
-): void {
-  const cascadeIndex = opts.cascadeIndex ?? 0;
-  graph.addPass(name, {
-    reads: [],
-    writes: [opts.depth],
-    execute: (c: RenderPipelineContext) =>
-      recordShadowPass(
-        c as Parameters<typeof recordShadowPass>[0],
-        opts.selector,
-        opts.viewport,
-        cascadeIndex,
-      ),
-  });
-}
-
-/**
- * feat-20260612-point-light-shadows-urp-hdrp M3 / T-M3-4 (plan-strategy §D-1
- * + AC-04 + AC-09). Render the 6 x N point-light shadow caster passes into
- * the cube_array atlas owned by `frameState.pointShadowAtlas`. Implementation
- * detail: `recordPointShadowPass` (package-private) iterates
- * `frameState.pointShadowSnapshots` and emits one independent render pass
- * per (layer, face), opening / submitting each on its own command encoder
- * (RD-4 manual barrier between depth-write and the URP forward pass's
- * cube_array sample).
- *
- * Resource model: the cube_array atlas is a runtime-owned resource (NOT a
- * graph color target) because its size is `4 * 6 * faceSize^2` and per-face
- * 2D views must be created with explicit `baseArrayLayer` indexing — the
- * existing `addColorTarget` vocabulary is single-attachment-only. The pass
- * therefore declares no `writes` (the dependency between this pass and the
- * URP forward pass is enforced by the `addScenePass.reads` order — both
- * sample shadowAtlas, and graph topological order keeps shadow before
- * forward). A future render-graph extension may model the cube_array as a
- * first-class resource; for now the manual command-encoder boundary is the
- * synchronization point.
- *
- * AC-09 zero-shadow zero-pass: the URP `buildGraph` gates the call to
- * `addPointShadowPass` on `frameState.pointShadowSnapshots.length > 0` so
- * the graph itself never declares the pass when no PointLightShadow exists.
- * `recordPointShadowPass` re-checks at execute time as defence in depth.
- */
-export function addPointShadowPass(graph: RenderGraph<RenderPipelineContext>, name: string): void {
-  graph.addPass(name, {
-    reads: [],
-    writes: [],
-    execute: recordPointShadowPass as (c: RenderPipelineContext) => void,
-  });
-}
-
-export interface AddSpotShadowPassOptions {
-  /** Graph depth target (depth32float 2x2 tile atlas) the spot casters write. */
-  readonly depth: string;
-}
-
-/**
- * feat-20260625-spot-light-shadow-mapping M2 / w9 + w11 (D-1 + D-2). Render the
- * spot-light shadow caster passes into the graph-owned `spotShadowDepth` atlas
- * (a single 2D depth32float texture of 2x2 tiles — NOT a 2d-array). One graph
- * pass NODE; the execute closure (`recordSpotShadowPass`) loops the per-frame
- * `frameState.spotShadowSnapshots`, rendering each castShadow spot's perspective
- * depth into its tile (viewport keyed on `shadowAtlasTile`) with first-tile
- * clear / rest load (independent of the directional cascadeIndex; D-2). Unlike
- * `addPointShadowPass` the spot atlas IS a graph color target, so the pass
- * declares `writes: [opts.depth]` — `addScenePass.reads` lists the same key to
- * order spot-shadow -> main. The single-node-with-internal-loop shape keeps the
- * memoized graph from rebuilding on spot-count drift (AC-03 zero-spot scenes
- * record zero passes via the early-return inside recordSpotShadowPass).
- */
-export function addSpotShadowPass(
-  graph: RenderGraph<RenderPipelineContext>,
-  name: string,
-  opts: AddSpotShadowPassOptions,
-): void {
-  graph.addPass(name, {
-    reads: [],
-    writes: [opts.depth],
-    execute: recordSpotShadowPass as (c: RenderPipelineContext) => void,
-  });
-}
-
-export interface AddSkyboxPassOptions {
-  /** Graph colour target the skybox writes (typically the same target the scene pass writes). */
-  readonly color: string;
-}
-
-/**
- * Render a skybox cube into the declared colour target. Implementation detail:
- * `recordSkyboxPass` (package-private) emits a single cube draw with a
- * skybox-view matrix derived from the camera. Writes `opts.color` so the
- * scene pass can declare it under `reads` to enforce skybox -> main order.
- */
-export function addSkyboxPass(
-  graph: RenderGraph<RenderPipelineContext>,
-  name: string,
-  opts: AddSkyboxPassOptions,
-): void {
-  graph.addPass(name, {
-    reads: [],
-    writes: [opts.color],
-    execute: recordSkyboxPass as (c: RenderPipelineContext) => void,
-  });
-}
-
-export interface AddBloomPassesOptions {
-  /** HDR colour target the bright-extract reads + the composite reads back. */
-  readonly hdrColor: string;
-  /** Logical key the composite WRITES (typically an alias of hdrColor). */
-  readonly hdrComposited: string;
-  /** Half-res bright target. */
-  readonly bright: string;
-  /** Half-res H blur target. */
-  readonly blurH: string;
-  /** Half-res V blur target. */
-  readonly blurV: string;
-}
-
-/**
- * Wire the 4-pass bloom chain (bright -> blur-h -> blur-v -> composite). All
- * intermediate targets are half-resolution; the composite reads hdrColor +
- * blurV and writes the alias `hdrComposited` (declared via
- * `g.addColorTargetAlias` to fold onto the actual hdrColor texture, KB-1).
- */
-export function addBloomPasses(
-  graph: RenderGraph<RenderPipelineContext>,
-  opts: AddBloomPassesOptions,
-): void {
-  graph.addPass('bloom-bright', {
-    reads: [opts.hdrColor],
-    writes: [opts.bright],
-    colorConnections: [{ source: opts.hdrColor, destination: opts.bright }],
-    execute: recordBloomBrightPass as (c: RenderPipelineContext) => void,
-  });
-  graph.addPass('bloom-blur-h', {
-    reads: [opts.bright],
-    writes: [opts.blurH],
-    colorConnections: [{ source: opts.bright, destination: opts.blurH }],
-    execute: recordBloomBlurHPass as (c: RenderPipelineContext) => void,
-  });
-  graph.addPass('bloom-blur-v', {
-    reads: [opts.blurH],
-    writes: [opts.blurV],
-    colorConnections: [{ source: opts.blurH, destination: opts.blurV }],
-    execute: recordBloomBlurVPass as (c: RenderPipelineContext) => void,
-  });
-  graph.addPass('bloom-composite', {
-    reads: [opts.hdrColor, opts.blurV],
-    writes: [opts.hdrComposited],
-    colorConnections: [
-      { source: opts.hdrColor, destination: opts.hdrComposited },
-      { source: opts.blurV, destination: opts.hdrComposited },
-    ],
-    execute: recordBloomCompositePass as (c: RenderPipelineContext) => void,
-  });
-}
-
-/**
- * feat-20260612-hdrp-ssao M3 / w15: SSAO pass parameters.
- *
- * Defaults: radius=0.5, bias=0.025, intensity=1.0.
- * Non-positive radius or negative bias triggers fail-fast PostProcessError
- * inside the per-frame record closure (w16 boundary impl).
- */
-export interface AddSsaoPassesParams {
-  /** SSAO sample radius in view-space units (default 0.5). */
-  readonly radius?: number | undefined;
-  /** SSAO depth bias to avoid self-occlusion (default 0.025). */
-  readonly bias?: number | undefined;
-  /** SSAO intensity blend factor (default 1.0). */
-  readonly intensity?: number | undefined;
-}
-
-/**
- * Options for `addSsaoPasses` (plan-strategy D-5, D-2).
- *
- * The caller (hdrp-pipeline.buildGraph) declares the color targets
- * (ssaoRaw / ssaoBlurred as half-swapchain r8unorm) and passes their
- * graph resource keys here. `gbuf0` and `hdrDepth` are g-buffer
- * resources declared by the pipeline.
- */
-export interface AddSsaoPassesOptions {
-  /** G-buffer RT0 (normal.rgb + roughness.a), rgba16float, swapchain. */
-  readonly gbuf0: string;
-  /** Hardware depth target, depth24plus-stencil8, swapchain. */
-  readonly hdrDepth: string;
-  /** SSAO calc output: half-res r8unorm transient target. */
-  readonly ssaoRaw: string;
-  /** SSAO blur output: half-res r8unorm transient target. */
-  readonly ssaoBlurred: string;
-  /** SSAO parameters (radius, bias, intensity). */
-  readonly params?: AddSsaoPassesParams | undefined;
-  /** Pipeline context for lazy SSAO buffer resolution. */
-  readonly ctx: RenderPipelineContext;
-}
-
-/**
- * Wire the 2-pass SSAO chain (calc -> blur) into the render graph.
- *
- * plan-strategy D-2: exactly 2 pass (ssao-calc + ssao-blur).
- * plan-strategy D-4: g-buffer missing -> graph-level skip.
- * plan-strategy D-5: signature matches addBloomPasses pattern.
- *
- * ssao-calc: reads gbuf0 + hdrDepth + ssao-noise + ssao-kernel + ssao-uniform,
- *   writes ssaoRaw (half-res r8unorm).
- * ssao-blur: reads ssaoRaw, writes ssaoBlurred (half-res r8unorm).
- *
- * Fail-fast: when SSAO buffers are unavailable (g-buffer not declared or
- * kernel/noise generation fails), the
- * function returns without wiring any pass nodes (graph-level skip).
- * Param validation happens in the record closure (w16 boundary impl).
- */
-export function addSsaoPasses(
-  graph: RenderGraph<RenderPipelineContext>,
-  opts: AddSsaoPassesOptions,
-): void {
-  const ctx = opts.ctx as _InternalRenderPipelineContext;
-
-  // plan-strategy D-4: g-buffer missing -> graph-level skip.
-  // Check that gbuf0 + hdrDepth are declared as graph color targets.
-  const resources = graph.listResources();
-  const hasGbuf0 = resources.some((r) => r.key === opts.gbuf0);
-  const hasHdrDepth = resources.some((r) => r.key === opts.hdrDepth);
-  if (!hasGbuf0 || !hasHdrDepth) {
-    return;
+function requireRenderGraphRecordContext(ctx: RenderPipelineContext): RenderGraphRecordContext {
+  if (!('frameState' in ctx) || !('bindGroupCounts' in ctx) || !('geometryDepthKey' in ctx)) {
+    throw new Error('typed render graph frame lacks the built-in record context');
   }
-
-  // Check SSAO buffers are available (allocation only; the kernel is a UBO so
-  // this path is valid on WebGL2).
-  const ssaoBufs = getOrCreateSsaoBuffers(ctx.runtime);
-  if (ssaoBufs === null) {
-    return;
-  }
-
-  // Validate parameters (fail-fast on illegal values).
-  const radius = opts.params?.radius ?? 0.5;
-  const bias = opts.params?.bias ?? 0.025;
-  if (radius <= 0) {
-    throw new PostProcessError({
-      code: 'ssao-radius-non-positive',
-      detail: { paramName: 'radius', value: radius },
-    });
-  }
-  if (bias < 0) {
-    throw new PostProcessError({
-      code: 'ssao-bias-negative',
-      detail: { paramName: 'bias', value: bias },
-    });
-  }
-
-  // Pass 1: SSAO calculation — fullscreen pass that samples g-buffer
-  // RT0 + depth, computes 64-sample hemisphere occlusion, writes
-  // single-channel R8 result to half-resolution target.
-  // Kernel SSBO / noise texture / uniform UBO are runtime-owned
-  // (getOrCreateSsaoBuffers) and bound at record time, not
-  // through the graph resource system.
-  graph.addPass('ssao-calc', {
-    reads: [opts.gbuf0, opts.hdrDepth],
-    writes: [opts.ssaoRaw],
-    execute: (_c: RenderPipelineContext, resolveCtx?: ResolveContext) => {
-      const internalCtx = _c as _InternalRenderPipelineContext;
-      recordSsaoCalcPass(internalCtx, resolveCtx, opts.ssaoRaw, opts.gbuf0, opts.hdrDepth);
-    },
-  });
-
-  // Pass 2: SSAO blur — fullscreen pass that reads the half-res R8
-  // ssaoRaw texture, applies a 4x4 box blur (16 taps), writes the
-  // blurred result to ssaoBlurred.
-  //
-  // M8 / w38: gbuf0 + hdrDepth declared as reads even though the blur
-  // shader does not sample them. Reason: the SSAO BGL is shared with the
-  // calc pass (9 entries 0-8); WebGPU requires every BGL slot to carry a
-  // valid resource, so the blur bind group must bind real gbuffer_normal +
-  // hdr_depth views at slots 4 + 5 — declaring them as graph reads is the
-  // mechanism that makes resolveCtx return their views here.
-  graph.addPass('ssao-blur', {
-    reads: [opts.ssaoRaw, opts.gbuf0, opts.hdrDepth],
-    writes: [opts.ssaoBlurred],
-    execute: (_c: RenderPipelineContext, resolveCtx?: ResolveContext) => {
-      const internalCtx = _c as _InternalRenderPipelineContext;
-      recordSsaoBlurPass(
-        internalCtx,
-        resolveCtx,
-        opts.ssaoBlurred,
-        opts.ssaoRaw,
-        opts.gbuf0,
-        opts.hdrDepth,
-      );
-    },
-  });
+  return ctx as RenderGraphRecordContext;
 }
 
-/**
- * Lazy-allocate the three constant SSAO record companions the first time the
- * calc / blur closure runs: a filtering sampler (binding 3 + 8), a
- * non-filtering depth sampler (binding 6, paired with hdr_depth — WebGPU
- * validation rejects depth + filtering), and a 1x1 r8unorm fallback view bound
- * at ssaoRaw (binding 7) in the calc pass (the calc shader never samples
- * ssaoRaw, but the BGL still requires a valid view).
- *
- * Returns null if any underlying allocation fires a structured error onto
- * runtime.errorRegistry; the caller then skips the pass.
- */
 /**
  * Resolve a depth-only view of a graph color target by key.
  *
@@ -603,13 +71,13 @@ export function addSsaoPasses(
  *   or creation fires a structured error
  */
 export function resolveDepthOnlyView(
-  internals: _InternalRenderPipelineContext,
+  internals: DepthResolutionContext,
   key: string,
   label: string,
   preferredKey?: string | null,
 ): TextureView | null {
   const graph = internals.frameState.perFrameGraph;
-  if (graph === null) return null;
+  if (graph === null || graph === undefined) return null;
   const preferredTexture =
     preferredKey === null || preferredKey === undefined
       ? undefined
@@ -641,7 +109,7 @@ export function resolveDepthOnlyView(
  * untouched (OOS-4).
  */
 function resolveHdrDepthDepthOnlyView(
-  internals: _InternalRenderPipelineContext,
+  internals: DepthResolutionContext,
   hdrDepthKey: string,
 ): TextureView | null {
   return resolveDepthOnlyView(internals, hdrDepthKey, 'ssao-hdr-depth-only-view');
@@ -718,13 +186,13 @@ function ensureSsaoRecordCompanions(internals: _InternalRenderPipelineContext): 
 }
 
 /**
- * Pack the 256B SSAO uniform payload from the camera + config.ssao.intensity.
+ * Pack the 256B SSAO uniform payload from the camera + config.ssao.
  *
  * Layout (plan-strategy D-1 + D-C):
  *   floats [0..15]   view              mat4
  *   floats [16..31]  projection        mat4
  *   floats [32..47]  inverseProjection mat4
- *   floats [48..51]  intensityPad      vec4  (x=intensity, yzw=0 padding)
+ *   floats [48..51]  intensityPad      vec4  (x=intensity, y=radius, z=bias)
  *   floats [52..63]  trailing zero-pad to round to 256B / 64f UBO alignment.
  */
 function buildSsaoUniformPayload(internals: _InternalRenderPipelineContext): Float32Array {
@@ -735,14 +203,17 @@ function buildSsaoUniformPayload(internals: _InternalRenderPipelineContext): Flo
   mat4.invert(invProj, sProj);
 
   const out = new Float32Array(64);
-  out.set(sView as unknown as Float32Array, 0);
-  out.set(sProj as unknown as Float32Array, 16);
-  out.set(invProj as unknown as Float32Array, 32);
+  out.set(sView, 0);
+  out.set(sProj, 16);
+  out.set(invProj, 32);
 
   const ssaoConfig = frameState.installedPipelineConfig?.ssao;
-  const intensity =
-    ssaoConfig !== undefined && ssaoConfig.enabled === true ? (ssaoConfig.intensity ?? 1.0) : 1.0;
-  out[48] = intensity;
+  const parameters = getSsaoParameters(
+    ssaoConfig !== undefined && ssaoConfig.enabled === true ? ssaoConfig : undefined,
+  );
+  out[48] = parameters.intensity;
+  out[49] = parameters.radius;
+  out[50] = parameters.bias;
   return out;
 }
 
@@ -766,28 +237,41 @@ function buildSsaoUniformPayload(internals: _InternalRenderPipelineContext): Flo
  * the SSAO buffers fail to allocate, or when the graph cannot resolve the
  * required views.
  */
-function recordSsaoCalcPass(
+export interface SsaoCalcPassViews {
+  readonly output: TextureView;
+  readonly normal: TextureView;
+  readonly depth: TextureView;
+  readonly depthCacheKey: TextureView;
+}
+
+export function recordSsaoCalcPass(
   _c: _InternalRenderPipelineContext,
   resolveCtx?: ResolveContext,
   ssaoRawKey?: string,
   gbuf0Key?: string,
   hdrDepthKey?: string,
+  graphPass?: RhiRenderPassEncoder,
+  graphViews?: SsaoCalcPassViews,
 ): void {
   const { runtime, pipelineState, encoder } = _c;
   const pp = pipelineState.perPassResources;
 
   if (pp.ssaoCalcPipeline === null || pp.ssaoBgl === null) return;
-  if (resolveCtx === undefined || ssaoRawKey === undefined) return;
+  if (graphViews === undefined && (resolveCtx === undefined || ssaoRawKey === undefined)) return;
 
-  const ssaoRawView = resolveCtx.resolve(ssaoRawKey) as TextureView | undefined;
+  const ssaoRawView =
+    graphViews?.output ?? (resolveCtx?.resolve(ssaoRawKey as string) as TextureView | undefined);
   const gbuf0View =
-    gbuf0Key !== undefined ? (resolveCtx.resolve(gbuf0Key) as TextureView | undefined) : undefined;
-  if (!ssaoRawView || !gbuf0View || hdrDepthKey === undefined) return;
+    graphViews?.normal ??
+    (gbuf0Key !== undefined
+      ? (resolveCtx?.resolve(gbuf0Key) as TextureView | undefined)
+      : undefined);
+  if (!ssaoRawView || !gbuf0View || (graphViews === undefined && hdrDepthKey === undefined)) return;
 
   // hdrDepth needs a depth-only view (BGL binding 5 sampleType=depth);
   // resolveCtx returns a default all-aspects view that dawn rejects when
   // paired with a depth sampler.
-  const hdrDepthView = resolveHdrDepthDepthOnlyView(_c, hdrDepthKey);
+  const hdrDepthView = graphViews?.depth ?? resolveHdrDepthDepthOnlyView(_c, hdrDepthKey as string);
   if (hdrDepthView === null) return;
 
   // Cache key: the graph's pooled hdrDepth view (stable object per size, new
@@ -795,7 +279,9 @@ function recordSsaoCalcPass(
   // so it cannot key the cache; the pooled all-aspects view co-varies with it
   // (both are views of the same transient hdrDepth texture) and changes exactly
   // on resize. Used only as a WeakMap key, never bound.
-  const hdrDepthPooledView = resolveCtx.resolve(hdrDepthKey) as TextureView | undefined;
+  const hdrDepthPooledView =
+    graphViews?.depthCacheKey ??
+    (resolveCtx?.resolve(hdrDepthKey as string) as TextureView | undefined);
   if (hdrDepthPooledView === undefined) return;
 
   const ssaoBufs = getOrCreateSsaoBuffers(runtime);
@@ -839,7 +325,7 @@ function recordSsaoCalcPass(
   const ssaoBgl = pp.ssaoBgl;
   const bindGroup = getOrCreateFromChain(
     _c.frameState.postProcessBgCache,
-    [gbuf0View as unknown as object, hdrDepthPooledView as unknown as object],
+    [gbuf0View, hdrDepthPooledView],
     'ssao-calc',
     () => {
       const bgRes = runtime.device.createBindGroup({
@@ -866,17 +352,19 @@ function recordSsaoCalcPass(
     _c.bindGroupCounts,
   );
 
-  const pass: RhiRenderPassEncoder = encoder.beginRenderPass(
-    buildBeginRenderPassDescriptor(
-      { colorFormats: ['r8unorm'], depthFormat: undefined, sampleCount: 1 },
-      { colorViews: [ssaoRawView] },
-      'post-process',
-    ) as never,
-  );
+  const pass: RhiRenderPassEncoder =
+    graphPass ??
+    encoder.beginRenderPass(
+      buildBeginRenderPassDescriptor(
+        { colorFormats: ['r8unorm'], depthFormat: undefined, sampleCount: 1 },
+        { colorViews: [ssaoRawView] },
+        'post-process',
+      ) as never,
+    );
   pass.setPipeline(pp.ssaoCalcPipeline);
   pass.setBindGroup(0, bindGroup);
   pass.draw(3, 1, 0, 0);
-  pass.end();
+  if (graphPass === undefined) pass.end();
 }
 
 /**
@@ -887,35 +375,53 @@ function recordSsaoCalcPass(
  * as the calc pass; the only difference is binding 7 carries the real
  * ssaoRaw view (vs the 1x1 fallback the calc pass binds).
  */
-function recordSsaoBlurPass(
+export interface SsaoBlurPassViews extends SsaoCalcPassViews {
+  readonly raw: TextureView;
+}
+
+export function recordSsaoBlurPass(
   _c: _InternalRenderPipelineContext,
   resolveCtx?: ResolveContext,
   ssaoBlurredKey?: string,
   ssaoRawKey?: string,
   gbuf0Key?: string,
   hdrDepthKey?: string,
+  graphPass?: RhiRenderPassEncoder,
+  graphViews?: SsaoBlurPassViews,
 ): void {
   const { runtime, pipelineState, encoder } = _c;
   const pp = pipelineState.perPassResources;
 
   if (pp.ssaoBlurPipeline === null || pp.ssaoBgl === null) return;
-  if (resolveCtx === undefined || ssaoBlurredKey === undefined || ssaoRawKey === undefined) return;
+  if (
+    graphViews === undefined &&
+    (resolveCtx === undefined || ssaoBlurredKey === undefined || ssaoRawKey === undefined)
+  )
+    return;
 
-  const ssaoBlurredView = resolveCtx.resolve(ssaoBlurredKey) as TextureView | undefined;
-  const ssaoRawView = resolveCtx.resolve(ssaoRawKey) as TextureView | undefined;
+  const ssaoBlurredView =
+    graphViews?.output ??
+    (resolveCtx?.resolve(ssaoBlurredKey as string) as TextureView | undefined);
+  const ssaoRawView =
+    graphViews?.raw ?? (resolveCtx?.resolve(ssaoRawKey as string) as TextureView | undefined);
   const gbuf0View =
-    gbuf0Key !== undefined ? (resolveCtx.resolve(gbuf0Key) as TextureView | undefined) : undefined;
+    graphViews?.normal ??
+    (gbuf0Key !== undefined
+      ? (resolveCtx?.resolve(gbuf0Key) as TextureView | undefined)
+      : undefined);
   if (!ssaoBlurredView || !ssaoRawView) return;
 
   // hdrDepth depth-only view (see recordSsaoCalcPass).
   const hdrDepthView =
-    hdrDepthKey !== undefined ? resolveHdrDepthDepthOnlyView(_c, hdrDepthKey) : null;
+    graphViews?.depth ??
+    (hdrDepthKey !== undefined ? resolveHdrDepthDepthOnlyView(_c, hdrDepthKey) : null);
   // Pooled hdrDepth view for the cache key (the depth-only view above is
   // recreated every frame; see recordSsaoCalcPass).
   const hdrDepthPooledView =
-    hdrDepthKey !== undefined
-      ? (resolveCtx.resolve(hdrDepthKey) as TextureView | undefined)
-      : undefined;
+    graphViews?.depthCacheKey ??
+    (hdrDepthKey !== undefined
+      ? (resolveCtx?.resolve(hdrDepthKey) as TextureView | undefined)
+      : undefined);
 
   const ssaoBufs = getOrCreateSsaoBuffers(runtime);
   if (ssaoBufs === null) return;
@@ -943,7 +449,7 @@ function recordSsaoBlurPass(
   // the calc pass): WebGPU requires every BGL slot carry a valid resource
   // even when the active fragment entry does not statically reference it.
   // gbuf0 + hdr_depth views are resolved from the graph; they must exist
-  // because addSsaoPasses declares them as `reads` on the blur node.
+  // because the typed SSAO graph declares them as reads on the blur node.
   if (gbuf0View === undefined || hdrDepthView === null || hdrDepthPooledView === undefined) return;
   // Identity-cached bind group keyed on the graph-pooled ssaoRaw + gbuf0 +
   // hdrDepth views (all retire + reallocate on resize). Replaces the prior
@@ -951,11 +457,7 @@ function recordSsaoBlurPass(
   const ssaoBgl = pp.ssaoBgl;
   const bindGroup = getOrCreateFromChain(
     _c.frameState.postProcessBgCache,
-    [
-      ssaoRawView as unknown as object,
-      gbuf0View as unknown as object,
-      hdrDepthPooledView as unknown as object,
-    ],
+    [ssaoRawView, gbuf0View, hdrDepthPooledView],
     'ssao-blur',
     () => {
       const bgRes = runtime.device.createBindGroup({
@@ -982,210 +484,19 @@ function recordSsaoBlurPass(
     _c.bindGroupCounts,
   );
 
-  const pass: RhiRenderPassEncoder = encoder.beginRenderPass(
-    buildBeginRenderPassDescriptor(
-      { colorFormats: ['r8unorm'], depthFormat: undefined, sampleCount: 1 },
-      { colorViews: [ssaoBlurredView] },
-      'post-process',
-    ) as never,
-  );
+  const pass: RhiRenderPassEncoder =
+    graphPass ??
+    encoder.beginRenderPass(
+      buildBeginRenderPassDescriptor(
+        { colorFormats: ['r8unorm'], depthFormat: undefined, sampleCount: 1 },
+        { colorViews: [ssaoBlurredView] },
+        'post-process',
+      ) as never,
+    );
   pass.setPipeline(pp.ssaoBlurPipeline);
   pass.setBindGroup(0, bindGroup);
   pass.draw(3, 1, 0, 0);
-  pass.end();
-}
-
-export interface AddTonemapPassOptions {
-  /** Logical HDR resource tonemap reads when bloom is on (the bloom composite output). */
-  readonly hdrComposited: string;
-  /**
-   * Logical HDR resource tonemap reads when bloom is OFF (the bloom composite
-   * pass is gated off and never writes hdrComposited). Defaults to
-   * `hdrComposited` for pipelines where the two are the same texture (e.g.
-   * HDRP passes `hdrColor` for both). URP passes `hdrColor` here so that with
-   * bloom off, tonemap reads the main-rendered scene directly instead of an
-   * unwritten hdrComposited target (bug-20260625).
-   */
-  readonly hdrColorWhenBloomOff?: string;
-  /** Logical LDR output; defaults to the swap-chain. */
-  readonly color?: string;
-  /** Run the final linear-LDR -> display-encoded output without tone mapping. */
-  readonly outputOnly?: boolean;
-}
-
-/**
- * Reserved post-process id for the engine built-in tonemap (feat-20260621 M-A3
- * / D-5). Registered at boot via `postProcess.register(TONEMAP_POST_PROCESS_ID,
- * { source, params })`; the extract stage bridges `Camera.exposure / whitePoint
- * / tonemap` onto the params channel under this key (render-system-extract.ts).
- */
-export const TONEMAP_POST_PROCESS_ID = 'forgeax::tonemap';
-
-/**
- * HDR -> LDR tonemap fullscreen pass. feat-20260621 M-A3 (D-5): the built-in
- * tonemap now flows through the SAME unified fullscreen post-process channel as
- * any custom post-process — registered at boot via `postProcess.register(
- * 'forgeax::tonemap', { source, params })`, its exposure/whitePoint/mode bridged
- * onto the per-frame params channel by the extract stage, and dispatched here
- * through `dispatchFullscreenPass`. This wrapper preserves two behaviours the
- * generic `addFullscreenPass` lacks:
- *   - the per-frame `tonemapActive` gate (`camera.tonemap === 'none'` ->
- *     zero-overhead skip), and
- *   - graceful degradation (charter §9) on the empty-manifest path: when
- *     `forgeax::tonemap` was never registered (Camera-only world, no manifest)
- *     fire a structured `shader-compile-failed` instead of letting the
- *     dispatcher throw `post-process-not-found`.
- * The output is a graph resource when FXAA is active, otherwise the reserved
- * `'swapchain'` key resolves to the current surface view.
- */
-export function addTonemapPass(
-  graph: RenderGraph<RenderPipelineContext>,
-  name: string,
-  opts: AddTonemapPassOptions,
-): void {
-  // Declare both potential read sources so the topo-sort keeps tonemap after
-  // BOTH the composite writer (hdrComposited) and the main writer (hdrColor),
-  // regardless of which one the dispatch resolves at record time. resolveCtx
-  // exposes every compiled texture, so the runtime pick below always resolves.
-  const hdrColorWhenBloomOff = opts.hdrColorWhenBloomOff ?? opts.hdrComposited;
-  const tonemapReads =
-    hdrColorWhenBloomOff === opts.hdrComposited
-      ? [opts.hdrComposited]
-      : [opts.hdrComposited, hdrColorWhenBloomOff];
-  graph.addPass(name, {
-    reads: tonemapReads,
-    writes: [opts.color ?? 'swapchain'],
-    ...(opts.color !== undefined && opts.color !== 'swapchain'
-      ? {
-          colorConnections: [
-            {
-              source: hdrColorWhenBloomOff,
-              destination: opts.color,
-              conversion: { kind: 'tone-map' as const },
-            },
-          ],
-        }
-      : {}),
-    execute: (ctx: RenderPipelineContext, resolveCtx?: ResolveContext) => {
-      // Tonemap mode `none` still needs the final output encode when the scene
-      // was rendered into the graph-owned linear-LDR target.
-      if (ctx.camera.tonemap === 'none' && opts.outputOnly !== true) return;
-      const registered = ctx.runtime.lookupPostProcess?.(TONEMAP_POST_PROCESS_ID);
-      if (registered === undefined) {
-        ctx.runtime.errorRegistry.fire(
-          new RhiError({
-            code: 'shader-compile-failed',
-            expected:
-              'manifest entries include pbr.wgsl + unlit.wgsl + tonemap.wgsl (engine SSOT triple)',
-            hint: 'verify @forgeax/engine-vite-plugin-shader emits manifest.json with the 3 engine entries; check vite plugin engineEntries option',
-          }),
-        );
-        return;
-      }
-      // Pick the read source by bloom state: when bloom is on the composite
-      // pass wrote hdrComposited; when off it was gated and never ran, so read
-      // the main-rendered hdrColor instead (bug-20260625). Same texture for
-      // pipelines that pass identical keys (e.g. HDRP).
-      const src =
-        opts.outputOnly === true
-          ? hdrColorWhenBloomOff
-          : ctx.camera.bloom === 'on'
-            ? opts.hdrComposited
-            : hdrColorWhenBloomOff;
-      dispatchFullscreenPass(
-        ctx,
-        name,
-        TONEMAP_POST_PROCESS_ID,
-        opts.color ?? 'swapchain',
-        [src],
-        resolveCtx,
-        false,
-        opts.outputOnly === true,
-      );
-    },
-  });
-}
-
-export interface AddFullscreenPassOptions {
-  /**
-   * Registered post-process shader id (via renderer.postProcess.register). The
-   * built-in `'fxaa'` id is a hardwired dispatcher branch; any other id is an
-   * AI-user effect whose WGSL declares `vs_main` + `fs_main` and samples the
-   * input at `@group(1) @binding(0)` texture + `@binding(1)` sampler. With
-   * `compositeOverSwapchain` this is how an effect layers over URP's final image
-   * (see RenderPipelineAsset.config.postEffects).
-   */
-  readonly shader: string;
-  /** Graph resource key the pass writes (intermediate scratch RT for FXAA / the composite scratch). */
-  readonly color: string;
-  /** Graph resource keys the pass samples. Empty = use the current surface view. */
-  readonly reads?: readonly string[] | undefined;
-  /**
-   * feat-20260621 M4': composite-over-swap-chain mode. When true, the pass
-   * copies the CURRENT swap-chain into the `color` scratch target (so the effect
-   * samples the already-composited final image), samples that scratch, then
-   * writes the result back into the swap-chain through its non-srgb storage view
-   * (R-COLORSPACE: the swap-chain is already sRGB-encoded, so writing through the
-   * srgb view would double-encode). This is the generalisation of the built-in
-   * `'fxaa'` copy idiom to AI-user effects — the mechanism that lets a built-in
-   * pipeline layer a registered effect on top of its final image WITHOUT
-   * replacing the pipeline (and dropping its shadow / tonemap passes). `color`
-   * MUST be a `graph.addColorTarget` declared with the swap-chain storage format
-   * + COPY_DST | TEXTURE_BINDING usage (it is both copy dst and sampled input);
-   * `reads` stays empty.
-   *
-   * WebGPU backend only: the mid-frame swap-chain copy + non-srgb storage-view
-   * write are not supported on the WebGL2 fallback swap-chain (no COPY_SRC, no
-   * non-srgb reinterpret view) — the same constraint `recordFxaaPass` carries.
-   */
-  readonly compositeOverSwapchain?: boolean | undefined;
-}
-
-/**
- * AC-06 / AC-07: declare a generic fullscreen post-process pass. The shader is
- * looked up from `renderer.postProcess.register(shader, …)`; the primitive
- * builds the input-texture BGL + sampler + pipeline + ping-pong wiring. For
- * the FXAA case the implementation detail is `recordFxaaPass`
- * (package-private), which owns the graph-input-to-surface-output attachment
- * route.
- *
- * If `opts.reads` is empty the pass uses the current surface view (default).
- * Post-processes that read a graph-owned texture
- * (e.g. tonemap rebuilt as a fullscreen pass, OOS-3) will declare reads
- * explicitly.
- *
- * F-3 topology refactor (2026-06-08): the FXAA path now flows through this
- * dispatcher (`addFullscreenPass(g, 'fxaa', ...)` -> `dispatchFullscreenPass` ->
- * `recordFxaaPass`). The two-branch dispatcher is the load-bearing AC-09
- * "FXAA refactored as the first post-process instance" claim: at the
- * topology layer FXAA is a special-cased shader id; at the record layer
- * recordFxaaPass owns the backend-aware output attachment. The
- * dispatcher is extracted as a named function (`dispatchFullscreenPass`)
- * so an AI user reading the per-pass execute closure sees a single call
- * site — the if/else fan-out is in one place, not duplicated across
- * future fullscreen passes.
- */
-export function addFullscreenPass(
-  graph: RenderGraph<RenderPipelineContext>,
-  name: string,
-  opts: AddFullscreenPassOptions,
-): void {
-  const reads = opts.reads ?? [];
-  graph.addPass(name, {
-    reads,
-    writes: [opts.color],
-    execute: (ctx: RenderPipelineContext, resolveCtx?: ResolveContext) => {
-      dispatchFullscreenPass(
-        ctx,
-        name,
-        opts.shader,
-        opts.color,
-        reads,
-        resolveCtx,
-        opts.compositeOverSwapchain ?? false,
-      );
-    },
-  });
+  if (graphPass === undefined) pass.end();
 }
 
 /**
@@ -1200,9 +511,9 @@ export function addFullscreenPass(
  *   body is intentionally unchanged across this refactor to preserve the
  *   AC-09 dualPassDiff=1069 (hello-fxaa) / 768 (learn-render-4-10-MSAA)
  *   byte-equivalence with the pre-feat baseline.
- * - any other id (AI-user path): the M1 patch wires `reads[0]` through the
+ * - every other id (AI-user path): the M1 patch wires `reads[0]` through the
  *   render-graph `resolveCtx` so the bind group samples the upstream
- *   graph-owned color target (e.g. `addScenePass` writes `'offscreenColor'`,
+ *   graph-owned color target (e.g. the typed scene pass writes `'offscreenColor'`,
  *   a custom post-process pass declares `reads: ['offscreenColor']`).
  *   Failure modes (charter P3 fail-fast):
  *     - `lookupPostProcess(shader) === undefined` -> throw
@@ -1222,7 +533,7 @@ export function addFullscreenPass(
  *   fullscreen-triangle vertex shader.
  *
  * Extracted from the addPass execute closure so the topology fan-out is in
- * one named place; an AI user reading addFullscreenPass sees the single
+ * one named place; the typed graph has a single
  * call site, and future post-process branches (e.g. tonemap migrated onto
  * this dispatcher per OOS-3) extend this function rather than the addPass
  * inline closure.
@@ -1236,6 +547,9 @@ function dispatchFullscreenPass(
   resolveCtx?: ResolveContext,
   compositeOverSwapchain = false,
   rawSwapchainOutput = false,
+  graphPass?: RhiRenderPassEncoder,
+  graphOutputFormat?: GPUTextureFormat,
+  graphDepthView?: TextureView,
 ): void {
   if (shader === 'fxaa') {
     if (resolveCtx === undefined) {
@@ -1244,7 +558,7 @@ function dispatchFullscreenPass(
         detail: { readsKey: reads[0] ?? 'ldrColor', passName: name },
       });
     }
-    recordFxaaPass(ctx as unknown as _InternalRenderPipelineContext, resolveCtx);
+    recordFxaaPass(requireRenderGraphRecordContext(ctx), resolveCtx, graphPass);
     return;
   }
   const lookup = ctx.runtime.lookupPostProcess;
@@ -1255,7 +569,6 @@ function dispatchFullscreenPass(
       detail: { id: shader },
     });
   }
-
   // feat-20260621 M4' composite-over-swap-chain: copy the current swap-chain
   // into the `color` scratch target BEFORE sampling, so the effect reads the
   // already-composited final image (shadows + tonemap + fxaa). Generalises the
@@ -1317,14 +630,14 @@ function dispatchFullscreenPass(
   // Both composite and non-composite branches handle depth symmetrically —
   // the depth resolution block is branch-agnostic (AC-02: no URP/HDRP
   // discrimination). Color input logic is unchanged (AC-03 zero-regression).
-  let depthTexView: TextureView | null = null;
+  let depthTexView: TextureView | null = graphDepthView ?? null;
   let depthSampler: Sampler | null = null;
   if (entry.reads && entry.reads.length > 0) {
-    const internals = ctx as unknown as _InternalRenderPipelineContext;
+    const internals = requireRenderGraphRecordContext(ctx);
     for (const read of entry.reads) {
       if (typeof read !== 'string' && read.sampleType === 'depth') {
         const depthKey = read.key;
-        depthTexView = resolveDepthOnlyView(
+        depthTexView ??= resolveDepthOnlyView(
           internals,
           depthKey,
           'post-process-scene-depth-only-view',
@@ -1351,7 +664,10 @@ function dispatchFullscreenPass(
   // targets may be linear HDR/LDR textures (for example rgba16float), while
   // the swap-chain path uses the backend-selected surface view format.
   let writeFormat = ctx.pipelineState?.colorAttachmentFormat ?? 'rgba8unorm-srgb';
-  if (rawSwapchainOutput && color === 'swapchain') {
+  if (graphPass !== undefined) {
+    writeView = ctx.view;
+    writeFormat = graphOutputFormat ?? writeFormat;
+  } else if (rawSwapchainOutput && color === 'swapchain') {
     const rawViewRes = ctx.runtime.device.createTextureView(ctx.currentTexture, {});
     if (!rawViewRes.ok) {
       ctx.runtime.errorRegistry.fire(rawViewRes.error);
@@ -1368,16 +684,11 @@ function dispatchFullscreenPass(
     writeView = storageViewRes.value;
     writeFormat = ctx.pipelineState?.format ?? 'rgba8unorm';
   } else {
-    const internalCtx = ctx as unknown as Partial<_InternalRenderPipelineContext>;
-    const graphColorFormat =
-      internalCtx.frameState?.perFrameGraph?.getColorTargetDescriptor(color)?.format;
+    const legacyGraph = requireRenderGraphRecordContext(ctx).frameState.perFrameGraph;
+    const graphColorFormat = legacyGraph?.getColorTargetDescriptor(color)?.format;
     if (graphColorFormat !== undefined) writeFormat = graphColorFormat;
     const resolvedColor = (resolveCtx?.resolve(color) as TextureView | undefined) ?? null;
-    writeView =
-      (internalCtx.frameState === undefined
-        ? resolvedColor
-        : resolveGraphColorAttachmentView(internalCtx.frameState, color, resolvedColor)) ??
-      ctx.view;
+    writeView = legacyGraph?.getColorTargetView(color) ?? resolvedColor ?? ctx.view;
   }
   if (writeView === null || writeView === undefined) return;
 
@@ -1428,7 +739,7 @@ function dispatchFullscreenPass(
   // Pipeline source-of-truth (M4 / T-10-a, solving M1 CONCERN-1):
   // RenderSystemRuntime.getPostProcessPipeline is the sync wrapper over the
   // shared shader-module adapter (1-frame warmup). First frame after
-  // postProcess.register: shader compile is in flight -> returns null -> we
+  // fullscreen effect registration: shader compile is in flight -> returns null -> we
   // skip the pass for that frame. Second frame onward: cached pipeline is
   // returned synchronously.
   //
@@ -1439,9 +750,11 @@ function dispatchFullscreenPass(
   // tonemap -> FXAA), while preserving the native surface storage/sRGB split.
   const lookupPipeline = ctx.runtime.getPostProcessPipeline;
   if (lookupPipeline === undefined) return;
-  const postColorFormat = writeFormat as unknown as GPUTextureFormat;
+  const postColorFormat = writeFormat;
   const pipeline = lookupPipeline(shader, built.bindGroupLayout, postColorFormat);
-  if (pipeline === null) return;
+  if (pipeline === null) {
+    return;
+  }
   const handle = built.createHandle(name, pipeline, paramsBuffer);
 
   // Open a render pass writing into the resolved color target. Fullscreen
@@ -1450,18 +763,49 @@ function dispatchFullscreenPass(
   // group=0 is reserved for future view bind groups, mirroring the
   // recordTonemap / recordSkybox pattern that uses slot 0 only when the
   // pipeline declares a single bind group at slot 0).
-  const pass = ctx.encoder.beginRenderPass(
-    buildBeginRenderPassDescriptor(
-      {
-        colorFormats: [writeFormat as unknown as GPUTextureFormat],
-        depthFormat: undefined,
-        sampleCount: 1,
-      },
-      { colorViews: [writeView] },
-      'post-process',
-    ) as never,
-  );
+  const pass =
+    graphPass ??
+    ctx.encoder.beginRenderPass(
+      buildBeginRenderPassDescriptor(
+        {
+          colorFormats: [writeFormat],
+          depthFormat: undefined,
+          sampleCount: 1,
+        },
+        { colorViews: [writeView] },
+        'post-process',
+      ) as never,
+    );
   pass.setBindGroup(1, bindGroup);
   handle.draw(pass, inputView);
-  pass.end();
+  if (graphPass === undefined) pass.end();
+}
+
+export function encodeFullscreenPass(
+  ctx: RenderPipelineContext,
+  pass: RhiRenderPassEncoder,
+  input: {
+    readonly name: string;
+    readonly shader: string;
+    readonly color: string;
+    readonly reads: readonly string[];
+    readonly resolve: ResolveContext;
+    readonly outputFormat: GPUTextureFormat;
+    readonly rawSwapchainOutput?: boolean | undefined;
+    readonly depthView?: TextureView | undefined;
+  },
+): void {
+  dispatchFullscreenPass(
+    ctx,
+    input.name,
+    input.shader,
+    input.color,
+    input.reads,
+    input.resolve,
+    false,
+    input.rawSwapchainOutput ?? false,
+    pass,
+    input.outputFormat,
+    input.depthView,
+  );
 }

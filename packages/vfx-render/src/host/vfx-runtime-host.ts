@@ -1,6 +1,18 @@
-import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { type EntityHandle, err, FixedUpdate, ok, type World } from '@forgeax/engine-ecs';
-import type { MaterialAsset, Result } from '@forgeax/engine-types';
+import type {
+  AssetRegistryResolver,
+  AssetRegistry as LegacyAssetRegistry,
+  RuntimeAssetRegistry,
+} from '@forgeax/engine-assets-runtime';
+import { getAssetRegistryResolver } from '@forgeax/engine-assets-runtime';
+import { createWorldContext, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import type {
+  Asset,
+  AssetDecoderLease,
+  MaterialAsset,
+  MeshAsset,
+  Result,
+} from '@forgeax/engine-types';
+import { err, ok } from '@forgeax/engine-types';
 import type {
   VfxDataInterfaceError,
   VfxDataInterfaceProvider,
@@ -15,6 +27,7 @@ import {
   ParticleEffectPlayer,
   VFX_GPU_RUNTIME_RESOURCE_KEY,
   type VfxGpuRuntime,
+  vfxGpuEffectContribution,
   vfxGpuEffectPackLoader,
   vfxGpuRuntimePlugin,
 } from '@forgeax/engine-vfx';
@@ -24,6 +37,23 @@ import {
   createVfxDataInterfaceRegistry,
   type VfxDataInterfaceRegistry,
 } from './data-interface-providers.js';
+
+/**
+ * Public authoring projection accepted by the VFX host. Editor owns the
+ * projection, while the Engine App still owns bytes/decoders/cache. Keeping
+ * this small structural seam public lets the Editor pass that projection
+ * without importing the runtime registry's internal module or fabricating a
+ * second registry identity.
+ */
+export interface VfxAuthoringAssetRegistry {
+  readonly loaders: {
+    registerPackLoader(loader: unknown): void;
+  };
+  lookup<T extends Asset = Asset>(guid: string): T | undefined;
+  readonly load?: (guid: string, kind: string) => Promise<Result<unknown, unknown>>;
+}
+
+type AssetRegistry = LegacyAssetRegistry | RuntimeAssetRegistry | VfxAuthoringAssetRegistry;
 
 export interface VfxRuntimeHostOptions {
   readonly camera: ParticleRenderCameraSource;
@@ -73,6 +103,16 @@ export interface VfxRuntimeHostControl {
     },
     VfxRuntimeHostControlError
   >;
+  setPlayerRenderConsumption(input: {
+    readonly player: EntityHandle;
+    readonly enabled: boolean;
+  }): Result<
+    {
+      readonly state: 'enabled' | 'paused';
+      readonly generation: number;
+    },
+    VfxRuntimeHostControlError
+  >;
 }
 
 export interface VfxRuntimeHost {
@@ -90,7 +130,12 @@ export interface VfxRuntimeHost {
   }): Promise<Result<{ readonly state: 'attached' | 'already-attached' }, VfxRuntimeHostError>>;
   detachWorld(input: {
     readonly world: World;
-  }): Result<{ readonly state: 'detached' | 'not-attached' }, VfxRuntimeHostError>;
+  }): Promise<Result<{ readonly state: 'detached' | 'not-attached' }, VfxRuntimeHostError>>;
+}
+
+/** Install the VFX owner decoder into the core registry. */
+export function installVfxRuntimeDecoder(registry: RuntimeAssetRegistry): AssetDecoderLease {
+  return registry.installDecoder(vfxGpuEffectContribution.kind, vfxGpuEffectContribution.decoder);
 }
 
 export interface VfxRuntimeHostInspectSnapshot {
@@ -100,6 +145,8 @@ export interface VfxRuntimeHostInspectSnapshot {
   readonly players: readonly VfxGpuPlayerInspectSnapshot[];
   readonly diagnostics: readonly VfxGpuRuntimeDiagnostic[];
 }
+
+type PluginContext = Awaited<ReturnType<typeof createWorldContext>>;
 
 function failure(
   code: VfxRuntimeHostError['code'],
@@ -123,24 +170,80 @@ export function createVfxRuntimeHost(options: VfxRuntimeHostOptions): VfxRuntime
   const registries = new WeakSet<AssetRegistry>();
   const worlds = new WeakMap<
     World,
-    { readonly assets: AssetRegistry; readonly generation: number }
+    {
+      readonly assets: AssetRegistry;
+      readonly resolver: AssetRegistryResolver | undefined;
+      readonly generation: number;
+      readonly pluginContext: PluginContext;
+      readonly renderAssets: Map<string, MaterialAsset | MeshAsset>;
+      readonly pendingRenderAssets: Map<string, Promise<void>>;
+      readonly unsubscribeAssets: () => void;
+      catalogEpoch: number;
+    }
   >();
+  const pausedPlayers = new WeakMap<World, Set<EntityHandle>>();
   let nextGeneration = 1;
   const dataInterfaces = createVfxDataInterfaceRegistry(options.providers);
+  const readRenderAsset = <Kind extends 'material' | 'mesh'>(
+    world: World,
+    guid: string,
+    kind: Kind,
+  ): (Kind extends 'material' ? MaterialAsset : MeshAsset) | undefined => {
+    const attached = worlds.get(world);
+    if (attached === undefined) return undefined;
+    const key = `${kind}:${guid.toLowerCase()}`;
+    const cached = attached.renderAssets.get(key);
+    if (cached?.kind === kind) return cached as Kind extends 'material' ? MaterialAsset : MeshAsset;
+    if ('lookup' in attached.assets) {
+      const lookup = attached.assets.lookup as (guid: string) => Asset | undefined;
+      // Preserve the registry receiver: the Engine-owned legacy class uses
+      // `this` to read its load-state/catalogue maps. The Editor facade may
+      // expose an arrow function, but calling through the owner is safe for
+      // both shapes and avoids turning a lookup into a swallowed plan error.
+      const legacy = lookup.call(attached.assets, guid);
+      if (legacy?.kind === kind) {
+        attached.renderAssets.set(key, legacy);
+        return legacy as Kind extends 'material' ? MaterialAsset : MeshAsset;
+      }
+    }
+    const resolved = attached.resolver?.lookup<MaterialAsset | MeshAsset>(guid);
+    if (resolved?.kind === kind) {
+      attached.renderAssets.set(key, resolved);
+      return resolved as Kind extends 'material' ? MaterialAsset : MeshAsset;
+    }
+    if (
+      'load' in attached.assets &&
+      typeof attached.assets.load === 'function' &&
+      !attached.pendingRenderAssets.has(key)
+    ) {
+      const epoch = attached.catalogEpoch;
+      const load = attached.assets.load as (
+        guid: string,
+        kind: string,
+      ) => Promise<Result<MaterialAsset | MeshAsset, unknown>>;
+      const request = load(guid, kind)
+        .then((result) => {
+          if (!result.ok || worlds.get(world) !== attached || attached.catalogEpoch !== epoch)
+            return;
+          attached.renderAssets.set(key, result.value);
+        })
+        .catch(() => undefined);
+      attached.pendingRenderAssets.set(key, request);
+      void request.finally(() => {
+        if (attached.pendingRenderAssets.get(key) === request) {
+          attached.pendingRenderAssets.delete(key);
+        }
+      });
+    }
+    return undefined;
+  };
   const feature = gpuParticleRenderFeature({
     camera: options.camera,
     dataInterfaces,
-    material: {
-      read: (world, guid) => {
-        const asset = worlds.get(world)?.assets.lookup(guid);
-        return asset?.kind === 'material' ? (asset as MaterialAsset) : undefined;
-      },
-    },
-    mesh: {
-      read: (world, guid) => {
-        const asset = worlds.get(world)?.assets.lookup(guid);
-        return asset?.kind === 'mesh' ? asset : undefined;
-      },
+    material: { read: (world, guid) => readRenderAsset(world, guid, 'material') },
+    mesh: { read: (world, guid) => readRenderAsset(world, guid, 'mesh') },
+    playerConsumption: {
+      isEnabled: (world, player) => !pausedPlayers.get(world)?.has(player),
     },
   });
   return {
@@ -232,6 +335,22 @@ export function createVfxRuntimeHost(options: VfxRuntimeHostOptions): VfxRuntime
               generation: requestedGeneration,
             });
           }),
+        setPlayerRenderConsumption: ({ player, enabled }) =>
+          withRuntime(player, () => {
+            let paused = pausedPlayers.get(world);
+            if (enabled) {
+              paused?.delete(player);
+              if (paused !== undefined && paused.size === 0) pausedPlayers.delete(world);
+            } else {
+              paused ??= new Set();
+              paused.add(player);
+              pausedPlayers.set(world, paused);
+            }
+            return Object.freeze({
+              state: enabled ? ('enabled' as const) : ('paused' as const),
+              generation: requestedGeneration,
+            });
+          }),
       };
       return ok(Object.freeze(control));
     },
@@ -241,7 +360,18 @@ export function createVfxRuntimeHost(options: VfxRuntimeHostOptions): VfxRuntime
       if (worlds.has(world)) return ok({ state: 'already-attached' });
       if (!registries.has(assets)) {
         try {
-          assets.loaders.registerPackLoader(vfxGpuEffectPackLoader);
+          // The Editor facade deliberately exposes the legacy LoaderRegistry
+          // while projecting the Engine-owned App.assets instance. Prefer
+          // that public authoring seam before looking for the five-action
+          // runtime registry; otherwise a facade that happens to expose
+          // `load` would be misclassified as a decoder owner.
+          if ('loaders' in assets) {
+            assets.loaders.registerPackLoader(vfxGpuEffectPackLoader);
+          } else if ('installDecoder' in assets) {
+            assets.installDecoder(vfxGpuEffectContribution.kind, vfxGpuEffectContribution.decoder);
+          } else {
+            throw new TypeError('VFX assets registry exposes neither loaders nor installDecoder');
+          }
           registries.add(assets);
         } catch (cause) {
           return err(
@@ -254,36 +384,74 @@ export function createVfxRuntimeHost(options: VfxRuntimeHostOptions): VfxRuntime
           );
         }
       }
-      const installed = await vfxGpuRuntimePlugin(
-        options.maxQueuedTicks === undefined ? {} : { maxQueuedTicks: options.maxQueuedTicks },
-      ).build(world);
-      if (!installed.ok) {
+      let pluginContext: PluginContext;
+      try {
+        pluginContext = await createWorldContext(world, [
+          vfxGpuRuntimePlugin(
+            options.maxQueuedTicks === undefined ? {} : { maxQueuedTicks: options.maxQueuedTicks },
+          ),
+        ]);
+      } catch (cause) {
         return err(
           failure(
             'vfx-host-world-attach-failed',
             'the World FixedUpdate VFX intent producer to install',
             'repair the reported World registration conflict and retry',
-            installed.error,
+            cause,
           ),
         );
       }
-      worlds.set(world, { assets, generation: nextGeneration++ });
+      let resolver: AssetRegistryResolver | undefined;
+      if (!('loaders' in assets) && 'installDecoder' in assets) {
+        try {
+          resolver = getAssetRegistryResolver(assets);
+        } catch {
+          resolver = undefined;
+        }
+      }
+      const attached = {
+        assets,
+        resolver,
+        pluginContext,
+        generation: nextGeneration++,
+        renderAssets: new Map<string, MaterialAsset | MeshAsset>(),
+        pendingRenderAssets: new Map<string, Promise<void>>(),
+        catalogEpoch:
+          'snapshot' in assets && typeof assets.snapshot === 'function'
+            ? assets.snapshot().epoch
+            : 0,
+        unsubscribeAssets: () => {},
+      };
+      if ('subscribe' in assets && typeof assets.subscribe === 'function') {
+        attached.unsubscribeAssets = assets.subscribe((snapshot) => {
+          if (snapshot.epoch === attached.catalogEpoch) return;
+          attached.catalogEpoch = snapshot.epoch;
+          attached.renderAssets.clear();
+          attached.pendingRenderAssets.clear();
+        });
+      }
+      worlds.set(world, attached);
       return ok({ state: 'attached' });
     },
-    detachWorld: ({ world }) => {
-      if (!worlds.has(world)) return ok({ state: 'not-attached' });
-      const removed = world.removeSystem(FixedUpdate, 'vfx-gpu-runtime');
-      if (!removed.ok) {
+    detachWorld: async ({ world }) => {
+      const attached = worlds.get(world);
+      if (attached === undefined) return ok({ state: 'not-attached' });
+      try {
+        await attached.pluginContext.fiber.dispose();
+      } catch (cause) {
         return err(
           failure(
             'vfx-host-world-detach-failed',
             'the VFX FixedUpdate producer to detach exactly once',
             'inspect the World schedule and retry detachWorld',
-            removed.error,
+            cause,
           ),
         );
       }
-      world.removeResource(VFX_GPU_RUNTIME_RESOURCE_KEY);
+      pausedPlayers.delete(world);
+      attached.unsubscribeAssets();
+      attached.renderAssets.clear();
+      attached.pendingRenderAssets.clear();
       worlds.delete(world);
       return ok({ state: 'detached' });
     },

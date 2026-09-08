@@ -51,22 +51,19 @@
 import { Entity, type EntityHandle, World } from '@forgeax/engine-ecs';
 import { encodeTileBits } from '@forgeax/engine-graphics-extras';
 import { frustum, mat4 } from '@forgeax/engine-math';
+import { CAMERA_PROJECTION_ORTHOGRAPHIC, Camera } from '@forgeax/engine-render';
+import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
+import { ChildOf, propagateTransforms, Transform } from '@forgeax/engine-scene';
+import type { TilesetAsset, TilesetTileEntry } from '@forgeax/engine-types';
+import { describe, expect, it } from 'vitest';
+import { encodeSortScope } from '../../../render/src/components/tile-layer';
 import {
-  encodeSortScope,
-  TileLayer,
-  Tilemap,
-  tilemapChunkExtractSystem,
-} from '@forgeax/engine-render/authoring';
-import {
-  CAMERA_PROJECTION_ORTHOGRAPHIC,
-  Camera,
   computeChunkStreamBounds,
   resetTilemapChunkExtractCache,
   resetTilemapDerivedEntityTracker,
-} from '@forgeax/engine-render/internal';
-import { ChildOf, propagateTransforms, Transform } from '@forgeax/engine-scene';
-import { type TilesetAsset, type TilesetTileEntry, toShared } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
+  tilemapChunkExtractSystem,
+} from '../../../render/src/tilemap-chunk-extract-system';
+import { makeTilemapAssetLookup } from './helpers/tilemap-assets';
 
 // Camera window x in [CAMERA_POS - 5, CAMERA_POS + 5]. Landing at 55 puts
 // the right edge at 60, which straddles the footprint of a widthCells=2
@@ -87,6 +84,7 @@ interface OverhangSceneOpts {
 interface Scene {
   readonly world: World;
   readonly cameraEntity: EntityHandle;
+  readonly lookup: ReturnType<typeof makeTilemapAssetLookup>;
 }
 
 function makeOverhangScene(opts: OverhangSceneOpts = {}): Scene {
@@ -114,8 +112,7 @@ function makeOverhangScene(opts: OverhangSceneOpts = {}): Scene {
   };
   const tileset: TilesetAsset = {
     kind: 'tileset',
-    guid: 'test/overhang-bounds',
-    atlases: [toShared<'TextureAsset'>(1)],
+    atlases: ['test/atlas'],
     tileWidth: 16,
     tileHeight: 16,
     columns: cols,
@@ -123,12 +120,12 @@ function makeOverhangScene(opts: OverhangSceneOpts = {}): Scene {
     regions: [{ x: 0, y: 0, width: 16, height: 16 }],
     tiles: [tileEntry],
   };
-  const tilesetHandle = world.allocSharedRef<'TilesetAsset', TilesetAsset>('TilesetAsset', tileset);
+  const lookup = makeTilemapAssetLookup(tileset);
   const tilemap = world
     .spawn(
       {
         component: Tilemap,
-        data: { cols, rows, tileSize: [tileSizeX, tileSizeY], chunkSize, tileset: tilesetHandle },
+        data: { cols, rows, tileSize: [tileSizeX, tileSizeY], chunkSize, tileset: 'test/tileset' },
       },
       { component: Transform, data: {} },
     )
@@ -171,7 +168,7 @@ function makeOverhangScene(opts: OverhangSceneOpts = {}): Scene {
     .unwrap();
   resetTilemapChunkExtractCache();
   resetTilemapDerivedEntityTracker();
-  return { world, cameraEntity };
+  return { world, cameraEntity, lookup };
 }
 
 function countDerivedPerCellEntities(world: World): number {
@@ -196,7 +193,7 @@ function countDerivedPerCellEntities(world: World): number {
 
 function runFrame(scene: Scene): number {
   propagateTransforms(scene.world);
-  tilemapChunkExtractSystem(scene.world);
+  tilemapChunkExtractSystem(scene.world, scene.lookup);
   return countDerivedPerCellEntities(scene.world);
 }
 

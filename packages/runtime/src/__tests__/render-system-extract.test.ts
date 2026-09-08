@@ -13,14 +13,11 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   Camera,
   DirectionalLight,
-  extractFrame,
-  extractFrames,
   MeshFilter,
   MeshRenderer,
   PointLight,
-  prepareExtractContext,
   SpotLight,
-} from '@forgeax/engine-render/internal';
+} from '@forgeax/engine-render';
 import { ChildOf, propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
 import type {
@@ -32,6 +29,11 @@ import type {
 } from '@forgeax/engine-types';
 import { srgbChannelToLinear } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
+import {
+  extractFrame,
+  extractFrames,
+  prepareExtractContext,
+} from '../../../render/src/render-system-extract';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ─── from render-system-extract.test.ts ───
@@ -123,9 +125,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           indexCount: 3,
           vertexCount: 36,
           topology: 'triangle-list',
+          materialSlot: 0,
         },
       ],
       ...(aabb !== undefined ? { aabb } : {}),
+
+      materialSlots: [{ slotName: 'Default' }],
     };
     return world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', mesh);
   }
@@ -547,8 +552,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           indexCount: 3,
           vertexCount: 36,
           topology: 'triangle-list',
+          materialSlot: 0,
         },
       ],
+
+      materialSlots: [{ slotName: 'Default' }],
     });
   }
 
@@ -846,8 +854,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           indexCount: 3,
           vertexCount: 36,
           topology: 'triangle-list',
+          materialSlot: 0,
         },
       ],
+
+      materialSlots: [{ slotName: 'Default' }],
     });
   }
 
@@ -1163,7 +1174,17 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       indices: new Uint16Array([0, 1, 2]),
       attributes: { position: positions },
       aabb: new Float32Array([0, 0, 0, 1, 1, 1]),
-      submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 36, topology: 'triangle-list' }],
+      submeshes: [
+        {
+          indexOffset: 0,
+          indexCount: 3,
+          vertexCount: 36,
+          topology: 'triangle-list',
+          materialSlot: 0,
+        },
+      ],
+
+      materialSlots: [{ slotName: 'Default' }],
     });
   }
 

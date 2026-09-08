@@ -55,3 +55,13 @@ export function workspaceConcurrency({ cpus, memoryBytes, reserveGB, workerGB })
 export function coverageVitestWorkers({ cpus, memoryBytes }) {
   return Math.min(6, workspaceConcurrency({ cpus, memoryBytes, reserveGB: 2, workerGB: 2 }));
 }
+
+/**
+ * Split coverage keeps Vitest itself at one worker and parallelizes isolated
+ * child processes instead. Each child has a 4 GiB V8 heap cap, so budget one
+ * extra GiB for native coverage/typecheck state and leave three GiB for the
+ * runner. The cap prevents large hosts from creating an unbounded I/O burst.
+ */
+export function coverageGroupConcurrency({ cpus, memoryBytes }) {
+  return Math.min(3, workspaceConcurrency({ cpus, memoryBytes, reserveGB: 3, workerGB: 5 }));
+}

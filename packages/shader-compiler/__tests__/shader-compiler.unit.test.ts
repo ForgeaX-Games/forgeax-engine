@@ -1131,6 +1131,7 @@ beforeAll(async () => {
   // Shared import bundles (transitively closed).
   const IBL_SHARED = readSrc('ibl-shared.wgsl');
   const BRDF = readSrc('brdf.wgsl');
+  const PBR_TEMPORAL = readSrc('pbr-temporal.wgsl');
   const TBN = readSrc('tbn.wgsl');
   const LIGHTING_DIRECTIONAL = readSrc('lighting-directional.wgsl');
   const LIGHTING_PUNCTUAL = readSrc('lighting-punctual.wgsl');
@@ -1146,7 +1147,9 @@ beforeAll(async () => {
 
   PBR_ENTRY_IMPORTS = {
     'forgeax_view::common': COMMON,
+    'forgeax_view::fog': readSrc('fog.wgsl'),
     'forgeax_pbr::brdf': BRDF,
+    'forgeax_pbr::temporal': PBR_TEMPORAL,
     'forgeax_pbr::ibl_shared': IBL_SHARED,
     'forgeax_pbr::ibl_sampling': IBL_SAMPLING,
     'forgeax_pbr::tbn': TBN,
@@ -1158,6 +1161,7 @@ beforeAll(async () => {
 
   UNLIT_ENTRY_IMPORTS = {
     'forgeax_view::common': COMMON,
+    'forgeax_view::fog': readSrc('fog.wgsl'),
   };
 });
 

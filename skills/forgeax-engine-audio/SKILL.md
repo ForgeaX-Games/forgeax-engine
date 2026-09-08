@@ -1,9 +1,8 @@
 ---
 name: forgeax-engine-audio
 description: >-
-  ForgeaX realm-neutral ECS audio with Host-owned Web Audio playback. Use when
-  playing BGM/SFX, wiring 3D listener pose, controlling sfx/music buses,
-  transporting audio from an Engine Worker, or diagnosing decode and cleanup state.
+  ForgeaX realm-neutral ECS audio with Host-owned playback. Use when playing BGM/SFX,
+  wiring spatial listeners or buses, transporting Worker audio, or diagnosing decode and cleanup.
 ---
 
 # forgeax-engine-audio
@@ -79,7 +78,7 @@ Inspect decode failure through `backend.getState().lastError` or `app.execution.
 
 ## Cleanup
 
-`app.stop()` disposes the Host consumer exactly once: stop sources, disconnect nodes, clear decode and entity-epoch maps, remove gesture listeners, and close the context. A poisoned World does not keep producing intents. Explicit Worker rebuild creates a fresh Host consumer so old async decode tasks cannot affect the new World identity.
+`app.stop()` only stops frame scheduling. `app.dispose()` drains the Cordis realm and disposes the Host consumer exactly once: stop sources, disconnect nodes, clear decode and entity-epoch maps, remove gesture listeners, and close the context. A poisoned World does not keep producing intents. Explicit Worker rebuild creates a fresh Host consumer so old async decode tasks cannot affect the new World identity.
 
 ## Sources of truth
 

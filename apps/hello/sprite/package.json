@@ -52,6 +52,7 @@
     "@forgeax/engine-app": "workspace:*",
     "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-input": "workspace:*",
     "@forgeax/engine-pack": "workspace:^",
     "@forgeax/engine-rhi": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
@@ -60,6 +61,7 @@
     "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/apps-shared": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",

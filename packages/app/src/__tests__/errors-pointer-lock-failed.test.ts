@@ -37,6 +37,7 @@ describe('AppErrorCode closed union', () => {
       'app-frame-step-invalid',
       'app-system-update-failed',
       'app-pointer-lock-failed',
+      'app-plugin-activation-failed',
       'app-execution-tier-unavailable',
       'app-execution-bootstrap-failed',
       'app-execution-deadline-exceeded',
@@ -45,11 +46,11 @@ describe('AppErrorCode closed union', () => {
       'app-execution-rebuild-failed',
     ];
 
-    expect(allCodes).toHaveLength(12);
+    expect(allCodes).toHaveLength(13);
 
     // Each member must be unique.
     const unique = new Set(allCodes);
-    expect(unique.size).toBe(12);
+    expect(unique.size).toBe(13);
   });
 
   it('exhaustive switch over AppErrorCode has zero default branch', () => {
@@ -72,6 +73,8 @@ describe('AppErrorCode closed union', () => {
           return 'system update failed';
         case 'app-pointer-lock-failed':
           return 'pointer lock failed';
+        case 'app-plugin-activation-failed':
+          return 'plugin activation failed';
         case 'app-execution-tier-unavailable':
         case 'app-execution-bootstrap-failed':
         case 'app-execution-deadline-exceeded':
@@ -183,12 +186,12 @@ describe("'app-pointer-lock-failed' detail shape", () => {
 describe('APP_EXPECTED / APP_ERROR_HINTS bidirectional symmetry', () => {
   it('APP_EXPECTED has one key per AppErrorCode member', () => {
     const keys = Object.keys(APP_EXPECTED);
-    expect(keys).toHaveLength(12);
+    expect(keys).toHaveLength(13);
   });
 
   it('APP_ERROR_HINTS has one key per AppErrorCode member', () => {
     const keys = Object.keys(APP_ERROR_HINTS);
-    expect(keys).toHaveLength(12);
+    expect(keys).toHaveLength(13);
   });
 
   it('APP_EXPECTED and APP_ERROR_HINTS have the same key set', () => {

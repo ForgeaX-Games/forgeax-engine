@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
 const WIDTH = 200;
 const HEIGHT = 150;
@@ -14,10 +16,13 @@ const BYTES_PER_PIXEL = 4;
 const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const FIXTURE_PATH = resolve(APP_ROOT, 'assets', 'pulse-material.pack.json');
 const MANIFEST_PATH = resolve(APP_ROOT, 'dist', 'shaders', 'manifest.json');
+const RECOOK_SCRIPT = resolve(APP_ROOT, 'scripts', 'recook-material-pack.mjs');
 const ARTIFACT_DIR = process.env.FORGEAX_MATERIAL_ARTIFACT_DIR;
 if (ARTIFACT_DIR !== undefined) mkdirSync(ARTIFACT_DIR, { recursive: true });
 const require = createRequire(resolve(APP_ROOT, 'package.json'));
 const { PNG } = require('pngjs');
+const execFileAsync = promisify(execFile);
+const m36Mode = process.env.FORGEAX_MATERIAL_M36 === '1';
 const resizeVariant = process.env.FORGEAX_MATERIAL_LIVE_RESIZE_VARIANT;
 const twoSlotResizeVariant = process.env.FORGEAX_MATERIAL_LIVE_TWO_SLOT_RESIZE_VARIANT;
 const twoSlotResizeRebuild = twoSlotResizeVariant === 'normal' || twoSlotResizeVariant === 'swap';
@@ -25,7 +30,9 @@ const twoSlotSwap = twoSlotResizeVariant === 'swap';
 const inheritanceLive = process.env.FORGEAX_MATERIAL_LIVE_INHERITANCE_REBIND === '1';
 const inheritanceFalsify = process.env.FORGEAX_FALSIFY_LIVE_INHERITANCE_REBIND === '1';
 const resizeRebuild = twoSlotResizeRebuild || resizeVariant === 'normal' || resizeVariant === 'swap';
-const liveSwap = twoSlotSwap || resizeVariant === 'swap' || (!resizeRebuild && twoSlotResizeVariant === undefined);
+const liveSwap =
+  !m36Mode &&
+  (twoSlotSwap || resizeVariant === 'swap' || (!resizeRebuild && twoSlotResizeVariant === undefined));
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -101,26 +108,61 @@ function compareRgba(before, after, width, height) {
   };
 }
 
-const fixture = JSON.parse(readFileSync(FIXTURE_PATH, 'utf8'));
-const cookedByGuid = new Map(
+function compareRgbaRegion(before, after, width, height, left, right) {
+  let changedPixels = 0;
+  let absoluteRgbDelta = 0;
+  const regionWidth = right - left;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = left; x < right; x += 1) {
+      const index = (y * width + x) * 4;
+      const redDelta = Math.abs(before[index] - after[index]);
+      const greenDelta = Math.abs(before[index + 1] - after[index + 1]);
+      const blueDelta = Math.abs(before[index + 2] - after[index + 2]);
+      if (redDelta !== 0 || greenDelta !== 0 || blueDelta !== 0) changedPixels += 1;
+      absoluteRgbDelta += redDelta + greenDelta + blueDelta;
+    }
+  }
+  const pixels = regionWidth * height;
+  return {
+    changedPixels,
+    changedFraction: changedPixels / pixels,
+    meanRgbDelta: absoluteRgbDelta / (pixels * 3 * 255),
+  };
+}
+
+const originalFixture = readFileSync(FIXTURE_PATH);
+process.once('exit', () => writeFileSync(FIXTURE_PATH, originalFixture));
+const fixture = JSON.parse(originalFixture);
+let cookedByGuid = new Map(
   fixture.assets.map((entry) => [entry.guid.toLowerCase(), entry.payload?.cooked]),
 );
-const { createMaterialLoader } = await import('@forgeax/engine-assets-runtime');
+const { createMaterialLoader, MaterialGenerationCache } =
+  await import('@forgeax/engine-assets-runtime');
 const loader = createMaterialLoader({
   loadRecord: async (guid) => cookedByGuid.get(guid.toLowerCase()),
   loadReference: async () => true,
 });
-const root = await loader.load({
-  guid: '01935b00-7d8c-7c4e-9f12-345678abcd02',
-  specializationKey: 'my-game::pulse-material',
-});
-const derived = await loader.load({
-  guid: '01935b00-7d8c-7c4e-9f12-345678abcd03',
-  specializationKey: 'my-game::pulse-material',
-});
-assert(root.status === 'Ready' && derived.status === 'Ready', 'inheritance material records are not runtime-ready');
+const materialCache = new MaterialGenerationCache();
+const materialDependencies = ['my-game::pulse-material', 'pack:pulse-material'];
+let destabilizeMaterialLoad = false;
+let lastMaterialGeneration;
+const loadCachedMaterial = (guid) =>
+  materialCache.resolve(guid, 'my-game::pulse-material', () =>
+    materialCache.loadWithGeneration(guid, materialDependencies, async (generation) => {
+      lastMaterialGeneration = generation;
+      const loaded = await loader.load({ guid, specializationKey: 'my-game::pulse-material' });
+      assert(loaded.status === 'Ready', `material ${guid} is not runtime-ready`);
+      if (destabilizeMaterialLoad) materialCache.bump(materialDependencies[0]);
+      return { generation, value: loaded };
+    }),
+  );
+const rootResult = await loadCachedMaterial('01935b00-7d8c-7c4e-9f12-345678abcd02');
+const derivedResult = await loadCachedMaterial('01935b00-7d8c-7c4e-9f12-345678abcd03');
+assert(rootResult.ok && derivedResult.ok, 'inheritance material generations are not runtime-ready');
+const root = rootResult.value;
+const derived = derivedResult.value;
 assert(root.artifact.digest === derived.artifact.digest, 'root and derived cooked artifacts differ');
-assert(root.record.receipt.inputDigest === derived.record.receipt.inputDigest, 'inheritance specialization inputs differ');
+assert(root.record.receipt.identity.cookIdentity === derived.record.receipt.identity.cookIdentity, 'inheritance specialization inputs differ');
 assert(
   JSON.stringify(stableJson(root.record.resolved.values)) === JSON.stringify(stableJson(derived.record.resolved.values)),
   'inheritance runtime-resolved material values differ',
@@ -187,20 +229,20 @@ const mockCanvas = {
 };
 
 const { World } = await import('@forgeax/engine-ecs');
-const { createRenderer } = await import('@forgeax/engine-runtime');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { createBoxGeometry } = await import('@forgeax/engine-geometry');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } =
   await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 
 const manifest = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
-const renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: manifest });
-const ready = await renderer.ready;
-assert(ready.ok, `renderer.ready failed: ${ready.ok ? '' : ready.error.code}`);
-assert(renderer.backend === 'webgpu', `unexpected backend: ${renderer.backend}`);
+const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: manifest });
+assert(constructed.ok, constructed.ok ? undefined : `${constructed.error.code}: ${constructed.error.hint}`);
+const renderer = constructed.value.renderer;
+assert(renderer.inspect().capabilities.backendKind === 'webgpu', `unexpected backend: ${renderer.inspect().capabilities.backendKind}`);
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const baseColorTexturePayload = {
   kind: 'texture', width: 2, height: 2, format: 'rgba8unorm-srgb',
@@ -223,23 +265,6 @@ const baseColorHandle = world.allocSharedRef('TextureAsset', baseColorTexturePay
 const normalHandle = world.allocSharedRef('TextureAsset', normalTexturePayload);
 const liveSwapBaseColorHandle = world.allocSharedRef('TextureAsset', liveSwapBaseColorTexturePayload);
 const liveSwapNormalHandle = world.allocSharedRef('TextureAsset', liveSwapNormalTexturePayload);
-for (const [label, handle, payload] of [
-  ['base-color', baseColorHandle, baseColorTexturePayload],
-  ['normal', normalHandle, normalTexturePayload],
-  ['live-swap-base-color', liveSwapBaseColorHandle, liveSwapBaseColorTexturePayload],
-  ['live-swap-normal', liveSwapNormalHandle, liveSwapNormalTexturePayload],
-]) {
-  const upload = await renderer.store.uploadTexture(handle, payload, {
-    bytes: payload.data,
-    width: payload.width,
-    height: payload.height,
-    mime: 'image/png',
-    colorSpace: payload.colorSpace,
-    mipmap: payload.mipmap,
-  });
-  assert(upload.ok, `${label} texture upload failed`);
-}
-
 const normalMaterial = materialFromRecord(derived.record, baseColorHandle, normalHandle);
 const swapMaterial = materialFromRecord(
   derived.record,
@@ -285,7 +310,9 @@ world.spawn({
 const materialValues = normalMaterial.values;
 if (materialValues !== undefined) materialValues.time = 0;
 const errors = [];
-renderer.onError((error) => errors.push(error.code));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') errors.push(event.error.code);
+});
 
 async function readback(label) {
   const width = mockCanvas.width;
@@ -324,7 +351,11 @@ async function readback(label) {
 
 async function drawFrame(label) {
   world.update().unwrap();
-  const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const result = renderer.draw({
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  });
   assert(result.ok, `${label} draw failed: ${result.ok ? '' : result.error.code}`);
   await sharedDevice.queue.onSubmittedWorkDone();
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -335,10 +366,80 @@ async function drawFrame(label) {
 // the live resource rebind rather than the first-frame pipeline compile.
 for (let frame = 0; frame < 4; frame += 1) await drawFrame(`warmup-${frame}`);
 const before = await readback('before');
-const mutation = liveSwap ? world.set(entity, MeshRenderer, { materials: [swapMaterialHandle] }) : { ok: true };
-assert(mutation.ok, `live material rebind failed: ${mutation.ok ? '' : mutation.error.code}`);
+let m36Evidence;
+let m36Stale;
+let m36StalePixels;
+if (m36Mode) {
+  materialCache.bump(materialDependencies[1]);
+  destabilizeMaterialLoad = true;
+  m36Stale = await loadCachedMaterial('01935b00-7d8c-7c4e-9f12-345678abcd03');
+  destabilizeMaterialLoad = false;
+  assert(!m36Stale.ok, 'Dawn stale cooked material was accepted');
+  assert(
+    m36Stale.error.code === 'material-specialization-stale-generation' &&
+      m36Stale.error.detail.code === m36Stale.error.code,
+    'Dawn stale generation code/detail changed',
+  );
+  assert(
+    JSON.stringify(m36Stale.error.detail.observed) !==
+      JSON.stringify(m36Stale.error.detail.current),
+    'Dawn stale generation vectors were equal',
+  );
+  for (let frame = 0; frame < 4; frame += 1) await drawFrame(`stale-${frame}`);
+  m36StalePixels = await readback('stale');
+
+  const recook = await execFileAsync(process.execPath, [RECOOK_SCRIPT, '--write'], {
+    cwd: resolve(APP_ROOT, '../../..'),
+    env: { ...process.env, FORGEAX_SKIP_HARNESS_SYNC: '1' },
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (ARTIFACT_DIR !== undefined) {
+    writeFileSync(resolve(ARTIFACT_DIR, 'm36-dawn-producer.log'), `${recook.stdout}${recook.stderr}`);
+    writeFileSync(resolve(ARTIFACT_DIR, 'm36-dawn-recooked.pack.json'), readFileSync(FIXTURE_PATH));
+  }
+  const recooked = JSON.parse(readFileSync(FIXTURE_PATH, 'utf8'));
+  cookedByGuid = new Map(
+    recooked.assets.map((entry) => [entry.guid.toLowerCase(), entry.payload?.cooked]),
+  );
+  materialCache.bump(materialDependencies[1]);
+  const fresh = await loadCachedMaterial('01935b00-7d8c-7c4e-9f12-345678abcd03');
+  assert(fresh.ok, `Dawn fresh recook failed: ${fresh.ok ? '' : fresh.error.code}`);
+  assert(fresh.value.artifact.digest !== derived.artifact.digest, 'Dawn recook kept the stale digest');
+  assert(materialCache.generationError('01935b00-7d8c-7c4e-9f12-345678abcd03') === undefined, 'Dawn stale diagnostic survived recook');
+  const freshMaterialHandle = world.allocSharedRef(
+    'MaterialAsset',
+    materialFromRecord(fresh.value.record, baseColorHandle, normalHandle),
+  );
+  const freshMutation = world.set(entity, MeshRenderer, { materials: [freshMaterialHandle] });
+  assert(freshMutation.ok, `Dawn fresh material publication failed: ${freshMutation.ok ? '' : freshMutation.error.code}`);
+  const allocationRelease = world.sharedRefs.release(freshMaterialHandle);
+  assert(allocationRelease.ok, 'Dawn fresh material allocation was not released');
+  for (let frame = 0; frame < 4; frame += 1) await drawFrame(`fresh-${frame}`);
+  m36Evidence = {
+    stale: {
+      code: m36Stale.error.code,
+      detail: m36Stale.error.detail,
+      published: false,
+      artifactDigest: derived.artifact.digest,
+    },
+    fresh: {
+      artifactDigest: fresh.value.artifact.digest,
+      inputDigest: fresh.value.record.receipt.identity.cookIdentity,
+      generation: lastMaterialGeneration,
+      allocationRelease: { ok: allocationRelease.ok },
+      materialRefcount: world.sharedRefs.refcount(freshMaterialHandle),
+    },
+    stalePixels: {
+      sha256: m36StalePixels.sha256,
+      centerPixel: m36StalePixels.centerPixel,
+    },
+  };
+} else {
+  const mutation = liveSwap ? world.set(entity, MeshRenderer, { materials: [swapMaterialHandle] }) : { ok: true };
+  assert(mutation.ok, `live material rebind failed: ${mutation.ok ? '' : mutation.error.code}`);
+}
 for (let frame = 0; frame < 4; frame += 1) await drawFrame(`pre-resize-${frame}`);
-const beforeResize = await readback('before-resize');
+const beforeResize = m36Mode ? before : await readback('before-resize');
 if (resizeRebuild) {
   mockCanvas.width = RESIZED_WIDTH;
   mockCanvas.height = RESIZED_HEIGHT;
@@ -348,7 +449,9 @@ const after = await readback(resizeRebuild ? 'after-resize' : 'after');
 const delta = resizeRebuild ? undefined : compareRgba(before.rgba, after.rgba, WIDTH, HEIGHT);
 assert(!resizeRebuild || (after.width === RESIZED_WIDTH && after.height === RESIZED_HEIGHT), 'Dawn resize did not reach the requested drawing buffer');
 if (delta !== undefined) {
-  if (inheritanceFalsify) {
+  if (m36Mode) {
+    // The M36 path compares the unchanged LKG and the fresh recook below.
+  } else if (inheritanceFalsify) {
     assert(delta.changedPixels === 0 && delta.meanRgbDelta === 0, `inheritance falsifier unexpectedly changed rendered pixels: ${JSON.stringify(delta)}`);
   } else {
     assert(delta.changedPixels > 0 && delta.meanRgbDelta > 0.001, `normal-slot live rebind was not visually discriminative: ${JSON.stringify(delta)}`);
@@ -356,6 +459,35 @@ if (delta !== undefined) {
 }
 assert(errors.length === 0, `renderer errors: ${errors.join(',')}`);
 
+if (m36Mode) {
+  assert(m36StalePixels !== undefined, 'Dawn M36 stale readback is missing');
+  const staleDelta = compareRgba(before.rgba, m36StalePixels.rgba, WIDTH, HEIGHT);
+  const siblingDelta = compareRgbaRegion(
+    before.rgba,
+    after.rgba,
+    WIDTH,
+    HEIGHT,
+    0,
+    Math.floor(WIDTH / 2),
+  );
+  const freshDelta = compareRgba(before.rgba, after.rgba, WIDTH, HEIGHT);
+  assert(staleDelta.changedPixels === 0, `Dawn LKG changed during stale refusal: ${JSON.stringify(staleDelta)}`);
+  assert(siblingDelta.changedPixels === 0, `Dawn healthy sibling changed: ${JSON.stringify(siblingDelta)}`);
+  assert(freshDelta.meanRgbDelta <= 0.01, `Dawn fresh recook left semantic pixel range: ${JSON.stringify(freshDelta)}`);
+  console.log(JSON.stringify({
+    status: 'pass',
+    frontDoor: 'custom-shader Dawn same-World renderer recook',
+    backend: renderer.inspect().capabilities.backendKind,
+    stale: m36Evidence.stale,
+    fresh: m36Evidence.fresh,
+    before: { sha256: before.sha256, centerPixel: before.centerPixel },
+    stalePixels: m36Evidence.stalePixels,
+    after: { sha256: after.sha256, centerPixel: after.centerPixel },
+    pixels: { staleDelta, siblingDelta, freshDelta },
+    rendererErrors: errors,
+  }));
+  sharedDevice.destroy();
+} else {
 const afterBaseColorHandle = inheritanceLive
   ? inheritanceFalsify
     ? baseColorHandle
@@ -378,7 +510,7 @@ if (inheritanceFalsify) {
 const output = {
   status: 'pass',
   frontDoor: 'engine-renderer-world-draw',
-  backend: renderer.backend,
+  backend: renderer.inspect().capabilities.backendKind,
   frames: { before: 1, after: 1 },
   material: {
     beforeHandle: normalMaterialHandle,
@@ -392,7 +524,7 @@ const output = {
     inheritanceBacked: inheritanceLive,
     sourceDerivedGuid: derived.record.guid,
     sourceArtifactDigest: derived.artifact.digest,
-    sourceCookInputDigest: derived.record.receipt.inputDigest,
+    sourceCookInputDigest: derived.record.receipt.identity.cookIdentity,
   },
   before: { sha256: before.sha256, centerPixel: before.centerPixel },
   beforeResize: { sha256: beforeResize.sha256, centerPixel: beforeResize.centerPixel },
@@ -401,8 +533,9 @@ const output = {
   delta,
   rootArtifactDigest: root.artifact.digest,
   derivedArtifactDigest: derived.artifact.digest,
-  rootCookInputDigest: root.record.receipt.inputDigest,
-  derivedCookInputDigest: derived.record.receipt.inputDigest,
+  rootCookInputDigest: root.record.receipt.identity.cookIdentity,
+  derivedCookInputDigest: derived.record.receipt.identity.cookIdentity,
 };
 console.log(JSON.stringify(output));
 sharedDevice.destroy();
+}

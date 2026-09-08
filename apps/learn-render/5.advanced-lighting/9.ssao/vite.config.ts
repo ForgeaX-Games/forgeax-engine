@@ -5,6 +5,7 @@ import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { withRhiDebug } from '../../../shared/src/rhi-debug-vite-preset';
+import { optionalAssetPack } from '../../../shared/src/optional-asset-pack.js';
 
 // RHI-debug frame capture wired via the shared preset (forgeaxShader +
 // vitePluginRhiDebug + fs.allow). The demo's LearnOpenGL objects (backpack.gltf
@@ -13,6 +14,7 @@ import { withRhiDebug } from '../../../shared/src/rhi-debug-vite-preset';
 // Capture stays gated behind FORGEAX_ENGINE_RHI_DEBUG=1.
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
+const assetRoots = [resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'objects')];
 const runtimeBinding = createStandaloneRuntimeAssetBinding('learn-render-5-9-ssao');
 
 export default withRhiDebug({
@@ -22,12 +24,14 @@ export default withRhiDebug({
   keepBinExternal: true,
   engineEntries: { hdrpSsao: true },
   extraPlugins: [
-    pluginPack({
-      runtimeBinding,
-      refresh: reloadAssetHost(),
-      producerReadiness: 'before-consume',
-      roots: [resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'objects')],
-      importers: [imageImporter, gltfImporter],
-    }),
+    ...optionalAssetPack(assetRoots, () =>
+      pluginPack({
+        runtimeBinding,
+        refresh: reloadAssetHost(),
+        producerReadiness: 'on-demand',
+        roots: assetRoots,
+        importers: [imageImporter, gltfImporter],
+      }),
+    ),
   ],
 });

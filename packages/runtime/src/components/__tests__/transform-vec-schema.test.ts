@@ -18,12 +18,13 @@
 // quaternion / zero scale).
 
 import { World } from '@forgeax/engine-ecs';
+import { componentSchema } from '@forgeax/engine-ecs/internal';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 
 describe('w4 -- Transform vec schema (AC-05)', () => {
   it('(a) schema declares pos/quat/scale array columns, no per-axis scalars', () => {
-    const schema = Transform.schema as Record<string, string>;
+    const schema = componentSchema(Transform) as Record<string, string>;
     expect(schema.pos).toBe('array<f32, 3>');
     expect(schema.quat).toBe('array<f32, 4>');
     expect(schema.scale).toBe('array<f32, 3>');
@@ -45,7 +46,7 @@ describe('w4 -- Transform vec schema (AC-05)', () => {
   });
 
   it('(b) world column keeps array<f32, 16> (outside the M2 migration surface)', () => {
-    const schema = Transform.schema as Record<string, string>;
+    const schema = componentSchema(Transform) as Record<string, string>;
     expect(schema.world).toBe('array<f32, 16>');
   });
 });

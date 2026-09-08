@@ -21,6 +21,7 @@
 // material via the empty-MeshRenderer default). The engine only sees cubes +
 // camera + light -- the reel-game semantics live entirely host-side.
 
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import type { CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import type { World } from '@forgeax/engine-ecs';
@@ -28,23 +29,22 @@ import {
   createCatalogSource,
   type AssetRegistry,
 } from '@forgeax/engine-assets-runtime';
-import type { CatalogDelta, CatalogEntry } from '@forgeax/engine-types';
+import type { CatalogDelta, CatalogEntry, RuntimeAssetBinding } from '@forgeax/engine-types';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { createCatalogClient } from '@forgeax/engine-vite-plugin-pack/catalog-client';
-import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
+
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 import { type ReelGameBlob, REEL_GAME_LEVEL_1_GUID } from './reel-game-blob';
 import { reelGameBlobLoader } from './reel-game-blob-loader';
 
-const runtimeBinding = createStandaloneRuntimeAssetBinding('hello-custom-importer');
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) {
@@ -66,23 +66,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     reportAppError(appRes.error);
     return;
   }
   const app = appRes.value;
-  console.warn(`[custom-importer] backend=${app.renderer.backend}`);
+  console.warn(`[custom-importer] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
-  const ready = await app.renderer.ready;
-  if (!ready.ok) {
-    console.error('[custom-importer] renderer.ready failed:', ready.error.code, ready.error.hint);
-    return;
-  }
 
-  const assets = app.renderer.assets;
-  if (assets === null) {
+  const assets = app.assets;
+  if (assets === undefined) {
     console.error('[custom-importer] AssetRegistry is null (renderer construction failed)');
     return;
   }
@@ -91,39 +86,46 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // mirror of the build-time importer; the engine carries zero knowledge of
   // 'reel-game-blob' -- the host owns both ends (AC-05 / OOS-1).
   assets.loaders.register(reelGameBlobLoader());
-  assets.configureRuntimeBinding(runtimeBinding);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
-  const catalogClient = createCatalogClient(readCatalogRows, import.meta.hot);
-  assets.setCatalogSource(
-    createCatalogSource({
-      url: runtimeBinding.catalogUrl,
-      expectedScope: runtimeBinding,
-      subscribe: catalogClient.subscribe,
-    }),
-  );
   let lastKnownGood: ReelGameBlob | undefined;
   let catalogWork = Promise.resolve();
-  const stopCatalog = assets.subscribeCatalog((delta) => {
-    catalogWork = catalogWork
-      .then(() =>
-        handleCatalogDelta(
-          delta,
-          assets,
-          (blob) => {
-            lastKnownGood = blob;
-          },
-          () => lastKnownGood,
-        ),
-      )
-      .catch((error: unknown) => {
-        console.error('[custom-importer] catalog HMR transaction failed:', error);
-      });
-  });
-  const disposeCatalog = (): void => {
-    stopCatalog();
-    assets.clearCatalogSource();
-  };
-  import.meta.hot?.dispose(disposeCatalog);
+  let disposeCatalog = (): void => {};
+  const developmentBinding = runtimeBinding;
+  if (developmentBinding !== undefined) {
+    const catalogClient = createCatalogClient(
+      () => readCatalogRows(developmentBinding),
+      import.meta.hot,
+    );
+    assets.setCatalogSource(
+      createCatalogSource({
+        url: developmentBinding.catalogUrl,
+        expectedScope: developmentBinding,
+        subscribe: catalogClient.subscribe,
+      }),
+    );
+    const stopCatalog = assets.subscribeCatalog((delta) => {
+      catalogWork = catalogWork
+        .then(() =>
+          handleCatalogDelta(
+            delta,
+            assets,
+            (blob) => {
+              lastKnownGood = blob;
+            },
+            () => lastKnownGood,
+          ),
+        )
+        .catch((error: unknown) => {
+          console.error('[custom-importer] catalog HMR transaction failed:', error);
+        });
+    });
+    disposeCatalog = (): void => {
+      stopCatalog();
+      assets.clearCatalogSource();
+    };
+    import.meta.hot?.dispose(disposeCatalog);
+  }
 
   const baseline = await assets.enumerateCatalog();
   if (!baseline.ok) {
@@ -168,9 +170,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   console.warn('[custom-importer] running.');
 }
 
-async function readCatalogRows(): Promise<readonly CatalogEntry[]> {
-  const response = await fetch(runtimeBinding.catalogUrl);
-  if (!response.ok) return [];
+async function readCatalogRows(binding: RuntimeAssetBinding): Promise<readonly CatalogEntry[]> {
+  const response = await fetch(binding.catalogUrl);
+  if (!response.ok)
+    throw {
+      code: 'catalog-route-failed',
+      expected: 'an HTTP 2xx response from the scoped catalog route',
+      hint: 'wait for the runtime scope to become available, then retry catalog enumeration',
+      detail: { status: response.status, statusText: response.statusText },
+    };
   const raw = (await response.json()) as unknown;
   if (Array.isArray(raw)) return raw as CatalogEntry[];
   if (raw !== null && typeof raw === 'object' && Array.isArray((raw as { entries?: unknown }).entries)) {

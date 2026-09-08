@@ -13,30 +13,26 @@
 //   "// 3. bootstrap"       entry point wiring (1)+(2)
 
 // 1. engine usage
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
 import type { App } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+
 import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
 import { Materials, SKYBOX_MODE_CUBEMAP, SkyboxBackground, Skylight } from '@forgeax/engine-render';
 
-import {
-  createStandaloneRuntimeAssetBinding,
-  type EquirectAsset,
-  type MaterialAsset,
-} from '@forgeax/engine-types';
+import { type EquirectAsset, type MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
+import { captureCanvasPixels } from '@forgeax/apps-shared/canvas-capture';
 
 // 2. example glue
 
 const NEWPORT_LOFT_GUID = '019e4a26-3c29-7420-af5d-20f2724a16b0';
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-4-6-cubemaps',
-);
 
 const CAMERA_FOV = Math.PI / 3;
 const CAMERA_POS_X = 0;
@@ -58,23 +54,26 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    forgeaxBundlerAdapter(),
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 4.6 cubemaps] createApp failed:', appRes.error);
     return;
   }
   const app = appRes.value;
-  const renderer = app.renderer;
   const world = app.world;
   app.onError((error) => {
     console.error('[learn-render 4.6 cubemaps] app.onError:', error.code, error.hint);
     const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;
     if (bus !== undefined) bus.push({ code: error.code, hint: error.hint });
   });
-  const assets = renderer.assets;
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[learn-render 4.6 cubemaps] asset owner is unavailable');
+    return;
+  }
 
-  assets.configureRuntimeBinding(runtimeBinding);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   // Parse newport_loft.hdr GUID (forgeax-engine-assets vendor submodule, CC BY-NC 4.0).
   const guidRes = AssetGuid.parse(NEWPORT_LOFT_GUID);
@@ -182,7 +181,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
             far: CAMERA_FAR,
           }),
           tonemap: TONEMAP_REINHARD_EXTENDED,
-          // LO 4.6 dark slate clear (was the retired RendererOptions.clearColor;
+          // LO 4.6 dark slate clear (kept at the Standard profile boundary;
           // sinks here per feat-20260608 D-1).
           clearColor: [0.1, 0.1, 0.1, 1.0],
         },
@@ -190,7 +189,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     )
     .unwrap();
 
-  addFirstPersonSystem(world, renderer, {
+  addFirstPersonSystem(world, {
     name: 'learn-render-4.6-cubemaps-first-person',
     overrideBackend: undefined,
   });
@@ -200,26 +199,22 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[learn-render 4.6 cubemaps] app.start failed:', startRes.error);
     return;
   }
-  console.warn(`[learn-render 4.6 cubemaps] backend=${renderer.backend}`);
+  console.warn('[learn-render 4.6 cubemaps] Standard pipeline active');
 
-  installCaptureHook(app, world);
+  installCaptureHook(target, world);
 }
 
-// RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives
-// one update + draw + readPixels so the live canvas read is anchored to the same
-// frame the capture records. Only meaningful when the page is served with
-// FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
-function installCaptureHook(app: App, world: App['world']): void {
+// Canvas capture hook for the capture smoke harness (pixel mode). Advances the
+// World before reading the Host-owned presentation surface.
+function installCaptureHook(target: HTMLCanvasElement, world: App['world']): void {
   type CaptureHook = () => Promise<Uint8Array>;
   const win = window as unknown as { __captureCubemaps?: CaptureHook };
-  const renderer = app.renderer;
   win.__captureCubemaps = async (): Promise<Uint8Array> => {
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    const r = await renderer.readPixels();
+    const r = await captureCanvasPixels(target);
     if (!r.ok) {
       throw new Error(
-        `[learn-render 4.6 cubemaps] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
+        `[learn-render 4.6 cubemaps] canvas capture failed: ${r.error.code} -- ${r.error.hint}`,
       );
     }
     return r.value;

@@ -1,11 +1,12 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // Dawn smoke for Bevy's 3d/skybox reproduction.
 // FALSIFY=remove-skybox removes the component and must remove the skybox pass.
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -90,7 +91,7 @@ const manifestUrl = `data:application/json,${encodeURIComponent(JSON.stringify(m
 const { createApp } = await import('@forgeax/engine-app');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 const { createDevImportTransport } = await import('@forgeax/engine-runtime');
-const { buildSkyboxWorld } = await import(resolve(appRoot, 'src', 'skybox.ts'));
+const { buildSkyboxWorld } = await import(pathToFileURL(resolve(appRoot, 'src', 'skybox.ts')));
 
 const distDir = resolve(appRoot, 'dist');
 const packIndexPath = resolve(distDir, 'pack-index.json');
@@ -146,20 +147,15 @@ if (!appResult.ok) {
   process.exit(1);
 }
 const app = appResult.value;
-app.renderer.onError((error) => errors.push(error));
+subscribeSmokeErrors(app.renderer, (error) => errors.push(error));
 app.onError((error) => errors.push(error));
-const ready = await app.renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 const guidResult = AssetGuid.parse(hdrGuid);
 if (!guidResult.ok) {
   console.error(`[smoke] FAIL - AssetGuid.parse: ${guidResult.error.code}`);
   process.exit(1);
 }
-const assets = app.renderer.assets;
+const assets = app.assets;
 assets.configurePackIndex('/pack-index.json');
 const hdrResult = await assets.loadByGuid(guidResult.value);
 if (!hdrResult.ok) {
@@ -184,7 +180,7 @@ for (let i = 0; i < targetFrames; i += 1) {
   if (!due) break;
   due.callback(i * 16.67);
   frames += 1;
-  if (i === 4) passNames = [...app.renderer.perFramePassNames];
+  if (i === 4) passNames = [...app.renderer.inspect().perFramePassNames];
   if (i % 16 === 15) {
     await sharedDevice.queue.onSubmittedWorkDone();
     await delay(1);
@@ -201,7 +197,7 @@ for (let i = 0; i < 32; i += 1) {
   frames += 1;
   if (i % 8 === 7) await sharedDevice.queue.onSubmittedWorkDone();
 }
-passNames = [...app.renderer.perFramePassNames];
+passNames = [...app.renderer.inspect().perFramePassNames];
 app.stop();
 
 const bytesPerRow = Math.ceil((width * 4) / 256) * 256;
@@ -229,12 +225,12 @@ for (let i = 0; i < tight.length; i += 4) {
 }
 const hasSkybox = passNames.includes('skybox');
 const failures = [];
-if (app.renderer.backend !== 'webgpu') failures.push(`backend=${app.renderer.backend}`);
+if (rendererBackend(app.renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(app.renderer)}`);
 if (frames < targetFrames) failures.push(`frames=${frames} < ${targetFrames}`);
 if (errors.length > 0) failures.push(`engine errors=${errors.map((error) => error.code).join(',')}`);
 if (falsify !== 'remove-skybox' && !hasSkybox) failures.push(`skybox pass missing: ${JSON.stringify(passNames)}`);
 if (maxLuma <= 0.02) failures.push(`${falsify === 'remove-skybox' ? 'FALSIFY removed skybox and darkened frame' : 'HDR skybox is dark'}: maxLuma=${maxLuma.toFixed(4)}`);
-console.log(`[smoke] backend=${app.renderer.backend}`);
+console.log(`[smoke] backend=${rendererBackend(app.renderer)}`);
 console.log(`[smoke] frames=${frames} passNames=${JSON.stringify(passNames)} maxLuma=${maxLuma.toFixed(4)} png=${pngOut}`);
 if (failures.length > 0) {
   console.error(`[smoke] FAIL - ${failures.join('; ')}`);

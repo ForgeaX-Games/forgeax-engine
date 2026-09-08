@@ -27,22 +27,18 @@
 
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
-import {
-  encodeSortScope,
-  TileLayer,
-  Tilemap,
-  tilemapChunkExtractSystem,
-} from '@forgeax/engine-render/authoring';
-import {
-  Layer,
-  MeshFilter,
-  MeshRenderer,
-  resetTilemapChunkExtractCache,
-  resetTilemapDerivedEntityTracker,
-} from '@forgeax/engine-render/internal';
+import { Layer, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
 import { ChildOf, Transform } from '@forgeax/engine-scene';
 import { type MaterialAsset, type TilesetAsset, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { encodeSortScope } from '../../../render/src/components/tile-layer';
+import {
+  resetTilemapChunkExtractCache,
+  resetTilemapDerivedEntityTracker,
+  tilemapChunkExtractSystem,
+} from '../../../render/src/tilemap-chunk-extract-system';
+import { makeTilemapAssetLookup } from './helpers/tilemap-assets';
 
 interface AtlasMeta {
   atlasWidth: number;
@@ -60,8 +56,7 @@ function makeTileset(opts: {
 }): TilesetAsset {
   return {
     kind: 'tileset',
-    guid: opts.guid,
-    atlases: [toShared<'TextureAsset'>(101)],
+    atlases: ['test/atlas'],
     tileWidth: opts.atlas.tileWidth,
     tileHeight: opts.atlas.tileHeight,
     columns: opts.atlas.columns,
@@ -78,12 +73,12 @@ function spawnAndExtract(
   rows = 1,
 ): World {
   const world = new World();
-  const tilesetHandle = world.allocSharedRef<'TilesetAsset', TilesetAsset>('TilesetAsset', tileset);
+  const lookup = makeTilemapAssetLookup(tileset);
   const tilemap = world
     .spawn(
       {
         component: Tilemap,
-        data: { cols, rows, tileSize: [1, 1], chunkSize: 4, tileset: tilesetHandle },
+        data: { cols, rows, tileSize: [1, 1], chunkSize: 4, tileset: 'test/tileset' },
       },
       { component: Transform, data: {} },
     )
@@ -97,7 +92,7 @@ function spawnAndExtract(
   );
   resetTilemapChunkExtractCache();
   resetTilemapDerivedEntityTracker();
-  tilemapChunkExtractSystem(world);
+  tilemapChunkExtractSystem(world, lookup);
   return world;
 }
 

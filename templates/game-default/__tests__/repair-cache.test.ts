@@ -1,5 +1,9 @@
 import { readFileSync } from 'node:fs';
+import type { World } from '@forgeax/engine-ecs';
+import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import type { LocalEntityId } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { expandLoadedScene, type LoadedScene } from '../assets/plugins/scene-runtime.js';
 import { resolveRepairCacheImpact } from '../assets/plugins/repair-cache.js';
 
 describe('game-default nested repair cache', () => {
@@ -36,5 +40,43 @@ describe('game-default nested repair cache', () => {
         Transform: { pos: [0, 0.8, -1.2], scale: [0.38, 0.38, 0.38] },
       },
     });
+  });
+
+  it('expands a host-projected numeric nested mount through World.sharedRefs', async () => {
+    const nested = {
+      kind: 'scene',
+      entities: [
+        { localId: 0, components: { Name: { value: 'NestedTarget' } } },
+        { localId: 1, components: { Name: { value: 'NestedRepairPickup' } } },
+      ],
+    } as const;
+    const world = {
+      sharedRefs: { resolve: () => ({ ok: true, value: nested }) },
+    } as unknown as World;
+    const assets = {
+      loadByGuid: async () => {
+        throw new Error('numeric projected mount should not load by GUID');
+      },
+    } as unknown as AssetRegistry;
+    const authored = {
+      kind: 'scene',
+      entities: [],
+      mounts: [
+        {
+          localId: 23 as LocalEntityId,
+          source: 7,
+          memberFirst: 24 as LocalEntityId,
+          memberCount: 2,
+        },
+      ],
+    } as const;
+    const loaded = { mapping: new Map(), nodes: [] } as LoadedScene;
+
+    const expanded = await expandLoadedScene(world, assets, authored, loaded);
+
+    expect(expanded.nodes.map((node) => [node.localId, node.components.Name?.value])).toEqual([
+      [24, 'NestedTarget'],
+      [25, 'NestedRepairPickup'],
+    ]);
   });
 });

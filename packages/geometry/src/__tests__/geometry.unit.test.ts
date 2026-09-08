@@ -17,9 +17,10 @@ import {
   createSphereGeometry,
   createTorusGeometry,
   deriveVertexBufferLayout,
+  meshFromInterleaved,
   PROCEDURAL_FLOATS_PER_VERTEX,
 } from '@forgeax/engine-geometry';
-import type { MeshAsset, VertexAttributeMap } from '@forgeax/engine-types';
+import type { MeshAsset, Result, VertexAttributeMap } from '@forgeax/engine-types';
 import { AssetError } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
@@ -69,6 +70,11 @@ import { describe, expect, it } from 'vitest';
     return [arr[b] ?? 0, arr[b + 1] ?? 0, arr[b + 2] ?? 0, arr[b + 3] ?? 0];
   }
 
+  function unwrapTangent(r: Result<Float32Array, AssetError>): Float32Array {
+    if (!r.ok) throw new Error(`unexpected tangent error: ${r.error.code}`);
+    return r.value;
+  }
+
   function dot3(a: [number, number, number], b: [number, number, number]): number {
     return (a[0] ?? 0) * (b[0] ?? 0) + (a[1] ?? 0) * (b[1] ?? 0) + (a[2] ?? 0) * (b[2] ?? 0);
   }
@@ -78,6 +84,120 @@ import { describe, expect, it } from 'vitest';
   }
 
   describe('computeTangentVec4 helper (M4 / w20)', () => {
+    it('malformed normal cardinality returns a structured failure instead of throwing (M72 red gate)', () => {
+      const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+      const malformedNormals = new Float32Array([0, 0, 1, 0, 0, 1]);
+      const uvs = new Float32Array([0, 0, 1, 0, 0, 1]);
+      const indices = new Uint32Array([0, 1, 2]);
+
+      expect(() => computeTangentVec4(positions, malformedNormals, uvs, indices)).not.toThrow();
+      const result = computeTangentVec4(positions, malformedNormals, uvs, indices);
+      expect(result.ok).toBe(false);
+    });
+
+    it('preflights every public tangent topology boundary with the existing AssetError', () => {
+      const validPositions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+      const validNormals = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]);
+      const validUvs = new Float32Array([0, 0, 1, 0, 0, 1]);
+      const cases = [
+        {
+          field: 'positions',
+          positions: new Float32Array(8),
+          normals: validNormals,
+          uvs: validUvs,
+          indices: new Uint32Array([0, 1, 2]),
+        },
+        {
+          field: 'normals',
+          positions: validPositions,
+          normals: new Float32Array(6),
+          uvs: validUvs,
+          indices: new Uint32Array([0, 1, 2]),
+        },
+        {
+          field: 'uvs',
+          positions: validPositions,
+          normals: validNormals,
+          uvs: new Float32Array(4),
+          indices: new Uint32Array([0, 1, 2]),
+        },
+        {
+          field: 'positions',
+          positions: new Float32Array([0, 0, 0, 1, 0, 0]),
+          normals: new Float32Array([0, 0, 1, 0, 0, 1]),
+          uvs: new Float32Array([0, 0, 1, 0]),
+          indices: undefined,
+        },
+        {
+          field: 'indices',
+          positions: validPositions,
+          normals: validNormals,
+          uvs: validUvs,
+          indices: new Uint32Array([0, 1]),
+        },
+        {
+          field: 'indices',
+          positions: validPositions,
+          normals: validNormals,
+          uvs: validUvs,
+          indices: new Uint32Array([0, 1, 3]),
+        },
+      ];
+
+      for (const testCase of cases) {
+        const result = computeTangentVec4(
+          testCase.positions,
+          testCase.normals,
+          testCase.uvs,
+          testCase.indices,
+        );
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error).toBeInstanceOf(AssetError);
+          expect(result.error.code).toBe('asset-parse-failed');
+          expect(result.error.detail).toMatchObject({ field: testCase.field });
+        }
+      }
+    });
+
+    it('corrected arrays recover on the next call with the established vec4 output', () => {
+      const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+      const malformedNormals = new Float32Array([0, 0, 1, 0, 0, 1]);
+      const normals = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]);
+      const uvs = new Float32Array([0, 0, 1, 0, 0, 1]);
+      const indices = new Uint32Array([0, 1, 2]);
+
+      const failed = computeTangentVec4(positions, malformedNormals, uvs, indices);
+      expect(failed.ok).toBe(false);
+      const recovered = computeTangentVec4(positions, normals, uvs, indices);
+      expect(recovered.ok).toBe(true);
+      if (recovered.ok) {
+        expect([...recovered.value]).toEqual([1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1]);
+      }
+    });
+
+    it('preflights interleaved vertex and index topology before allocation', () => {
+      const malformedVertices = meshFromInterleaved(
+        new Float32Array(9),
+        new Uint32Array([0, 1, 2]),
+      );
+      expect(malformedVertices.ok).toBe(false);
+      if (!malformedVertices.ok) {
+        expect(malformedVertices.error).toBeInstanceOf(AssetError);
+        expect(malformedVertices.error.code).toBe('asset-parse-failed');
+        expect(malformedVertices.error.detail).toMatchObject({ field: 'vertices' });
+      }
+
+      const validInterleaved = new Float32Array(3 * 8);
+      const malformedIndices = meshFromInterleaved(validInterleaved, new Uint32Array([0, 1, 3]));
+      expect(malformedIndices.ok).toBe(false);
+      if (!malformedIndices.ok) {
+        expect(malformedIndices.error).toBeInstanceOf(AssetError);
+        expect(malformedIndices.error.code).toBe('asset-parse-failed');
+        expect(malformedIndices.error.detail).toMatchObject({ field: 'indices' });
+      }
+    });
+
     it('single UV-aligned triangle yields tangent (1,0,0,1) (normal)', () => {
       // Triangle on the XY plane with +Z normal; UV maps so that u runs
       // along +X (E2), v runs along +Y (E1). Path A predicts tangent (1,0,0)
@@ -86,7 +206,7 @@ import { describe, expect, it } from 'vitest';
       const normals = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]);
       const uvs = new Float32Array([0, 0, 1, 0, 0, 1]);
       const indices = new Uint32Array([0, 1, 2]);
-      const out = computeTangentVec4(positions, normals, uvs, indices);
+      const out = unwrapTangent(computeTangentVec4(positions, normals, uvs, indices));
       expect(out.length).toBe(3 * 4);
       for (let i = 0; i < 3; i++) {
         const [tx, ty, tz, tw] = readVec4(out, i);
@@ -104,7 +224,7 @@ import { describe, expect, it } from 'vitest';
       // Swap u for vertices 1 and 2: u=0 at v1, u=1 at v2 -> deltaU's flip sign
       const uvs = new Float32Array([1, 0, 0, 0, 1, 1]);
       const indices = new Uint32Array([0, 1, 2]);
-      const out = computeTangentVec4(positions, normals, uvs, indices);
+      const out = unwrapTangent(computeTangentVec4(positions, normals, uvs, indices));
       for (let i = 0; i < 3; i++) {
         const [, , , tw] = readVec4(out, i);
         expect(Math.abs(tw)).toBe(1);
@@ -122,7 +242,7 @@ import { describe, expect, it } from 'vitest';
       const normals = new Float32Array([k, 0, k, k, 0, k, k, 0, k]);
       const uvs = new Float32Array([0, 0, 1, 0, 0, 1]);
       const indices = new Uint32Array([0, 1, 2]);
-      const out = computeTangentVec4(positions, normals, uvs, indices);
+      const out = unwrapTangent(computeTangentVec4(positions, normals, uvs, indices));
       for (let i = 0; i < 3; i++) {
         const t = readVec3(out.subarray(i * 4, i * 4 + 3), 0);
         const n = readVec3(normals, i);
@@ -136,7 +256,7 @@ import { describe, expect, it } from 'vitest';
       const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
       const normals = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]);
       const uvs = new Float32Array([0, 0, 1, 0, 0, 1]);
-      const out = computeTangentVec4(positions, normals, uvs);
+      const out = unwrapTangent(computeTangentVec4(positions, normals, uvs));
       expect(out.length).toBe(3 * 4);
       const [tx, , , tw] = readVec4(out, 0);
       expect(tx).toBeCloseTo(1, 4);

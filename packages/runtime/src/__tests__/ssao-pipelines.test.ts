@@ -107,7 +107,7 @@ describe('SSAO RenderPipeline PSO descriptor assertions (w24 — RED)', () => {
 
   it('(g1) renderer BGL keeps the kernel binding uniform', () => {
     const factory = readFileSync(
-      fileURLToPath(new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url)),
+      fileURLToPath(new URL('../../../render/src/assembly/factory.ts', import.meta.url)),
       'utf8',
     );
     const ssaoBgl = factory.slice(factory.indexOf("label: 'ssao-bgl'"));

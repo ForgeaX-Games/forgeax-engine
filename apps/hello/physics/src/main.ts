@@ -133,6 +133,7 @@ function reportError(err: CanvasAppError): void {
     case 'app-canvas-detached':
     case 'app-system-update-failed':
     case 'app-pointer-lock-failed':
+    case 'app-plugin-activation-failed':
     case 'adapter-unavailable':
     case 'feature-not-enabled':
     case 'limit-exceeded':
@@ -151,8 +152,6 @@ function reportError(err: CanvasAppError): void {
     case 'oom':
     case 'internal-error':
     case 'hierarchy-broken':
-    case 'duplicate-plugin':
-    case 'plugin-build-failed':
       console.error(`[hello-physics] ${err.code}: ${err.hint}`);
       return;
   }

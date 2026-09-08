@@ -5,10 +5,18 @@
 // - RenderGraph — main class: addResource / addPass / compile / execute
 // - PassInfo / ResourceInfo — query interfaces (D-5)
 
-import type { RhiCaps, RhiDevice, Texture, TextureView } from '@forgeax/engine-rhi';
+import type {
+  RhiCaps,
+  ComputePassDescriptor as RhiComputePassDescriptor,
+  RhiComputePassEncoder,
+  RhiDevice,
+  Texture,
+  TextureFormat,
+  TextureView,
+} from '@forgeax/engine-rhi';
 import {
+  type AliasSourceDetail,
   type CapMissingDetail,
-  type CyclicDependencyDetail,
   type DanglingReadDetail,
   err,
   ok,
@@ -54,6 +62,8 @@ export type ColorTargetSize =
  *
  * format: GPU texture format (e.g. 'rgba16float', 'bgra8unorm').
  * size: target dimensions relative to swap-chain or absolute.
+ * lifetime: allocation lifetime (default 'transient'); persistent targets keep
+ * their physical texture across unchanged compiles and replace it on descriptor drift.
  * sample: multisample count (default 1; MSAA count=4 via #301).
  * usage: GPU texture usage flags (default RENDER_ATTACHMENT | TEXTURE_BINDING).
  * viewFormats: extra GPU texture formats viewable via createTextureView from this
@@ -62,18 +72,19 @@ export type ColorTargetSize =
  *   store), so the consumer pre-declares the alternate format here.
  */
 export interface ColorTargetDescriptor {
-  readonly format: string;
+  readonly format: TextureFormat;
   readonly size: ColorTargetSize;
+  readonly lifetime?: ResourceLifetime | undefined;
   readonly sample?: number | undefined;
   readonly usage?: number | undefined;
-  readonly viewFormats?: readonly string[] | undefined;
+  readonly viewFormats?: readonly TextureFormat[] | undefined;
   /** Semantic color domain. Omitted only for legacy graphs without domain connections. */
   readonly domain?: ColorValueDomain | undefined;
 }
 
 export interface ResolvedColorTargetDescriptor {
   readonly texture: Texture;
-  readonly format: string;
+  readonly format: TextureFormat;
   readonly size: { readonly width: number; readonly height: number };
   readonly usage: number;
   readonly sample: number;
@@ -110,6 +121,20 @@ export interface PassDescriptor<Ctx = unknown> {
   readonly colorConnections?: readonly ColorDomainConnection[] | undefined;
 }
 
+export interface ComputePassDescriptor<Ctx> {
+  readonly reads: readonly string[];
+  readonly writes: readonly string[];
+  readonly storageBuffer?: boolean | undefined;
+  readonly begin?: ((frame: Ctx) => RhiComputePassDescriptor) | undefined;
+  readonly onBeginError?: ((frame: Ctx, cause: unknown) => void) | undefined;
+  readonly after?: ((frame: Ctx) => void) | undefined;
+  encode(context: {
+    readonly pass: RhiComputePassEncoder;
+    readonly frame: Ctx;
+    readonly resources: ResolveContext;
+  }): void;
+}
+
 /** Optional nested observer for per-pass execution attribution. */
 export type PassExecuteRunner = (passName: string, action: () => void) => void;
 
@@ -133,7 +158,6 @@ export interface InternalizedPass {
   readonly name: string;
   readonly reads: readonly string[];
   readonly writes: readonly string[];
-  readonly barriers: readonly string[];
 }
 
 /**
@@ -196,26 +220,148 @@ export interface CompileOptions {
  * texture; drift in any field triggers rebuild.
  * NOTE: stringified form is used as Map key; the interface is for doc only.
  */
-// interface _TexturePoolKey { format:string; width:number; height:number; usage:number; sampleCount:number; }
+// interface _TexturePoolKey { format:string; width:number; height:number; usage:number; sample:number; viewFormats:string[]; }
 
-/** Pooled transient texture entry. */
+/** Pooled texture entry shared by transient and persistent allocation paths. */
 interface PooledTexture {
   readonly texture: unknown; // opaque RHI Texture handle
   readonly view: unknown; // opaque RHI TextureView handle
+  readonly descriptorKey: string;
+}
+
+interface StagedColorTargetAllocation {
+  readonly resolvedTextures: Map<string, TextureView>;
+  readonly transient: ReadonlyMap<string, PooledTexture>;
+  readonly persistent: ReadonlyMap<string, PooledTexture>;
 }
 
 /** A subset of RhiDevice surface needed by drain() and reclaim to release pooled textures. */
 type DrainDevice = Pick<RhiDevice, 'destroyTexture' | 'queue'>;
 
 function poolKey(meta: {
-  format: string;
+  format: TextureFormat;
   width: number;
   height: number;
   usage: number;
   sample: number;
+  viewFormats: readonly TextureFormat[];
 }): string {
-  return `${meta.format}:${meta.width}x${meta.height}:${meta.usage}:${meta.sample}`;
+  return `${meta.format}:${meta.width}x${meta.height}:${meta.usage}:${meta.sample}:${JSON.stringify(meta.viewFormats)}`;
 }
+
+/**
+ * Runtime projection of the type-only WebGPU GPUTextureFormat union.
+ *
+ * `TextureFormat` is erased at runtime, but RenderGraph must reject malformed
+ * declarations before it calls an RHI device. Keep this ordered vocabulary as
+ * the single runtime validation authority; backend capability or usage refusal
+ * remains a `resource-alloc-failed` result after this syntax gate.
+ */
+const VALID_GPU_TEXTURE_FORMATS = [
+  'r8unorm',
+  'r8snorm',
+  'r8uint',
+  'r8sint',
+  'r16unorm',
+  'r16snorm',
+  'r16uint',
+  'r16sint',
+  'r16float',
+  'rg8unorm',
+  'rg8snorm',
+  'rg8uint',
+  'rg8sint',
+  'r32uint',
+  'r32sint',
+  'r32float',
+  'rg16unorm',
+  'rg16snorm',
+  'rg16uint',
+  'rg16sint',
+  'rg16float',
+  'rgba8unorm',
+  'rgba8unorm-srgb',
+  'rgba8snorm',
+  'rgba8uint',
+  'rgba8sint',
+  'bgra8unorm',
+  'bgra8unorm-srgb',
+  'rgb9e5ufloat',
+  'rgb10a2uint',
+  'rgb10a2unorm',
+  'rg11b10ufloat',
+  'rg32uint',
+  'rg32sint',
+  'rg32float',
+  'rgba16unorm',
+  'rgba16snorm',
+  'rgba16uint',
+  'rgba16sint',
+  'rgba16float',
+  'rgba32uint',
+  'rgba32sint',
+  'rgba32float',
+  'stencil8',
+  'depth16unorm',
+  'depth24plus',
+  'depth24plus-stencil8',
+  'depth32float',
+  'depth32float-stencil8',
+  'bc1-rgba-unorm',
+  'bc1-rgba-unorm-srgb',
+  'bc2-rgba-unorm',
+  'bc2-rgba-unorm-srgb',
+  'bc3-rgba-unorm',
+  'bc3-rgba-unorm-srgb',
+  'bc4-r-unorm',
+  'bc4-r-snorm',
+  'bc5-rg-unorm',
+  'bc5-rg-snorm',
+  'bc6h-rgb-ufloat',
+  'bc6h-rgb-float',
+  'bc7-rgba-unorm',
+  'bc7-rgba-unorm-srgb',
+  'etc2-rgb8unorm',
+  'etc2-rgb8unorm-srgb',
+  'etc2-rgb8a1unorm',
+  'etc2-rgb8a1unorm-srgb',
+  'etc2-rgba8unorm',
+  'etc2-rgba8unorm-srgb',
+  'eac-r11unorm',
+  'eac-r11snorm',
+  'eac-rg11unorm',
+  'eac-rg11snorm',
+  'astc-4x4-unorm',
+  'astc-4x4-unorm-srgb',
+  'astc-5x4-unorm',
+  'astc-5x4-unorm-srgb',
+  'astc-5x5-unorm',
+  'astc-5x5-unorm-srgb',
+  'astc-6x5-unorm',
+  'astc-6x5-unorm-srgb',
+  'astc-6x6-unorm',
+  'astc-6x6-unorm-srgb',
+  'astc-8x5-unorm',
+  'astc-8x5-unorm-srgb',
+  'astc-8x6-unorm',
+  'astc-8x6-unorm-srgb',
+  'astc-8x8-unorm',
+  'astc-8x8-unorm-srgb',
+  'astc-10x5-unorm',
+  'astc-10x5-unorm-srgb',
+  'astc-10x6-unorm',
+  'astc-10x6-unorm-srgb',
+  'astc-10x8-unorm',
+  'astc-10x8-unorm-srgb',
+  'astc-10x10-unorm',
+  'astc-10x10-unorm-srgb',
+  'astc-12x10-unorm',
+  'astc-12x10-unorm-srgb',
+  'astc-12x12-unorm',
+  'astc-12x12-unorm-srgb',
+] as const satisfies readonly TextureFormat[];
+
+const VALID_GPU_TEXTURE_FORMAT_SET: ReadonlySet<string> = new Set(VALID_GPU_TEXTURE_FORMATS);
 
 export class RenderGraph<Ctx = unknown> {
   private readonly resources = new ResourceRegistry();
@@ -225,9 +371,9 @@ export class RenderGraph<Ctx = unknown> {
   /** Transient texture pool: keyed by descriptor, reused across compiles (D-2). */
   private readonly transientPool = new Map<string, PooledTexture>();
   /**
-   * Pending-destroy queue (bug-20260622): old transient textures awaiting GPU
-   * retirement before actual device.destroyTexture. drainTransient() and
-   * setTransientEntry() push here instead of destroying immediately;
+   * Pending-destroy queue (bug-20260622): replaced textures awaiting GPU
+   * retirement before actual device.destroyTexture. drainTransient(),
+   * setTransientEntry(), and setPersistentEntry() push here instead of destroying immediately;
    * reclaimRetiredTransients() (called post-queue.submit in recordFrame) drains
    * the queue when the GPU signals onSubmittedWorkDone.
    */
@@ -300,11 +446,13 @@ export class RenderGraph<Ctx = unknown> {
   /**
    * Declare a color target alias: both names share the same physical texture.
    * The source must already be registered via addColorTarget.
-   * Used for hdrComposited -> hdrColor folding (KB-1 / D-2).
+   * Used for hdrComposited -> hdrColor folding (KB-1 / D-2). The returned
+   * Result contains the opaque alias handle or a duplicate-resource error.
    */
-  addColorTargetAlias(name: string, source: string): ColorTargetHandle {
-    this.resources.addColorTargetAlias(name, source);
-    return name;
+  addColorTargetAlias(name: string, source: string): Result<ColorTargetHandle, RenderGraphError> {
+    const result = this.resources.addColorTargetAlias(name, source);
+    if (!result.ok) return result;
+    return ok(name);
   }
 
   addResource(
@@ -316,21 +464,86 @@ export class RenderGraph<Ctx = unknown> {
 
   /**
    * Declare a color target resource that the compiler will allocate as a
-   * transient GPU texture (D-1 / D-8). Returns an opaque string handle
-   * that can be referenced in pass read/write arrays and resolved to a
-   * TextureView via resolve(name) inside a pass execute closure.
+   * transient or persistent GPU texture (D-1 / D-8). A successful Result
+   * contains an opaque string handle that can be referenced in pass read/write
+   * arrays and resolved to a TextureView via resolve(name) inside a pass
+   * execute closure. A duplicate key is rejected before registry publication.
    *
-   * The resource is registered as `kind:'texture'` with `lifetime:'transient'`
-   * internally. format/size/sample/usage are stored on the resource entry
-   * for the compile allocation phase (w6).
+   * Omitted lifetime preserves the default `transient`; `persistent` retains
+   * identity across unchanged compiles and replaces on descriptor drift.
+   * format/size/sample/usage are stored on the resource entry for the compile
+   * allocation phase (w6).
    */
-  addColorTarget(name: string, desc: ColorTargetDescriptor): ColorTargetHandle {
-    this.resources.addColorTarget(name, desc);
-    return name;
+  addColorTarget(
+    name: string,
+    desc: ColorTargetDescriptor,
+  ): Result<ColorTargetHandle, RenderGraphError> {
+    const result = this.resources.addColorTarget(name, desc);
+    if (!result.ok) return result;
+    return ok(name);
   }
 
   addPass(name: string, descriptor: PassDescriptor<Ctx>): PassEntry<Ctx> {
     return this.passes.add(name, descriptor);
+  }
+
+  /** @internal Renderer composition seam for declaring feature work at its semantic target. */
+  _addPassBefore(name: string, before: string, descriptor: PassDescriptor<Ctx>): PassEntry<Ctx> {
+    return this.passes.add(name, descriptor, before);
+  }
+
+  addComputePass(name: string, descriptor: ComputePassDescriptor<Ctx>): PassEntry<Ctx> {
+    return this.addComputePassAt(name, descriptor);
+  }
+
+  /** @internal Renderer composition seam for declaring feature work at its semantic target. */
+  _addComputePassBefore(
+    name: string,
+    before: string,
+    descriptor: ComputePassDescriptor<Ctx>,
+  ): PassEntry<Ctx> {
+    return this.addComputePassAt(name, descriptor, before);
+  }
+
+  private addComputePassAt(
+    name: string,
+    descriptor: ComputePassDescriptor<Ctx>,
+    before?: string,
+  ): PassEntry<Ctx> {
+    return this.passes.add(
+      name,
+      {
+        reads: descriptor.reads,
+        writes: descriptor.writes,
+        compute: true,
+        storageBuffer: descriptor.storageBuffer ?? true,
+        execute: (frame: Ctx, resources: ResolveContext) => {
+          const encoder = (
+            frame as Ctx & { readonly encoder: import('@forgeax/engine-rhi').RhiCommandEncoder }
+          ).encoder;
+          const begin = descriptor.begin?.(frame);
+          let pass: RhiComputePassEncoder;
+          try {
+            pass = encoder.beginComputePass({
+              label: name,
+              ...(begin?.timestampWrites === undefined
+                ? {}
+                : { timestampWrites: begin.timestampWrites }),
+            });
+          } catch (cause) {
+            descriptor.onBeginError?.(frame, cause);
+            return;
+          }
+          try {
+            descriptor.encode({ pass, frame, resources });
+          } finally {
+            pass.end();
+          }
+          descriptor.after?.(frame);
+        },
+      },
+      before,
+    );
   }
 
   /**
@@ -351,17 +564,16 @@ export class RenderGraph<Ctx = unknown> {
    * 1. Cap-gate fail-fast
    * 2. Unknown-resource fail-fast (every pass read/write key is registered)
    * 3. Dangling-read fail-fast
-   * 4. Topology sort + cycle detection
-   * 5. Barrier planning (D-1)
-   * 6. Buffer-role resolution (AC-09 / D-6.1)
-   * 7. GPU allocation for color targets (D-1) — when device is provided and the
+   * 4. Preserve declaration order as the temporal authority
+   * 5. Buffer-role resolution (AC-09 / D-6.1)
+   * 6. GPU allocation for color targets (D-1) — when device is provided and the
    *    graph has addColorTarget resources, allocate textures via
    *    device.createTexture/createTextureView. Errors surface as
    *    'resource-alloc-failed' or 'invalid-format'.
    */
   compile(opts: CompileOptions): Result<InternalizedGraph, RenderGraphError> {
     const passList = this.passes.list();
-    const { backendKind, caps, device } = opts;
+    const { caps, device } = opts;
 
     const capErr = this.validateCaps(passList, caps);
     if (capErr) return capErr;
@@ -375,43 +587,43 @@ export class RenderGraph<Ctx = unknown> {
     const danglingErr = this.validateNoDanglingRead(passList);
     if (danglingErr) return danglingErr;
 
-    const sorted = this.topologicalSort(passList);
-    if (!sorted.ok) return sorted;
+    const formatErr = this.validateColorTargetFormats();
+    if (!formatErr.ok) return formatErr;
 
-    const sortedPasses = sorted.value;
-    const barriersPerPass = this.planBarriers(sortedPasses, backendKind);
-
-    const internalizedPasses: InternalizedPass[] = sortedPasses.map((pass, i) => {
-      const barriers = barriersPerPass[i] ?? [];
+    const internalizedPasses: InternalizedPass[] = passList.map((pass) => {
       return {
         name: pass.name,
         reads: pass.descriptor.reads,
         writes: pass.descriptor.writes,
-        barriers,
       };
     });
 
     const resolvedBuffers = this.resolveBuffers(caps);
 
-    // Phase 6.5: resize drain (AC-09, plan-strategy D-4). When swap-chain
-    // dimensions have changed since the last compile, release all old-size
-    // transient pool textures before allocating new ones. Without this step,
-    // old-dimension pool entries are stranded (key includes WxH, resize
-    // produces new keys and the old ones are never accessed again).
-    if (
-      this.swapChainWidth !== this.compiledWidth ||
-      this.swapChainHeight !== this.compiledHeight
-    ) {
+    // Phase 7: GPU allocation for color targets (D-1).
+    const resizeDetected =
+      this.swapChainWidth !== this.compiledWidth || this.swapChainHeight !== this.compiledHeight;
+    const allocatedTextures = this.allocateColorTargets(device, resizeDetected);
+    if (!allocatedTextures.ok) return allocatedTextures;
+
+    // Phase 6.5: resize drain (AC-09, plan-strategy D-4). Defer the drain
+    // until allocation succeeds so a refused compile leaves the active graph
+    // and its pool untouched for a retry.
+    if (resizeDetected) {
       this.drainTransient();
     }
 
-    // Phase 7: GPU allocation for color targets (D-1).
-    const resolvedTextures = this.allocateColorTargets(device);
+    for (const [key, pooled] of allocatedTextures.value.transient) {
+      this.setTransientEntry(key, pooled);
+    }
+    for (const [key, pooled] of allocatedTextures.value.persistent) {
+      this.setPersistentEntry(key, pooled);
+    }
 
     this.compiled = {
       passes: internalizedPasses,
       resolvedBuffers,
-      resolvedTextures,
+      resolvedTextures: allocatedTextures.value.resolvedTextures,
     };
     this.compiledWidth = this.swapChainWidth;
     this.compiledHeight = this.swapChainHeight;
@@ -431,9 +643,9 @@ export class RenderGraph<Ctx = unknown> {
    * (architecture-principles §1 SSOT: same path GpuTexture.destroy()
    * uses); render-graph stays RHI-pure (no runtime dep).
    *
-   * Plan-strategy D-7 + OOS-7: drain only covers the dispose exit path
-   * (`Renderer.dispose()`); resize / recompile pool eviction stays on
-   * the existing leaky-replace path until a follow-up feat addresses it.
+   * Plan-strategy D-7: drain covers the dispose exit path (`Renderer.dispose()`);
+   * descriptor-drift replacement during compile is fenced through
+   * `pendingDestroy` and `reclaimRetiredTransients()`.
    *
    * Idempotent (architecture-principles §6): a second drain on cleared
    * Maps is a no-op. drain() before any compile is also a safe no-op.
@@ -570,6 +782,19 @@ export class RenderGraph<Ctx = unknown> {
   }
 
   /**
+   * Publish a persistent replacement only after a complete allocation succeeds.
+   * The old handle remains fenced until the GPU retires work that may still
+   * reference it, just like a transient replacement.
+   */
+  private setPersistentEntry(key: string, pooled: PooledTexture): void {
+    const old = this.persistentTextures.get(key);
+    if (old && old.texture !== pooled.texture) {
+      this.pendingDestroy.push(old);
+    }
+    this.persistentTextures.set(key, pooled);
+  }
+
+  /**
    * bug-20260622 D-2: reclaim pool textures queued in pendingDestroy after
    * the GPU has retired all prior command buffers.
    *
@@ -637,7 +862,7 @@ export class RenderGraph<Ctx = unknown> {
   }
 
   /**
-   * Execute the compiled graph: iterate passes in topological order, calling
+   * Execute the compiled graph in declaration order, calling
    * each pass's execute closure with the provided context. Passes without an
    * execute closure are silently skipped.
    */
@@ -795,6 +1020,27 @@ export class RenderGraph<Ctx = unknown> {
     return resolved;
   }
 
+  private validateColorTargetFormats(): Result<undefined, RenderGraphError> {
+    for (const entry of this.resources.entries()) {
+      const meta = entry.colorTarget;
+      if (!meta || VALID_GPU_TEXTURE_FORMAT_SET.has(meta.format)) continue;
+
+      return err(
+        new RenderGraphError({
+          code: 'invalid-format',
+          expected: `addColorTarget format must be a valid GPU texture format; received '${meta.format}'`,
+          hint: `replace '${meta.format}' with one of detail.expected before recompiling`,
+          detail: {
+            resourceKey: entry.key,
+            format: meta.format,
+            expected: VALID_GPU_TEXTURE_FORMATS,
+          },
+        }),
+      );
+    }
+    return ok(undefined);
+  }
+
   /**
    * Phase 7: allocate GPU textures for registered color targets (D-1 / D-2).
    *
@@ -807,17 +1053,33 @@ export class RenderGraph<Ctx = unknown> {
    * (KB-1 MoveNode pattern). Persistent targets are retained across compiles
    * with size-drift rebuild.
    *
-   * device === undefined is a no-op (returns empty map).
-   * Texture allocation failures are silently skipped (error propagation via
-   * structured RenderGraphError in a follow-up).
+   * device === undefined is a no-op (returns an empty map).
+   * Allocation is transactional: newly created textures are destroyed on any
+   * failure, and pool mutations are committed only after every target succeeds.
    */
-  private allocateColorTargets(device: RhiDevice | undefined): Map<string, TextureView> {
+  private allocateColorTargets(
+    device: RhiDevice | undefined,
+    invalidateTransientPool = false,
+  ): Result<StagedColorTargetAllocation, RenderGraphError> {
     const result = new Map<string, TextureView>();
     if (
       !device ||
       typeof (device as unknown as Record<string, unknown>).createTexture !== 'function'
     )
-      return result;
+      return ok({ resolvedTextures: result, transient: new Map(), persistent: new Map() });
+
+    const stagedTransient = new Map<string, PooledTexture>();
+    const stagedPersistent = new Map<string, PooledTexture>();
+    const stagedAllocations: PooledTexture[] = [];
+    const discardStaged = (): void => {
+      for (const pooled of stagedAllocations) {
+        try {
+          device.destroyTexture(pooled.texture as Texture);
+        } catch {
+          // A cleanup failure must not hide the allocation error.
+        }
+      }
+    };
 
     for (const entry of this.resources.entries()) {
       const meta = entry.colorTarget;
@@ -826,9 +1088,23 @@ export class RenderGraph<Ctx = unknown> {
       // Resolve alias: fold to source physical texture.
       if (meta.aliasedFrom !== undefined) {
         const sourceView = result.get(meta.aliasedFrom);
-        if (sourceView) {
-          result.set(entry.key, sourceView);
+        const sourceTexture = result.get(`${meta.aliasedFrom}::tex`);
+        if (sourceView === undefined || sourceTexture === undefined) {
+          discardStaged();
+          return err(
+            new RenderGraphError({
+              code: 'alias-source-missing',
+              expected: `alias '${entry.key}' source '${meta.aliasedFrom}' must resolve to a compiled color target`,
+              hint: `register color target '${meta.aliasedFrom}' before compiling alias '${entry.key}'`,
+              detail: {
+                aliasKey: entry.key,
+                sourceKey: meta.aliasedFrom,
+              } satisfies AliasSourceDetail,
+            }),
+          );
         }
+        result.set(entry.key, sourceView);
+        result.set(`${entry.key}::tex`, sourceTexture);
         continue;
       }
 
@@ -845,16 +1121,18 @@ export class RenderGraph<Ctx = unknown> {
       // reads (texture binding from the same view), WebGPU rejects the command
       // buffer: "TextureBinding|RenderAttachment in the same synchronization
       // scope."
-      const key = `${entry.key}:${poolKey({
+      const descriptorKey = poolKey({
         format: meta.format,
         width,
         height,
         usage: meta.usage,
         sample: meta.sample,
-      })}`;
+        viewFormats: meta.viewFormats ?? [],
+      });
+      const key = `${entry.key}:${descriptorKey}`;
 
       if (lifetime === 'transient') {
-        const pooled = this.transientPool.get(key);
+        const pooled = invalidateTransientPool ? undefined : this.transientPool.get(key);
         if (pooled) {
           result.set(entry.key, pooled.view as TextureView);
           // w7-fix (round 3): re-publish the GPU Texture handle on every
@@ -868,9 +1146,7 @@ export class RenderGraph<Ctx = unknown> {
         }
       } else if (lifetime === 'persistent') {
         const persisted = this.persistentTextures.get(entry.key);
-        if (persisted) {
-          // Check for size drift.
-          // For simplicity: always reuse. Full drift detection in follow-up.
+        if (persisted?.descriptorKey === descriptorKey) {
           result.set(entry.key, persisted.view as TextureView);
           // biome-ignore lint/suspicious/noExplicitAny: opaque RHI texture handle
           result.set(`${entry.key}::tex`, persisted.texture as any);
@@ -891,33 +1167,64 @@ export class RenderGraph<Ctx = unknown> {
       } as never);
 
       if (!texResult.ok) {
-        // M1 / w7: propagate createTexture failure so the caller (recordFrame)
-        // can fire a structured error rather than silently falling through
-        // with an undefined TextureView.
-        return new Map();
+        discardStaged();
+        return err(
+          new RenderGraphError({
+            code: 'resource-alloc-failed',
+            expected: `device.createTexture must succeed for color target '${entry.key}'`,
+            hint: `retry after recovering the RHI allocation failure for '${entry.key}'`,
+            detail: {
+              resourceKey: entry.key,
+              rhiCode: texResult.error.code,
+            },
+          }),
+        );
       }
 
       const viewResult = device.createTextureView(texResult.value, {});
       if (!viewResult.ok) {
-        return new Map();
+        try {
+          device.destroyTexture(texResult.value);
+        } catch {
+          // A cleanup failure must not hide the allocation error.
+        }
+        discardStaged();
+        return err(
+          new RenderGraphError({
+            code: 'resource-alloc-failed',
+            expected: `device.createTextureView must succeed for color target '${entry.key}'`,
+            hint: `retry after recovering the RHI view allocation failure for '${entry.key}'`,
+            detail: {
+              resourceKey: entry.key,
+              rhiCode: viewResult.error.code,
+            },
+          }),
+        );
       }
 
       const pooled: PooledTexture = {
         texture: texResult.value,
         view: viewResult.value,
+        descriptorKey,
       };
+      stagedAllocations.push(pooled);
 
       if (lifetime === 'transient') {
-        this.setTransientEntry(key, pooled);
+        stagedTransient.set(key, pooled);
       } else {
-        this.persistentTextures.set(entry.key, pooled);
+        stagedPersistent.set(entry.key, pooled);
       }
 
       result.set(entry.key, viewResult.value);
       // biome-ignore lint/suspicious/noExplicitAny: store Texture alongside TextureView
       result.set(`${entry.key}::tex`, texResult.value as any);
     }
-    return result;
+
+    return ok({
+      resolvedTextures: result,
+      transient: stagedTransient,
+      persistent: stagedPersistent,
+    });
   }
 
   private resolveWidth(size: ColorTargetDescriptor['size']): number {
@@ -939,14 +1246,9 @@ export class RenderGraph<Ctx = unknown> {
   ): Result<never, RenderGraphError> | null {
     const writers = new Set<string>();
     for (const pass of passList) {
-      for (const key of pass.descriptor.writes) {
-        writers.add(key);
-      }
-    }
-
-    for (const pass of passList) {
       for (const key of pass.descriptor.reads) {
-        if (!writers.has(key)) {
+        const imported = this.resources.get(key)?.descriptor.lifetime === 'persistent';
+        if (key !== 'swapchain' && !imported && !writers.has(key)) {
           return err(
             new RenderGraphError({
               code: 'dangling-read',
@@ -960,149 +1262,8 @@ export class RenderGraph<Ctx = unknown> {
           );
         }
       }
+      for (const key of pass.descriptor.writes) writers.add(key);
     }
     return null;
-  }
-
-  private topologicalSort(
-    passList: readonly PassEntry<Ctx>[],
-  ): Result<readonly PassEntry<Ctx>[], RenderGraphError> {
-    const passNames = passList.map((p) => p.name);
-    const indexMap = new Map<string, number>();
-    for (let i = 0; i < passNames.length; i++) {
-      const name = passNames[i];
-      if (name !== undefined) indexMap.set(name, i);
-    }
-
-    // Build dependency edges: pass depends on passes that write its reads.
-    const edges = this.buildEdges(passList);
-
-    // Compute in-degree for Kahn's algorithm.
-    const inDegree = new Map<string, number>();
-    for (const name of passNames) inDegree.set(name, 0);
-    for (const [name, deps] of edges) {
-      for (const _dep of deps) {
-        inDegree.set(name, (inDegree.get(name) ?? 0) + 1);
-      }
-    }
-
-    // Kahn's algorithm.
-    const queue = passNames.filter((n) => (inDegree.get(n) ?? 0) === 0);
-    const sorted: string[] = [];
-    while (queue.length > 0) {
-      queue.sort((a, b) => (indexMap.get(a) ?? 0) - (indexMap.get(b) ?? 0));
-      const current = queue.shift();
-      if (current === undefined) break;
-      sorted.push(current);
-
-      for (const [name, deps] of edges) {
-        if (deps.has(current)) {
-          const newDeg = (inDegree.get(name) ?? 1) - 1;
-          inDegree.set(name, newDeg);
-          if (newDeg === 0) queue.push(name);
-        }
-      }
-    }
-
-    if (sorted.length < passList.length) {
-      return err(
-        new RenderGraphError({
-          code: 'cyclic-dependency',
-          expected: 'pass graph must be acyclic',
-          hint: this.buildCycleHint(passNames, sorted, edges),
-          detail: {
-            cycle: this.findCycle(passNames, sorted, edges),
-          } satisfies CyclicDependencyDetail,
-        }),
-      );
-    }
-
-    const sortedPasses = sorted
-      .map((name) => passList.find((p) => p.name === name))
-      .filter((p): p is PassEntry => p !== undefined);
-    return ok(sortedPasses);
-  }
-
-  private buildEdges(passList: readonly PassEntry<Ctx>[]): Map<string, Set<string>> {
-    const edges = new Map<string, Set<string>>();
-    for (const pass of passList) {
-      const deps = new Set<string>();
-      for (const key of pass.descriptor.reads) {
-        for (const other of passList) {
-          if (other.descriptor.writes.includes(key) && other.name !== pass.name) {
-            deps.add(other.name);
-          }
-        }
-      }
-      edges.set(pass.name, deps);
-    }
-    return edges;
-  }
-
-  private findCycle(
-    passNames: string[],
-    sorted: string[],
-    edges: Map<string, Set<string>>,
-  ): string[] {
-    const remaining = passNames.filter((n) => !sorted.includes(n));
-    if (remaining.length === 0) return [];
-    const firstNode = remaining[0];
-    if (firstNode === undefined) return remaining;
-    let node = firstNode;
-    const visited = new Set<string>();
-    const cycle: string[] = [];
-    while (!visited.has(node)) {
-      visited.add(node);
-      cycle.push(node);
-      const deps = edges.get(node);
-      let found = false;
-      if (deps) {
-        for (const dep of deps) {
-          if (remaining.includes(dep)) {
-            node = dep;
-            found = true;
-            break;
-          }
-        }
-      }
-      if (!found) break;
-    }
-    return cycle.length > 0 ? cycle : remaining;
-  }
-
-  private buildCycleHint(
-    passNames: string[],
-    sorted: string[],
-    edges: Map<string, Set<string>>,
-  ): string {
-    const cycle = this.findCycle(passNames, sorted, edges);
-    return `break the cycle among passes: ${cycle.join(' -> ')}`;
-  }
-
-  private planBarriers(
-    sortedPasses: readonly PassEntry<Ctx>[],
-    backendKind: CompileOptions['backendKind'],
-  ): string[][] {
-    const barriersPerPass: string[][] = sortedPasses.map(() => []);
-    if (backendKind !== 'wgpu-native') return barriersPerPass;
-
-    const lastWriter = new Map<string, number>();
-    for (let i = 0; i < sortedPasses.length; i++) {
-      const pass = sortedPasses[i];
-      if (pass === undefined) continue;
-      for (const key of pass.descriptor.reads) {
-        const writerIdx = lastWriter.get(key);
-        if (writerIdx !== undefined && writerIdx !== i) {
-          const passBarriers = barriersPerPass[i];
-          if (passBarriers !== undefined && !passBarriers.includes(key)) {
-            passBarriers.push(key);
-          }
-        }
-      }
-      for (const key of pass.descriptor.writes) {
-        lastWriter.set(key, i);
-      }
-    }
-    return barriersPerPass;
   }
 }

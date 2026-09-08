@@ -6,12 +6,17 @@
 // `.assetCatalog`, so a duck-typed stub standing in for AssetRegistry suffices
 // (charter F2: test against the surface the code touches, not the whole class).
 
-import type { MaterialAsset, ParamSchemaEntry } from '@forgeax/engine-types';
+import {
+  type MaterialAsset,
+  type ParamSchemaEntry,
+  ParamSchemaProjectionOwner,
+} from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import type { AssetRegistry } from '../asset-registry';
 import {
   detectTileNeedsRepeatSampler,
   materialShaderTextureFieldNames,
+  validateMaterialCookIdentity,
   validateMaterialPasses,
   validateParamType,
   validateSpriteSlices,
@@ -25,12 +30,24 @@ function makeRegistry(
   shaders: StubShaders,
   opts: { metrics?: { increment(k: string): void }; catalog?: Map<string, unknown> } = {},
 ): AssetRegistry {
+  const projectionOwner = new ParamSchemaProjectionOwner();
   return {
     shaderRegistry: {
       findMaterialArtifact(id: string) {
         const paramSchema = shaders[id];
-        return paramSchema
-          ? { ok: true as const, value: { source: '', paramSchema } }
+        const paramSchemaProjection =
+          paramSchema === undefined
+            ? undefined
+            : projectionOwner.admit({ ownerId: id, revision: 1, schema: paramSchema });
+        return paramSchemaProjection !== undefined
+          ? {
+              ok: true as const,
+              value: {
+                source: '',
+                paramSchema: paramSchemaProjection.schema,
+                paramSchemaProjection,
+              },
+            }
           : { ok: false as const, error: new Error('not found') };
       },
     },
@@ -42,6 +59,34 @@ function makeRegistry(
 function mat(over: Record<string, unknown>): MaterialAsset {
   return { kind: 'material', ...over } as unknown as MaterialAsset;
 }
+
+describe('validateMaterialCookIdentity', () => {
+  const record = {
+    guid: 'mat-child',
+    receipt: {
+      identity: { layoutIdentity: 'sha256:root-layout' },
+      derivedInterface: { layoutIdentity: 'sha256:root-layout' },
+    },
+  } as never;
+
+  it('accepts an effective root identity and rejects a stale one', () => {
+    expect(
+      validateMaterialCookIdentity(record, {
+        guid: 'mat-parent',
+        layoutIdentity: 'sha256:root-layout',
+      }),
+    ).toBeNull();
+    expect(
+      validateMaterialCookIdentity(record, {
+        guid: 'mat-parent',
+        layoutIdentity: 'sha256:changed-layout',
+      }),
+    ).toMatchObject({
+      code: 'material-derived-interface-mismatch',
+      detail: { stage: 'extract', action: 'recook' },
+    });
+  });
+});
 
 describe('validateMaterialPasses', () => {
   it('returns null when passes is undefined (inherits from parent)', () => {
@@ -151,7 +196,8 @@ describe('validateParamType', () => {
     expect(validateParamType(reg, 'x', 'color', [1, 2, 3, 4])).toBe(true);
     expect(validateParamType(reg, 'x', 'color', [1, 2])).toBe(false);
   });
-  it('texture values are structured records', () => {
+  it('texture values accept compact GUIDs and structured records', () => {
+    expect(validateParamType(reg, 'x', 'texture', 'guid')).toBe(true);
     expect(validateParamType(reg, 'x', 'texture', { texture: 'guid' })).toBe(true);
     expect(validateParamType(reg, 'x', 'texture', 123)).toBe(false);
   });

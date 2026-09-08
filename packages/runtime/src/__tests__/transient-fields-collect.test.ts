@@ -1,3 +1,4 @@
+import * as SceneOwner from '@forgeax/engine-scene';
 // feat-20260709-component-vec-fields-and-field-transient-batch M1 / w1 + w2:
 //   w1: AC-07 transient exclusion tests for SpriteAnimation and VideoPlayer.
 //   w2: AC-08 round-trip + rebuild tests for SpriteAnimation and VideoPlayer.
@@ -18,6 +19,7 @@ import type { SceneEntity } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { rootsToSceneAsset } from '../collect-scene-asset';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+import { registerRuntimeComponents } from './helpers/register-runtime-components';
 
 function makeRegistry(): AssetRegistry {
   return new AssetRegistry(makeMockShaderRegistry());
@@ -35,6 +37,7 @@ function hasComp(entity: SceneEntity, compName: string): boolean {
 describe('w1 — AC-07 transient exclusion (SpriteAnimation, VideoPlayer)', () => {
   it('SpriteAnimation: currentFrame and accumDt are absent from collect output', () => {
     const world = new World();
+    registerRuntimeComponents(world);
     const e = world.spawn({
       component: SpriteAnimation,
       data: { frameCount: 4, frameDuration: 0.1, regions: new Float32Array(16) },
@@ -65,6 +68,7 @@ describe('w1 — AC-07 transient exclusion (SpriteAnimation, VideoPlayer)', () =
 
   it('VideoPlayer: currentTime is absent from collect output', () => {
     const world = new World();
+    registerRuntimeComponents(world);
     const e = world.spawn({
       component: VideoPlayer,
       data: { playing: true, loop: false, currentTime: 5.5 },
@@ -95,6 +99,7 @@ describe('w1 — AC-07 transient exclusion (SpriteAnimation, VideoPlayer)', () =
 describe('w2 — AC-08 round-trip tests (SpriteAnimation, VideoPlayer)', () => {
   it('SpriteAnimation: currentFrame/accumDt excluded, round-trip defaults to 0', () => {
     const world = new World();
+    registerRuntimeComponents(world);
     const e = world.spawn({
       component: SpriteAnimation,
       data: {
@@ -122,7 +127,10 @@ describe('w2 — AC-08 round-trip tests (SpriteAnimation, VideoPlayer)', () => {
 
     // Round-trip: instantiate the collected scene → read ECS state directly.
     const handle = world.allocSharedRef('SceneAsset', collected.value);
-    const inst = world.instantiateScene(handle as Parameters<typeof world.instantiateScene>[0]);
+    const inst = SceneOwner.worldInstantiateScene(
+      world,
+      handle as Parameters<typeof SceneOwner.worldInstantiateScene>[1],
+    );
     expect(inst.ok).toBe(true);
     if (!inst.ok) return;
 
@@ -153,6 +161,7 @@ describe('w2 — AC-08 round-trip tests (SpriteAnimation, VideoPlayer)', () => {
     // The playback head is authoritative on the host HTMLVideoElement.
     // This test asserts exclusion + round-trip to default 0 only.
     const world = new World();
+    registerRuntimeComponents(world);
     const e = world.spawn({
       component: VideoPlayer,
       data: { playing: true, loop: true, currentTime: 42.0 },
@@ -173,7 +182,10 @@ describe('w2 — AC-08 round-trip tests (SpriteAnimation, VideoPlayer)', () => {
 
     // Round-trip: instantiate the collected scene → read ECS state directly.
     const handle = world.allocSharedRef('SceneAsset', collected.value);
-    const inst = world.instantiateScene(handle as Parameters<typeof world.instantiateScene>[0]);
+    const inst = SceneOwner.worldInstantiateScene(
+      world,
+      handle as Parameters<typeof SceneOwner.worldInstantiateScene>[1],
+    );
     expect(inst.ok).toBe(true);
     if (!inst.ok) return;
 

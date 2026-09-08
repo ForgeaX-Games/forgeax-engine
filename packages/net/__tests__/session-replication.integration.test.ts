@@ -20,6 +20,34 @@ function profile() {
 }
 
 describe('NetSession replication integration', () => {
+  it('does not reserve an authority publication before the first peer connects', () => {
+    const [authorityEndpoint, replicaEndpoint] = createMemoryEndpointPair();
+    const authorityWorld = new World();
+    authorityWorld.spawn(
+      { component: NetworkedSession, data: { enabled: true } },
+      { component: PositionSession, data: { x: 7 } },
+    );
+    const replication = profile();
+    const authoritySession = new NetSession({ endpoint: authorityEndpoint, maxRawMessages: 8 });
+    authoritySession.attachAuthority(createAuthorityCoordinator(authorityWorld, replication));
+
+    expect(authoritySession.publish().ok).toBe(true);
+    expect(authoritySession.getRecoverySnapshot().pendingPackets).toBe(0);
+
+    const replicaSession = new NetSession({ endpoint: replicaEndpoint, maxRawMessages: 8 });
+    const replica = createReplicaCoordinator(new World(), replication, replicaEndpoint);
+    replicaSession.attachReplica(replica, replication.limits);
+    authoritySession.receiveEvents();
+    replicaSession.receiveEvents();
+    expect(authoritySession.getPeerSnapshot().connected).toBe(true);
+
+    expect(authoritySession.publish().ok).toBe(true);
+    expect(replicaSession.receiveEvents()).toEqual([]);
+    expect(replica.snapshot()).toEqual([
+      { id: 1, components: ['NetworkedSession', 'PositionSession'] },
+    ]);
+  });
+
   it('tracks actual peers, publishes canonical bytes, and applies them through a replica attachment', () => {
     const [authorityEndpoint, replicaEndpoint] = createMemoryEndpointPair();
     const authorityWorld = new World();
@@ -45,6 +73,8 @@ describe('NetSession replication integration', () => {
       { id: 1, components: ['NetworkedSession', 'PositionSession'] },
     ]);
     expect(replicaSession.drainRawMessages()).toEqual([]);
+    expect(authoritySession.receiveEvents()).toEqual([]);
+    expect(authoritySession.getRecoverySnapshot().pendingPackets).toBe(0);
   });
 
   it('publishes a full current baseline when a later session peer connects', () => {
@@ -91,7 +121,14 @@ describe('NetSession replication integration', () => {
 
     expect(lateAuthoritySession.publish().ok).toBe(true);
     expect(lateReplicaSession.receiveEvents()).toEqual([]);
+    expect(lateReplicaSession.getRecoverySnapshot()).toMatchObject({
+      state: { kind: 'active', epoch: 1, sequence: 1 },
+      epoch: 1,
+      sequence: 1,
+    });
     expect(lateReplica.snapshot()).toEqual(initialReplica.snapshot());
+    expect(lateAuthoritySession.receiveEvents()).toEqual([]);
+    expect(lateAuthoritySession.getRecoverySnapshot().pendingPackets).toBe(0);
   });
 
   it('disconnects a sender when attached replica decoding rejects malformed bytes', () => {

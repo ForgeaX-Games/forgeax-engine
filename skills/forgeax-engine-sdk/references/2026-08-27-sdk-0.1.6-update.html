@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="ForgeaX SDK v0.1.6 npm 与 ZIP 发布更新、验证和后续发布流程" />
+    <title>ForgeaX SDK v0.1.6 · 更新说明</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f7fb;
+        --surface: #ffffff;
+        --surface-muted: #eef2f8;
+        --text: #172033;
+        --muted: #5f6b7d;
+        --line: #d9e0eb;
+        --brand: #3157d5;
+        --brand-soft: #e8edff;
+        --success: #13795b;
+        --success-soft: #e5f7ef;
+        --warning: #8b5a00;
+        --warning-soft: #fff4d7;
+        --code: #101827;
+        --code-text: #e9efff;
+        --shadow: 0 14px 40px rgba(27, 42, 72, 0.09);
+      }
+
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        background:
+          radial-gradient(circle at 15% 0%, #eaf0ff 0, transparent 34rem),
+          var(--bg);
+        color: var(--text);
+        font: 16px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      }
+      a { color: var(--brand); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .shell { width: min(1120px, calc(100% - 32px)); margin: 0 auto; }
+      header { padding: 64px 0 34px; }
+      .eyebrow {
+        color: var(--brand);
+        font-size: 0.82rem;
+        font-weight: 750;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      h1, h2, h3 { line-height: 1.25; margin: 0 0 14px; }
+      h1 { font-size: clamp(2.15rem, 5vw, 4.2rem); letter-spacing: -0.04em; }
+      h2 { font-size: clamp(1.45rem, 3vw, 2rem); margin-top: 8px; }
+      h3 { font-size: 1.08rem; }
+      .lead { color: var(--muted); font-size: 1.12rem; max-width: 780px; margin: 0; }
+      .meta-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin: 26px 0 0;
+      }
+      .meta {
+        background: rgba(255, 255, 255, 0.8);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 15px 16px;
+      }
+      .meta .label { color: var(--muted); display: block; font-size: 0.78rem; }
+      .meta .value { display: block; font-weight: 750; margin-top: 3px; overflow-wrap: anywhere; }
+      main { padding-bottom: 72px; }
+      section {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        box-shadow: var(--shadow);
+        margin: 18px 0;
+        padding: clamp(20px, 4vw, 34px);
+      }
+      .callout {
+        border-left: 5px solid var(--brand);
+        background: var(--brand-soft);
+        border-radius: 10px;
+        padding: 14px 18px;
+        margin: 16px 0 22px;
+      }
+      .callout.success { border-left-color: var(--success); background: var(--success-soft); }
+      .callout.warning { border-left-color: var(--warning); background: var(--warning-soft); }
+      .callout p { margin: 0; }
+      .table-wrap { overflow-x: auto; }
+      table { border-collapse: collapse; width: 100%; min-width: 640px; }
+      th, td { border-bottom: 1px solid var(--line); padding: 11px 10px; text-align: left; vertical-align: top; }
+      th { background: var(--surface-muted); font-size: 0.86rem; }
+      tbody tr:last-child td { border-bottom: 0; }
+      code {
+        background: var(--surface-muted);
+        border-radius: 5px;
+        padding: 0.12em 0.35em;
+        font: 0.9em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      pre {
+        background: var(--code);
+        border: 1px solid #263554;
+        border-radius: 12px;
+        color: var(--code-text);
+        margin: 12px 0 0;
+        overflow: auto;
+        padding: 16px 18px;
+      }
+      pre code { background: transparent; border-radius: 0; color: inherit; padding: 0; }
+      .flow {
+        align-items: stretch;
+        display: grid;
+        gap: 9px;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+        margin: 22px 0 8px;
+      }
+      .flow-step {
+        align-items: center;
+        background: var(--brand-soft);
+        border: 1px solid #c9d3ff;
+        border-radius: 12px;
+        display: flex;
+        font-size: 0.88rem;
+        font-weight: 700;
+        justify-content: center;
+        min-height: 70px;
+        padding: 10px;
+        position: relative;
+        text-align: center;
+      }
+      .flow-step:not(:last-child)::after {
+        color: var(--brand);
+        content: "→";
+        font-size: 1.4rem;
+        position: absolute;
+        right: -16px;
+        top: 20px;
+        z-index: 1;
+      }
+      .two-col { display: grid; gap: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .card {
+        background: var(--surface-muted);
+        border: 1px solid var(--line);
+        border-radius: 13px;
+        padding: 17px;
+      }
+      .card h3 { margin-bottom: 8px; }
+      ul, ol { margin: 9px 0 0; padding-left: 1.35rem; }
+      li + li { margin-top: 5px; }
+      .checklist { list-style: none; padding-left: 0; }
+      .checklist li { padding-left: 1.65rem; position: relative; }
+      .checklist li::before {
+        color: var(--success);
+        content: "✓";
+        font-weight: 900;
+        left: 0;
+        position: absolute;
+      }
+      details { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 14px; }
+      summary { cursor: pointer; font-weight: 750; }
+      footer { color: var(--muted); font-size: 0.9rem; padding: 4px 0 52px; }
+      @media (max-width: 860px) {
+        .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .flow { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+        .flow-step:nth-child(4)::after { display: none; }
+      }
+      @media (max-width: 620px) {
+        .shell { width: min(100% - 20px, 1120px); }
+        header { padding-top: 36px; }
+        .meta-grid, .two-col, .flow { grid-template-columns: 1fr; }
+        .flow-step:not(:last-child)::after {
+          content: "↓";
+          right: auto;
+          top: auto;
+          bottom: -22px;
+          left: calc(50% - 7px);
+        }
+        .flow-step { min-height: 52px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header>
+        <div class="eyebrow">ForgeaX Engine · Release update · 2026-08-27</div>
+        <h1>SDK v0.1.6</h1>
+        <p class="lead">
+          npm carrier 的发布与可见性链路已恢复。本文记录当前可交付状态、ZIP/npm
+          两条用户路径、真实消费者验证，以及下一次发布应遵循的门禁。
+        </p>
+        <div class="meta-grid" aria-label="版本摘要">
+          <div class="meta"><span class="label">SDK</span><span class="value">0.1.6</span></div>
+          <div class="meta"><span class="label">Engine commit</span><span class="value">e5cddd16fe67…</span></div>
+          <div class="meta"><span class="label">npm latest</span><span class="value">0.1.6</span></div>
+          <div class="meta"><span class="label">发布日期</span><span class="value">2026-08-27</span></div>
+        </div>
+      </header>
+
+      <main>
+        <section>
+          <h2>当前状态</h2>
+          <div class="callout success">
+            <p>
+              <strong>已完成：</strong>GitHub Release、npm carrier、README、初始化和外部游戏
+              创建均已通过实测；远端 <code>Protect</code> ruleset 已恢复为 active。
+            </p>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>项目</th><th>事实</th></tr></thead>
+              <tbody>
+                <tr><td>ZIP 构建与验收</td><td><a href="https://github.com/ForgeaX-Games/forgeax-engine/actions/runs/33066171395">Actions 33066171395</a> · success</td></tr>
+                <tr><td>npm carrier 恢复</td><td><a href="https://github.com/ForgeaX-Games/forgeax-engine/actions/runs/33068823496">Actions 33068823496</a> · success</td></tr>
+                <tr><td>GitHub Release</td><td><a href="https://github.com/ForgeaX-Games/forgeax-engine/releases/tag/sdk-v0.1.6">sdk-v0.1.6</a></td></tr>
+                <tr><td>npm 包</td><td><a href="https://www.npmjs.com/package/@forgeax/engine-sdk/v/0.1.6"><code>@forgeax/engine-sdk@0.1.6</code></a> · <code>latest=0.1.6</code></td></tr>
+                <tr><td>npm integrity</td><td><code>sha512-j8YlMmmag9uXLSfM2XAngZfw7D0t3UqIyUg1G/0dyUHHwGwqJKUaWeoc9Jq5b0uWybUHeqjlqCsD4OcxE+hrNA==</code></td></tr>
+                <tr><td>规则集</td><td><code>Protect=active</code>；direct/effective required contexts 都是 21 项</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section>
+          <h2>这次更新解决了什么</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>变化</th><th>影响</th></tr></thead>
+              <tbody>
+                <tr><td>canonical kit 使用独立输出目录</td><td>构建不再改写 contributor checkout 中跟踪的 <code>cook-receipt.json</code>。</td></tr>
+                <tr><td>npm carrier 根级 README</td><td>npm 页面不再显示 <code>No README data found!</code>，安装与开发入口可直接发现。</td></tr>
+                <tr><td>carrier 元数据完整</td><td>包含 homepage、repository、keywords、Node 要求，并只发布 <code>README.md</code> 与 <code>sdk/</code>。</td></tr>
+                <tr><td>carrier 移除 offline store</td><td>npm 包保持可发布体积；游戏按锁文件从 registry 安装 Engine 依赖。</td></tr>
+                <tr><td>README 发布门禁</td><td><code>sdk:publish:npm</code> 缺少 <code>package/README.md</code> 时 fail-closed。</td></tr>
+                <tr><td>carrier 恢复工作流</td><td>从已验证 Release ZIP 重建，等待公共 registry 返回版本和 <code>dist.integrity</code>。</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <details>
+            <summary>为什么需要恢复工作流</summary>
+            <p>
+              主发布任务先报告 npm publish 成功，但公共 registry 仍短暂返回 0.1.4；
+              carrier 版本和 tarball 都是 404。恢复任务没有重新构建 Engine，而是从已通过
+              ZIP verifier 的 Release 重建 carrier，再轮询公共 registry。这样可以区分
+              “发布请求完成”和“用户真的能下载”这两个状态。
+            </p>
+          </details>
+        </section>
+
+        <section>
+          <h2>本次新增：正式特性目录与 Agent 引导链</h2>
+          <div class="callout success">
+            <p>
+              SDK 不再只提供散落的 package README。初始化结果会直接告诉 Agent 应先读哪些
+              文件，再按需求选择 focused skill 和 package contract。
+            </p>
+          </div>
+          <ol>
+            <li>先读 SDK 根目录的 <code>AGENTS.md</code>：所有权、初始化约束、工程结构和安全边界。</li>
+            <li>再读 <code>skills/forgeax-engine-sdk/SKILL.md</code>：五分钟能力导览和“需求 → skill → 证据”路线。</li>
+            <li>先读特性目录开头的 <code>sdk-v0.1.4 → sdk-v0.1.6</code> 版本增量，再查 <code>skills/forgeax-engine-sdk/references/feature-catalog.md</code> 的完整能力全景。</li>
+            <li>确定能力后，进入对应 focused skill 和 <code>packages/&lt;name&gt;/README.md</code>，最后用 CLI/真实运行证据验收。</li>
+          </ol>
+          <pre><code>node ./bin/forgeax.mjs init --json
+
+// value.onboarding.read
+AGENTS.md
+skills/forgeax-engine-sdk/SKILL.md
+skills/forgeax-engine-sdk/references/feature-catalog.md</code></pre>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>扫描事实</th><th>值</th></tr></thead>
+              <tbody>
+                <tr><td>能力内容基线</td><td><code>e5cddd16fe6796b85559945c9637bd67faffbcc7</code>（<code>sdk-v0.1.6</code>）</td></tr>
+                <tr><td>完成时间</td><td>2026-08-27 20:14:08 UTC+08:00（12:14:08 UTC）</td></tr>
+                <tr><td>本次复查范围</td><td><code>f58184ad3d3430ee6b27d6cac408b75748f5e5d6..e5cddd16fe6796b85559945c9637bd67faffbcc7</code></td></tr>
+                <tr><td>下次增量范围</td><td><code>git diff --stat e5cddd16fe6796b85559945c9637bd67faffbcc7..HEAD</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="callout">
+            <p>
+              能力目录的基线是“能力扫描范围”，不是 SDK 归档身份；归档身份仍以
+              <code>sdk-manifest.json#engineCommit</code> 和 SDK semver 为准。目录中的
+              “内建/按需/构建期/宿主侧/开发期/测试实验”也明确区分了可用能力和当前游戏是否已启用。
+            </p>
+          </div>
+          <details>
+            <summary>目录覆盖的能力分类</summary>
+            <p>
+              渲染管线与画面效果、材质/Shader/几何、GPU/RHI/VFX、ECS 与核心架构、
+              App/输入/插件、物理/音频/网络/智能、资产与内容生产，以及 AI 工具、
+              Preview、Profiler、Remote、RHI-debug 和 SDK 交付。
+            </p>
+          </details>
+        </section>
+
+        <section>
+          <h2>0.1.4 → 0.1.6：Engine 关键增量</h2>
+          <div class="callout warning">
+            <p>
+              之前的说明只给了当前能力快照，遗漏了版本之间的 Engine 演进。这里按 SDK tag
+              重建增量：绝大多数运行时、资产和 DevKit 变化发生在
+              <code>sdk-v0.1.4..sdk-v0.1.5</code>；<code>sdk-v0.1.5..sdk-v0.1.6</code>
+              主要是交付面修复，不应被误读成新的 runtime API。
+            </p>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>SDK tag</th><th>Engine commit</th><th>时间（UTC+08:00）</th><th>定位</th></tr></thead>
+              <tbody>
+                <tr><td><code>sdk-v0.1.4</code></td><td><code>991e857eeb8e5adcaebe147cffa1853264ab3887</code></td><td>2026-08-26 19:29:41</td><td>本次增量起点；已有能力见正式特性目录快照。</td></tr>
+                <tr><td><code>sdk-v0.1.5</code></td><td><code>2d24560bf4e6677def8228f04f1f443d1c7d558a</code></td><td>2026-08-27 18:47:06</td><td>引擎、渲染、资产和 DevKit 变化集中落点。</td></tr>
+                <tr><td><code>sdk-v0.1.6</code></td><td><code>e5cddd16fe6796b85559945c9637bd67faffbcc7</code></td><td>2026-08-27 19:09:27</td><td>canonical kit、npm carrier 与发布门禁修复。</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <h3>0.1.4 → 0.1.5 的引擎与创作链</h3>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>领域</th><th>关键变化</th><th>对游戏工程的影响</th><th>commit</th></tr></thead>
+              <tbody>
+                <tr><td>Render core</td><td>完成 M7 owner 收敛：Standard Pipeline、RenderScene、DeviceScope、extract → prepare → record 与 FrameReceipt 统一；删除旧 pipeline registry、宽 barrel 和重复 single-World 路径。</td><td>RenderFeature 必须接入同一条 typed pipeline；不要再寻找 legacy registry。先读 <code>packages/render/README.md</code> 的 Render happy path。</td><td><code>6e4f51db6</code></td></tr>
+                <tr><td>Render 状态</td><td>generation failure stage 改由 owner 推导，公开 visibility decoder，并保留 health/recovery 与 last-known-good receipt。</td><td>黑屏或失败先读结构化 <code>code/detail/hint</code>，按 owner 修复；不要用 console 文本猜状态。</td><td><code>06ec1fb21</code><br /><code>336e1ed41</code><br /><code>1b5e40900</code></td></tr>
+                <tr><td>App execution</td><td>执行 realm 通过可序列化 descriptor 携带 scoped asset catalog；Worker 不再捕获 Host-side AssetRegistry。</td><td><code>engine-worker</code>/<code>shared</code> 由 <code>execution.assetCatalog</code> 在目标 realm 建立 Catalog；<code>CreateAppOptions.assetCatalog</code> 不跨 realm。</td><td><code>ef34c2713</code></td></tr>
+                <tr><td>Pack / Catalog</td><td>Pack runtime binding 成为 Catalog SSOT；<code>vite-plugin-pack</code> 暴露只读 <code>runtimeBinding()</code> 和唯一 <code>rebind()</code> seam；ScriptablePack 会 stage Meta 外部依赖。</td><td>dev、preview、Worker 和 production 使用同一 scope/generation；不要在游戏代码维护第二份 URL 表。</td><td><code>63d6b71af</code><br /><code>1299fee44</code><br /><code>c9319b002</code></td></tr>
+                <tr><td>Scene</td><td>增加 payload-shaped scene instantiation，并覆盖 projected payload 的 ownership。</td><td>场景从 Catalog payload 建立实体层级；不要手工复制 GUID/Transform 绕过 scene owner。</td><td><code>254ca4319</code></td></tr>
+                <tr><td>Shader</td><td>WGSL portability passes 集中到 shader-compiler，并规范化 Safari 不接受的长 f32 literal。</td><td>自定义 WGSL 在构建期统一过 compatibility pipeline；不要在 runtime 编译或写 Safari 专用分支。</td><td><code>7b1f623f</code><br /><code>d6f328597</code></td></tr>
+                <tr><td>VFX</td><td>channel overflow policy 改由 renderer owner 推导。</td><td>VFX source 只声明效果意图；容量和溢出恢复服从 renderer capability。</td><td><code>4053fdd9c</code></td></tr>
+                <tr><td>外部资产</td><td>FBX external texture resolver contract 恢复；assets-runtime 恢复 custom asset kind helper。</td><td>FBX 外部贴图走统一 resolver；自定义 kind 通过公开 helper 注册/识别，GUID/Meta 仍是身份 SSOT。</td><td><code>51226adc0</code><br /><code>f8d20f276</code></td></tr>
+                <tr><td>媒体与调试</td><td>video backend kind 从 RHI capabilities 推导；RHI-debug 浏览器 codec 随包打入。</td><td>视频按 capability 选择 lane；浏览器端 RHI-debug 不再依赖未声明的外部 codec。</td><td><code>a3375408c</code><br /><code>aa4fc5846</code></td></tr>
+                <tr><td>DevKit / 诊断</td><td>bootstrap roots 从 BaseHost 推导；CLI、Preview、RHI-debug、GLTF 诊断保留结构化 owner/sourceKey/port/build-graph 信息；benchmark vocabulary 从 report 派生。</td><td><code>doctor</code>、<code>preview</code>、<code>asset</code>、<code>rhi-debug</code> 失败读取 JSON，不 grep 日志；按 root/sourceKey/port 找 owner。</td><td><code>324161844</code><br /><code>1b5e40900</code><br /><code>6eb1b264b</code></td></tr>
+                <tr><td>物理与错误</td><td><code>createApp</code> 保留 dispatch/Worker terminal error；Rapier WASM/plugin 激活失败在 PhysicsWorld 创建前归一化。</td><td><code>App.lastError</code>/<code>onError</code> 是 Agent 故障入口；失败不会留下半初始化 PhysicsWorld。</td><td><code>1b5e40900</code></td></tr>
+                <tr><td>ECS 写入安全</td><td>组件结构写入和已有实体更新统一做 numeric preflight；NaN 返回带 entity/component/field/index 的闭合错误，避免部分列写入。</td><td>生成组件数据时先修复 <code>component-numeric-value-invalid</code>；不要用 NaN 试探运行时容错。</td><td><code>1b5e40900</code></td></tr>
+                <tr><td>glTF 输入合同</td><td>required extension admission 增加 <code>KHR_texture_transform</code>；source-key 冲突改为带 key、sourceIndices 和 entry 详情的结构化错误。</td><td>导入前检查扩展和稳定 semantic/name key；失败时按 <code>detail</code> 修复源文件，不用 sourceIndex 兜底。</td><td><code>1b5e40900</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <h3>0.1.5 → 0.1.6 的交付面</h3>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>变化</th><th>用户可见结果</th><th>commit</th></tr></thead>
+              <tbody>
+                <tr><td>canonical kit 使用独立输出目录</td><td>SDK 构建不再把验证/烹饪副作用写回 contributor checkout。</td><td><code>e5cddd16f</code></td></tr>
+                <tr><td>carrier 根级 README、元数据和 publish guard</td><td><code>@forgeax/engine-sdk@0.1.6</code> 的 npm 页面可直接发现入口；缺 README 或版本闭包会 fail-closed。</td><td><code>e5cddd16f</code></td></tr>
+                <tr><td>carrier 移除 offline store，完整 ZIP 保留 <code>store/pnpm/</code></td><td>npm 适合联网安装，ZIP 继续支持离线创建；两者共享同一锁文件和裸 <code>packages/</code>。</td><td><code>e5cddd16f</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <details>
+            <summary>哪些提交没有算作 Engine 能力</summary>
+            <p>
+              同一范围还包括 Snake M16 网络重连、parity fixture、required-CI 和 Harness
+              调整。它们分别是 demo/evidence 或交付基础设施，不应被 Agent 当成新的 runtime
+              API；需要追踪时查看 <code>4d1fdc8b0</code>、<code>0cbf6dba5</code>、
+              <code>b820923da</code> 等提交。
+            </p>
+          </details>
+          <div class="callout">
+            <p>
+              完整历史索引已写入 SDK 内的
+              <code>skills/forgeax-engine-sdk/references/feature-catalog.md</code>。下次更新以
+              <code>sdk-v0.1.6</code> 为基线，先运行
+              <code>git log --first-parent --oneline sdk-v0.1.6..HEAD -- packages scripts skills templates</code>，
+              再把有公开 owner、export 和真实 gate 的变化加入表格。
+            </p>
+          </div>
+        </section>
+
+        <section>
+          <h2>用户标准路径</h2>
+          <div class="flow" aria-label="SDK 用户流程">
+            <div class="flow-step">下载 ZIP<br />或 npm install</div>
+            <div class="flow-step">SDK 根<br /><code>forgeax init</code></div>
+            <div class="flow-step"><code>forgeax new</code><br />创建游戏</div>
+            <div class="flow-step">阅读<br /><code>AGENTS.md</code></div>
+            <div class="flow-step">doctor<br />test / build</div>
+            <div class="flow-step">dev<br />preview</div>
+            <div class="flow-step"><code>forgeax package</code><br />HTTPS 分享</div>
+          </div>
+
+          <div class="two-col">
+            <div class="card">
+              <h3>完整 ZIP · 可离线</h3>
+              <pre><code>unzip forgeax-sdk-v0.1.6.zip
+cd forgeax-sdk
+node ./bin/forgeax.mjs init
+node ./bin/forgeax.mjs new ../my-game
+cd ../my-game
+pnpm exec forgeax doctor --json
+pnpm test
+pnpm build
+pnpm dev</code></pre>
+              <p>
+                ZIP 携带规范化 <code>store/pnpm/</code>。游戏目标必须在 SDK 根目录之外，
+                多个游戏使用兄弟目录或其他绝对路径。
+              </p>
+            </div>
+            <div class="card">
+              <h3>npm carrier · 联网</h3>
+              <pre><code>pnpm dlx @forgeax/engine@0.1.6 sdk install "$HOME/ForgeaX/sdk-0.1.6"
+cd "$HOME/ForgeaX/sdk-0.1.6"
+node ./bin/forgeax.mjs init
+node ./bin/forgeax.mjs new ../my-game
+cd ../my-game
+pnpm exec forgeax doctor --json
+pnpm test
+pnpm build
+pnpm dev</code></pre>
+              <p>
+                <code>@forgeax/engine-sdk</code> 是 carrier，不是 CLI；CLI 由
+                <code>@forgeax/engine</code> 的 umbrella 入口提供。
+              </p>
+            </div>
+          </div>
+          <div class="callout warning">
+            <p>
+              不要双击 <code>dist/index.html</code> 或用 <code>file://</code> 判断画面。
+              开发使用 <code>pnpm dev</code>，构建产物使用 <code>pnpm preview</code> 或
+              HTTPS 静态站点；HTTP 200 只证明服务存活，不等于 WebGPU 画面正确。
+            </p>
+          </div>
+        </section>
+
+        <section>
+          <h2>归档和 npm surface</h2>
+          <pre><code>forgeax-sdk/
+├── bin/forgeax                 # 独立 CLI
+├── packages/&lt;name&gt;/            # 裸 package surface，不含 tgz/package 层
+├── templates/                  # game-empty、game-default
+├── skills/                     # Engine skills
+├── source/engine/              # 公开源码快照
+├── store/pnpm/                 # 仅完整 ZIP
+├── sdk-manifest.json
+└── AGENTS.md</code></pre>
+          <p>
+            npm tarball 解压时的临时 <code>package/</code> 层是 npm 标准行为；
+            <code>sdk install</code> 会把 <code>package/sdk/</code> 的内容复制到用户指定
+            目录，因此用户拿到的 SDK 仍是平铺结构。
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>carrier 必须包含</th><th>carrier 必须排除</th></tr></thead>
+              <tbody>
+                <tr><td><code>README.md</code>、<code>package.json</code>、<code>sdk/</code></td><td><code>sdk/store/pnpm/</code></td></tr>
+                <tr><td><code>sdk/bin</code>、<code>sdk/packages</code>、<code>sdk/templates</code>、<code>sdk/skills</code></td><td>workspace link、私有 asset submodule、半初始化目录</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section>
+          <h2>版本检查与升级风险</h2>
+          <p>每次 <code>forgeax new</code> 都返回当前 SDK 与公共 registry 的版本判断：</p>
+          <pre><code>{
+  "status": "current",
+  "currentVersion": "0.1.6",
+  "latestVersion": "0.1.6"
+}</code></pre>
+          <ol>
+            <li>发现新版本时先阅读 Release 的变更和迁移说明。</li>
+            <li>旧游戏保持原版本，不自动改写依赖。</li>
+            <li>在独立分支或复制目录中用新版 SDK 创建验证工程。</li>
+            <li>通过 doctor、tests、build、dev/preview 以及必要的浏览器/RHI 证据后再迁移。</li>
+          </ol>
+          <p>
+            升级可能涉及 API、资产 schema、插件 Entry 或构建工具变化；旧游戏需要自行适配。
+          </p>
+        </section>
+
+        <section>
+          <h2>0.1.6 验收记录</h2>
+          <ul class="checklist">
+            <li>ZIP 构建、重建一致性和 exact archive verifier 成功。</li>
+            <li>verifier 覆盖 <code>new</code>、<code>skill.verify</code>、<code>doctor</code>、<code>test</code>、<code>build</code>、<code>dev</code>、<code>preview</code>。</li>
+            <li>61 个物理 npm package 与 SDK carrier 通过版本、依赖和完整性检查。</li>
+            <li>carrier tarball 实际下载成功，大小约 43 MB，根级 README 约 4.3 KB。</li>
+            <li>npm 安装 SDK 的 <code>init</code> 成功，使用 pnpm 11.7.0 registry 模式。</li>
+            <li>npm 安装 SDK 的 <code>new</code> 成功，生成 AGENTS、skills、lockfile、.npmrc 和 node_modules。</li>
+            <li>starter tests 2 passed，生产 build 成功。</li>
+            <li>dev/preview 启动成功并返回 <code>http://localhost:5173/</code>，HTTP 200。</li>
+            <li><code>Protect</code> ruleset active，direct/effective required contexts 均为 21 项。</li>
+          </ul>
+          <details>
+            <summary>21 项 required contexts</summary>
+            <pre><code>build-artifacts
+primary-pnpm
+coverage-pnpm
+coverage-perf
+vitest-browser
+shared-inputs-browser
+smoke-fleet
+smoke-fleet-0
+smoke-fleet-1
+smoke-fleet-2
+bevy-smoke-fleet
+bevy-smoke-fleet-0
+bevy-smoke-fleet-1
+bevy-smoke-fleet-2
+vitest-dawn
+webkit-fallback
+portability-bun
+metrics-validate-browser
+metrics-validate-runtime
+metrics-validate
+collectathon-boot-e2e</code></pre>
+          </details>
+        </section>
+
+        <section>
+          <h2>下一次发布 runbook</h2>
+          <div class="flow" aria-label="发布流程">
+            <div class="flow-step">干净 commit</div>
+            <div class="flow-step"><code>sdk:build</code></div>
+            <div class="flow-step"><code>sdk:verify</code></div>
+            <div class="flow-step"><code>publish:npm</code></div>
+            <div class="flow-step">registry<br />可见性</div>
+            <div class="flow-step">Release<br />资产</div>
+            <div class="flow-step">外部消费者<br />smoke</div>
+          </div>
+          <h3>本地发布前门禁</h3>
+          <pre><code>pnpm sdk:build -- --version 1.2.3
+pnpm sdk:verify -- --archive artifacts/sdk/forgeax-sdk-v1.2.3.zip
+pnpm sdk:publish:npm -- --version 1.2.3 --check-only</code></pre>
+          <h3>carrier 延迟或 404 时</h3>
+          <pre><code>gh workflow run sdk-carrier-republish.yml \
+  --repo ForgeaX-Games/forgeax-engine \
+  --ref main \
+  -f version=1.2.3
+
+npm view @forgeax/engine-sdk@1.2.3 version dist-tags readmeFilename homepage engines \
+  --json --registry=https://registry.npmjs.org
+curl -fsSL https://registry.npmjs.org/@forgeax%2fengine-sdk/-/engine-sdk-1.2.3.tgz \
+  -o /tmp/engine-sdk-1.2.3.tgz
+tar -tzf /tmp/engine-sdk-1.2.3.tgz | sed -n '1,20p'</code></pre>
+          <div class="callout">
+            <p>
+              不能只看 <code>npm publish</code> 的退出码；必须确认目标版本、tarball、
+              <code>dist.integrity</code> 和 README 都能从公共 registry 读取。
+            </p>
+          </div>
+          <h3>发布前清单</h3>
+          <ul class="checklist">
+            <li>build/verify 结果的 Engine commit 与目标 commit 一致。</li>
+            <li>ZIP、SHA256SUMS、SPDX、provenance、verify result 一起发布。</li>
+            <li>npm carrier 有根级 README，且没有 store。</li>
+            <li>内部 <code>@forgeax/engine-*</code> 依赖全部指向同一版本。</li>
+            <li>registry 版本、tarball、README 和 integrity 真实可见。</li>
+            <li>required-ci ruleset active，并与仓库 manifest 完全一致。</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>相关入口</h2>
+          <ul>
+            <li><a href="../../.agents/skills/forgeax-engine-sdk/SKILL.md">SDK skill</a></li>
+            <li><a href="../../skills/forgeax-engine-sdk/SDK-README.md">SDK README source</a></li>
+            <li><a href="../../skills/forgeax-engine-sdk/SDK-AGENTS.md">SDK AI entry</a></li>
+            <li><a href="../../skills/forgeax-engine-sdk/references/feature-catalog.md">Feature catalog</a></li>
+            <li><a href="https://forgeax.github.io/download/engine-ai.md">Public download guide</a></li>
+          </ul>
+        </section>
+      </main>
+
+      <footer>
+        本文是 0.1.6 发布记录；SDK 的精确能力、文件清单和项目操作仍以已安装版本的
+        <code>AGENTS.md</code>、<code>SDK-README.md</code> 与 <code>sdk-manifest.json</code> 为准。
+      </footer>
+    </div>
+  </body>
+</html>

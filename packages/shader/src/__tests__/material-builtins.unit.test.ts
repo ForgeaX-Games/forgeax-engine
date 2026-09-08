@@ -1,14 +1,44 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { derive } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import {
   BUILTIN_MATERIAL_MODULES,
   type BuiltinMaterialKind,
   createBuiltinMaterialAsset,
+  isEngineMaterial,
+  isEngineMaterialModule,
 } from '../index.js';
 import type { MaterialShaderArtifact } from '../material/artifact-types.js';
+import { DEFAULT_STANDARD_PBR_PARAM_SCHEMA } from '../material-schemas.js';
+
+const builtinSources = [
+  'default-standard-pbr.wgsl',
+  'default-standard-pbr-skin.wgsl',
+  'unlit.wgsl',
+  'sprite.wgsl',
+  'sprite-lit.wgsl',
+  'msdf-text.wgsl',
+] as const;
 
 const kinds: readonly BuiltinMaterialKind[] = ['standard', 'unlit', 'sprite'];
 
+function source(file: string): string {
+  return readFileSync(fileURLToPath(new URL(`../${file}`, import.meta.url)), 'utf8');
+}
+
 describe('built-in MaterialAsset sources', () => {
+  it('keeps Engine-owned module identity in one shared predicate', () => {
+    expect(isEngineMaterial(createBuiltinMaterialAsset('standard'))).toBe(true);
+    expect(isEngineMaterialModule('forgeax::default-standard-pbr')).toBe(true);
+    expect(isEngineMaterialModule('game::custom')).toBe(false);
+    expect(
+      isEngineMaterial({
+        passes: [{ name: 'forward', program: { module: 'game::custom' } }],
+      }),
+    ).toBe(false);
+  });
+
   it.each(kinds)('uses one authored MaterialAsset contract for %s', (kind) => {
     const material = createBuiltinMaterialAsset(kind);
     const pass = material.passes?.[0];
@@ -26,6 +56,7 @@ describe('built-in MaterialAsset sources', () => {
       material: 'builtin-standard',
       pass: material.passes?.[0]?.name ?? 'forward',
       wgsl: 'builtin-standard-wgsl',
+      layoutIdentity: 'sha256-builtin-standard-layout',
       bindings: [],
       deps: [BUILTIN_MATERIAL_MODULES.standard],
       vertexInputs: [],
@@ -38,5 +69,43 @@ describe('built-in MaterialAsset sources', () => {
     expect(
       { ...material, values: { ...material.values, baseColor: [0.2, 0.3, 0.4, 1] } }.values,
     ).toMatchObject({ baseColor: [0.2, 0.3, 0.4, 1] });
+  });
+});
+
+describe('built-in and custom material derived layout matrix', () => {
+  it('models emissive and occlusion as real standard material texture parameters', () => {
+    const names = DEFAULT_STANDARD_PBR_PARAM_SCHEMA.map((entry) => entry.name);
+    expect(names).toContain('emissiveTexture');
+    expect(names).toContain('occlusionTexture');
+    expect(
+      DEFAULT_STANDARD_PBR_PARAM_SCHEMA.filter((entry) => entry.type === 'texture2d'),
+    ).toHaveLength(6);
+  });
+
+  it('derives a coordinate record for every texture parameter in an interleaved custom schema', () => {
+    const derived = derive([
+      { name: 'before', type: 'vec4' },
+      { name: 'albedo', type: 'texture2d' },
+      { name: 'roughness', type: 'f32' },
+      { name: 'normal', type: 'texture2d' },
+    ]);
+    expect(derived.coordinateRecords.map((record) => record.parameter)).toEqual([
+      'albedo',
+      'normal',
+    ]);
+    expect(derived.coordinateRecords.every((record) => record.size === 32)).toBe(true);
+    expect(derived.coordinateRecords[0]?.offset).not.toBe(derived.coordinateRecords[1]?.offset);
+  });
+
+  it('keeps the built-in source matrix on the derived coordinate contract', () => {
+    for (const file of builtinSources) {
+      const text = source(file);
+      expect(text, `${file} must expose derived coordinate members`).toContain(
+        'CoordinatesTransform',
+      );
+      expect(text, `${file} must not carry a fixed coordinate tail`).not.toContain(
+        'textureScalePadding',
+      );
+    }
   });
 });

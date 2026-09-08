@@ -3,7 +3,7 @@
 > [!NOTE]
 > **LO original chapter**: [LearnOpenGL 4.3 Blending](https://learnopengl.com/Advanced-OpenGL/Blending)
 >
-> **Engine surface**: `createApp` + `MeshRenderer` with `blend` in `MaterialRenderState` + `TRANSPARENT_SORT_MODE_DISTANCE` (distance-based transparent sort) + `setTransparentSortConfig` + `configurePackIndex` + `loadByGuid<TextureAsset>` + custom `registerMaterialShader` (alpha-test discard).
+> **Engine surface**: `createApp` + `MeshRenderer` with `blend` in `MaterialRenderState` + `TRANSPARENT_SORT_MODE_DISTANCE` (distance-based transparent sort) + `setTransparentSortConfig` + `configureRuntimeAssetCatalog` + `loadByGuid<TextureAsset>` + custom `registerMaterialShader` (alpha-test discard).
 
 ## Hit-rate index (AI user fast-locate)
 
@@ -13,7 +13,7 @@
 | `blend` SRC_ALPHA / ONE_MINUS_SRC_ALPHA | `blend:` | `src/index.ts` (window MaterialAsset renderState) |
 | alpha-test discard shader (alpha < 0.1) | `alpha-test.wgsl` | `src/alpha-test.wgsl` (custom WGSL material shader) |
 | `loadByGuid<TextureAsset>` GUID texture loading | `loadByGuid<TextureAsset>` | `src/index.ts` (bootstrap section) |
-| `configurePackIndex` texture catalog wiring | `configurePackIndex` | `src/index.ts` (bootstrap section) |
+| Runtime catalog wiring | `configureRuntimeAssetCatalog` | `src/index.ts` (bootstrap section) |
 | `registerMaterialShader` custom shader | `registerMaterialShader` | `src/index.ts` (alpha-test shader registration) |
 
 ## What this example shows
@@ -30,7 +30,7 @@ In forgeax, this example expresses both techniques:
 
 The scene also includes a `metal.png` textured floor at Y=-0.5 and a single `marble.jpg` textured cube at (0, 0.5, 0). Grass and window textures use `clamp-to-edge` addressMode (set in their `.meta.json` sidecar files) to prevent grey border artifacts from bilinear interpolation at texture edges.
 
-Textures are loaded through the GUID asset pipeline (`configurePackIndex('/pack-index.json')` + `loadByGuid<TextureAsset>`) from the `forgeax-engine-assets/learn-opengl/textures/` submodule.
+Textures are loaded through the GUID asset pipeline (`configureRuntimeAssetCatalog(assets, runtimeBinding)` + `loadByGuid<TextureAsset>`). The helper selects the scoped Vite catalog in development and the emitted `/pack-index.json` in a production build.
 
 ## Run
 
@@ -62,7 +62,7 @@ pnpm --filter "@forgeax/app-learn-render-4-advanced-opengl-3-blending" typecheck
 | Floor plane | Custom 6-vertex plane at Y=-0.5 with texcoord=2.0 | `HANDLE_QUAD` (engine-builtin 1x1 quad) rotated -90 deg around X, scaled 5x5 at Y=-0.5 |
 | Cube geometry | 1x1x1 CCW cube, 36 vertices | `HANDLE_CUBE` (engine-builtin CCW cube) |
 | Transparent positions | 5 `glm::vec3` positions | Same 5 positions: (-1.5,0,-0.48), (1.5,0,0.51), (0,0,0.7), (-0.3,0,-2.3), (0.5,0,-0.6) |
-| Texture loading | `stb_image.h` + `loadTexture(path)` | `configurePackIndex` + `loadByGuid<TextureAsset>` with sidecar `.meta.json` |
+| Texture loading | `stb_image.h` + `loadTexture(path)` | `configureRuntimeAssetCatalog` + `loadByGuid<TextureAsset>` with sidecar `.meta.json` |
 | Camera | LO `Camera` class at (0,0,3), Zoom=45 deg | `Transform` (at (0,0,3)) + `Camera` (fov=PI/4, near=0.1, far=100) |
 | Window + loop | `glfwCreateWindow` + `while(!glfwWindowShouldClose)` | `createApp(canvas, opts)` from `@forgeax/engine-app` |
 

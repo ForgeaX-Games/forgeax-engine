@@ -14,7 +14,7 @@ export const SnakeSegment = defineComponent('SnakeSegment', {
 });
 export const GridPosition = defineComponent('GridPosition', { x: 'i32', y: 'i32' });
 export const Food = defineComponent('Food', { enabled: 'bool' });
-export const ControlledBy = defineComponent('ControlledBy', { peer: 'u32' });
+export const ControlledBy = defineComponent('ControlledBy', { sessionId: 'u32' });
 export const PendingDirection = defineComponent('PendingDirection', { value: 'u8' });
 export const SnakeSession = defineComponent('SnakeSession', {
   started: 'bool',

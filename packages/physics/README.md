@@ -40,10 +40,18 @@ Three ECS systems run in order every frame (registered by `physicsPlugin` during
 | Phase | System Name | Runs After | What It Does |
 |:--|:--|:--|:--|
 | 1. Sync | `physicsSyncBackend` | `propagateTransforms` | Iterates archetypes with (Transform, RigidBody, Collider); calls `ensureBody` to create Rapier bodies for new entities |
-| 2. Step | `physicsStepSimulation` | `physicsSyncBackend` | Reads `Time.dt` resource; calls `PhysicsWorld.step()` to advance simulation (skips when dt <= 0 or > 0.1s) |
+| 2. Step | `physicsStepSimulation` | `physicsSyncBackend` | Reads the constant `FixedTime.delta`; calls `PhysicsWorld.step()` once per bounded fixed iteration |
 | 3. Writeback | `physicsWriteback` | `physicsStepSimulation` | Calls `writebackDynamicBodies()`; writes dynamic-body pose back to ECS `Transform` |
 
 All three systems early-return safely when the `PhysicsWorld` resource is not yet available (WASM fire-and-forget load).
+
+The ECS `World` owns host-frame recovery. It clamps `Time.delta` to the configured
+`maxDeltaSeconds`, advances at most `FixedTime.maxStepsPerUpdate` fixed steps,
+records discarded whole fixed intervals in `FixedTime.droppedSeconds` and
+`FixedTime.droppedUpdates`, and retains only the fractional `overstep`. A later
+healthy frame consumes only its own fixed delta; discarded time is never replayed.
+The backend `dt <= 0` / `dt > 0.1` guard remains defensive because physics receives
+`FixedTime.delta`, not the host-frame gap.
 
 ### Transform Pose Projection
 

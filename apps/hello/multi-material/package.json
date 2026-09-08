@@ -10,7 +10,12 @@
     "typecheck": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview",
-    "smoke": "node scripts/smoke-dawn.mjs"
+    "smoke": "node scripts/smoke-dawn.mjs",
+    "smoke:m26": "node scripts/smoke-dawn.mjs --m26-recovery",
+    "smoke:m32": "node scripts/smoke-dawn.mjs --m32-recovery",
+    "smoke:browser": "node scripts/smoke-browser.mjs",
+    "smoke:m26:browser": "node scripts/smoke-browser.mjs",
+    "smoke:m32:browser": "node scripts/smoke-browser.mjs --m32-recovery"
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-multi-material smoke",
@@ -35,11 +40,28 @@
         "enabled": false,
         "reason": "not a spike app; this is the M5 hello-multi-material multi-prim + mixed-topology exemplar"
       }
+    },
+    "gauntletScenario": {
+      "id": "hello-multi-material-slot-override-repair",
+      "script": "smoke:m26:browser",
+      "domains": ["Asset schemas, import, and delivery", "Rendering and shader construction"],
+      "packages": ["@forgeax/engine-assets-runtime", "@forgeax/engine-render", "@forgeax/engine-runtime"],
+      "risks": ["baseline", "default-inheritance", "structured-fault", "gpu-recovery", "cleanup"],
+      "phaseInputs": ["baseline", "overflow", "repair", "cleanup"],
+      "evidence": {
+        "frontDoors": ["dawn-node", "browser-app"],
+        "legs": ["semantic", "live", "gpu", "recovery"]
+      },
+      "oracle": {
+        "stdoutIncludes": ["[m26] PASS", "[m26] Browser PASS"]
+      }
     }
   },
   "dependencies": {
     "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-geometry": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-scene": "workspace:*",
@@ -49,6 +71,8 @@
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "vite": "8.0.10",
     "webgpu": "^0.4.0",
-    "@webgpu/types": "^0.1.71"
+    "@webgpu/types": "^0.1.71",
+    "playwright": "^1.56.1",
+    "pngjs": "^7.0.0"
   }
 }

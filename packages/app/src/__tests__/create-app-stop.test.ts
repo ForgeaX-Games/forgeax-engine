@@ -15,10 +15,9 @@ import type { Renderer } from '@forgeax/engine-render';
 import type { RhiError } from '@forgeax/engine-rhi/errors';
 import { ok } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
+import { RendererContractFailureError } from '../../../render/src/errors/render';
 
 import { createApp } from '../create-app';
-import { type CleanupFunnelOptions, makeCleanupFunnel } from '../internal/cleanup';
-import type { FrameLoopHandle } from '../internal/frame-loop';
 
 type ReadyResult = { ok: true; value: undefined } | { ok: false; error: RhiError };
 
@@ -40,16 +39,11 @@ function makeRendererStubForStop(): StubRenderer {
     draw(): { ok: true; value: undefined } {
       return { ok: true, value: undefined };
     },
-    attachWorld(): { ok: true; value: undefined } {
+    attach(): { ok: true; value: undefined } {
       return { ok: true, value: undefined };
     },
     detachWorld(): void {},
-    onError(): () => void {
-      return () => {
-        // no-op unsubscribe
-      };
-    },
-    onLost(): () => void {
+    subscribe(): () => void {
       return () => {
         // no-op unsubscribe
       };
@@ -85,11 +79,7 @@ describe('create-app-stop.test.ts', () => {
 
     it('does not restore a running loop when surface release fails', async () => {
       const { renderer } = makeRendererStubForStop();
-      const releaseError = new (await import('@forgeax/engine-rhi')).RhiError({
-        code: 'rhi-not-available',
-        expected: 'test release succeeds',
-        hint: 'forced failure',
-      });
+      const releaseError = new RendererContractFailureError('draw', 'forced failure');
       vi.mocked(renderer.releaseSurface).mockReturnValue({ ok: false, error: releaseError });
       const result = await createApp({ renderer, world: new World() });
       expect(result.ok).toBe(true);
@@ -151,131 +141,6 @@ describe('create-app-stop.test.ts', () => {
   });
 });
 
-// -------------------------------------------------------------------------
-// feat-20260619-audio-resource-ownership-deterministic-reclaim / M1 test
-// helpers
-// -------------------------------------------------------------------------
-
-function makeFrameLoopStub(): FrameLoopHandle {
-  return {
-    setDrawSource() {},
-    start() {
-      return ok(undefined);
-    },
-    stop() {
-      return ok(undefined);
-    },
-    pause() {
-      return ok(undefined);
-    },
-    resume() {
-      return ok(undefined);
-    },
-    stepFrame() {
-      return ok(undefined);
-    },
-    getState() {
-      return 'idle' as const;
-    },
-    setStopped() {
-      // no-op
-    },
-  };
-}
-
-function makeDispatchStubs() {
-  const dispatch = vi.fn<(err: import('../types').AppDispatchError) => void>();
-  const setLastError = vi.fn<(err: import('../types').AppDispatchError) => void>();
-  return { dispatch, setLastError };
-}
-
-// w1: AC-01 -- canvas-form stop triggers audioBackendDispose exactly once.
-// The funnel does not yet know about audioBackendDispose (field added in w5),
-// so this test will be RED until w5+w6 wire it.
-describe('feat-20260619 M1: F23 cleanup funnel audio leg', () => {
-  describe('w1: AC-01 canvas-form stop triggers audioBackendDispose', () => {
-    it('stop() calls audioBackendDispose exactly once', () => {
-      const loop = makeFrameLoopStub();
-      const { dispatch, setLastError } = makeDispatchStubs();
-      const destroySpy = vi.fn<() => void>();
-
-      const opts = {
-        loop,
-        dispatch: dispatch as CleanupFunnelOptions['dispatch'],
-        setLastError: setLastError as CleanupFunnelOptions['setLastError'],
-        audioBackendDispose: destroySpy,
-      } as unknown as CleanupFunnelOptions;
-
-      const funnel = makeCleanupFunnel(opts);
-      funnel({ reason: 'stop' });
-
-      expect(destroySpy).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  // w2: AC-02 -- reason semantics: stop fires audioBackendDispose,
-  // device-lost skips it (mirrors rendererDispose, OOS-2).
-  describe('w2: AC-02 reason semantics', () => {
-    it('device-lost does not call audioBackendDispose', () => {
-      const loop = makeFrameLoopStub();
-      const { dispatch, setLastError } = makeDispatchStubs();
-      const destroySpy = vi.fn<() => void>();
-
-      const opts = {
-        loop,
-        dispatch: dispatch as CleanupFunnelOptions['dispatch'],
-        setLastError: setLastError as CleanupFunnelOptions['setLastError'],
-        audioBackendDispose: destroySpy,
-      } as unknown as CleanupFunnelOptions;
-
-      const funnel = makeCleanupFunnel(opts);
-      funnel({ reason: 'device-lost' });
-      expect(destroySpy).not.toHaveBeenCalled();
-    });
-
-    it('stop calls audioBackendDispose', () => {
-      const loop = makeFrameLoopStub();
-      const { dispatch, setLastError } = makeDispatchStubs();
-      const destroySpy = vi.fn<() => void>();
-
-      const opts = {
-        loop,
-        dispatch: dispatch as CleanupFunnelOptions['dispatch'],
-        setLastError: setLastError as CleanupFunnelOptions['setLastError'],
-        audioBackendDispose: destroySpy,
-      } as unknown as CleanupFunnelOptions;
-
-      const funnel = makeCleanupFunnel(opts);
-      funnel({ reason: 'stop' });
-      expect(destroySpy).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  // w3: AC-03 -- double-stop idempotency: the funnel's `invoked` latch
-  // (cleanup.ts:99/104-111) guarantees audioBackendDispose fires at most
-  // once, even when stop() is called multiple times.
-  describe('w3: AC-03 double-stop idempotency', () => {
-    it('two consecutive funnel({ reason: "stop" }) calls invoke audioBackendDispose exactly once', () => {
-      const loop = makeFrameLoopStub();
-      const { dispatch, setLastError } = makeDispatchStubs();
-      const destroySpy = vi.fn<() => void>();
-
-      const opts = {
-        loop,
-        dispatch: dispatch as CleanupFunnelOptions['dispatch'],
-        setLastError: setLastError as CleanupFunnelOptions['setLastError'],
-        audioBackendDispose: destroySpy,
-      } as unknown as CleanupFunnelOptions;
-
-      const funnel = makeCleanupFunnel(opts);
-      funnel({ reason: 'stop' });
-      funnel({ reason: 'stop' });
-
-      expect(destroySpy).toHaveBeenCalledTimes(1);
-    });
-  });
-});
-
 // w4: AC-04 -- assemble form does not auto-destroy host-managed audioBackend.
 describe('w4: AC-04 assemble form does not auto-destroy external backend', () => {
   it('stop() on assemble-form app with external audioBackend does not call destroy()', async () => {
@@ -324,7 +189,12 @@ describe('w4: AC-04 assemble form does not auto-destroy external backend', () =>
 // feat-20260619 M3: auto-register audioTickSystem (w13/w14 tests, w15 impl)
 // ---------------------------------------------------------------------------
 
-import { AUDIO_ENGINE_RESOURCE_KEY, AudioSource, audioPlugin } from '@forgeax/engine-audio';
+import {
+  AUDIO_ENGINE_RESOURCE_KEY,
+  AudioSource,
+  audioBackendPlugin,
+  audioPlugin,
+} from '@forgeax/engine-audio';
 import { WebAudioEngine } from '@forgeax/engine-audio-webaudio';
 
 function createTestBufferForApp(duration = 1, sampleRate = 48000): AudioBuffer {
@@ -566,11 +436,10 @@ describe('feat-20260619 M3: auto-register audioTickSystem', () => {
         // New assemble contract (D-2 / D-4): host inserts the audio backend
         // resource + passes audioPlugin() in the plugin list. audioPlugin reads
         // the resource and registers the audio-tick world system.
-        world.insertResource(AUDIO_ENGINE_RESOURCE_KEY, backend);
         const result = await createApp({
           renderer: rendererWithAssets,
           world,
-          plugins: [audioPlugin()],
+          plugins: [audioBackendPlugin(backend), audioPlugin()],
         });
         expect(result.ok).toBe(true);
         if (!result.ok) return;
@@ -708,11 +577,10 @@ describe('feat-20260619 M3: auto-register audioTickSystem', () => {
         const rendererWithAssets = { ...renderer, assets: world.sharedRefs } as unknown as Renderer;
         // New assemble contract (D-2 / D-4): host inserts the audio resource +
         // passes audioPlugin() so the audio-tick world system is registered.
-        world.insertResource(AUDIO_ENGINE_RESOURCE_KEY, backend);
         const result = await createApp({
           renderer: rendererWithAssets,
           world,
-          plugins: [audioPlugin()],
+          plugins: [audioBackendPlugin(backend), audioPlugin()],
         });
         expect(result.ok).toBe(true);
         if (!result.ok) return;

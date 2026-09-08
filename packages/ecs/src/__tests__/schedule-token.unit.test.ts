@@ -25,7 +25,7 @@ describe('ScheduleToken registration', () => {
     const system = { name: 'set-system', queries: [], fn: () => {} };
 
     expect(world.addSystems(Update, set, [system]).ok).toBe(true);
-    expect(world.configureSets(Update, { set }).ok).toBe(true);
+    expect(world.inspect().systemCount).toBe(1);
   });
 
   it('requires a token for removal and replacement', () => {
@@ -41,5 +41,14 @@ describe('ScheduleToken registration', () => {
         fn: () => {},
       }).ok,
     ).toBe(true);
+  });
+
+  it('publishes one identity for split runtime bundles', () => {
+    const registry = globalThis as typeof globalThis & {
+      readonly [key: symbol]: unknown;
+    };
+
+    expect(registry[Symbol.for('forgeax.ecs.schedule-token.Update')]).toBe(Update);
+    expect(registry[Symbol.for('forgeax.ecs.schedule-token.FixedUpdate')]).toBe(FixedUpdate);
   });
 });

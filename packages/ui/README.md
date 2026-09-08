@@ -31,7 +31,7 @@ const loaded = assets.loadByGuid<UiAsset>(HUD_GUID);
 if (!loaded.ok) return report(loaded.error);
 const mounted = mountUi(loaded.value, { root: ctx.uiRoot, layer: 60 });
 if (!mounted.ok) return report(mounted.error);
-ctx.registerCleanup?.(() => mounted.value.dispose());
+ctx.effect(() => () => mounted.value.dispose(), 'game/hud');
 ```
 
 ## Preview and deterministic capture

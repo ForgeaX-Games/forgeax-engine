@@ -38,7 +38,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = appResult.value;
-  console.warn(`[bevy-axes] backend=${app.renderer.backend}`);
+  console.warn(`[bevy-axes] state=${app.renderer.inspect().state}`);
 
   if (!app.debugDraw) {
     console.error('[bevy-axes] app.debugDraw missing — debug-draw auto-attach failed');

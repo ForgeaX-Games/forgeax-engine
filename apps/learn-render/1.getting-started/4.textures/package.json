@@ -49,6 +49,7 @@
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
+    "@forgeax/engine-rhi-webgpu": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-scene": "workspace:*",

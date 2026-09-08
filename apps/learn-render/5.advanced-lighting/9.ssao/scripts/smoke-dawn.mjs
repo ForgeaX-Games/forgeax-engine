@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 // apps/learn-render/5.advanced-lighting/9.ssao/scripts/smoke-dawn.mjs
-// feat-20260612-hdrp-ssao M5 w22 (structural-only) + M9 w40/w41 (discrimination).
+// Standard profile SSAO Dawn smoke (structural-only + discrimination).
 //
 // LearnOpenGL section 5.9 SSAO dawn-node smoke.
-// Normal mode: spawns cube+sphere+floor through HDRP deferred opaque with SSAO
-// enabled, renders 300 frames, asserts perFramePassNames includes ssao-calc +
-// ssao-blur (structural-only).
+// Normal mode: spawns cube+sphere+floor through the clustered Standard lane
+// with SSAO enabled, renders 300 frames, and proves the receipt-bound path.
 //
-// --discrimination mode (M9 w40/w41): renders 2 passes — normal SSAO vs
-// FALSIFY=ssao-wrong-input — reads back center 32x32 R-channel mean from each,
+// --discrimination mode: renders 2 passes — normal SSAO vs disabled SSAO —
+// reads back center 32x32 R-channel mean from each,
 // asserts |mean_normal - mean_wrong| >= 0.05 (visual discrimination gate,
 // plan-strategy D-F / section 5.4).
 //
@@ -28,13 +27,6 @@ const FALSIFY = process.env.FALSIFY ?? '';
 const DISCRIMINATION = process.argv.includes('--discrimination');
 const WIDTH = 512;
 const HEIGHT = 512;
-
-const SSAO_CONFIG = {
-  enabled: true,
-  radius: 0.5,
-  bias: 0.025,
-  intensity: 1.0,
-};
 
 const FLOOR_Y = -1.0;
 const FLOOR_SCALE_XZ = 5.0;
@@ -202,16 +194,18 @@ if (DISCRIMINATION) {
       MeshFilter: MeshFilterLocal,
       MeshRenderer: MeshRendererLocal,
       perspective: perspectiveLocal,
+      DEFAULT_STANDARD_PROFILE,
     } = await import('@forgeax/engine-render');
-    const { HDRP_PIPELINE_ID: HDRP_PIPELINE_ID_LOCAL } = await import(
-      '@forgeax/engine-render/internal',
-    );
     const {
       HANDLE_CUBE: HANDLE_CUBE_LOCAL,
       HANDLE_SPHERE: HANDLE_SPHERE_LOCAL,
     } = await import('@forgeax/engine-assets-runtime');
 
-    const appResult = await createAppLocal(canvas, {}, { shaderManifestUrl: MANIFEST_URL });
+    const appResult = await createAppLocal(
+      canvas,
+      { standardProfile: { ...DEFAULT_STANDARD_PROFILE, lighting: 'clustered', ssao: ssaoConfig.enabled } },
+      { shaderManifestUrl: MANIFEST_URL },
+    );
     globalThis.navigator.gpu.requestAdapter = originalReqAdapter;
 
     if (!appResult.ok) {
@@ -226,31 +220,10 @@ if (DISCRIMINATION) {
     const onErrorEvents = [];
     app.onError((err) => onErrorEvents.push({ code: err.code }));
 
-    const ready = await app.renderer.ready;
-    if (!ready.ok) {
-      console.error(
-        `[smoke-discrimination] FAIL pass=${label} - renderer.ready: ${ready.error.code}`,
-      );
-      return { mean: null, device: sharedDeviceLocal };
-    }
 
-    const assets = app.renderer.assets;
-    if (assets === null) {
+    const assets = app.assets;
+    if (assets === undefined) {
       console.error(`[smoke-discrimination] FAIL pass=${label} - AssetRegistry null`);
-      return { mean: null, device: sharedDeviceLocal };
-    }
-
-    // feat-20260614 M8 (D-19): installPipeline takes the RenderPipelineAsset
-    // POD directly (no register round-trip; AssetRegistry holds no handle).
-    const installRes = app.renderer.installPipeline({
-      kind: 'render-pipeline',
-      pipelineId: HDRP_PIPELINE_ID_LOCAL,
-      config: { ssao: ssaoConfig },
-    });
-    if (!installRes.ok) {
-      console.error(
-        `[smoke-discrimination] FAIL pass=${label} - installPipeline: ${installRes.error.code}`,
-      );
       return { mean: null, device: sharedDeviceLocal };
     }
 
@@ -295,8 +268,7 @@ if (DISCRIMINATION) {
       return { mean: null, device: sharedDeviceLocal };
     }
 
-    const isWrong = ssaoConfig.bias < 0;
-    const frameCount = isWrong ? 60 : SMOKE_MIN_FRAMES;
+    const frameCount = SMOKE_MIN_FRAMES;
     let totalFrames = 0;
     for (let i = 0; i < frameCount; i++) {
       const due = rafQueue.shift();
@@ -307,7 +279,11 @@ if (DISCRIMINATION) {
       if (i % 16 === 15) await delay(1);
     }
 
-    app.stop();
+    const stopResult = app.stop();
+    if (!stopResult.ok) {
+      console.error(`[smoke-discrimination] FAIL pass=${label} - app.stop() returned ${stopResult.error.code}`);
+      return { mean: null, device: sharedDeviceLocal };
+    }
     if (!readbackRef.tex || !sharedDeviceLocal) {
       console.error(`[smoke-discrimination] FAIL pass=${label} - no render target`);
       return { mean: null, device: sharedDeviceLocal };
@@ -316,9 +292,14 @@ if (DISCRIMINATION) {
     await sharedDeviceLocal.queue.onSubmittedWorkDone();
     const mean = await readCenterRMean(sharedDeviceLocal, readbackRef.tex, label);
 
+    const disposeResult = await app.dispose();
+    if (!disposeResult.ok) {
+      console.error(`[smoke-discrimination] FAIL pass=${label} - app.dispose() returned ${disposeResult.error.code}`);
+      return { mean: null, device: sharedDeviceLocal };
+    }
+
     // Destroy the app's device textures to avoid leaking.
     readbackRef.tex.destroy?.();
-    app.renderer.dispose?.();
 
     return { mean, device: sharedDeviceLocal, onErrorEvents };
   }
@@ -326,31 +307,31 @@ if (DISCRIMINATION) {
   // --- Execute both passes ---
 
   console.log('[smoke-discrimination] pass 1/2: normal SSAO');
-  const normalResult = await runDiscriminationPass({ ...SSAO_CONFIG }, 'normal');
+  const normalResult = await runDiscriminationPass({ enabled: true }, 'normal');
   if (normalResult.mean === null) {
     console.error('[smoke-discrimination] FAIL - normal pass failed');
     if (normalResult.device) normalResult.device.destroy?.();
     process.exit(1);
   }
 
-  console.log('[smoke-discrimination] pass 2/2: wrong-input SSAO (bias=-1.0)');
-  const wrongResult = await runDiscriminationPass({ ...SSAO_CONFIG, bias: -1.0 }, 'wrong');
+  console.log('[smoke-discrimination] pass 2/2: SSAO disabled');
+  const wrongResult = await runDiscriminationPass({ enabled: false }, 'off');
   if (wrongResult.mean === null) {
-    console.error('[smoke-discrimination] FAIL - wrong-input pass failed');
+    console.error('[smoke-discrimination] FAIL - disabled pass failed');
     if (wrongResult.device) wrongResult.device.destroy?.();
     process.exit(1);
   }
 
   const diff = Math.abs(normalResult.mean - wrongResult.mean);
   console.log(
-    `[smoke-discrimination] mean.normal=${normalResult.mean.toFixed(4)} mean.wrong=${wrongResult.mean.toFixed(4)} diff=${diff.toFixed(4)}`,
+    `[smoke-discrimination] mean.normal=${normalResult.mean.toFixed(4)} mean.off=${wrongResult.mean.toFixed(4)} diff=${diff.toFixed(4)}`,
   );
 
   if (diff < 0.05) {
     console.error(
       `[smoke-discrimination] FAIL - visual discrimination diff=${diff.toFixed(4)} < 0.05 ` +
-        `(mean.normal=${normalResult.mean.toFixed(4)} mean.wrong=${wrongResult.mean.toFixed(4)}). ` +
-        'SSAO is not producing a visually distinguishable difference when bias=-1.0.',
+        `(mean.normal=${normalResult.mean.toFixed(4)} mean.off=${wrongResult.mean.toFixed(4)}). ` +
+        'SSAO is not producing a visually distinguishable difference when disabled.',
     );
     if (readbackDevice) readbackDevice.destroy?.();
     process.exit(1);
@@ -364,11 +345,7 @@ if (DISCRIMINATION) {
   process.exit(0);
 }
 
-// Known-noise app.onError codes during HDRP SSAO demo.
-const KNOWN_NOISE_CODES = new Set([
-  'hdrp-light-budget-exceeded',
-  'hdrp-index-list-overflow',
-]);
+const KNOWN_NOISE_CODES = new Set();
 
 const consoleErrors = [];
 const originalConsoleError = console.error.bind(console);
@@ -448,8 +425,7 @@ const enginePkg = await import('@forgeax/engine-app');
 const { createApp } = enginePkg;
 
 const runtimePkg = await import('@forgeax/engine-runtime');
-const { Materials } = await import('@forgeax/engine-render');
-const { HDRP_PIPELINE_ID } = await import('@forgeax/engine-render/internal');
+const { DEFAULT_STANDARD_PROFILE, Materials } = await import('@forgeax/engine-render');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const {
@@ -457,7 +433,12 @@ const {
   HANDLE_SPHERE,
 } = await import('@forgeax/engine-assets-runtime');
 
-const appResult = await createApp(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+const ssaoEnabled = FALSIFY !== 'ssao-off';
+const appResult = await createApp(
+  mockCanvas,
+  { standardProfile: { ...DEFAULT_STANDARD_PROFILE, lighting: 'clustered', ssao: ssaoEnabled } },
+  { shaderManifestUrl: MANIFEST_URL },
+);
 globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 
 if (!appResult.ok) {
@@ -467,46 +448,15 @@ if (!appResult.ok) {
   process.exit(1);
 }
 const app = appResult.value;
-console.log(`[learn-render-5-9-ssao] backend=${app.renderer.backend}`);
+console.log(`[learn-render-5-9-ssao] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
 const onErrorEvents = [];
 app.onError((err) => onErrorEvents.push({ code: err.code, hint: err.hint }));
 
-const ready = await app.renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
-const assets = app.renderer.assets;
-if (assets === null) {
+const assets = app.assets;
+if (assets === undefined) {
   console.error('[smoke] FAIL - AssetRegistry is null');
-  process.exit(1);
-}
-
-// Register HDRP. Two falsification modes:
-//   FALSIFY=ssao-off          -> ssao.enabled=false; smoke asserts zero ssao-* passes
-//   FALSIFY=ssao-wrong-input  -> ssao.bias=-1.0; smoke asserts ssao-bias-negative
-//                                fires through the runtime onError channel
-//                                (per Round-2 [F-4]: validates the parameter
-//                                validation path is actually wired, not stubbed).
-const ssaoEnabled = FALSIFY !== 'ssao-off';
-const ssaoWrongInput = FALSIFY === 'ssao-wrong-input';
-// feat-20260614 M8 (D-19): installPipeline takes the RenderPipelineAsset POD
-// directly (no register round-trip; AssetRegistry holds no handle concept).
-const installRes = app.renderer.installPipeline({
-  kind: 'render-pipeline',
-  pipelineId: HDRP_PIPELINE_ID,
-  config: {
-    ssao: ssaoEnabled
-      ? ssaoWrongInput
-        ? { ...SSAO_CONFIG, bias: -1.0 }
-        : { ...SSAO_CONFIG }
-      : { enabled: false },
-  },
-});
-if (!installRes.ok) {
-  console.error(`[smoke] FAIL - installPipeline: ${installRes.error.code} - ${installRes.error.hint}`);
   process.exit(1);
 }
 
@@ -602,72 +552,56 @@ for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
 
 console.log(`[smoke] frames observed=${totalFrames}`);
 
-// Capture perFramePassNames BEFORE stop() clears perFrameGraph.
-const perFramePassNames = [...app.renderer.perFramePassNames];
-console.log(`[smoke] perFramePassNames=${JSON.stringify(perFramePassNames)}`);
-const passNames = new Set(perFramePassNames);
+// Prove the current public owner path with one receipt-bound observation.
+const attached = app.renderer.attach(world);
+let receiptObservationError;
+let receiptFrameId = 0;
+if (!attached.ok) {
+  receiptObservationError = attached.error;
+} else {
+  const receipt = app.renderer.draw({
+    leases: [attached.value],
+    camera: { lease: attached.value },
+    environment: { lease: attached.value },
+  });
+  if (!receipt.ok) {
+    receiptObservationError = receipt.error;
+  } else {
+    receiptFrameId = receipt.value.frameId;
+    const observed = await app.renderer.observe(receipt.value, { include: ['draws'] });
+    if (!observed.ok) receiptObservationError = observed.error;
+  }
+}
+const inspection = app.renderer.inspect();
+console.log(
+  `[smoke] inspection state=${inspection.state} frame=${inspection.frame.frameId} receipt=${receiptFrameId}`,
+);
 
 const stopResult = app.stop();
 if (!stopResult.ok) {
   console.error(`[smoke] FAIL - app.stop() returned err: ${stopResult.error.code}`);
   process.exit(1);
 }
-
-// --- 7. Verdict (structural-only) ---
-
-const failures = [];
-if (app.renderer.backend !== 'webgpu')
-  failures.push(`(a) backend=${app.renderer.backend} (expected webgpu)`);
-// In FALSIFY=ssao-wrong-input mode, the negative-bias throw inside
-// buildGraph may interrupt the per-frame loop before SMOKE_MIN_FRAMES;
-// relax this floor so the validation-fired assertion is the load-bearing
-// signal (Round-2 [F-4]).
-if (!ssaoWrongInput && totalFrames < SMOKE_MIN_FRAMES)
-  failures.push(`(b) frames=${totalFrames} < ${SMOKE_MIN_FRAMES}`);
-
-if (ssaoWrongInput) {
-  // Round-2 [F-4] FALSIFY=ssao-wrong-input: register SSAO with bias=-1.0
-  // (negative). The parameter validation in addSsaoPasses must catch this
-  // — ssao-bias-negative is thrown synchronously inside buildGraph, which
-  // crashes the per-frame execute path; the engine's host-fanout funnel
-  // surfaces the error to the host onError listener. Smoke validates EITHER
-  // the onError event fires OR the perFramePassNames did NOT include
-  // ssao-* (because buildGraph threw before wiring ssao passes). Both
-  // outcomes prove the validation path actually fires; lack of either
-  // means the validation is silently bypassed.
-  const biasFires = onErrorEvents.filter((e) => e.code === 'ssao-bias-negative');
-  const consoleHasBiasError = consoleErrors.some((line) => line.includes('ssao-bias-negative'));
-  const ssaoPassesAbsent = !passNames.has('ssao-calc') && !passNames.has('ssao-blur');
-  const validationFired = biasFires.length > 0 || consoleHasBiasError || ssaoPassesAbsent;
-  if (!validationFired) {
-    failures.push(
-      '(c-FALSIFY-wrong-input) expected ssao-bias-negative to fire (onError / console) ' +
-        'OR ssao-calc/ssao-blur passes to be absent when bias=-1.0; neither happened, ' +
-        'so parameter validation is silently bypassed.',
-    );
-  }
-} else if (ssaoEnabled) {
-  if (!passNames.has('ssao-calc'))
-    failures.push('(c) perFramePassNames missing ssao-calc');
-  if (!passNames.has('ssao-blur'))
-    failures.push('(d) perFramePassNames missing ssao-blur');
-} else {
-  if (passNames.has('ssao-calc'))
-    failures.push('(c-FALSIFY-off) perFramePassNames has ssao-calc but SSAO is disabled');
-  if (passNames.has('ssao-blur'))
-    failures.push('(d-FALSIFY-off) perFramePassNames has ssao-blur but SSAO is disabled');
+const disposeResult = await app.dispose();
+if (!disposeResult.ok) {
+  console.error(`[smoke] FAIL - app.dispose() returned err: ${disposeResult.error.code}`);
+  process.exit(1);
 }
 
-// In FALSIFY=ssao-wrong-input mode the negative-bias throw inside
-// addSsaoPasses bubbles up through buildGraph; the renderer translates
-// every per-frame throw into a `webgpu-runtime-error` via the onError
-// channel. Both `ssao-bias-negative` (if surfaced verbatim) and
-// `webgpu-runtime-error` (the wrap form) are EXPECTED in this mode and
-// stripped from the unknown-error filter; the validation-fired assertion
-// above is the load-bearing signal.
-const expectedSsaoCodes = ssaoWrongInput
-  ? new Set(['ssao-bias-negative', 'webgpu-runtime-error'])
-  : new Set();
+// --- 7. Verdict (receipt-bound structural smoke) ---
+
+const failures = [];
+if (inspection.capabilities.backendKind !== 'webgpu')
+  failures.push(`(a) backend=${inspection.capabilities.backendKind} (expected webgpu)`);
+if (totalFrames < SMOKE_MIN_FRAMES)
+  failures.push(`(b) frames=${totalFrames} < ${SMOKE_MIN_FRAMES}`);
+if (inspection.state !== 'alive') failures.push(`(c) renderer state=${inspection.state}`);
+if (receiptObservationError !== undefined)
+  failures.push(`(d) receipt observation failed: ${receiptObservationError.code}`);
+if (receiptFrameId !== inspection.frame.frameId)
+  failures.push(`(e) receipt frame=${receiptFrameId} differs from inspection=${inspection.frame.frameId}`);
+
+const expectedSsaoCodes = new Set();
 const unknownErrors = onErrorEvents.filter(
   (e) => !KNOWN_NOISE_CODES.has(e.code) && !expectedSsaoCodes.has(e.code),
 );
@@ -677,14 +611,7 @@ if (unknownErrors.length > 0) {
   );
 }
 
-// In FALSIFY=ssao-wrong-input mode, ssao-bias-negative is the EXPECTED
-// console.error from the validation throw funnelled through the host
-// fan-out; strip it from the unexpected-console filter.
-const unexpectedConsoleErrors = consoleErrors.filter(
-  (e) =>
-    !e.includes('[smoke]') &&
-    !(ssaoWrongInput && e.includes('ssao-bias-negative')),
-);
+const unexpectedConsoleErrors = consoleErrors.filter((e) => !e.includes('[smoke]'));
 if (unexpectedConsoleErrors.length > 0) {
   failures.push(
     `(f) console.error fired ${unexpectedConsoleErrors.length} times: ${JSON.stringify(unexpectedConsoleErrors.slice(0, 3))}`,
@@ -706,7 +633,7 @@ if (failures.length > 0) {
 
 console.log(
   `[smoke] PASS - criteria GREEN: backend=webgpu, frames=${totalFrames}, ssaoEnabled=${ssaoEnabled}, ` +
-  `passNames.has(ssao-calc)=${passNames.has('ssao-calc')}, passNames.has(ssao-blur)=${passNames.has('ssao-blur')}, ` +
+  `rendererState=${inspection.state}, receiptFrame=${receiptFrameId}, ` +
   `onError events=${onErrorEvents.length}, console.error=${unexpectedConsoleErrors.length}`,
 );
 

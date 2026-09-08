@@ -141,6 +141,14 @@ axiom declaration; this package does not overstate the slimming it delivers).
 | `videoLoader` | const | `Loader<VideoAsset>`; wired by assets-runtime defaults |
 | `probeVideoHighPerfUpload(device)` | function | AC-09 capability probe; accepts a structural device shape with `caps.backendKind` and optional `importExternalTexture` |
 
+`videoLoader` accepts a non-empty browser-resolvable URL descriptor without
+normalizing it: root-relative (`/cutscene.webm`), path-relative
+(`cutscene.webm`), and absolute `http:` / `https:` URLs are preserved exactly.
+The policy rejects whitespace, C0/DEL control characters, protocol-relative
+URLs, non-string values, empty values, and every other URL scheme. Relative
+values are checked with a sentinel `https:` origin only for browser URL
+grammar; that origin is never published or fetched.
+
 ### Error codes
 
 This package declares **no** `*ErrorCode` union. `layoutGlyphText` returns a

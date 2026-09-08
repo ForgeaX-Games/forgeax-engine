@@ -42,6 +42,7 @@ const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOL
 //     parent is not being applied or the camera framing washes out the
 //     difference, and the smoke is suspect. Counter-proof for AC-02.
 const FALSIFY = process.env.FALSIFY ?? '';
+const M22_RECOVERY = process.argv.includes('--m22-recovery') || process.env.M22_RECOVERY === '1';
 if (FALSIFY !== '' && FALSIFY !== 'clip-fixed' && FALSIFY !== 'no-skin' && FALSIFY !== 'identity-parent') {
   console.error(`[smoke] FAIL - unknown FALSIFY mode '${FALSIFY}' (expected '' / 'clip-fixed' / 'no-skin' / 'identity-parent')`);
   process.exit(1);
@@ -219,18 +220,20 @@ const mockCanvas = {
 
 // --- 3. Engine + Fox.glb pipeline -----------------------------------------------
 
-const { ENTITY_NULL_RAW, World } = await import('@forgeax/engine-ecs');
-const { createRenderer } = await import('@forgeax/engine-runtime');
+const { createWorldContext, ENTITY_NULL_RAW, World } = await import('@forgeax/engine-ecs');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { SceneInstance } = await import('@forgeax/engine-render');
 const {
   AnimationPlayer,
   AnimationTargetId,
+  animationPlugin,
   bindAnimationTargets,
   registerAdvanceAnimationPlayer,
+  subscribeAnimationDiagnostics,
 } = await import('@forgeax/engine-animation');
-const { Camera, DirectionalLight } = await import('@forgeax/engine-render');
-const { ChildOf, Transform } = await import('@forgeax/engine-scene');
-const { Skin } = await import('@forgeax/engine-skinning');
+const { Camera, DirectionalLight, renderComponentsPlugin } = await import('@forgeax/engine-render');
+const { ChildOf, scenePlugin, Transform } = await import('@forgeax/engine-scene');
+const { Skin, skinningPlugin } = await import('@forgeax/engine-skinning');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 const { gltfDocToSceneAsset, meshIrToMeshAsset, parseGlb, toMaterialAsset } = await import(
   '@forgeax/engine-gltf'
@@ -241,7 +244,10 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  var hostAssets = constructed.value.assets;
 } catch (err) {
   console.error(
     `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
@@ -251,13 +257,8 @@ try {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[hello-skin] backend=${renderer.backend}`);
-
-const assets = renderer.assets;
-if (!assets) {
-  console.error('[smoke] FAIL - AssetRegistry is null');
-  process.exit(1);
-}
+const backend = renderer.inspect().capabilities.backendKind;
+console.log(`[hello-skin] backend=${backend}`);
 
 // --- Fox.glb parse + POD register (mirrors src/main.ts) ------------------------
 
@@ -298,8 +299,21 @@ if (!skeletonRec) {
 // w64: World holds the SharedRefStore minted handles need; create it before
 // any allocSharedRef. catalog stores GUID->payload for instantiate resolution.
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldContext = await createWorldContext(world, [
+  renderComponentsPlugin(),
+  scenePlugin(),
+  animationPlugin(),
+  skinningPlugin(),
+]);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const lease = worldAttachment1.value;
+const drawFrame = () => renderer.draw({
+  leases: [lease],
+  camera: { lease },
+  environment: { lease },
+});
+const assets = hostAssets;
 assets.catalog(skeletonGuid, {
   kind: 'skeleton',
   inverseBindMatrices: skeletonRec.inverseBindMatrices,
@@ -344,7 +358,9 @@ const walkHandle = world.allocSharedRef('AnimationClip', walkClip);
 const runHandle = world.allocSharedRef('AnimationClip', runClip);
 
 const meshIrs = doc.meshes.filter((m) => m.meshIndex === 0);
-const meshAsset = meshIrToMeshAsset(meshIrs);
+const meshResult = meshIrToMeshAsset(meshIrs);
+if (!meshResult.ok) throw meshResult.error;
+const meshAsset = meshResult.value;
 assets.catalog(meshGuid, meshAsset);
 const meshHandle = world.allocSharedRef('MeshAsset', meshAsset);
 // feat-20260611 w17-a: smoke-dawn parallels the gltf-importer cooker by
@@ -480,7 +496,7 @@ for (const { x, clip, label } of lineup) {
   }
   // tweak-20260611 M7: capture per-instance Skin entity + clip handle so the
   // post-loop AC-03 + AC-09 assertions can verify multi-instance isolation.
-  perInstance.push({ label, root, skinned, clip });
+  perInstance.push({ label, root, skinned, clip, animationTargets });
 }
 
 // --- 4b. AC-03 distinct clips + AC-09 distinct skinned entities ----------------
@@ -529,25 +545,220 @@ world.spawn({
   data: { direction: [-0.5, -1, -0.3], color: [1, 1, 1], intensity: 1 },
 });
 
-registerAdvanceAnimationPlayer(world);
-
 // --- 5. Render loop + pixel readback -------------------------------------------
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint });
+});
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
 const frameStart = Date.now();
 let framesObserved = 0;
+const m22RecoveryFailures = [];
+let m22RecoveryEvidence;
+
+async function readFrameHash(device) {
+  if (!renderTarget) throw new Error('M22 readFrameHash requires an allocated render target');
+  const bytesPerRow = Math.ceil((WIDTH * 4) / 256) * 256;
+  const readback = device.createBuffer({ size: bytesPerRow * HEIGHT, usage: 0x01 | 0x08 });
+  const encoder = device.createCommandEncoder();
+  encoder.copyTextureToBuffer(
+    { texture: renderTarget },
+    { buffer: readback, bytesPerRow, rowsPerImage: HEIGHT },
+    { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
+  );
+  device.queue.submit([encoder.finish()]);
+  await readback.mapAsync(0x01);
+  const bytes = new Uint8Array(readback.getMappedRange().slice(0));
+  readback.unmap();
+  readback.destroy();
+  return fnv1a32Dawn(bytes, 0, bytes.length);
+}
+
+function poseHash(entity) {
+  const transform = world.get(entity, Transform);
+  if (!transform.ok) return 'missing';
+  const local = new Float32Array(10);
+  local.set(transform.value.pos, 0);
+  local.set(transform.value.quat, 3);
+  local.set(transform.value.scale, 7);
+  const bytes = new Uint8Array(local.buffer);
+  return fnv1a32Dawn(bytes, 0, bytes.length);
+}
+
+function poseValues(entity) {
+  const transform = world.get(entity, Transform);
+  if (!transform.ok) return null;
+  return {
+    pos: [...transform.value.pos],
+    quat: [...transform.value.quat],
+    scale: [...transform.value.scale],
+  };
+}
+
+async function renderM22Frame() {
+  world.update(1 / 60).unwrap();
+  const draw = drawFrame();
+  if (!draw.ok) throw new Error(`M22 draw failed: ${draw.error.code}`);
+  await sharedDevice.queue.onSubmittedWorkDone();
+  return readFrameHash(sharedDevice);
+}
+
+async function renderM22Frames(count) {
+  let hash = '';
+  for (let i = 0; i < count; i++) hash = await renderM22Frame();
+  return hash;
+}
+
+if (M22_RECOVERY) {
+  const first = perInstance[0];
+  const healthy = perInstance[1];
+  const clipResult = first && world.sharedRefs.resolve(first.clip);
+  const diagnostics = [];
+  const unsubscribe = subscribeAnimationDiagnostics((source, diagnostic) => {
+    if (source === world) diagnostics.push(diagnostic);
+  });
+  let channelTargetId;
+  let brokenTarget;
+  let healthyTarget;
+  if (first !== undefined && healthy !== undefined) {
+    const firstHistory = new Map();
+    const healthyHistory = new Map();
+    for (const entity of first.animationTargets) {
+      const id = world.get(entity, AnimationTargetId);
+      if (id.ok) firstHistory.set(id.value.value, new Set([poseHash(entity)]));
+    }
+    for (const entity of healthy.animationTargets) {
+      const id = world.get(entity, AnimationTargetId);
+      if (id.ok) healthyHistory.set(id.value.value, new Set([poseHash(entity)]));
+    }
+    for (let i = 0; i < 12; i++) {
+      await renderM22Frame();
+      for (const entity of first.animationTargets) {
+        const id = world.get(entity, AnimationTargetId);
+        if (id.ok) firstHistory.get(id.value.value)?.add(poseHash(entity));
+      }
+      for (const entity of healthy.animationTargets) {
+        const id = world.get(entity, AnimationTargetId);
+        if (id.ok) healthyHistory.get(id.value.value)?.add(poseHash(entity));
+      }
+    }
+    for (const [targetId, firstPoses] of firstHistory) {
+      const firstEntity = first.animationTargets.find((entity) => {
+        const id = world.get(entity, AnimationTargetId);
+        return id.ok && id.value.value === targetId;
+      });
+      const healthyEntity = healthy.animationTargets.find((entity) => {
+        const id = world.get(entity, AnimationTargetId);
+        return id.ok && id.value.value === targetId;
+      });
+      if (
+        firstEntity !== undefined &&
+        healthyEntity !== undefined &&
+        firstPoses.size > 1 &&
+        (healthyHistory.get(targetId)?.size ?? 0) > 1
+      ) {
+        channelTargetId = targetId;
+        brokenTarget = firstEntity;
+        healthyTarget = healthyEntity;
+        break;
+      }
+    }
+    if (channelTargetId === undefined && clipResult?.ok) {
+      channelTargetId = clipResult.value.channels[0]?.targetId;
+      brokenTarget = first.animationTargets.find((entity) => {
+        const id = world.get(entity, AnimationTargetId);
+        return id.ok && id.value.value === channelTargetId;
+      });
+      healthyTarget = healthy.animationTargets.find((entity) => {
+        const id = world.get(entity, AnimationTargetId);
+        return id.ok && id.value.value === channelTargetId;
+      });
+    }
+  }
+  if (first === undefined || healthy === undefined || channelTargetId === undefined || brokenTarget === undefined || healthyTarget === undefined) {
+    m22RecoveryFailures.push('could not locate matching animated target in two real Fox instances');
+  } else {
+    const originalId = world.get(brokenTarget, AnimationTargetId).unwrap().value;
+    const baselinePixels = await renderM22Frame();
+    const baselineBrokenPose = poseHash(brokenTarget);
+    const baselineHealthyPose = poseHash(healthyTarget);
+    const baselineBrokenValues = poseValues(brokenTarget);
+    world.set(brokenTarget, AnimationTargetId, { value: 'f'.repeat(32) }).unwrap();
+    const faultPixels = await renderM22Frames(3);
+    const faultBrokenPose = poseHash(brokenTarget);
+    const faultHealthyPose = poseHash(healthyTarget);
+    const faultBrokenValues = poseValues(brokenTarget);
+    const faultDiagnostic = diagnostics.find(
+      (diagnostic) =>
+        diagnostic.code === 'animation-target-missing' &&
+        diagnostic.detail.player === (first.root ?? 0) &&
+        diagnostic.detail.targetId === channelTargetId,
+    );
+    const diagnosticsBeforeRepair = diagnostics.length;
+    world.set(brokenTarget, AnimationTargetId, { value: originalId }).unwrap();
+    const repairedPixels = await renderM22Frames(3);
+    const repairedBrokenPose = poseHash(brokenTarget);
+    const repairedBrokenValues = poseValues(brokenTarget);
+    const diagnosticsAtRepair = diagnostics.length;
+    unsubscribe();
+    unsubscribe();
+    if (faultDiagnostic === undefined) {
+      m22RecoveryFailures.push('missing-target diagnostic did not expose structured code/detail');
+    }
+    if (faultHealthyPose === baselineHealthyPose) {
+      m22RecoveryFailures.push('healthy sibling pose did not advance while the broken target was skipped');
+    }
+    if (faultBrokenPose !== baselineBrokenPose) {
+      m22RecoveryFailures.push('broken target pose changed while its authored binding was invalid');
+    }
+    if (repairedBrokenPose === faultBrokenPose) {
+      m22RecoveryFailures.push('same-world repair did not resume the broken target pose');
+    }
+    if (diagnosticsAtRepair === 0 || diagnosticsAtRepair !== diagnosticsBeforeRepair) {
+      m22RecoveryFailures.push(
+        `diagnostic uniqueness/settling failed: beforeRepair=${diagnosticsBeforeRepair} afterRepair=${diagnosticsAtRepair}`,
+      );
+    }
+    if (baselinePixels === repairedPixels) {
+      m22RecoveryFailures.push(
+        `pixel recovery hashes did not show three states: ${baselinePixels}/${faultPixels}/${repairedPixels}`,
+      );
+    }
+    m22RecoveryEvidence = {
+      channelTargetId,
+      brokenTarget: Number(brokenTarget),
+      healthyTarget: Number(healthyTarget),
+      diagnostic: faultDiagnostic ?? null,
+      baselinePixels,
+      faultPixels,
+      repairedPixels,
+      baselineBrokenPose,
+      faultBrokenPose,
+      repairedBrokenPose,
+      baselineBrokenValues,
+      faultBrokenValues,
+      repairedBrokenValues,
+      baselineHealthyPose,
+      faultHealthyPose,
+      diagnosticsBeforeRepair,
+      diagnosticsAtRepair,
+    };
+    console.log(`[m22-recovery] evidence=${JSON.stringify(m22RecoveryEvidence)}`);
+  }
+  if (first !== undefined && healthy !== undefined && brokenTarget === undefined) unsubscribe();
+  if (m22RecoveryFailures.length > 0) {
+    console.error(`[m22-recovery] FAIL - ${m22RecoveryFailures.join('; ')}`);
+  } else {
+    console.log('[m22-recovery] PASS - invalid binding, healthy sibling, same-world repair, diagnostics, and pixels recovered');
+  }
+}
+
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = drawFrame();
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
 }
@@ -638,8 +849,8 @@ for (const s of sites) {
 }
 
 const failures = [];
-if (renderer.backend !== 'webgpu')
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (M22_RECOVERY) failures.push(...m22RecoveryFailures.map((failure) => `(m22) ${failure}`));
+if (backend !== 'webgpu') failures.push(`(a) backend=${backend} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES)
   failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (meshedRenderCount < 1)

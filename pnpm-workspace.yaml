@@ -8,12 +8,18 @@ packages:
   - "apps/parity/*"
   - "apps/learn-render/*/*"
   - "apps/learn-render/*/*/*"
+  - "templates/game-empty"
+  - "templates/game-3d"
   - "templates/game-default"
+  - "templates/game-brotato-3d"
 
 allowBuilds:
   esbuild: true
   simple-git-hooks: true
   webgpu: true
+
+patchedDependencies:
+  '@deepseek-ai/cordis-plugin-loader@1.0.2': patches/@deepseek-ai__cordis-plugin-loader@1.0.2.patch
 
 supportedArchitectures:
   os:

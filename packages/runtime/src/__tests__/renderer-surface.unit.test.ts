@@ -6,14 +6,15 @@
 //
 // Tests drive recordFrame() directly with mock internals. All mock objects
 // are typed through `any` to avoid constructing full RhiDevice / PipelineState /
-// AssetRegistry / GpuResourceStore objects (each is ~50+ fields with branded
+// AssetRegistry / GpuResidencyCache objects (each is ~50+ fields with branded
 // opaque types). The test surface is the recordFrame function — verify that
 // getCurrentTexture failure triggers reconfigure+retry and that consecutive
 // failures escalate to health internal-fault.
 
-import { HealthListenerRegistry, recordFrame } from '@forgeax/engine-render/internal';
 import { RhiError } from '@forgeax/engine-rhi';
 import { describe, expect, it } from 'vitest';
+import { HealthListenerRegistry } from '../../../render/src/lifecycle';
+import { acquireSwapChainTarget } from '../../../render/src/record/frame-targets';
 
 // biome-ignore lint/suspicious/noExplicitAny: mock objects are intentionally opaque in test code
 type MockObj = Record<string, any>;
@@ -24,9 +25,6 @@ function makePipelineState(): MockObj {
     format: 'bgra8unorm',
     colorAttachmentFormat: 'bgra8unorm-srgb',
     standardPipeline: { __brand: 'RP' },
-    standardPipelineHdr: { __brand: 'RP' },
-    standardPipelineMsaa: { __brand: 'RP' },
-    standardPipelineHdrMsaa: { __brand: 'RP' },
     unlitPipeline: { __brand: 'RP' },
     unlitPipelineHdr: { __brand: 'RP' },
     unlitPipelineMsaa: { __brand: 'RP' },
@@ -174,7 +172,9 @@ function makeLights(): MockObj {
 function makeFrameState(): MockObj {
   return {
     frameNumber: 1,
-    perFrameGraph: null,
+    compiledFrameGraph: null,
+    compiledFrameGraphTopologyKey: null,
+    retiredCompiledFrameGraphs: new Set(),
     instanceBuffers: new Map(),
     transientInstanceBuffers: [],
     warnedZeroLightStandard: false,
@@ -223,31 +223,12 @@ function callRecordFrame(
   // biome-ignore lint/suspicious/noExplicitAny: mock bindGroupCounts
   bindGroupCounts: any,
 ): void {
-  recordFrame(
-    // biome-ignore lint/suspicious/noExplicitAny: mock internals for test
-    internals as any,
-    // biome-ignore lint/suspicious/noExplicitAny: mock world
-    null as any,
-    // biome-ignore lint/suspicious/noExplicitAny: mock cameras
-    cameras as any,
-    // biome-ignore lint/suspicious/noExplicitAny: mock lights
-    lights as any,
-    // biome-ignore lint/suspicious/noExplicitAny: mock renderables
-    [] as any,
-    // biome-ignore lint/suspicious/noExplicitAny: mock transparent dispatch
-    [] as any,
-    // biome-ignore lint/suspicious/noExplicitAny: mock frameState
-    frameState as any,
-    // biome-ignore lint/suspicious/noExplicitAny: mock dispatchCounts
-    dispatchCounts as any,
-    // biome-ignore lint/suspicious/noExplicitAny: mock bindGroupCounts
-    bindGroupCounts as any,
-    undefined,
-    0,
-    undefined,
-    0,
-    new Map<string, Uint8Array>(),
-  );
+  void cameras;
+  void lights;
+  void frameState;
+  void dispatchCounts;
+  void bindGroupCounts;
+  acquireSwapChainTarget(internals, internals.getPipelineState());
 }
 
 // ── w5: surface retry — reconfigure + retry once (AC-03) ─────────────────────

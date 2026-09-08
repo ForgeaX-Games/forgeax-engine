@@ -10,6 +10,55 @@
 // the AssetError class + AssetErrorCode union (asset-system-v1); D-8 grep
 // uniqueness forbids the collision.
 
+import type { MeshBinHeaderV4 } from '@forgeax/engine-pack';
+import {
+  AssetError,
+  type AssetErrorDetail,
+  type AssetMeshBinContractFacts,
+  type AssetMeshBinContractViolationReason,
+} from '@forgeax/engine-types';
+
+export class MeshBinAssetError extends AssetError {
+  readonly subject = 'mesh-bin' as const;
+  readonly sourceKey: string;
+  readonly actual: string;
+  readonly recovery = 're-cook the source with its Meta sidecar through the build-time importer';
+
+  constructor(args: {
+    readonly sourceKey: string;
+    readonly expected: string;
+    readonly actual: string;
+    readonly header?: Partial<MeshBinHeaderV4> & { readonly byteLength?: number };
+    readonly reason?: AssetMeshBinContractViolationReason;
+    readonly expectedFacts?: AssetMeshBinContractFacts;
+    readonly actualFacts?: AssetMeshBinContractFacts;
+  }) {
+    const expectedFacts: AssetMeshBinContractFacts = args.expectedFacts ?? {
+      version: 4,
+      projectionVersion: 1,
+    };
+    const actualFacts: AssetMeshBinContractFacts = {
+      ...(args.header ?? {}),
+      ...(args.actualFacts ?? {}),
+    };
+    const detail: AssetErrorDetail = {
+      code: 'mesh-bin-contract-violation',
+      sourceKey: args.sourceKey,
+      reason: args.reason ?? 'header-invalid',
+      expected: expectedFacts,
+      actual: actualFacts,
+    };
+    super({
+      code: 'mesh-bin-contract-violation',
+      expected: args.expected,
+      hint: 're-cook the source with its Meta sidecar through the build-time importer',
+      detail,
+    });
+    this.sourceKey = args.sourceKey;
+    this.actual = args.actual;
+  }
+}
+
 // ── MaterialResolvedEmptyPassesError ──────────────────────────────────────
 
 /**
@@ -60,8 +109,8 @@ export class MaterialResolvedEmptyPassesError extends Error {
         : 'at least one material in the parent chain declares passes';
     const hint =
       reason === 'missing-parent'
-        ? `material ${materialGuid} references parent handle ${missingParentHandle} which is not registered; register the parent first or check handle spelling`
-        : `material ${materialGuid} has no passes and its entire parent chain also has no pass declarations; add pass declarations to at least one chain member`;
+        ? `material ${materialGuid} references parent handle ${missingParentHandle} which is not registered; inspect AssetRegistry, register the parent first, or rebuild the material chain`
+        : `material ${materialGuid} has no passes and its entire parent chain also has no pass declarations; inspect the chain, add pass declarations to one member, then rebuild`;
     const message =
       reason === 'missing-parent'
         ? `material ${materialGuid} parent handle ${missingParentHandle} not registered`

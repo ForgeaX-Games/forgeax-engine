@@ -77,7 +77,7 @@ export type ParticleRendererSource =
       readonly width?: number;
     };
 
-export type ParticleChannelOverflowPolicy = 'drop-newest' | 'drop-oldest';
+export type ParticleChannelOverflowPolicy = ParticleRendererOverflowPolicy;
 
 export type ParticleStageDomain = 'particle';
 export type ParticleStageResourceAccess = 'read' | 'write' | 'read-write';

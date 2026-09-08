@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { FixedUpdate, Update } from '../schedule-token';
 import { FixedTime, Time } from '../time';
 import { World } from '../world';
-import { registerFixedTickHook } from '../world-scheduling';
 
 describe('fixed update loop', () => {
   it('runs zero, one, and multiple fixed iterations while preserving remainder', () => {
@@ -37,6 +36,25 @@ describe('fixed update loop', () => {
     expect(fixed.overstep).toBeCloseTo(1 / 60, 10);
   });
 
+  it('does not replay discarded catch-up time on the next healthy frame', () => {
+    const world = new World();
+    let fixedRuns = 0;
+    world.addSystem(FixedUpdate, { name: 'fixed', queries: [], fn: () => fixedRuns++ });
+
+    expect(world.update(5).ok).toBe(true);
+    const afterLargeFrame = world.getResource<typeof FixedTime>(FixedTime);
+    const largeFrameTick = afterLargeFrame.tick;
+    const largeFrameDroppedSeconds = afterLargeFrame.droppedSeconds;
+    const largeFrameDroppedUpdates = afterLargeFrame.droppedUpdates;
+
+    expect(world.update(1 / 60).ok).toBe(true);
+    const afterHealthyFrame = world.getResource<typeof FixedTime>(FixedTime);
+    expect(fixedRuns).toBe(5);
+    expect(afterHealthyFrame.tick).toBe(largeFrameTick + 1);
+    expect(afterHealthyFrame.droppedSeconds).toBe(largeFrameDroppedSeconds);
+    expect(afterHealthyFrame.droppedUpdates).toBe(largeFrameDroppedUpdates);
+  });
+
   it('runs Update before and after the intrinsic fixed node', () => {
     const world = new World();
     const trace: string[] = [];
@@ -56,22 +74,5 @@ describe('fixed update loop', () => {
 
     expect(world.update(1 / 60).ok).toBe(true);
     expect(trace).toEqual(['before', 'fixed', 'after']);
-  });
-
-  it('runs fixed boundary hooks after tick growth and before FixedUpdate systems', () => {
-    const world = new World();
-    const trace: string[] = [];
-    const unregister = registerFixedTickHook(world, (_world, tick) => {
-      trace.push(`hook:${tick}`);
-    });
-    world.addSystem(FixedUpdate, {
-      name: 'fixed-boundary-observer',
-      queries: [],
-      fn: (_world) => trace.push(`system:${_world.getResource(FixedTime).tick}`),
-    });
-
-    expect(world.update(1 / 30).ok).toBe(true);
-    expect(trace).toEqual(['hook:1', 'system:1', 'hook:2', 'system:2']);
-    unregister();
   });
 });

@@ -14,22 +14,20 @@ export class SerializedRebuildQueue {
 
 /** Transactionally replace one Renderer-attached World. */
 export async function commitAttachedWorld(
-  renderer: Pick<Renderer, 'attachWorld' | 'detachWorld'>,
-  previousWorld: World | undefined,
+  renderer: Pick<Renderer, 'attach'>,
   nextWorld: World,
   initializeCandidate: () => Promise<boolean>,
 ): Promise<boolean> {
-  const attached = renderer.attachWorld(nextWorld);
+  const attached = renderer.attach(nextWorld);
   if (!attached.ok) throw attached.error;
   try {
     if (!(await initializeCandidate())) {
-      renderer.detachWorld(nextWorld);
+      attached.value.dispose();
       return false;
     }
   } catch (cause) {
-    renderer.detachWorld(nextWorld);
+    attached.value.dispose();
     throw cause;
   }
-  if (previousWorld !== undefined) renderer.detachWorld(previousWorld);
   return true;
 }

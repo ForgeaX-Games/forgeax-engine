@@ -5,7 +5,7 @@
 // - w10: hard-capacity truncate + warn (AC-09)
 
 import { describe, expect, it, vi } from 'vitest';
-import { DebugDraw, INITIAL_VERTEX_CAPACITY, MAX_VERTEX_CAPACITY } from '../src';
+import { createDebugDraw, DebugDraw, INITIAL_VERTEX_CAPACITY, MAX_VERTEX_CAPACITY } from '../src';
 
 function makeMockDevice() {
   // createBuffer returns a fresh Result.ok buffer each call so ensureCapacity's
@@ -21,7 +21,7 @@ function makeMockDevice() {
   } as any;
 }
 
-function makeDd(initialCap = INITIAL_VERTEX_CAPACITY) {
+function makeDd(initialCap = INITIAL_VERTEX_CAPACITY, maxCap = MAX_VERTEX_CAPACITY) {
   const device = makeMockDevice();
   const dd = new DebugDraw(
     device,
@@ -30,10 +30,30 @@ function makeDd(initialCap = INITIAL_VERTEX_CAPACITY) {
     {} as any, // uniformBuf
     {} as any, // bindGroup
     initialCap,
-    MAX_VERTEX_CAPACITY,
+    maxCap,
   );
   return { dd, device };
 }
+
+function makeEncoder(drawCounts: number[]) {
+  const pass = {
+    setPipeline: vi.fn(),
+    setBindGroup: vi.fn(),
+    setVertexBuffer: vi.fn(),
+    draw: vi.fn((vertexCount: number) => drawCounts.push(vertexCount)),
+    end: vi.fn(),
+  };
+  return {
+    beginRenderPass: vi.fn(() => pass),
+  } as any;
+}
+
+const IDENTITY_VIEW_PROJ = [
+  1, 0, 0, 0,
+  0, 1, 0, 0,
+  0, 0, 1, 0,
+  0, 0, 0, 1,
+] as any;
 
 describe('w9: capacity resize triggers warn + doubles buffer (AC-08)', () => {
   it('INITIAL_VERTEX_CAPACITY is imported and matches constant', () => {
@@ -95,5 +115,69 @@ describe('w10: hard-capacity truncate + warn (AC-09)', () => {
     expect(warnSpy).toHaveBeenCalled();
 
     warnSpy.mockRestore();
+  });
+
+  it('warns once per overflowing frame and starts the next frame empty', () => {
+    const { dd, device } = makeDd(10, 10);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const firstFrameDraws: number[] = [];
+
+    for (let i = 0; i < 5; i++) {
+      dd.line([0, 0, 0], [1, 0, 0], [1, 0, 0, 1]);
+    }
+    dd.line([0, 1, 0], [1, 1, 0], [1, 0, 0, 1]);
+    dd.aabb([-1, -1, -1], [1, 1, 1], [0, 1, 0, 1]);
+
+    expect(dd._stagingVertexCount).toBe(10);
+    expect(dd._getVertexPosition(0)).toEqual([0, 0, 0]);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    const firstFlush = dd.flush(makeEncoder(firstFrameDraws), {} as any, IDENTITY_VIEW_PROJ);
+    expect(firstFlush.ok).toBe(true);
+    expect(firstFrameDraws).toEqual([10]);
+    expect(firstFrameDraws[0]).toBeLessThanOrEqual(10);
+    expect(dd._stagingVertexCount).toBe(0);
+
+    const secondFrameDraws: number[] = [];
+    dd.line([0, 0, 2], [1, 0, 2], [0, 0, 1, 1]);
+    const secondFlush = dd.flush(makeEncoder(secondFrameDraws), {} as any, IDENTITY_VIEW_PROJ);
+    expect(secondFlush.ok).toBe(true);
+    expect(secondFrameDraws).toEqual([2]);
+    expect(dd._stagingVertexCount).toBe(0);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    dd.destroy();
+    dd.destroy();
+    expect(device.destroyBuffer).toHaveBeenCalledTimes(2);
+
+    warnSpy.mockRestore();
+  });
+
+  it('does not allocate an initial GPU buffer above the configured hard cap', async () => {
+    const device = {
+      createBuffer: vi.fn(() => ({ ok: true, value: { __mockBuffer: 1 } })),
+      destroyBuffer: vi.fn(),
+      createBindGroupLayout: vi.fn(() => ({ ok: true, value: {} })),
+      createPipelineLayout: vi.fn(() => ({ ok: true, value: {} })),
+      createRenderPipeline: vi.fn(() => ({ ok: true, value: {} })),
+      createBindGroup: vi.fn(() => ({ ok: true, value: {} })),
+      queue: { writeBuffer: vi.fn() },
+    } as any;
+    const result = await createDebugDraw({
+      device,
+      queue: device.queue,
+      createShaderModule: vi.fn(async () => ({ ok: true, value: {} })) as any,
+      initialVertexCapacity: 1024,
+      maxVertexCapacity: 10,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(device.createBuffer).toHaveBeenCalledWith(
+      expect.objectContaining({ size: 10 * 16 }),
+    );
+    if (result.ok) {
+      expect(result.value._capacity).toBe(10);
+      result.value.destroy();
+    }
   });
 });

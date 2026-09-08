@@ -1,21 +1,10 @@
-import type {
-  RenderError,
-  RenderFeature,
-  RenderFeatureErrorDescriptor,
-  RenderFeaturePreparedRef,
-} from '@forgeax/engine-render';
-import { ok, type Result } from '@forgeax/engine-types';
+import type { RenderFeature, RenderFeatureErrorDescriptor } from '@forgeax/engine-render';
+import { ok } from '@forgeax/engine-types';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
 type PreparedFrame = {
   readonly items: readonly unknown[];
 };
-
-interface PreparedGraphicsRefs {
-  readonly pipeline: RenderFeaturePreparedRef<'pipeline'>;
-  readonly bindings: RenderFeaturePreparedRef<'bindings'>;
-  readonly vertexData: RenderFeaturePreparedRef<'vertex-data'>;
-}
 
 function describeRenderFeatureError(error: RenderFeatureErrorDescriptor): string {
   switch (error.code) {
@@ -51,62 +40,12 @@ function describeRenderFeatureError(error: RenderFeatureErrorDescriptor): string
 }
 
 function publicPreparedRecipe(frame: PreparedFrame): RenderFeature<PreparedFrame> {
-  let prepared: PreparedGraphicsRefs | undefined;
   const feature: RenderFeature<PreparedFrame> = {
     identity: 'docs.prepared-graphics',
     extract: () => ok(frame),
-    prepare: (data, context): Result<void, RenderError> => {
-      const pipeline = context.graphics.preparePipeline('docs.pipeline', {
-        shader: 'docs.shader',
-        vertexLayout: 'particle-billboard',
-        colorFormats: ['rgba8unorm-srgb'],
-      });
-      if (!pipeline.ok) return pipeline;
-      const bindings = context.graphics.prepareBindings('docs.bindings', {
-        pipeline: pipeline.value,
-        values: { itemCount: data.items.length },
-      });
-      if (!bindings.ok) return bindings;
-      const vertexData = context.graphics.prepareVertexData('docs.vertices', {
-        layout: 'particle-billboard',
-        data: new Float32Array(),
-      });
-      if (!vertexData.ok) return vertexData;
-      prepared = {
-        pipeline: pipeline.value,
-        bindings: bindings.value,
-        vertexData: vertexData.value,
-      };
-      return ok(undefined);
-    },
-    contribute: (data, context): Result<void, RenderError> => {
-      if (prepared === undefined) {
-        return ok(undefined);
-      }
-      return context.staging.addGraphicsPass('docs.prepared-pass', {
-        attachments: {
-          colors: [
-            {
-              resource: 'swap-chain',
-              format: 'rgba8unorm-srgb',
-              loadOp: 'load',
-              storeOp: 'store',
-            },
-          ],
-        },
-        draws: [
-          {
-            kind: 'draw',
-            pipeline: prepared.pipeline,
-            bindings: [prepared.bindings],
-            vertexData: [{ slot: 0, resource: prepared.vertexData }],
-            command: {
-              vertexCount: data.items.length * 0,
-              instanceCount: 1,
-            },
-          },
-        ],
-      });
+    plan: (data) => {
+      void data.items.length;
+      return ok({ resources: [], passes: [] });
     },
   };
   return feature;
@@ -124,17 +63,17 @@ describe('public prepared graphics recipe', () => {
   it('keeps structured error fields available without message parsing', () => {
     const error: RenderFeatureErrorDescriptor = {
       code: 'render-feature-stage-failed',
-      expected: "feature 'docs.prepared-graphics' completes its prepare stage without an error",
-      hint: "correct 'docs.prepared-graphics' prepare data and retry on the next frame",
+      expected: "feature 'docs.prepared-graphics' completes its plan stage without an error",
+      hint: "correct 'docs.prepared-graphics' plan data and retry on the next frame",
       detail: {
         featureIdentity: 'docs.prepared-graphics',
         order: 0,
-        stage: 'prepare',
+        stage: 'plan',
         recovery: 'next-frame',
       },
     };
-    expect(describeRenderFeatureError(error)).toBe('docs.prepared-graphics:prepare:next-frame');
-    expect(error.expected).toContain('prepare');
+    expect(describeRenderFeatureError(error)).toBe('docs.prepared-graphics:plan:next-frame');
+    expect(error.expected).toContain('plan');
     expect(error.hint).toContain('next frame');
     expect(error.detail.recovery).toBe('next-frame');
   });

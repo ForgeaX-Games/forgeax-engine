@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { buildEngineShaderManifest } from '@forgeax/engine-vite-plugin-shader';
-import { createRenderer } from '@forgeax/engine-runtime';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
 import { readbackTexturePixels } from '../../../../../../packages/rhi-debug/src/readback';
 import { describe, expect, it } from 'vitest';
 import ldrCase from '../transparent-ldr-urp.json' with { type: 'json' };
@@ -37,30 +37,30 @@ describe('transparency post Dawn GPU integration', () => {
     }> = [];
     for (const sceneCase of cases) {
       const surface = createDawnSurface(sceneCase.scene.width, sceneCase.scene.height);
-      const renderer = await createRenderer(surface.canvas, {}, { shaderManifestUrl: manifestUrl });
+      const constructed = await constructRuntimeRendererHost(surface.canvas, {}, {
+        shaderManifestUrl: manifestUrl,
+      });
+      expect(constructed.ok).toBe(true);
+      if (!constructed.ok) throw constructed.error;
+      const { renderer, debugDrawHost } = constructed.value;
       try {
-        const ready = await renderer.ready;
-        expect(ready.ok).toBe(true);
-        if (!ready.ok) throw new Error(ready.error.hint);
-        if (sceneCase.pipeline?.identity === 'hdrp') {
-          const installed = renderer.installPipeline({
-            kind: 'render-pipeline',
-            pipelineId: 'forgeax::hdrp',
-            config: { clusterGrid: { x: 16, y: 9, z: 24 } },
-          });
-          expect(installed.ok).toBe(true);
-          if (!installed.ok) throw new Error(installed.error.hint);
-        }
         const world = makeWorld(sceneCase);
-        const attachment = renderer.attachWorld(world);
+        const attachment = renderer.attach(world);
         if (!attachment.ok) throw attachment.error;
         world.update().unwrap();
-        const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+        const frameRequest = {
+          leases: [attachment.value],
+          camera: { lease: attachment.value },
+          environment: { lease: attachment.value },
+        };
+        const drawn = renderer.draw(frameRequest);
         expect(drawn.ok).toBe(true);
         if (!drawn.ok) throw new Error(drawn.error.hint);
-        await renderer.device.queue.onSubmittedWorkDone();
+        const completed = await drawn.value.completed;
+        expect(completed.ok).toBe(true);
+        if (!completed.ok) throw completed.error;
         const bytes = await readbackTexturePixels(
-          renderer.device,
+          debugDrawHost.device,
           surface.getTexture(),
           sceneCase.scene.width,
           sceneCase.scene.height,
@@ -68,18 +68,21 @@ describe('transparency post Dawn GPU integration', () => {
         );
         observations.push({
           caseId: sceneCase.caseId,
-          pipelineId: sceneCase.pipeline?.engineId ?? 'forgeax::urp',
+          pipelineId: 'forgeax::standard',
           backendId: 'dawn',
           frameId: 0,
           rawHash: hashBytes(bytes),
           bytes: Array.from(bytes),
         });
       } finally {
-        renderer.dispose();
+        await renderer.dispose();
       }
     }
     expect(observations).toHaveLength(2);
-    expect(observations.map((entry) => entry.pipelineId)).toEqual(['forgeax::urp', 'forgeax::hdrp']);
+    expect(observations.map((entry) => entry.pipelineId)).toEqual([
+      'forgeax::standard',
+      'forgeax::standard',
+    ]);
     expect(observations.every((entry) => entry.bytes.length > 0)).toBe(true);
     expect(observations.every((entry) => /^[0-9a-f]{8}$/.test(entry.rawHash))).toBe(true);
     const artifactPath = process.env.FORGEAX_PARITY_TRANSPARENCY_ARTIFACT;

@@ -64,6 +64,7 @@ vi.mock('@forgeax/engine-codec', async (importActual) => {
         rawBytes: bytes,
       },
     })),
+    ktx2ColorSpace: vi.fn(() => mockedColorSpace),
     // Echo the requested target so tex.format == the selected transcode target.
     transcodeKtx2: vi.fn(async (_parsed: unknown, targetFormat: GPUTextureFormat) => ({
       ok: true as const,
@@ -79,6 +80,7 @@ vi.mock('@forgeax/engine-codec', async (importActual) => {
 
 const GUID_TEX = 'c0000000-0000-4000-a000-000074657874';
 const PACK_INDEX_URL = '/test-transcode-fallback-pack-index.json';
+let mockedColorSpace: 'srgb' | 'linear' = 'srgb';
 // A minimal buffer whose first 12 bytes are the KTX2 identifier so the loader's
 // magic dispatch enters the codec arm.
 const KTX2_MAGIC = new Uint8Array([
@@ -97,6 +99,7 @@ function wireFetch(
   compression: 'basis-uastc' | 'basis-etc1s',
   colorSpace: 'srgb' | 'linear',
 ): void {
+  mockedColorSpace = colorSpace;
   globalThis.fetch = vi.fn().mockImplementation((input: string) => {
     const url = typeof input === 'string' ? input : String(input);
     if (url === PACK_INDEX_URL) {
@@ -129,7 +132,11 @@ function wireFetch(
                   body: {
                     path: `${GUID_TEX}.ktx2`,
                     mediaType: 'image/ktx2',
-                    assetCodec: { name: 'basis', profile: compression.slice(6) },
+                    assetCodec: {
+                      name: 'basis',
+                      container: 'ktx2',
+                      profile: compression.slice(6),
+                    },
                   },
                 },
               },

@@ -1,0 +1,73 @@
+{
+  "schemaVersion": "format-tier1-meshopt-gpu/1",
+  "featureId": "feat-20260812-format-classification-tier1",
+  "generatedAt": "2026-08-24T18:18:29.515Z",
+  "sourceCodeSha": "1f8a0cef49cc3f6c5ac131e95b7d5b24a26d9b50",
+  "fixture": {
+    "path": "apps/hello/format-tier1/fixtures/meshopt-triangle.gltf",
+    "sha256": "66a62c6baddfcbb6042a53266335823334094a190d6e6484a8ed4b8a46bddae0"
+  },
+  "reference": {
+    "path": "apps/hello/format-tier1/fixtures/meshopt-triangle-reference.json",
+    "sha256": "914646407d97c2fcd3ea3a577c821480e0126553222bf7da67bf0ce91ac5d3b8"
+  },
+  "status": "pass",
+  "consumer": "Dawn reference buffer upload and MAP_READ readback",
+  "decoded": {
+    "topology": "triangle-list",
+    "attributes": [
+      "position",
+      "normal",
+      "uv",
+      "tangent"
+    ],
+    "vertexCount": 3,
+    "indexCount": 3,
+    "attributeReadback": {
+      "position": {
+        "status": "pass",
+        "maxAbsError": 0,
+        "threshold": 0.000001,
+        "actualLength": 9,
+        "referenceLength": 9
+      },
+      "normal": {
+        "status": "pass",
+        "maxAbsError": 0,
+        "threshold": 0.000001,
+        "actualLength": 9,
+        "referenceLength": 9
+      },
+      "uv": {
+        "status": "pass",
+        "maxAbsError": 0,
+        "threshold": 0.000001,
+        "actualLength": 6,
+        "referenceLength": 6
+      },
+      "tangent": {
+        "status": "pass",
+        "maxAbsError": 0,
+        "threshold": 0.000001,
+        "actualLength": 12,
+        "referenceLength": 12
+      }
+    },
+    "indexReadback": {
+      "status": "pass",
+      "maxAbsError": 0,
+      "threshold": 0.000001,
+      "actualLength": 3,
+      "referenceLength": 3
+    }
+  },
+  "malformed": {
+    "status": "refused",
+    "error": {
+      "code": "gltf-meshopt-decode-failed",
+      "expected": "damaged EXT_meshopt_compression input is rejected",
+      "hint": "repair the compressed artifact or inspect the decoder detail",
+      "detail": "{\"bufferView\":4,\"actual\":\"compressed range out of bounds\",\"mode\":\"TRIANGLES\",\"filter\":\"NONE\"}"
+    }
+  }
+}

@@ -1,7 +1,9 @@
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { defineComponent, World } from '@forgeax/engine-ecs';
+import * as SceneOwner from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 import { rootsToSceneAsset } from '../collect-scene-asset';
+import { registerSceneComponents } from './helpers/register-scene-components';
 
 const Selected = defineComponent('SparseSceneSelected', {}, { storage: 'sparse' });
 const RuntimeOnly = defineComponent(
@@ -16,6 +18,7 @@ const RuntimeOnly = defineComponent(
 describe('sparse tag scene persistence', () => {
   it('round-trips authored sparse tags and omits transient sparse tags', () => {
     const source = new World();
+    registerSceneComponents(source, [Selected, RuntimeOnly]);
     const entity = source
       .spawn({ component: Selected, data: {} }, { component: RuntimeOnly, data: {} })
       .unwrap();
@@ -29,8 +32,9 @@ describe('sparse tag scene persistence', () => {
     expect(components?.SparseSceneRuntimeOnly).toBeUndefined();
 
     const target = new World();
+    registerSceneComponents(target, [Selected, RuntimeOnly]);
     const handle = target.allocSharedRef('SceneAsset', collected);
-    target.instantiateScene(handle).unwrap();
+    SceneOwner.worldInstantiateScene(target, handle).unwrap();
     expect(
       Array.from(target.query({ with: [Selected] }).unwrap(), (row) => row.entity),
     ).toHaveLength(1);

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // Headless proof for Bevy's `bounding_2d` reproduction.
 //
 // The rendered scene proves the app's real World/camera path is alive. The in-process
@@ -103,25 +104,20 @@ const manifestUrl = `data:application/json,${encodeURIComponent(readFileSync(man
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: manifestUrl });
+  renderer = await createSmokeRenderer(createRenderer, mockCanvas, {}, { shaderManifestUrl: manifestUrl });
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
-console.log(`[bevy-bounding-2d] backend=${renderer.backend}`);
+console.log(`[bevy-bounding-2d] backend=${rendererBackend(renderer)}`);
 
 const errors = [];
-renderer.onError((err) => errors.push(err.code));
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
+subscribeSmokeErrors(renderer, (err) => errors.push(err.code));
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 buildBounding2dWorld(world);
 propagateTransforms(world);
@@ -152,7 +148,7 @@ let frame;
 let framesObserved = 0;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   world.update().unwrap();
-  const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const result = drawSmokeFrame(renderer, world);
   if (!result.ok) console.error(`[smoke] draw frame ${i} error: ${result.error.code}`);
   framesObserved++;
   if (i === 5) frame = await capture(sharedDevice);
@@ -200,7 +196,7 @@ try {
 }
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`backend=${renderer.backend}`);
+if (rendererBackend(renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(renderer)}`);
 if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (maxBright <= SMOKE_BRIGHT_FLOOR) failures.push(`frame maxBright=${maxBright.toFixed(4)} <= ${SMOKE_BRIGHT_FLOOR}`);
 if (modeResults.length !== BOUNDING_2D_TESTS.length) failures.push('not all bounding modes ran');

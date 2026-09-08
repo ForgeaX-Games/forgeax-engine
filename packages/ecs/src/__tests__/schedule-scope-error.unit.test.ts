@@ -1,30 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { defineSystemSet } from '../schedule';
 import { FixedUpdate, Update } from '../schedule-token';
 import { World } from '../world';
 
 describe('schedule scope errors', () => {
-  it('rejects a set from another schedule with a structured scope error', () => {
-    const world = new World();
-    const fixedSet = defineSystemSet({ name: 'fixed-set' });
-    const updateSet = defineSystemSet({ name: 'update-set' });
-
-    expect(world.addSystems(FixedUpdate, fixedSet, []).ok).toBe(true);
-    expect(world.addSystems(Update, updateSet, []).ok).toBe(true);
-
-    const result = world.configureSets(Update, { set: updateSet, after: [fixedSet] });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe('schedule-scope-mismatch');
-      expect(result.error.expected).toContain('Update');
-      expect(result.error.hint).toContain('FixedUpdate');
-      expect(result.error.detail).toMatchObject({
-        sourceSchedule: 'Update',
-        targetSchedule: 'FixedUpdate',
-      });
-    }
-  });
-
   it('rejects a string system-name ordering edge that crosses schedules', () => {
     const world = new World();
     world.addSystem(FixedUpdate, { name: 'fixed-system', queries: [], fn: () => {} });

@@ -1,3 +1,5 @@
+// @perf-budget-skip: intentional full mock-GPU render regression smoke gate.
+
 // feat-city-glb Bug 5 (per-submesh transparency) — structural regression test.
 //
 // A multi-material mesh whose transparent (glTF alphaMode=BLEND) submesh sits
@@ -24,6 +26,15 @@ import type { World as WorldType } from '@forgeax/engine-ecs';
 import type { Renderer as RendererType } from '@forgeax/engine-render';
 import type { Handle, MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+function canonicalTestMeshAttributes(vertexCount: number) {
+  return {
+    position: new Float32Array(vertexCount * 3),
+    normal: new Float32Array(vertexCount * 3),
+    uv: new Float32Array(vertexCount * 2),
+    tangent: new Float32Array(vertexCount * 4),
+  };
+}
 
 interface BindGroupEntryRecord {
   readonly binding: number;
@@ -188,15 +199,25 @@ function buildManifestDataUrl(): string {
 }
 
 interface RendererLike {
-  ready: Promise<unknown>;
+  subscribe: RendererType['subscribe'];
   draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
-  onError: (cb: (err: { code: string }) => void) => () => void;
 }
 
 async function importEngine(): Promise<{
-  createRenderer: (canvas: unknown, opts?: unknown, opts2?: unknown) => Promise<RendererLike>;
+  createRenderer: (...args: readonly unknown[]) => Promise<RendererLike>;
 }> {
-  return (await import('../createRenderer')) as never;
+  const engine = (await import('../createRenderer')) as {
+    createRenderer: (...args: readonly unknown[]) => Promise<unknown>;
+  };
+  return {
+    createRenderer: async (...args: readonly unknown[]) => {
+      const result = (await engine.createRenderer(...args)) as
+        | { readonly ok: true; readonly value: unknown }
+        | { readonly ok: false; readonly error: unknown };
+      if (!result.ok) throw result.error;
+      return result.value as RendererLike;
+    },
+  };
 }
 async function importEcs(): Promise<{
   World: new () => {
@@ -214,7 +235,7 @@ async function importComponents(): Promise<{
   DirectionalLight: unknown;
 }> {
   return {
-    ...(await import('@forgeax/engine-render/internal')),
+    ...(await import('@forgeax/engine-render')),
     ...(await import('@forgeax/engine-scene')),
   } as never;
 }
@@ -247,10 +268,23 @@ function twoSubmeshMesh(): MeshAsset {
     kind: 'mesh',
     vertices: new Float32Array(6 * 12),
     indices: new Uint16Array([0, 1, 2, 3, 4, 5]),
-    attributes: {},
+    attributes: canonicalTestMeshAttributes(6),
+    materialSlots: [{ slotName: 'Opaque' }, { slotName: 'Transparent' }],
     submeshes: [
-      { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' as const },
-      { indexOffset: 3, indexCount: 3, vertexCount: 3, topology: 'triangle-list' as const },
+      {
+        indexOffset: 0,
+        indexCount: 3,
+        vertexCount: 3,
+        materialSlot: 0,
+        topology: 'triangle-list' as const,
+      },
+      {
+        indexOffset: 3,
+        indexCount: 3,
+        vertexCount: 3,
+        materialSlot: 1,
+        topology: 'triangle-list' as const,
+      },
     ],
   } as unknown as MeshAsset;
 }
@@ -264,7 +298,6 @@ async function setupRenderer(spies: DeviceSpies): Promise<{ renderer: RendererLi
     {},
     { shaderManifestUrl: buildManifestDataUrl() },
   );
-  await renderer.ready;
   return { renderer };
 }
 
@@ -378,10 +411,18 @@ describe('record: per-submesh transparency (feat-city-glb Bug 5)', () => {
     const spies = makeSpies();
     const { renderer } = await setupRenderer(spies);
     const errors: string[] = [];
-    renderer.onError((e) => errors.push(e.code));
+    renderer.subscribe((event) => {
+      if (event.kind === 'error') errors.push(event.error.code);
+    });
 
     const { world } = await spawnMixedTransparentScene();
-    if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+    if (!(renderer as unknown as RendererType).attach(world as WorldType).ok) {
+      throw new Error('World attachment failed');
+    }
+    (world as WorldType).update().unwrap();
+    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (!(renderer as unknown as RendererType).attach(world as WorldType).ok) {
       throw new Error('World attachment failed');
     }
     (world as WorldType).update().unwrap();

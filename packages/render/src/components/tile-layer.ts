@@ -40,7 +40,6 @@
 // schema mirrors MeshFilter / MeshRenderer conventions).
 
 import { defineComponent, type EcsError, type EntityHandle, type World } from '@forgeax/engine-ecs';
-import { Transform } from '@forgeax/engine-scene';
 import type { Result } from '@forgeax/engine-types';
 
 /**
@@ -57,6 +56,12 @@ import type { Result } from '@forgeax/engine-types';
  */
 export type SortScope = 'layer' | 'per-cell';
 
+/** Compact authoring values for the stored u8 sort-scope field. */
+export const TilemapSort = Object.freeze({
+  layer: 0 as const,
+  perCell: 1 as const,
+});
+
 /**
  * Bridge: `SortScope` -> on-disk u8. SSOT for the encoding (`'layer'` -> 0,
  * `'per-cell'` -> 1). The compile-time exhaustive switch guards against
@@ -66,9 +71,9 @@ export type SortScope = 'layer' | 'per-cell';
 export function encodeSortScope(scope: SortScope): 0 | 1 {
   switch (scope) {
     case 'layer':
-      return 0;
+      return TilemapSort.layer;
     case 'per-cell':
-      return 1;
+      return TilemapSort.perCell;
   }
 }
 
@@ -136,25 +141,12 @@ export interface TileLayerData {
  * AI users supply the per-cell array at spawn time. To trigger a re-build
  * after mutating tiles in place, call `markTileLayerDirty(world, layer)`.
  */
-export const TileLayer = defineComponent(
-  'TileLayer',
-  {
-    tiles: { type: 'array<u32>' },
-    layerOrder: { type: 'i32', default: 0 },
-    dirty: { type: 'u8', default: 0 },
-    sortScope: { type: 'u8', default: 0 },
-  },
-  {
-    // tweak-20260714-tilemap-layer-childed-render-entities M1 (AC-01 / AC-09):
-    // auto-attach an identity Transform on every TileLayer spawn so the layer
-    // entity's archetype enters propagateTransforms' liveMap. Transform's
-    // field-level defaults yield pos=[0,0,0] / quat=[0,0,0,1] / scale=[1,1,1]
-    // (identity TRS); demo spawn code stays byte-identical (AC-09). Callers
-    // that explicitly name Transform in their spawn bundle keep their value
-    // (layer-1 wins — see world._spawnCore expandCoAttach).
-    coAttach: [{ component: Transform, data: {} }],
-  },
-);
+export const TileLayer = defineComponent('TileLayer', {
+  tiles: { type: 'array<u32>' },
+  layerOrder: { type: 'i32', default: 0 },
+  dirty: { type: 'u8', default: 0 },
+  sortScope: { type: 'u8', default: 0 },
+});
 
 /**
  * Mark a TileLayer entity dirty so the next `tilemapChunkExtractSystem`

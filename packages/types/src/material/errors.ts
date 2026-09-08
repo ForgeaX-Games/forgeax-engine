@@ -13,9 +13,16 @@ export const MATERIAL_ERROR_CODES = [
   'material-specialization-not-cooked',
   'material-specialization-stale-generation',
   'gltf-material-uv-set-missing',
+  'material-derived-interface-mismatch',
+  'material-texture-coordinate-invalid',
+  'material-payload-bounds',
 ] as const;
 
 export type MaterialErrorCode = (typeof MATERIAL_ERROR_CODES)[number];
+
+export interface MaterialGenerationVector {
+  readonly dependencies: Readonly<Record<string, number>>;
+}
 
 export interface MaterialParentNotFoundDetail {
   readonly code: 'material-parent-not-found';
@@ -99,6 +106,8 @@ export interface MaterialSpecializationStaleGenerationDetail {
   readonly code: 'material-specialization-stale-generation';
   readonly material: string;
   readonly dependencies: readonly string[];
+  readonly observed: MaterialGenerationVector;
+  readonly current: MaterialGenerationVector;
 }
 
 export interface GltfMaterialUvSetMissingDetail {
@@ -107,6 +116,40 @@ export interface GltfMaterialUvSetMissingDetail {
   readonly slot: string;
   readonly requestedSet: number;
   readonly availableSets: readonly number[];
+}
+
+export interface MaterialDerivedInterfaceMismatchDetail {
+  readonly code: 'material-derived-interface-mismatch';
+  readonly stage: 'compile' | 'cook' | 'extract' | 'record';
+  readonly material: string;
+  readonly layoutIdentity: string;
+  readonly expectedIdentity?: string;
+  readonly actualIdentity?: string;
+  readonly parameter?: string;
+  readonly action: 'recook';
+}
+
+export interface MaterialTextureCoordinateInvalidDetail {
+  readonly code: 'material-texture-coordinate-invalid';
+  readonly stage: 'compile' | 'cook' | 'extract' | 'record';
+  readonly material: string;
+  readonly layoutIdentity: string;
+  readonly parameter: string;
+  readonly slot: string;
+  readonly reason: 'missing' | 'non-finite' | 'shape';
+  readonly action: 'recook';
+}
+
+export interface MaterialPayloadBoundsDetail {
+  readonly code: 'material-payload-bounds';
+  readonly stage: 'compile' | 'cook' | 'extract' | 'record';
+  readonly material: string;
+  readonly layoutIdentity: string;
+  readonly slot: string;
+  readonly byteOffset: number;
+  readonly byteLength: number;
+  readonly payloadBytes: number;
+  readonly action: 'stop-draw';
 }
 
 interface MaterialErrorDetailByCode {
@@ -124,6 +167,9 @@ interface MaterialErrorDetailByCode {
   readonly 'material-specialization-not-cooked': MaterialSpecializationNotCookedDetail;
   readonly 'material-specialization-stale-generation': MaterialSpecializationStaleGenerationDetail;
   readonly 'gltf-material-uv-set-missing': GltfMaterialUvSetMissingDetail;
+  readonly 'material-derived-interface-mismatch': MaterialDerivedInterfaceMismatchDetail;
+  readonly 'material-texture-coordinate-invalid': MaterialTextureCoordinateInvalidDetail;
+  readonly 'material-payload-bounds': MaterialPayloadBoundsDetail;
 }
 
 export type MaterialErrorDetail = MaterialErrorDetailByCode[MaterialErrorCode];
@@ -196,6 +242,18 @@ const MATERIAL_ERROR_POLICY = {
   'gltf-material-uv-set-missing': {
     expected: 'each texture slot references an available primitive UV set',
     hint: 'add the requested UV set to the primitive and re-import it',
+  },
+  'material-derived-interface-mismatch': {
+    expected: 'the generated material interface matches the derived schema interface',
+    hint: 'repair the schema or WGSL producer and recook the material',
+  },
+  'material-texture-coordinate-invalid': {
+    expected: 'every texture coordinate record is finite and complete',
+    hint: 'repair the texture metadata or coordinates and recook the material',
+  },
+  'material-payload-bounds': {
+    expected: 'every material payload write stays within the derived payload',
+    hint: 'repair the derived payload owner before submitting the draw',
   },
 } satisfies {
   readonly [C in MaterialErrorCode]: {

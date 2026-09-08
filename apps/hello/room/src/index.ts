@@ -5,7 +5,7 @@
 // consumer shape (16 sections expose a `bootstrap(canvas)` + a top-level
 // `void bootstrap(canvas)` self-call). The onerror-gate browser test imports
 // this module via `() => import('../index.ts')`, so the bootstrap must wire
-// `renderer.onError` into the `globalThis.__learnRenderErrors` bus before the
+// `renderer.subscribe` error channel into the `globalThis.__learnRenderErrors` bus before the
 // gate's 5s poll window samples it (charter F1: read one learn-render entry,
 // reuse the same pattern here).
 //
@@ -14,12 +14,14 @@
 // `Materials.unlit` factory (a valid pass-based POD) instead of the legacy
 // hand-written unlit-discriminant shape that carried no passes, resolved to
 // zero passes at draw time, and fired `material-resolved-empty-passes`
-// through `renderer.onError`.
+// through the renderer error event.
 
-import { World } from '@forgeax/engine-ecs';
+import { createWorldContext, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { acquireCanvasContext, createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
-import { Materials } from '@forgeax/engine-render';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
+import { Materials, renderComponentsPlugin } from '@forgeax/engine-render';
+import { scenePlugin } from '@forgeax/engine-scene';
 import {
   type LocalEntityId,
   type SceneAsset,
@@ -36,43 +38,22 @@ void bootstrap(canvas);
 
 export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   try {
-    const renderer = await createRenderer(target, {}, forgeaxBundlerAdapter());
+    const constructed = await constructRuntimeRendererHost(target, {}, forgeaxBundlerAdapter());
+    if (!constructed.ok) throw constructed.error;
+    const { renderer, assets } = constructed.value;
     // Forward every renderer error into the onerror-gate bus (charter P3
     // structured failure: AI users consume `.code` / `.hint`). The gate
     // installs `__learnRenderErrors` before importing this module; when the
     // bus is absent (normal dev / smoke run) the push is skipped.
-    renderer.onError((e) => {
-      console.error('[room] renderer.onError:', e.code, e.hint);
+    renderer.subscribe((event) => {
+      if (event.kind !== 'error') return;
+      const e = event.error;
+      console.error('[room] renderer error:', e.code, e.hint);
       const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;
       if (bus !== undefined) bus.push({ code: e.code, hint: e.hint });
     });
 
-    const ctxResult = acquireCanvasContext(target);
-    if (ctxResult.ok) {
-      const cfgResult = ctxResult.value.configure({
-        device: renderer.device,
-        format: 'rgba8unorm',
-        usage: 0x10 | 0x01,
-      });
-      if (!cfgResult.ok) {
-        console.error('[room] canvasContext.configure failed:', cfgResult.error);
-      }
-    } else {
-      console.error('[room] acquireCanvasContext failed:', ctxResult.error);
-    }
-    console.warn(`[room] backend=${renderer.backend}`);
-
-    const ready = await renderer.ready;
-    if (!ready.ok) {
-      console.error('[room] renderer.ready failed:', ready.error);
-      return;
-    }
-
-    const assets = renderer.assets;
-    if (assets === null) {
-      console.error('[room] AssetRegistry is null (renderer construction did not complete successfully)');
-      return;
-    }
+    console.warn('[room] Standard pipeline active');
 
     // Step 1: catalogue the scene's non-builtin materials under the same GUIDs
     // declared in room.pack.json refs. `catalog` stores GUID->payload so the
@@ -114,15 +95,24 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // Pass-based unlit MaterialAsset via the Materials.unlit factory. The
     // legacy hand-written unlit-discriminant shape carried no `passes` array
     // and resolved to empty passes at draw time, firing
-    // `material-resolved-empty-passes` through renderer.onError.
+    // `material-resolved-empty-passes` through the renderer error event.
     assets.catalog(unlitMatGuidResult.value, Materials.unlit([0.2, 0.3, 0.9, 1]));
 
     // Step 2: prepare World + register every component the SceneAsset
     // references. The SceneInstanceContainer resolver looks tokens up by
     // name; pre-registering keeps the spawn surface compile-time stable.
     const world = new World();
-    const worldAttachment1 = renderer.attachWorld(world);
+    const worldContext = await createWorldContext(world, [
+      renderComponentsPlugin(),
+      scenePlugin(),
+    ]);
+    const worldAttachment1 = renderer.attach(world);
     if (!worldAttachment1.ok) throw worldAttachment1.error;
+    const frameRequest = {
+      leases: [worldAttachment1.value],
+      camera: { lease: worldAttachment1.value },
+      environment: { lease: worldAttachment1.value },
+    };
 
     // Step 3: construct SceneAsset POD from room.pack.json with GUID strings
     // in handle fields (post-parseScenePayload intermediate state). The refs
@@ -230,8 +220,9 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     }
 
     const frame = (): void => {
+      void worldContext;
       world.update().unwrap();
-      const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      const r = renderer.draw(frameRequest);
       if (!r.ok) console.error('[room] draw error:', r.error);
       requestAnimationFrame(frame);
     };

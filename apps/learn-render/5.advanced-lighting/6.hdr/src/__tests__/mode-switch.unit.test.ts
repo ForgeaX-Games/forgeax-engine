@@ -15,77 +15,40 @@ import {
   installHdrPipelineByKey,
   resetHdrPipelineRegistryForTest,
   setHdrPipelineRegistryForTest,
-  type HdrPipelineRegistry,
+  type HdrMode,
 } from '../hdr-pipeline';
 
-type FakeAsset = { __h: 'hdr' | 'ldr' };
-
-const HDR_ASSET: FakeAsset = { __h: 'hdr' };
-const LDR_ASSET: FakeAsset = { __h: 'ldr' };
-
-const installCalls: Array<FakeAsset> = [];
-
-const fakeRenderer: HdrPipelineRegistry['renderer'] = {
-  installPipeline(asset) {
-    installCalls.push(asset as unknown as FakeAsset);
-    return { ok: true } as { ok: true };
-  },
-};
+const modeCalls: HdrMode[] = [];
 
 beforeEach(() => {
-  installCalls.length = 0;
+  modeCalls.length = 0;
   resetHdrPipelineRegistryForTest();
 });
 
 describe('installHdrPipelineByKey', () => {
   it("returns Result.ok and installs HDR pipeline for key '1'", () => {
-    setHdrPipelineRegistryForTest({
-      assetsByKey: new Map([
-        ['1', HDR_ASSET as never],
-        ['2', LDR_ASSET as never],
-      ]),
-      renderer: fakeRenderer,
-    });
+    setHdrPipelineRegistryForTest({ setMode: (mode) => modeCalls.push(mode) });
     const result = installHdrPipelineByKey('1');
     expect(result.ok).toBe(true);
-    expect(installCalls).toEqual([HDR_ASSET]);
+    expect(modeCalls).toEqual(['hdr']);
   });
 
   it("returns Result.ok and installs LDR pipeline for key '2'", () => {
-    setHdrPipelineRegistryForTest({
-      assetsByKey: new Map([
-        ['1', HDR_ASSET as never],
-        ['2', LDR_ASSET as never],
-      ]),
-      renderer: fakeRenderer,
-    });
+    setHdrPipelineRegistryForTest({ setMode: (mode) => modeCalls.push(mode) });
     const result = installHdrPipelineByKey('2');
     expect(result.ok).toBe(true);
-    expect(installCalls).toEqual([LDR_ASSET]);
+    expect(modeCalls).toEqual(['ldr']);
   });
 
   it('the two known keys map to different assets', () => {
-    setHdrPipelineRegistryForTest({
-      assetsByKey: new Map([
-        ['1', HDR_ASSET as never],
-        ['2', LDR_ASSET as never],
-      ]),
-      renderer: fakeRenderer,
-    });
+    setHdrPipelineRegistryForTest({ setMode: (mode) => modeCalls.push(mode) });
     installHdrPipelineByKey('1');
     installHdrPipelineByKey('2');
-    expect(installCalls).toHaveLength(2);
-    expect(installCalls[0]).not.toBe(installCalls[1]);
+    expect(modeCalls).toEqual(['hdr', 'ldr']);
   });
 
   it("returns Result.err code='unknown-hdr-key' for unknown key with detail echo", () => {
-    setHdrPipelineRegistryForTest({
-      assetsByKey: new Map([
-        ['1', HDR_ASSET as never],
-        ['2', LDR_ASSET as never],
-      ]),
-      renderer: fakeRenderer,
-    });
+    setHdrPipelineRegistryForTest({ setMode: (mode) => modeCalls.push(mode) });
     const result = installHdrPipelineByKey('9');
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -94,7 +57,7 @@ describe('installHdrPipelineByKey', () => {
       expect(result.error.hint).toContain('1');
       expect(result.error.hint).toContain('2');
     }
-    expect(installCalls).toHaveLength(0);
+    expect(modeCalls).toHaveLength(0);
   });
 
   it("returns Result.err code='pipelines-not-ready' when registry is unset", () => {
@@ -104,6 +67,6 @@ describe('installHdrPipelineByKey', () => {
       expect(result.error.code).toBe('pipelines-not-ready');
       expect(result.error.hint).toContain('app.start()');
     }
-    expect(installCalls).toHaveLength(0);
+    expect(modeCalls).toHaveLength(0);
   });
 });

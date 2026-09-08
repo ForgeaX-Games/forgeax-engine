@@ -1,22 +1,33 @@
 // @forgeax/engine-ecs — Component schema + opaque token.
 //
-// `defineComponent(name, schema, options?)` returns a frozen token carrying:
+// `defineComponent(name, fields, options?)` returns a frozen token carrying
+// only the three runtime facts needed by callers:
 //   - `.name`: component name string
-//   - `.schema`: frozen schema object (the runtime+compiletime SSOT)
-//   - `.id`: auto-incrementing ComponentId (number)
+//   - `.fields`: frozen field descriptors (the schema SSOT)
+//   - `.storage`: table or sparse placement
+// Numeric identity, flat schema projections, and default maps live in the ECS
+// owner tables below rather than on the public token.
 //
 // ComponentId is used by archetype storage, bitmask matching, and edges cache.
 
-import type { Handle } from '@forgeax/engine-types';
+import { err, type Handle, ok, type Result } from '@forgeax/engine-types';
+import {
+  assertComponentStorage,
+  deepFreeze,
+  registerComponentDefinition,
+} from './component-schema';
 import type { EntityHandle } from './entity-handle';
 import {
   ManagedArrayElementTypeNotAllowedError,
-  RelationshipMirrorComponentNotRegisteredError,
-  RelationshipMirrorFieldTypeMismatchError,
   SchemaUnsupportedFieldError,
   SparseStorageRequiresTagError,
 } from './errors';
 import type { ManagedColumnReader } from './storage/column';
+
+// The internal package subpath reuses this owner module so the source budget
+// does not grow a second forwarding module. Root exports remain curated in
+// index.ts; this re-export is only reached through `@forgeax/engine-ecs/internal`.
+export { componentDefinition } from './component-schema';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Field types — schema vocab keywords (AC-01).
@@ -41,19 +52,23 @@ import type { ManagedColumnReader } from './storage/column';
 // longer a valid schema field type — the union has narrowed it out.
 // ────────────────────────────────────────────────────────────────────────────
 
+/** Bytes per element for each scalar field type. */
+const FIELD_SIZE_BYTES = {
+  f32: 4,
+  f64: 8,
+  i32: 4,
+  u32: 4,
+  i16: 2,
+  u16: 2,
+  i8: 1,
+  u8: 1,
+  bool: 1,
+  enum: 4,
+  ref: 4,
+} as const;
+
 /** Numeric scalar field types backed by TypedArray storage (legacy tier). */
-export type ScalarFieldType =
-  | 'f32'
-  | 'f64'
-  | 'i32'
-  | 'u32'
-  | 'i16'
-  | 'u16'
-  | 'i8'
-  | 'u8'
-  | 'bool'
-  | 'enum'
-  | 'ref';
+export type ScalarFieldType = keyof typeof FIELD_SIZE_BYTES;
 
 /**
  * Legal element-type whitelist for the `array<T,N>` / `array<T>` vocab
@@ -533,13 +548,10 @@ export type TypedArrayFor<T extends SchemaFieldType> = T extends 'f32'
  * entity) at add / remove / despawn time.
  *
  * - `mirror` — the mirror component's string NAME (not a type reference, so
- *   `engine-ecs` never imports the mirror component type; AC-29). Resolved at
- *   `defineComponent` time via the global `resolveComponent` index. The mirror
- *   component is a derived runtime view rebuilt by the hooks below, so it MUST
- *   declare `transient: true` — otherwise scene collect serializes it and
- *   `instantiateScene` double-writes (serialized copy + hook rebuild). The dev
- *   assertion {@link checkRelationshipMirrorsTransient} catches an omitted
- *   `transient` at collect time (feat-20260707).
+ *   `engine-ecs` never imports the mirror component type; AC-29). The mirror
+ *   component is a derived runtime view rebuilt by the relationship owner, so
+ *   it MUST declare `transient: true` — otherwise scene collect serializes it
+ *   and `instantiateScene` double-writes (serialized copy + owner rebuild).
  * - `field` — the `array<entity>` field on the mirror component that holds the
  *   reverse list. Validated to be exactly `'array<entity>'` at `defineComponent` time.
  * - `exclusive` — when `true`, re-adding the holder component with a new target
@@ -549,13 +561,6 @@ export type TypedArrayFor<T extends SchemaFieldType> = T extends 'f32'
  *   holders in its mirror list. Default `false` (D-1): despawn only prunes the
  *   mirror entry, the holder entity survives.
  */
-export interface RelationshipMeta {
-  readonly mirror: string;
-  readonly field: string;
-  readonly exclusive: boolean;
-  readonly linkedSpawn?: boolean;
-}
-
 /** A schema is a record of field-name → field-type keyword. */
 export type ComponentSchema = Record<string, SchemaFieldType>;
 
@@ -580,112 +585,56 @@ export type InputShapeOf<S extends ComponentSchema> = {
 // ComponentId
 // ────────────────────────────────────────────────────────────────────────────
 
-/** Auto-incrementing ComponentId counter. */
-let nextComponentId = 0;
+/**
+ * Numeric identity is an ECS-owner fact, not component authoring data. Keep it
+ * out of the token's own enumerable surface so reflection sees only
+ * `name`/`fields`/`storage`.
+ */
+/** Component owner identity shared by independently bundled ECS entry points. */
+const COMPONENT_OWNER_REGISTRY = Symbol.for('forgeax.ecs.componentOwnerRegistry');
+interface ComponentOwnerRegistry {
+  nextId: number;
+  readonly ids: WeakMap<object, ComponentId>;
+  readonly schemas: WeakMap<object, Readonly<Record<string, SchemaFieldType>>>;
+}
+const ownerSymbols = globalThis as typeof globalThis & { [key: symbol]: unknown };
+const ownerRegistry =
+  (ownerSymbols[COMPONENT_OWNER_REGISTRY] as ComponentOwnerRegistry | undefined) ??
+  (() => {
+    const registry: ComponentOwnerRegistry = {
+      nextId: 1,
+      ids: new WeakMap<object, ComponentId>(),
+      schemas: new WeakMap<object, Readonly<Record<string, SchemaFieldType>>>(),
+    };
+    ownerSymbols[COMPONENT_OWNER_REGISTRY] = registry;
+    return registry;
+  })();
+
+let entityDefinitionSeen = false;
+let componentDefinedBeforeEntity = false;
+
+/** @internal Barrel-only check for the id=0 Entity import-order invariant. */
+export function isComponentDefinitionOrderValid(): boolean {
+  return !componentDefinedBeforeEntity;
+}
+
+/** @internal Read the owner-assigned identity for storage/archetype code. */
+export function componentId(component: Component): ComponentId {
+  const id = ownerRegistry.ids.get(component);
+  if (id === undefined) throw new Error(`Component identity missing for '${component.name}'.`);
+  return id;
+}
+
+/** @internal Derive the flat type map from the fields SSOT. */
+export function componentSchema<const C extends Component>(component: C): Readonly<SchemaOf<C>> {
+  const schema = ownerRegistry.schemas.get(component);
+  if (schema === undefined) throw new Error(`Component schema missing for '${component.name}'.`);
+  return schema as Readonly<SchemaOf<C>>;
+}
 
 /** Numeric identifier for a component type, used by bitmask matching and archetype edges. */
 export type ComponentId = number;
 export type ComponentStorage = 'table' | 'sparse';
-
-// ────────────────────────────────────────────────────────────────────────────
-// Global name → Component token index
-// ────────────────────────────────────────────────────────────────────────────
-
-/**
- * Global module-level registry of component names to their {@link Component}
- * tokens. Written by {@link defineComponent} during token creation; serves as
- * the single source of truth for name-based component resolution, replacing
- * the per-World `componentsByName` bookkeeping (feat-20260602 M1).
- *
- * @internal
- */
-const nameToToken = new Map<string, Component>();
-
-/**
- * Resolve a component name to its global token.
- *
- * Returns the frozen {@link Component} previously created by
- * {@link defineComponent}, or `undefined` if the name has never been defined.
- *
- * @param name - The component name string passed to `defineComponent`.
- * @returns The component token, or `undefined` for an unknown name.
- *
- * @internal
- */
-export function resolveComponent(name: string): Component | undefined {
-  return nameToToken.get(name);
-}
-
-/**
- * Read-only snapshot of all components defined via {@link defineComponent},
- * keyed by name. Mirrors `getRegisteredSystems` (schedule.ts) and
- * `getRegisteredTokens` (@forgeax/engine-state). Duplicate names silently
- * overwrite, so the map reflects the latest token for each name (OOS-3).
- */
-export function getRegisteredComponents(): ReadonlyMap<string, Component> {
-  return nameToToken;
-}
-
-/**
- * Internal mutable set of every {@link Component} token whose
- * `DefineComponentOptions.relationship` was defined during
- * {@link defineComponent}.
- *
- * @internal
- */
-const _relationshipSet = new Set<Component>();
-
-/**
- * Read-only set of every component that declares a relationship (mirror field).
- *
- * Consumers iterate this Set to discover relationship-holder components
- * without scanning every registered component name. Built automatically by
- * {@link defineComponent} when `options.relationship` is provided
- * (feat-20260602 M1).
- */
-export const RELATIONSHIP_COMPONENTS: ReadonlySet<Component> = _relationshipSet;
-
-/**
- * Dev assertion: checks that every relationship component's mirror target
- * declares `transient: true`. Returns an array of mirror component names that
- * are missing the transient declaration.
- *
- * Pure function with injectable dependencies (D-2): `holders` and
- * `resolveComponent` are parameters, enabling testing with mock tokens
- * without polluting the global `RELATIONSHIP_COMPONENTS` Set.
- *
- * @param holders - Iterable of relationship-holder `Component` tokens (e.g.
- *   `RELATIONSHIP_COMPONENTS` at runtime). Only tokens with `relationship.mirror`
- *   are inspected; non-relationship tokens in the iterable are skipped.
- * @param resolveComponent - Injected resolver (same signature as the module-level
- *   `resolveComponent`). Mirror name -> token, or `undefined` if not yet registered
- *   (ESM ordering edge case — skipped gracefully).
- * @returns Array of mirror component names whose token has `transient !== true`.
- *   Empty array = all mirrors correctly declare `transient: true` (or no
- *   relationship components exist).
- *
- * @remarks The holder token's own `transient` field is NOT checked — only the
- *   resolved **mirror target** token is inspected. The `RELATIONSHIP_COMPONENTS`
- *   Set stores holders (e.g. `ChildOf`), not mirrors (e.g. `Children`), per
- *   the defineComponent registration in `component.ts:609-619`. The function
- *   traverses `holder.relationship.mirror` -> resolve -> inspect.
- */
-export function checkRelationshipMirrorsTransient(
-  holders: Iterable<Component>,
-  resolveComponent: (name: string) => Component | undefined,
-): string[] {
-  const violations: string[] = [];
-  for (const holder of holders) {
-    const mirrorName = holder.relationship?.mirror;
-    if (mirrorName === undefined) continue; // not a relationship component
-    const mirrorToken = resolveComponent(mirrorName);
-    if (mirrorToken === undefined) continue; // not registered yet (ESM ordering)
-    if (mirrorToken.transient !== true) {
-      violations.push(mirrorName);
-    }
-  }
-  return violations;
-}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Token
@@ -707,148 +656,16 @@ declare const __componentBrand: unique symbol;
  */
 export interface Component<N extends string = string, S extends ComponentSchema = ComponentSchema> {
   readonly name: N;
-  readonly schema: Readonly<S>;
-  /**
-   * Module-level auto-incrementing component identifier.
-   *
-   * @remarks This is the single global `ComponentId` source. It identifies the
-   *   token uniquely across every World and is used directly as archetype
-   *   column / query / edge keys; the same token always has the same id in
-   *   every World.
-   */
-  readonly id: ComponentId;
-  readonly storage: ComponentStorage;
-  /**
-   * Offline manifest discoverability surface (feat-20260515-buffer-array-vocab-collapse
-   * plan-strategy §8.4): trivial alias for `JSON.stringify(this.schema)`. AI
-   * users discovering the API via IDE autocomplete on the frozen Component
-   * token find a single named entry instead of having to remember the
-   * `JSON.stringify(C.schema)` idiom; the four collapsed-vocab keyword shapes
-   * (`array<entity>` / `array<f32, 16>` / `buffer<16>` / `buffer`) surface as
-   * literal substrings of the returned JSON for offline `grep` analysis.
-   */
-  toSchemaJSON(): string;
-  /**
-   * Frozen layer-2 component-level defaults map (w21 / D-P3). Read by
-   * `SceneInstanceContainer.instantiate` when a SceneEntity omits a known
-   * schema field. `undefined` when no defaults were provided -- callers
-   * detect via `componentToken.defaults?.[fieldName]` and fall through to
-   * layer 3 (TS type defaults).
-   */
-  readonly defaults: Readonly<Partial<ShapeOf<S>>> | undefined;
-  /**
-   * Optional spawn-time payload validator (feat-20260519 / w5+w8 / plan-
-   * strategy D-S3 a). Invoked by `world.spawn` (and `world.addComponent`)
-   * after layer-2 / layer-3 default fill, before the row write. Returning a
-   * non-null `EcsError` aborts the spawn with `Result.err(e)`.
-   *
-   * Components that do not declare a validator (the default) skip the call
-   * entirely -- zero overhead for components without bound contracts.
-   *
-   * The data argument is typed as a bare record so the field is variance-
-   * compatible across `Component<string, ComponentSchema>` parameter sites.
-   * Validators cast / read the fields they care about (PointLight / SpotLight
-   * read `range` / `outerConeDeg` / `innerConeDeg`).
-   */
-  readonly validate:
-    | ((data: Readonly<Record<string, unknown>>) => Error | null | undefined)
-    | undefined;
-  /**
-   * Optional cardinality bound for this component type (plan-strategy D-3).
-   *
-   * When set to a positive integer (canonical first consumer:
-   * `PointLightShadow` with `cardinality = 4`), `world.spawn` and
-   * `world.addComponent` enforce that at most `cardinality` entities carry
-   * this component at any time. Violations return
-   * `CardinalityExceededError` with `.code = 'cardinality-exceeded'`.
-   *
-   * `undefined` (default) — no cardinality bound; unlimited instances.
-   */
-  readonly cardinality?: number;
-  /**
-   * Lifecycle hook fired after a component value is written. The value
-   * parameter is typed as a bare record for variance compatibility across
-   * `Component<string, ComponentSchema>` parameter sites.
-   */
-  readonly onInsert?: (entity: EntityHandle, value: Record<string, unknown>) => void;
-  /** Lifecycle hook fired when an entity first gains this component. */
-  readonly onAdd?: (entity: EntityHandle, value: Record<string, unknown>) => void;
-  /** Lifecycle hook fired before an existing component value is discarded. */
-  readonly onDiscard?: (entity: EntityHandle, value: Record<string, unknown>) => void;
-  /** Lifecycle hook fired before a component row is removed. */
-  readonly onRemove?: (entity: EntityHandle, value: Record<string, unknown>) => void;
-  /**
-   * Relationship metadata (feat-20260531 M2). `undefined` for non-relationship
-   * components. Validated at `defineComponent` time (mirror existence + field
-   * type, via the global `resolveComponent` index) + read by the three hook
-   * trigger sites (bidirectional mirror maintenance). See {@link RelationshipMeta}.
-   */
-  readonly relationship?: RelationshipMeta;
-  /**
-   * True = derived runtime state, skipped by scene collect (rootsToSceneAsset),
-   * still present at runtime. Mirror targets of relationship components should
-   * declare this.
-   *
-   * Default: `false` (component participates in serialization).
-   */
-  readonly transient: boolean;
-  /** Runtime/presentation state excluded from simulation record/restore. */
-  readonly simulationTransient: boolean;
-  /**
-   * Companion components auto-attached at `world.spawn` time when the caller
-   * omits them from the spawn bundle (tweak-20260714 M1). `undefined` for
-   * components that declare no companions. See
-   * {@link DefineComponentOptions.coAttach} for the declaration surface and
-   * chain-isolation contract.
-   */
-  readonly coAttach?: readonly {
-    readonly component: Component<string, ComponentSchema>;
-    readonly data: Readonly<Record<string, unknown>>;
-  }[];
-  /**
-   * Component-level open namespace (feat-20260602 M1 / D-A3, AC-01 layer 1).
-   * A mutable `Record<string, unknown>` map aggregating every field-level `meta`
-   * sub-key declared in the field-descriptor input. Component definitions may
-   * also seed it through `DefineComponentOptions.meta`, and higher-level
-   * consumers may extend it after registration. The infra gives no key any
-   * special meaning (open namespace, OOS-1) — aligned with the
-   * `PackIndexEntry.metadata` precedent. Querying an absent key returns
-   * `undefined` (charter P3: explicit signal, never a silent default).
-   *
-   * The component token remains frozen, but this metadata map is intentionally
-   * not frozen so consumers can register their own namespaced annotations.
-   */
-  readonly meta: Record<string, unknown>;
-  /**
-   * Per-field pre-parsed reflection (feat-20260602 M1 / D-A3, AC-01 layer 3).
-   * `fields[fieldName]` carries the field `type`, its `default` (if any), and —
-   * for `array<...>` fields only — the pre-parsed `arrayMeta` (parse happens
-   * once at registration time, reused across reads, AC-03c). Frozen per row and
-   * at the map level. The keys mirror `schema` (the derived flat projection).
-   */
+  /** The one schema projection: type, default, and enum labels per field. */
   readonly fields: Readonly<Record<keyof S & string, FieldReflection>>;
+  readonly storage: ComponentStorage;
   readonly [__componentBrand]: ShapeOf<S>;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Field byte sizes + TypedArray constructors — internal; consumed by
-// `scalarRow()` to build TYPE_METADATA rows (feat-20260602 M4, w12).
+// TypedArray constructors — internal; consumed by `scalarRow()` to build
+// TYPE_METADATA rows (feat-20260602 M4, w12).
 // ────────────────────────────────────────────────────────────────────────────
-
-/** Bytes per element for each scalar field type. */
-const FIELD_SIZE_BYTES: Readonly<Record<ScalarFieldType, number>> = {
-  f32: 4,
-  f64: 8,
-  i32: 4,
-  u32: 4,
-  i16: 2,
-  u16: 2,
-  i8: 1,
-  u8: 1,
-  bool: 1,
-  enum: 4,
-  ref: 4,
-};
 
 /** TypedArray constructor for each scalar field type. */
 const VIEW_CTORS: Readonly<
@@ -1068,7 +885,7 @@ export interface ArrayMeta {
  *
  * - `type` — the schema field-type keyword (a parametrized string such as
  *   `'array<f32,3>'` / `'unique<MaterialAsset>'` is used verbatim, D-A2).
- * - `default` — layer-2 default value; aggregated into `component.defaults`.
+ * - `default` — layer-2 default value; retained in the field reflection row.
  * - `shape` — producer-owned semantic shape tag for schema consumers; it does
  *   not change ECS storage or runtime value semantics.
  * - `meta` — field-level open namespace; aggregated into `component.meta`. The
@@ -1079,8 +896,6 @@ export interface ArrayMeta {
  *   world mat4) is excluded from serialization while its component's persisted
  *   fields still round-trip. Absent (the common case) means the field is
  *   serialized.
- * - `simulationTransient` — when `true`, the field is excluded from the ECS
- *   simulation record/restore projection while remaining scene-serializable.
  * - `labels` — for an `enum` field ONLY: the label→numeric-value map (e.g.
  *   `{ static: 0, dynamic: 1, kinematic: 2 }`). An `enum` field stores a bare
  *   `u32` variant index; the human-readable names historically lived in a
@@ -1100,8 +915,6 @@ export interface FieldDescriptor<T extends SchemaFieldType = SchemaFieldType> {
   readonly shape?: FieldShapeKind;
   readonly meta?: Readonly<Record<string, unknown>>;
   readonly transient?: boolean;
-  /** Exclude this field from simulation record/restore, but keep scene writeback. */
-  readonly simulationTransient?: boolean;
   readonly labels?: Readonly<Record<string, number>>;
 }
 
@@ -1127,8 +940,6 @@ export interface FieldReflection {
   readonly shape?: FieldShapeKind;
   readonly arrayMeta?: ArrayMeta;
   readonly transient?: boolean;
-  /** Exclude this field from simulation record/restore, but keep scene writeback. */
-  readonly simulationTransient?: boolean;
   /**
    * For an `enum` field: the label→numeric-value map declared on the field
    * descriptor (see `FieldDescriptor.labels`). Lets a schema consumer resolve a
@@ -1157,83 +968,26 @@ export type FieldsInput = Record<string, FieldSpec>;
  * spec maps to its `type`. This keeps `Component<N, SchemaOf<F>>` driving every
  * downstream type (ShapeOf / query row/span projection / TypedArrayFor) unchanged.
  */
-export type SchemaOf<F extends FieldsInput> = {
-  [K in keyof F]: F[K] extends FieldDescriptor<infer T>
-    ? T
-    : F[K] extends SchemaFieldType
-      ? F[K]
+export type SchemaOf<F extends FieldsInput | Component> =
+  F extends Component<string, infer S>
+    ? S
+    : F extends FieldsInput
+      ? {
+          [K in keyof F]: F[K] extends FieldDescriptor<infer T>
+            ? T
+            : F[K] extends SchemaFieldType
+              ? F[K]
+              : never;
+        }
       : never;
-};
 
 // ────────────────────────────────────────────────────────────────────────────
 // defineComponent
 // ────────────────────────────────────────────────────────────────────────────
 
 /** Optional configuration for `defineComponent` (w4, M3 consumer; w21 layer-2 defaults). */
-export interface DefineComponentOptions<S extends ComponentSchema = ComponentSchema> {
+export interface DefineComponentOptions {
   readonly storage?: ComponentStorage;
-  /**
-   * Optional spawn-time payload validator (feat-20260519 / w5+w8 / plan-
-   * strategy D-S3 a). Invoked by `world.spawn` (and `world.addComponent`)
-   * after layer-2 / layer-3 default fill, before the row write. Returning a
-   * non-null `EcsError` aborts the spawn with `Result.err(e)`.
-   *
-   * Used by `PointLight` / `SpotLight` to enforce `range >= 0`, cone-deg
-   * bounds, etc. (AC-06). Components without bound contracts omit it
-   * entirely -- zero overhead for the common case.
-   *
-   * The data argument is typed as a bare record so the field is variance-
-   * compatible across `Component<string, ComponentSchema>` parameter sites.
-   */
-  readonly validate?: (data: Readonly<Record<string, unknown>>) => Error | null | undefined;
-  /**
-   * Optional cardinality bound for this component type (plan-strategy D-3).
-   *
-   * When set to a positive integer (canonical first consumer:
-   * `PointLightShadow` with `cardinality = 4`), `world.spawn` and
-   * `world.addComponent` enforce that at most `cardinality` entities carry
-   * this component at any time. Violations return
-   * `CardinalityExceededError` with `.code = 'cardinality-exceeded'`.
-   */
-  readonly cardinality?: number;
-  /**
-   * Lifecycle hook: fired after a component value is written to an entity
-   * (via spawn / addComponent / set). Receives the entity handle and the
-   * written value (ShapeOf<S>) as a snapshot.
-   */
-  readonly onInsert?: (entity: EntityHandle, value: ShapeOf<S>) => void;
-  /**
-   * Lifecycle hook: fired after a component is added to an entity that did not
-   * already carry it, before `onInsert`.
-   */
-  readonly onAdd?: (entity: EntityHandle, value: ShapeOf<S>) => void;
-  /**
-   * Lifecycle hook: fired before an existing component value is discarded by
-   * `set`, `removeComponent`, or `despawn`.
-   */
-  readonly onDiscard?: (entity: EntityHandle, value: ShapeOf<S>) => void;
-  /**
-   * Lifecycle hook: fired before a component row is removed from an entity
-   * (via removeComponent / despawn). Receives the entity handle and the
-   * old value snapshot (ShapeOf<S>) captured before archetype migration.
-   *
-   * The old value is a read-only snapshot so callers can inspect it
-   * (e.g. to locate mirror targets for AC-03/AC-08/AC-09) without
-   * reading the column after move.
-   *
-   * The callback receives a snapshot and cannot directly mutate the World.
-   */
-  readonly onRemove?: (entity: EntityHandle, value: ShapeOf<S>) => void;
-  /**
-   * Relationship metadata (feat-20260531 M2 / plan-strategy D-5). Declares this
-   * component as the holder side of a bidirectional relationship; the engine
-   * mirrors the reverse reference into the named mirror component's
-   * `array<entity>` field at add / remove / despawn time. Single nested entry
-   * (AC-06) so IDE autocomplete discovers it alongside `cardinality` without
-   * flattening the mirror / field / exclusive trio.
-   * See {@link RelationshipMeta}.
-   */
-  readonly relationship?: RelationshipMeta;
   /**
    * When `true`, the component is skipped by scene collect
    * (rootsToSceneAsset). The component stays in archetype columns and
@@ -1244,29 +998,6 @@ export interface DefineComponentOptions<S extends ComponentSchema = ComponentSch
    * rebuilt by the mirror hook after instantiateScene).
    */
   readonly transient?: boolean;
-  /** Exclude this component from simulation record/restore, but keep scene writeback. */
-  readonly simulationTransient?: boolean;
-  /**
-   * Companion components auto-attached at `world.spawn` time when the caller
-   * omits them from the spawn bundle
-   * (tweak-20260714-tilemap-layer-childed-render-entities M1 / plan-strategy
-   * D-1). Each entry names a `component` token and its `data` payload; if the
-   * spawn bundle already carries that component the caller's value wins
-   * (layer-1 preservation). Chain-isolated: auto-attached companions do NOT
-   * recursively trigger their own `coAttach` (charter P4 boundary — keeps
-   * archetype hash stable, prevents unbounded expansion).
-   *
-   * Canonical consumer: `TileLayer` declares
-   * `coAttach: [{ component: Transform, data: {} }]` so any spawn of
-   * `TileLayer` without a caller-supplied Transform lands identity TRS via
-   * Transform's field-level defaults — satisfying requirements AC-01
-   * (default identity Transform) + AC-09 (existing demo spawn code stays
-   * byte-identical).
-   */
-  readonly coAttach?: readonly {
-    readonly component: Component<string, ComponentSchema>;
-    readonly data: Readonly<Record<string, unknown>>;
-  }[];
   /**
    * Component-level open metadata namespace. Entries are copied into
    * `Component.meta` at registration; the ECS core assigns no meaning to any
@@ -1282,8 +1013,8 @@ export interface DefineComponentOptions<S extends ComponentSchema = ComponentSch
  * The throw carries the field name + expected shape (charter P3 / OOS-6: this
  * is a programmer error caught at registration time, no new EcsErrorCode).
  */
-function fieldSpecType(fieldName: string, spec: FieldSpec): string {
-  if (typeof spec === 'string') return spec;
+function fieldSpecType(fieldName: string, spec: FieldSpec): SchemaFieldType {
+  if (typeof spec === 'string') return spec as SchemaFieldType;
   const t = (spec as FieldDescriptor).type;
   if (typeof t !== 'string') {
     throw new SchemaUnsupportedFieldError(
@@ -1291,17 +1022,13 @@ function fieldSpecType(fieldName: string, spec: FieldSpec): string {
       `<field-descriptor missing 'type'> (expected { type, default?, meta? })`,
     );
   }
-  return t;
+  return t as SchemaFieldType;
 }
 
 /**
- * Define a component. Returns a frozen opaque token with `.name`, `.schema`,
- * `.id`, plus the three reflection layers produced once at
- * registration time (feat-20260602 M1): `.meta` (component-level open
- * namespace), `.fields` (per-field pre-parsed reflection), and the global
- * `TYPE_METADATA` table (module-level, type-intrinsic). `.schema` / `.defaults`
- * are derived backward-compat projections (D-A7 / D-A8): `schema[k] =
- * fields[k].type`, `defaults` is derived purely from `fields[k].default`.
+ * Define a component. Returns a frozen opaque token with exactly three runtime
+ * facts: `.name`, `.fields`, and `.storage`. Numeric identity, flat schema,
+ * and defaults are owner projections held outside the token.
  *
  * The second argument accepts each field either as a bare type keyword
  * ('f32', 'array<entity>', ...) or as a field-descriptor object
@@ -1321,12 +1048,8 @@ function fieldSpecType(fieldName: string, spec: FieldSpec): string {
  * (e.g. `array<ref<X>>`) raise `ManagedArrayElementTypeNotAllowedError`
  * (AC-03 runtime fail-safe).
  *
- * When `options.relationship` is provided, the mirror component named by
- * `relationship.mirror` must already be defined (via an earlier
- * `defineComponent` call) and expose `relationship.field` typed exactly as
- * `'array<entity>'`. This define-time fail-fast (feat-20260602 M2) means the
- * mirror component must be defined before the holder; define them in
- * mirror-then-holder order.
+ * Relationship roles are declared through `defineRelationship`; component
+ * definitions contain only schema vocabulary and no mirror metadata.
  *
  * @throws SchemaUnsupportedFieldError for any field type not in the supported
  *   set, or a field-descriptor object missing its `type`.
@@ -1344,16 +1067,14 @@ function fieldSpecType(fieldName: string, spec: FieldSpec): string {
 export function defineComponent<const N extends string, const S extends FieldsInput>(
   name: N,
   fields: S,
-  options?: DefineComponentOptions<SchemaOf<S>>,
+  options?: DefineComponentOptions,
 ): Component<N, SchemaOf<S>> {
   const storage = options?.storage ?? 'table';
-  if (
-    storage === 'sparse' &&
-    (Object.keys(fields).length !== 0 || options?.relationship !== undefined)
-  ) {
+  assertComponentStorage(storage);
+  if (storage === 'sparse' && Object.keys(fields).length !== 0) {
     throw new SparseStorageRequiresTagError(name);
   }
-  const schema: Record<string, string> = {};
+  const schema: Record<string, SchemaFieldType> = {};
   const reflectedFields: Record<string, FieldReflection> = {};
   const collectedMeta: Record<string, unknown> = {};
   const collectedDefaults: Record<string, unknown> = {};
@@ -1378,7 +1099,7 @@ export function defineComponent<const N extends string, const S extends FieldsIn
       // Pre-parse once at registration (AC-03c): array fields cache arrayMeta.
       // Bare length sentinel {elementType, length?} (D-A1): drop `length` when
       // variable so the row is byte-identical to the parse return shape.
-      arrayMeta = Object.freeze(
+      arrayMeta = deepFreeze(
         parsed.length === undefined
           ? { elementType: parsed.elementType }
           : { elementType: parsed.elementType, length: parsed.length },
@@ -1397,7 +1118,6 @@ export function defineComponent<const N extends string, const S extends FieldsIn
       shape?: FieldShapeKind;
       arrayMeta?: ArrayMeta;
       transient?: boolean;
-      simulationTransient?: boolean;
       labels?: Readonly<Record<string, number>>;
     } = {
       type: fieldType,
@@ -1414,17 +1134,20 @@ export function defineComponent<const N extends string, const S extends FieldsIn
       }
       // exactOptionalPropertyTypes: only attach `transient` when declared.
       if (desc.transient !== undefined) row.transient = desc.transient;
-      if (desc.simulationTransient !== undefined)
-        row.simulationTransient = desc.simulationTransient;
       // enum label→value map (see FieldDescriptor.labels). Frozen so the
       // reflected row exposes a stable read-only map. Only enum fields declare it.
-      if (desc.labels !== undefined) row.labels = Object.freeze({ ...desc.labels });
+      if (desc.labels !== undefined) row.labels = deepFreeze({ ...desc.labels });
     }
     if (arrayMeta !== undefined) row.arrayMeta = arrayMeta;
     reflectedFields[fieldName] = Object.freeze(row) as FieldReflection;
   }
 
-  const id = nextComponentId++;
+  if (name === 'Entity') {
+    entityDefinitionSeen = true;
+  } else if (!entityDefinitionSeen) {
+    componentDefinedBeforeEntity = true;
+  }
+  const id = name === 'Entity' ? 0 : ownerRegistry.nextId++;
 
   // Derived defaults projection (D-A8): pure from `fields[k].default`.
   // No longer merged with a removed `options.defaults` input — strict single-entry
@@ -1432,75 +1155,114 @@ export function defineComponent<const N extends string, const S extends FieldsIn
   const frozenDefaults =
     Object.keys(collectedDefaults).length === 0
       ? undefined
-      : (Object.freeze(collectedDefaults) as Readonly<Partial<ShapeOf<SchemaOf<S>>>>);
+      : (deepFreeze(collectedDefaults) as Readonly<Partial<ShapeOf<SchemaOf<S>>>>);
 
   // Keep the component token immutable while leaving its open metadata map
   // extensible for higher-level consumers after registration.
   if (options?.meta !== undefined) {
     Object.assign(collectedMeta, options.meta);
   }
-  const frozenSchema = Object.freeze(schema);
-  const frozenFields = Object.freeze(reflectedFields);
+  const frozenSchema = deepFreeze(schema);
+  const frozenFields = deepFreeze(reflectedFields);
   const meta = collectedMeta;
-  const relationship =
-    options?.relationship === undefined
-      ? undefined
-      : (Object.freeze({
-          linkedSpawn: true,
-          ...options.relationship,
-        }) as RelationshipMeta);
-  if (relationship !== undefined) {
-    const mirror = resolveComponent(relationship.mirror);
-    if (mirror === undefined) {
-      throw new RelationshipMirrorComponentNotRegisteredError(name, relationship.mirror);
-    }
-    const fieldType = (mirror.schema as Record<string, string>)[relationship.field];
-    if (fieldType !== 'array<entity>') {
-      throw new RelationshipMirrorFieldTypeMismatchError(
-        name,
-        relationship.mirror,
-        relationship.field,
-        fieldType ?? '<missing>',
-      );
-    }
-  }
-  // coAttach declarations (tweak-20260714 M1): freeze the array + each entry
-  // so downstream consumers cannot mutate the metadata surface. `undefined`
-  // (not an empty array) means "no companions" — spawn-side skip is a
-  // property-existence check.
-  const coAttach =
-    options?.coAttach === undefined
-      ? undefined
-      : Object.freeze(
-          options.coAttach.map((entry) =>
-            Object.freeze({ component: entry.component, data: entry.data }),
-          ),
-        );
-  const token = {
-    name,
-    schema: frozenSchema,
-    id,
-    storage,
-    defaults: frozenDefaults,
-    validate: options?.validate,
-    cardinality: options?.cardinality,
-    transient: options?.transient ?? false,
-    simulationTransient: options?.simulationTransient ?? false,
-    onInsert: options?.onInsert,
-    onAdd: options?.onAdd,
-    onDiscard: options?.onDiscard,
-    onRemove: options?.onRemove,
-    relationship,
-    coAttach,
-    meta,
+  const token = Object.freeze({ name, fields: frozenFields, storage }) as Component<N, SchemaOf<S>>;
+  ownerRegistry.ids.set(token, id);
+  ownerRegistry.schemas.set(token, frozenSchema);
+  registerComponentDefinition(token, {
     fields: frozenFields,
-    toSchemaJSON(): string {
-      return JSON.stringify(frozenSchema);
-    },
-  } as unknown as Component<N, SchemaOf<S>>;
-  nameToToken.set(name, token as unknown as Component);
-  if (relationship !== undefined) {
-    _relationshipSet.add(token as unknown as Component);
-  }
+    defaults: frozenDefaults,
+    policy: { transient: options?.transient ?? false, meta },
+  });
   return Object.freeze(token);
+}
+
+export class ComponentInUseError extends Error {
+  override readonly name = 'ComponentInUseError';
+  readonly code = 'component-in-use' as const;
+  readonly expected = 'the component to have no live entity or scheduled-system references';
+  readonly hint =
+    'Remove owning systems and component values before disposing the registration lease.';
+  readonly detail: { readonly componentName: string };
+
+  constructor(componentName: string) {
+    super(`Component ${componentName} is still in use.`);
+    this.detail = { componentName };
+  }
+}
+
+export class ComponentNameConflictError extends Error {
+  override readonly name = 'ComponentNameConflictError';
+  readonly code = 'component-name-conflict' as const;
+  readonly expected = 'one component token per name in a World';
+  readonly hint =
+    'Use the token already registered in this World or choose a distinct component name.';
+  readonly detail: { readonly componentName: string };
+
+  constructor(componentName: string) {
+    super(`Component ${componentName} is already registered with a different token.`);
+    this.detail = { componentName };
+  }
+}
+
+export type ComponentCatalogError = ComponentInUseError | ComponentNameConflictError;
+
+export interface ComponentLease {
+  readonly component: Component;
+  dispose(): Result<void, ComponentInUseError>;
+}
+
+interface ComponentRegistration {
+  readonly component: Component;
+  owners: number;
+}
+
+/** World-local discovery and ownership boundary for plugin-installed component vocabulary. */
+export class ComponentCatalog {
+  private readonly registrations = new Map<string, ComponentRegistration>();
+
+  constructor(private readonly inUse: (component: Component) => boolean) {}
+
+  register(component: Component): Result<ComponentLease, ComponentNameConflictError> {
+    const current = this.registrations.get(component.name);
+    if (current !== undefined && current.component !== component) {
+      return err(new ComponentNameConflictError(component.name));
+    }
+    if (current === undefined) {
+      this.registrations.set(component.name, { component, owners: 1 });
+    } else {
+      current.owners += 1;
+    }
+
+    let active = true;
+    return ok({
+      component,
+      dispose: () => {
+        if (!active) return ok(undefined);
+        const registration = this.registrations.get(component.name);
+        if (registration === undefined || registration.component !== component) {
+          active = false;
+          return ok(undefined);
+        }
+        if (registration.owners > 1) {
+          registration.owners -= 1;
+          active = false;
+          return ok(undefined);
+        }
+        if (this.inUse(component)) return err(new ComponentInUseError(component.name));
+        this.registrations.delete(component.name);
+        active = false;
+        return ok(undefined);
+      },
+    });
+  }
+
+  resolve(name: string): Component | undefined {
+    return this.registrations.get(name)?.component;
+  }
+
+  entries(): ReadonlyMap<string, Component> {
+    return new Map(
+      [...this.registrations].map(([name, registration]) => [name, registration.component]),
+    );
+  }
 }

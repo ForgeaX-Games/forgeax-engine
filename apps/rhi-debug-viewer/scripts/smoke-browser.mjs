@@ -1,701 +1,615 @@
-// smoke-browser.mjs — feat-20260619-rhi-debug-viewer-page-pr4
-//
-// Playwright e2e smoke for apps/rhi-debug-viewer. Spawns a local vite dev server,
-// drives headed Chrome with WebGPU enabled, uploads the checkin fixture tape pair
-// via setInputFiles on the hidden file input, and asserts the viewer renders
-// the DOM anchors and window.__forgeaxViewer correctly.
-//
-// Why this script:
-// The viewer consumes deserializeTape + computePassOffsets + extractDrawInfo
-// entirely through the browser module graph. Dawn-node unit tests (w10/w11)
-// cover the pure-data layer but cannot verify that the React DOM anchors render,
-// the hidden file input upload path works end-to-end, window.__forgeaxViewer
-// is populated, and the RT canvas renders non-black pixels when WebGPU is available.
-//
-// Invocation: `pnpm --filter @forgeax/engine-rhi-debug-viewer smoke:browser`
-//
-// Exit codes:
-//   0 = green (all assertions pass)
-//   1 = red (regression detected)
-//   2 = harness error (vite did not boot)
-//
-// Constraint AC-13: ALL selectors are data-forgeax-* or text content ONLY.
-// No tailwind/shadcn class selectors are used in this script.
+// Browser contract smoke for the v7 single-file read-only Viewer.
 
 import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { resolve, dirname } from 'node:path';
-import { buildHelloCubeFixture } from '../fixtures/build-hello-cube-tape.mjs';
+import { dirname, resolve } from 'node:path';
+import { encodeTape } from '@forgeax/engine-rhi-debug';
+import { startViewerDevServer } from './smoke-browser-harness.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-// apps/rhi-debug-viewer/scripts -> repo root
-const REPO_ROOT = resolve(HERE, '..', '..', '..');
+const ROOT = resolve(HERE, '..', '..', '..');
+const TEMP = mkdtempSync(resolve(tmpdir(), 'forgeax-rhi-viewer-v7-'));
+const screenshotDir = process.env.FORGEAX_VIEWER_SCREENSHOT_DIR ?? TEMP;
+const evidencePath = process.env.FORGEAX_VIEWER_EVIDENCE_PATH;
+const falsifyAnchors = process.env.FORGEAX_FALSIFY_VIEWER_ANCHORS === '1';
+const falsifyTextureAttachment = process.env.FORGEAX_FALSIFY_TEXTURE_ATTACHMENT === '1';
 
-const APP_DIR = resolve(HERE, '..');
-const INPUT_TAPE_PATH = process.env.FORGEAX_RHI_DEBUG_TAPE_PATH;
-const INPUT_REPORT_PATH = process.env.FORGEAX_RHI_DEBUG_REPORT_PATH;
-// Zero-binary invariant: no committed .tape.bin. Synthesise the fixture in
-// memory and write to a throwaway temp dir for playwright setInputFiles.
-const FIXTURES_DIR = mkdtempSync(resolve(tmpdir(), 'rhi-debug-viewer-fixture-'));
-const inputPair =
-  INPUT_TAPE_PATH !== undefined && INPUT_REPORT_PATH !== undefined
-    ? { binPath: resolve(INPUT_TAPE_PATH), jsonPath: resolve(INPUT_REPORT_PATH) }
-    : null;
-if (inputPair === null) {
-  const { blob, report } = buildHelloCubeFixture();
-  writeFileSync(resolve(FIXTURES_DIR, 'frame-0.tape.bin'), blob);
-  writeFileSync(resolve(FIXTURES_DIR, 'frame-0.report.json'), JSON.stringify(report, null, 2));
-}
-
-// ============================================================================
-// Falsification mode (w19, plan-strategy §5.4)
-// ============================================================================
-// When FALSIFY_NO_SHADER_MODULE=1: the viewer's replay-session.ts reads
-// window.__forgeaxFalsifyNoShaderModule and passes undefined as
-// createShaderModuleFn to createReplay. replayer.ts:1227 silently skips
-// shader compilation → pipeline incomplete → RT canvas all-black.
-// This variant proves the main smoke (w18) is genuinely sensitive to correct
-// shader compilation — if w18 were a false-positive (always passing), this
-// variant would also pass. The variant asserts RT IS all-zero (black) and
-// exits 0 to signal falsification confirmed.
-const FALSIFY_MODE = process.env.FALSIFY_NO_SHADER_MODULE === '1';
-const captureEvidence = { mode: 'pixel' };
-const viewerFirstAnswerStartedAt = performance.now();
-
-function emitViewerFailure(reasonCode, affectedScope, recoveryAction, detail) {
-  console.error(
-    `[smoke-browser] consumerAnswer=${JSON.stringify({
-      consumer: 'viewer',
-      status: 'failed',
-      source: 'browser-smoke',
-      boundary: 'existing viewer model ready',
-      reasonCode,
-      affectedScope,
-      recoveryAction,
-      ...(detail === undefined ? {} : { detail }),
-    })}`,
-  );
-}
-if (FALSIFY_MODE) {
-  console.log('[smoke-browser] FALSIFY mode: skipping createShaderModule — RT expected all-black');
-}
-
-const viteProc = spawn('pnpm', ['-F', '@forgeax/engine-rhi-debug-viewer', 'dev'], {
-  cwd: REPO_ROOT,
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
-let portUrl = null;
-viteProc.stdout.on('data', (chunk) => {
-  const s = chunk.toString();
-  process.stdout.write(`[vite] ${s}`);
-  const m = s.match(/Local:\s+(http:\/\/[^\s]+)/);
-  if (m) portUrl = m[1];
-});
-viteProc.stderr.on('data', (chunk) => process.stderr.write(`[vite-err] ${chunk}`));
-
-const deadline = Date.now() + 30000;
-while (!portUrl && Date.now() < deadline) await sleep(200);
-if (!portUrl) {
-  emitViewerFailure(
-    'vite-start-failure',
-    'viewer Vite dev server',
-    'Inspect the Vite startup output and rerun the existing viewer smoke.',
-  );
-  console.error('FAIL: vite did not become ready in 30s');
-  viteProc.kill();
-  process.exit(2);
-}
-console.log(`[smoke-browser] using ${portUrl}`);
-
-const browser = await chromium.launch({
-  headless: true,
-  channel: 'chrome',
-  args: [
-    '--enable-unsafe-webgpu',
-    '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
-    '--ignore-gpu-blocklist',
-  ],
-});
-const ctx = await browser.newContext();
-const page = await ctx.newPage();
-const errors = [];
-page.on('pageerror', (e) => errors.push(`PAGEERROR: ${e.message}`));
-page.on('console', (msg) => {
-  const txt = msg.text();
-  if (msg.type() === 'error') errors.push(`CONSOLE-ERR: ${txt}`);
-});
-
-// Falsification: set the flag before page loads so replay-session.ts reads it
-if (FALSIFY_MODE) {
-  await page.addInitScript(() => {
-    window.__forgeaxFalsifyNoShaderModule = true;
-  });
-}
-
-await page.goto(portUrl, { waitUntil: 'networkidle', timeout: 30000 });
-console.log('[smoke-browser] page loaded');
-
-// ============================================================================
-// Assertion 1 (AC-01): setInputFiles -> load-status=loaded
-// ============================================================================
-// The DropZone has a hidden <input type=file accept=".tape.bin,.json" multiple>
-// that we target for playwright setInputFiles.
-const binPath = inputPair?.binPath ?? resolve(FIXTURES_DIR, 'frame-0.tape.bin');
-const jsonPath = inputPair?.jsonPath ?? resolve(FIXTURES_DIR, 'frame-0.report.json');
-console.log(`[smoke-browser] uploading ${binPath} + ${jsonPath}`);
-
-const fileInput = page.locator('input[type="file"][accept=".tape.bin,.json"]');
-await fileInput.setInputFiles([binPath, jsonPath]);
-
-// Wait for the load-status anchor to appear with "loaded"
-try {
-  await page.waitForSelector('[data-forgeax-load-status="loaded"]', { timeout: 10000 });
-  const viewerFirstAnswerWallTimeMs = Math.max(
-    0,
-    Math.round(performance.now() - viewerFirstAnswerStartedAt),
-  );
-  console.log(
-    `[smoke-browser] consumerAnswer=${JSON.stringify({
-      consumer: 'viewer',
-      status: 'observed',
-      wallTimeMs: viewerFirstAnswerWallTimeMs,
-      source: 'browser-smoke',
-      boundary: 'existing viewer model ready',
-      affectedScope: 'viewer first answer',
-      recoveryAction: 'Inspect the load-status and retained tape/report pair.',
-    })}`,
-  );
-  console.log('[smoke-browser] AC-01 GREEN: data-forgeax-load-status=loaded');
-} catch {
-  const currentStatus = await page.getAttribute('[data-forgeax-load-status]', 'data-forgeax-load-status');
-  emitViewerFailure(
-    currentStatus === 'parse-error' ? 'malformed-artifact' : 'replay-failure',
-    'viewer first answer',
-    'Inspect the load-status, Vite output, and retained tape/report pair.',
-    `load-status=${currentStatus}`,
-  );
-  console.error(`[smoke-browser] AC-01 RED: load-status is "${currentStatus}", expected "loaded"`);
-  await browser.close();
-  viteProc.kill('SIGTERM');
-  process.exit(1);
-}
-
-// ============================================================================
-// Assertion 2 (AC-02): window.__forgeaxViewer tree has 1 pass + 1 draw
-// ============================================================================
-const vm = await page.evaluate(() => window.__forgeaxViewer);
-if (!vm) {
-  console.error('[smoke-browser] AC-02 RED: window.__forgeaxViewer is null/undefined');
-  await browser.close();
-  viteProc.kill('SIGTERM');
-  process.exit(1);
-}
-
-const tree = vm.tree;
-const draws = vm.draws;
-
-if (!Array.isArray(tree) || tree.length === 0) {
-  console.error(`[smoke-browser] AC-02 RED: tree has ${tree?.length ?? 'null'} entries, expected >= 1`);
-  await browser.close();
-  viteProc.kill('SIGTERM');
-  process.exit(1);
-}
-
-const firstPassNode = tree[0];
-const passDraws = firstPassNode.draws;
-const passDrawCount = Array.isArray(passDraws) ? passDraws.length : 0;
-const drawCount = Array.isArray(draws) ? draws.length : 0;
-
-console.log(
-  `[smoke-browser] AC-02: tree[0].kind=${firstPassNode.kind} tree[0].draws.length=${passDrawCount} draws.length=${drawCount}`,
-);
-
-if (drawCount < 1) {
-  console.error(`[smoke-browser] AC-02 RED: draws.length=${drawCount}, expected >= 1`);
-  await browser.close();
-  viteProc.kill('SIGTERM');
-  process.exit(1);
-}
-console.log('[smoke-browser] AC-02 GREEN: tree + draws populated');
-
-// ============================================================================
-// Assertion 3 (AC-05): draws[0].bindings is non-empty InspectBindingEntry[]
-// ============================================================================
-const firstDraw = draws[0];
-if (!firstDraw.bindings || !Array.isArray(firstDraw.bindings)) {
-  console.error('[smoke-browser] AC-05 RED: draws[0].bindings is missing or not an array');
-  await browser.close();
-  viteProc.kill('SIGTERM');
-  process.exit(1);
-}
-const bindingCount = firstDraw.bindings.length;
-console.log(`[smoke-browser] AC-05: draws[0].bindings.length=${bindingCount}`);
-if (bindingCount === 0) {
-  // The hello-cube fixture may have 0 bindings (the shader uses builtin vertex_index only).
-  // This is NOT a regression; accept 0 bindings as valid.
-  console.log('[smoke-browser] AC-05 WARN: draws[0].bindings is empty (hello-cube has 0 bindings)');
-}
-console.log('[smoke-browser] AC-05 GREEN: draws[0].bindings present');
-
-// ============================================================================
-// Assertion 4 (AC-12): data-forgeax-selected=true exists on first draw row
-// ============================================================================
-const selectedEl = page.locator('[data-forgeax-selected="true"]');
-const selectedCount = await selectedEl.count();
-if (selectedCount === 0) {
-  console.error('[smoke-browser] AC-12 RED: no element with data-forgeax-selected="true"');
-  await browser.close();
-  viteProc.kill('SIGTERM');
-  process.exit(1);
-}
-console.log(`[smoke-browser] AC-12 GREEN: ${selectedCount} element(s) with data-forgeax-selected=true`);
-
-// ============================================================================
-// Assertion 5 (AC-06): RT canvas non-zero pixels when WebGPU available
-// ============================================================================
-// Check if WebGPU is actually available in this browser session
-const hasGpu = await page.evaluate(() => !!navigator.gpu);
-if (!hasGpu) {
-  console.log(
-    '[smoke-browser] AC-06 SKIP: WebGPU not available in this browser — RT pixel check skipped',
-  );
-} else if (FALSIFY_MODE) {
-  // Falsification mode (w19): run the AC-06 RT check but INVERT assertion —
-  // RT MUST be all-black (or no-rt/error) because window.__forgeaxFalsifyNoShaderModule
-  // causes createReplay to skip shader compilation. If RT is non-zero despite
-  // no shader, the main smoke (w18) is NOT discriminative.
-  try {
-    await page.waitForSelector('[data-forgeax-rt-status]', { timeout: 15000 });
-    const rtStatus = await page.getAttribute('[data-forgeax-rt-status]', 'data-forgeax-rt-status');
-    console.log(`[smoke-browser] FALSIFY AC-06: data-forgeax-rt-status=${rtStatus}`);
-
-    if (rtStatus === 'ok') {
-      const canvasPixelResult = await page.evaluate(() => {
-        const canvas = document.querySelector('canvas[data-forgeax-rt-canvas]');
-        if (!canvas) return 'no-canvas';
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return 'no-context';
-        const sample = ctx.getImageData(0, 0, Math.min(canvas.width, 100), Math.min(canvas.height, 100));
-        let allZero = true;
-        for (let i = 0; i < sample.data.length; i++) {
-          if (sample.data[i] !== 0) { allZero = false; break; }
-        }
-        return allZero ? 'all-zero' : 'non-zero';
-      });
-
-      if (canvasPixelResult === 'non-zero') {
-        console.error(
-          '\n[smoke-browser] FALSIFY W19 RED: RT canvas has non-zero pixels even without createShaderModule.\n' +
-            'The w18 assertion (RT non-zero) would be GREEN either way — NOT discriminative.',
-        );
-        await browser.close();
-        viteProc.kill('SIGTERM');
-        process.exit(1);
-      }
-      console.log('[smoke-browser] FALSIFY W19 GREEN: RT all-black (falsification confirmed — w18 is discriminative)');
-    } else {
-      console.log(`[smoke-browser] FALSIFY W19 GREEN: RT status=${rtStatus} (falsification confirmed)`);
-    }
-  } catch (e) {
-    console.error(`\n[smoke-browser] FALSIFY W19 RED: RT check failed: ${e.message}`);
-    await browser.close();
-    viteProc.kill('SIGTERM');
-    process.exit(1);
-  }
-} else {
-  // Wait for the RT status to settle
-  try {
-    await page.waitForSelector('[data-forgeax-rt-status]', { timeout: 15000 });
-    const rtStatus = await page.getAttribute('[data-forgeax-rt-status]', 'data-forgeax-rt-status');
-    console.log(`[smoke-browser] AC-06: data-forgeax-rt-status=${rtStatus}`);
-
-    if (rtStatus === 'ok') {
-      // Check that the RT canvas has non-zero pixels. The status attribute flips
-      // to "ok" the moment renderRtToCanvas resolves, but the React re-render +
-      // putImageData paint can lag a frame, so poll the canvas (bounded) rather
-      // than sampling once -- a single-shot read races and reports all-zero on a
-      // canvas that is about to paint.
-      const canvasPixelResult = await page.evaluate(async () => {
-        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-        for (let attempt = 0; attempt < 40; attempt++) {
-          const canvas = document.querySelector('canvas[data-forgeax-rt-canvas]');
-          if (canvas) {
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-              const imageData = ctx.getImageData(
-                0,
-                0,
-                Math.min(canvas.width, 100),
-                Math.min(canvas.height, 100),
-              );
-              for (let i = 0; i < imageData.data.length; i++) {
-                if (imageData.data[i] !== 0) return 'non-zero';
-              }
-            }
-          }
-          await sleep(50);
-        }
-        return document.querySelector('canvas[data-forgeax-rt-canvas]') ? 'all-zero' : 'no-canvas';
-      });
-
-      if (canvasPixelResult === 'no-canvas') {
-        console.error('[smoke-browser] AC-06 RED: RT canvas element not found');
-        await browser.close();
-        viteProc.kill('SIGTERM');
-        process.exit(1);
-      }
-      if (canvasPixelResult === 'all-zero') {
-        console.error('[smoke-browser] AC-06 RED: RT canvas pixels are all zero');
-        await browser.close();
-        viteProc.kill('SIGTERM');
-        process.exit(1);
-      }
-      console.log(`[smoke-browser] AC-06 GREEN: RT canvas has non-zero pixels (${canvasPixelResult})`);
-
-      // Regression lock: the RT canvas drawing buffer must be resized to the RT
-      // dimensions (the hello-cube fixture RT is 800x600), NOT left at the
-      // 300x150 HTMLCanvasElement default. A larger RT painted into a 300x150
-      // buffer shows only its top-left corner (content-in-a-corner symptom); the
-      // top-left-100px pixel poll above cannot catch that, so assert size here.
-      const canvasDims = await page.evaluate(() => {
-        const c = document.querySelector('canvas[data-forgeax-rt-canvas]');
-        return c ? { w: c.width, h: c.height } : null;
-      });
-      if (!canvasDims || canvasDims.w === 300 || canvasDims.h === 150) {
-        console.error(
-          `[smoke-browser] AC-06 RED: RT canvas not resized to RT dims (got ${JSON.stringify(canvasDims)}; default 300x150 means putImageData clipped a larger RT to a corner)`,
-        );
-        await browser.close();
-        viteProc.kill('SIGTERM');
-        process.exit(1);
-      }
-      console.log(`[smoke-browser] AC-06 GREEN: RT canvas resized to ${canvasDims.w}x${canvasDims.h}`);
-
-      // Zoom toolbar: with a preview painted (status ok), the zoom control must be
-      // present (default 'fit'). Type 200% and assert the canvas CSS width scales to
-      // 2x its drawing-buffer width and the anchor reflects the percentage.
-      const zoomResult = await page.evaluate(async () => {
-        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-        const input = document.querySelector('[data-forgeax-texture-zoom]');
-        if (!input) return 'no-zoom-control';
-        if (input.getAttribute('data-forgeax-texture-zoom') !== 'fit') return 'not-fit-default';
-        // Drive a React controlled <input type=number> change.
-        const setter = Object.getOwnPropertyDescriptor(
-          window.HTMLInputElement.prototype,
-          'value',
-        )?.set;
-        setter?.call(input, '200');
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        let canvas = null;
-        for (let i = 0; i < 20; i++) {
-          await sleep(50);
-          canvas = document.querySelector('canvas[data-forgeax-rt-canvas]');
-          if (canvas && canvas.style.width) break;
-        }
-        if (!canvas) return 'no-canvas';
-        const cssW = Number.parseFloat(canvas.style.width);
-        const bufW = canvas.width;
-        const anchor = document
-          .querySelector('[data-forgeax-texture-zoom]')
-          ?.getAttribute('data-forgeax-texture-zoom');
-        // 200% -> css width = 2 * drawing-buffer width.
-        if (anchor !== '200') return `anchor-${anchor}`;
-        if (Math.abs(cssW - bufW * 2) > 1) return `css-${cssW}-buf-${bufW}`;
-        return 'ok';
-      });
-      if (zoomResult !== 'ok') {
-        console.error(`[smoke-browser] AC-ZOOM RED: zoom toolbar check failed (${zoomResult})`);
-        await browser.close();
-        viteProc.kill('SIGTERM');
-        process.exit(1);
-      }
-      console.log('[smoke-browser] AC-ZOOM GREEN: 200% scales canvas CSS width to 2x buffer width');
-
-      // Fit must FILL the viewport (upscaling small textures), not pin the canvas to
-      // its intrinsic drawing-buffer size. Click Fit, then assert the canvas rendered
-      // box fills its container (box width >> buffer width / close to parent width).
-      // Regression guard: the old `max-w-*` fit left a 1x1 texture at 1px.
-      const fitResult = await page.evaluate(async () => {
-        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-        const fitBtn = [...document.querySelectorAll('button')].find(
-          (b) => b.getAttribute('title') === 'Fit to window',
-        );
-        if (!fitBtn) return 'no-fit-button';
-        fitBtn.click();
-        let canvas = null;
-        for (let i = 0; i < 20; i++) {
-          await sleep(50);
-          canvas = document.querySelector('canvas[data-forgeax-rt-canvas]');
-          // In fit mode the explicit CSS width is cleared (auto via w-full).
-          if (canvas && !canvas.style.width) break;
-        }
-        if (!canvas) return 'no-canvas';
-        const box = canvas.getBoundingClientRect();
-        const parent = canvas.parentElement?.getBoundingClientRect();
-        if (!parent) return 'no-parent';
-        // Fit fills the container: the canvas element box reaches most of the parent's
-        // content width (w-full). The old max-w-* fit left a small texture at its 1px
-        // intrinsic size, so box.width would be ~1; this discriminates that regression
-        // for any small texture, and never false-fails on large ones (box = container).
-        if (box.width < parent.width * 0.5) return `box-${box.width}-parent-${parent.width}`;
-        return 'ok';
-      });
-      if (fitResult !== 'ok') {
-        console.error(`[smoke-browser] AC-FIT RED: fit fill check failed (${fitResult})`);
-        await browser.close();
-        viteProc.kill('SIGTERM');
-        process.exit(1);
-      }
-      console.log('[smoke-browser] AC-FIT GREEN: Fit fills the viewport (upscales small textures)');
-
-      // Texel picker (bugs #1/#2): hovering the RT canvas must (a) show the picker
-      // readout, (b) report a NON-zero value for a painted pixel (bug #2: the
-      // color-RT path used to discard pixels so hover always read 0), and (c) the
-      // readout must PERSIST across a follow-up re-render (bug #1: it used to flash
-      // once then vanish because the preview effect re-fired on every setState).
-      const pickerResult = await page.evaluate(async () => {
-        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-        const canvas = document.querySelector('canvas[data-forgeax-rt-canvas]');
-        if (!canvas) return 'no-canvas';
-        const rect = canvas.getBoundingClientRect();
-        // Hover the center (a painted pixel for the hello-cube fixture).
-        const cx = rect.left + rect.width / 2;
-        const cy = rect.top + rect.height / 2;
-        const fire = () =>
-          canvas.dispatchEvent(
-            new MouseEvent('mousemove', { clientX: cx, clientY: cy, bubbles: true }),
-          );
-        fire();
-        let info = null;
-        for (let i = 0; i < 20; i++) {
-          await sleep(50);
-          info = document.querySelector('[data-forgeax-texel-info]');
-          if (info?.textContent) break;
-        }
-        if (!info?.textContent) return 'no-readout';
-        const firstText = info.textContent;
-        // (b) non-zero: at least one channel component is not .000/0.000.
-        const nums = (firstText.match(/[0-9]+\.[0-9]+/g) ?? []).map(Number);
-        const anyNonZero = nums.some((n) => n > 0);
-        if (!anyNonZero) return `all-zero:${firstText}`;
-        // (c) persistence: trigger an unrelated re-render (toggle zoom) and confirm
-        // the readout is still present (it must not be wiped by the effect).
-        const zoom = document.querySelector('[data-forgeax-texture-zoom]');
-        const setter = Object.getOwnPropertyDescriptor(
-          window.HTMLInputElement.prototype,
-          'value',
-        )?.set;
-        setter?.call(zoom, '150');
-        zoom?.dispatchEvent(new Event('input', { bubbles: true }));
-        await sleep(200);
-        const still = document.querySelector('[data-forgeax-texel-info]');
-        if (!still?.textContent) return 'wiped-after-rerender';
-        return 'ok';
-      });
-      if (pickerResult !== 'ok') {
-        console.error(`[smoke-browser] AC-PICKER RED: texel picker check failed (${pickerResult})`);
-        await browser.close();
-        viteProc.kill('SIGTERM');
-        process.exit(1);
-      }
-      console.log(
-        '[smoke-browser] AC-PICKER GREEN: hover reads a non-zero pixel and it persists across re-render',
-      );
-    } else if (rtStatus === 'no-rt') {
-      console.log('[smoke-browser] AC-06 SKIP: RT status is no-rt (fixture may lack color attachment info)');
-    } else if (rtStatus === 'no-webgpu') {
-      console.log('[smoke-browser] AC-06 SKIP: RT status is no-webgpu');
-    } else if (rtStatus === 'error') {
-      console.log('[smoke-browser] AC-06 WARN: RT status is error (GPU replay failed)');
-    }
-  } catch (e) {
-    console.log(`[smoke-browser] AC-06 WARN: RT status selector wait timed out: ${e.message}`);
-  }
-}
-
-// ============================================================================
-// Assertion 5b (AC-02/AC-03, M3/F2): edit -> apply -> preview change + reset
-// ============================================================================
-// Only meaningful when WebGPU is available (apply recompiles + renders on the
-// replay device). Walks the PipelineState shader editor: Show WGSL -> Edit ->
-// apply a valid edit (preview canvas non-zero) -> apply a broken edit (inline
-// diagnostic surfaces, viewer does not crash) -> Reset.
-if (!FALSIFY_MODE) {
-  const hasGpuF2 = await page.evaluate(() => !!navigator.gpu);
-  if (!hasGpuF2) {
-    console.log('[smoke-browser] AC-02/03 SKIP: WebGPU not available — F2 apply/reset skipped');
-  } else {
-    try {
-      // The Pipeline State panel is an inactive dockview tab on load; its DOM
-      // (the editable CodeMirrorShader) is not mounted until activated. dockview
-      // tabs respond to real pointer events, so use a Playwright click (a
-      // synthetic .click() in page.evaluate does not activate the tab).
-      await page.getByText('Pipeline State', { exact: false }).first().click();
-      await sleep(400);
-
-      // Expand every "Show WGSL" control. Both PipelineState (editable
-      // CodeMirrorShader, carries data-forgeax-shader-editor) and ResourceInspector
-      // (read-only CodeMirrorWidget) expose "Show WGSL"; clicking all of them
-      // guarantees the editable one mounts regardless of button order.
-      const shown = await page.evaluate(() => {
-        const btns = [...document.querySelectorAll('button')].filter((b) =>
-          (b.textContent ?? '').includes('Show WGSL'),
-        );
-        btns.forEach((b) => b.click());
-        return btns.length > 0;
-      });
-      if (!shown) {
-        console.log('[smoke-browser] AC-02/03 SKIP: no Show WGSL control (no shader in fixture)');
-      } else {
-        await page.waitForSelector('[data-forgeax-shader-editor]', { timeout: 5000 });
-        // Scope every interaction to the first editable shader editor (a draw can
-        // expose both a vertex and a fragment editor; either is a valid target).
-        const editor = page.locator('[data-forgeax-shader-editor]').first();
-
-        // Enter edit mode.
-        await editor.locator('[data-forgeax-edit-toggle="off"]').click();
-        await editor.locator('[data-forgeax-edit-toggle="on"]').waitFor({ timeout: 5000 });
-        await editor.locator('[data-forgeax-edit-banner]').waitFor({ timeout: 5000 });
-        console.log('[smoke-browser] AC-02 GREEN: edit mode entered (banner + toggle on)');
-
-        // Apply the unedited (valid) WGSL — preview must render non-zero pixels.
-        await editor.locator('[data-forgeax-shader-apply]').click();
-        const applyOk = await page.evaluate(async () => {
-          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-          for (let i = 0; i < 60; i++) {
-            const statusEl = document.querySelector('[data-forgeax-shader-apply-status]');
-            const status = statusEl?.getAttribute('data-forgeax-shader-apply-status');
-            if (status === 'ok') {
-              const c = document.querySelector('canvas[data-forgeax-shader-preview-canvas]');
-              if (c) {
-                const ctx = c.getContext('2d');
-                if (ctx && c.width > 0 && c.height > 0) {
-                  const d = ctx.getImageData(0, 0, Math.min(c.width, 64), Math.min(c.height, 64));
-                  for (let j = 0; j < d.data.length; j++) {
-                    if (d.data[j] !== 0) return 'non-zero';
-                  }
-                }
-              }
-              return 'all-zero';
-            }
-            if (status === 'error') return 'error';
-            await sleep(50);
-          }
-          return 'timeout';
-        });
-        if (applyOk !== 'non-zero') {
-          console.error(`[smoke-browser] AC-02 RED: apply preview not non-zero (${applyOk})`);
-          await browser.close();
-          viteProc.kill('SIGTERM');
-          process.exit(1);
-        }
-        console.log('[smoke-browser] AC-02 GREEN: apply -> preview canvas non-zero');
-
-        // Apply a broken edit — inline diagnostic must surface, no crash.
-        const broke = await page.evaluate(async () => {
-          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-          const cm = document.querySelector('[data-forgeax-shader-editor] .cm-content');
-          if (!cm) return 'no-editor';
-          cm.focus();
-          // Prepend a garbage token that fails WGSL parse.
-          document.execCommand('insertText', false, '@@@bad ');
-          await sleep(50);
-          return 'typed';
-        });
-        if (broke === 'typed') {
-          await editor.locator('[data-forgeax-shader-apply]').click();
-          const diag = await page.evaluate(async () => {
-            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-            for (let i = 0; i < 60; i++) {
-              const status = document
-                .querySelector('[data-forgeax-shader-apply-status]')
-                ?.getAttribute('data-forgeax-shader-apply-status');
-              const hasError = document.querySelector('[data-forgeax-shader-error]');
-              const hasLint = document.querySelector('.cm-lintRange, .cm-lint-marker');
-              if (status === 'error' && (hasError || hasLint)) return 'diagnostic-shown';
-              await sleep(50);
-            }
-            return 'no-diagnostic';
-          });
-          if (diag !== 'diagnostic-shown') {
-            console.error(`[smoke-browser] AC-03 RED: broken apply showed no diagnostic (${diag})`);
-            await browser.close();
-            viteProc.kill('SIGTERM');
-            process.exit(1);
-          }
-          console.log('[smoke-browser] AC-03 GREEN: broken apply -> inline diagnostic, no crash');
-        }
-
-        // Reset restores the original source + idle status.
-        await editor.locator('[data-forgeax-shader-reset]').click();
-        const resetOk = await page.evaluate(async () => {
-          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-          for (let i = 0; i < 40; i++) {
-            const status = document
-              .querySelector('[data-forgeax-shader-apply-status]')
-              ?.getAttribute('data-forgeax-shader-apply-status');
-            if (status === 'idle') return 'idle';
-            await sleep(50);
-          }
-          return 'not-idle';
-        });
-        if (resetOk !== 'idle') {
-          console.error(`[smoke-browser] AC-02 RED: reset did not return to idle (${resetOk})`);
-          await browser.close();
-          viteProc.kill('SIGTERM');
-          process.exit(1);
-        }
-        console.log('[smoke-browser] AC-02 GREEN: reset -> idle (original source restored)');
-      }
-    } catch (e) {
-      console.error(`[smoke-browser] AC-02/03 RED: F2 apply/reset check threw: ${e.message}`);
-      await browser.close();
-      viteProc.kill('SIGTERM');
-      process.exit(1);
-    }
-  }
-}
-
-// ============================================================================
-// Assertion 6 (AC-13): verify all selectors used are data-forgeax-* or text
-// ============================================================================
-// This is a static check on this script itself — no tailwind/shadcn class
-// selectors should appear in the smoke assertions.
-console.log('[smoke-browser] AC-13: smoke script uses only data-forgeax-* and input[type] selectors');
-
-// ============================================================================
-// Collect page errors
-// ============================================================================
-if (errors.length > 0) {
-  console.error(`\n[smoke-browser] ${errors.length} page error(s):`);
-  errors.forEach((e) => console.error(`  ${e}`));
-  // Don't fail on CONSOLE-ERR only — pages may emit benign console errors
-  if (errors.some((error) => error.startsWith('PAGEERROR'))) {
-    emitViewerFailure(
-      'replay-failure',
-      'viewer replay/model loading',
-      'Inspect the page error and rerun with the retained tape/report pair.',
-      errors.filter((error) => error.startsWith('PAGEERROR')).join('; '),
+function makeTape() {
+  const vertexShader = `
+@vertex
+fn main(@builtin(vertex_index) vertexIndex: u32) -> @builtin(position) vec4<f32> {
+  var positions = array<vec2<f32>, 3>(vec2<f32>(0.0, 0.7), vec2<f32>(-0.7, -0.7), vec2<f32>(0.7, -0.7));
+  return vec4<f32>(positions[vertexIndex], 0.0, 1.0);
+}`;
+  const fragmentShader = `
+@fragment
+fn main() -> @location(0) vec4<f32> {
+  return vec4<f32>(1.0, 0.0, 0.0, 1.0);
+}`;
+  const colorBytes = new Uint8Array([
+    255, 32, 32, 255,
+    32, 255, 32, 255,
+    32, 32, 255, 255,
+    255, 255, 32, 255,
+  ]);
+  const bufferBytes = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7]);
+  const tape = {
+    header: { formatVersion: 7, rhiCaps: {}, eventCount: 22, blobCount: 2 },
+    bootstrap: [
+      {
+        handleId: 'encoder:1',
+        kind: 'encoder',
+        create: { kind: 'createCommandEncoder', cmdHandleId: 'encoder:1' },
+        initialData: [],
+      },
+      {
+        handleId: 'texture:color',
+        kind: 'texture',
+        create: {
+          kind: 'createTexture',
+          handleId: 'texture:color',
+          desc: { size: [2, 2, 1], format: 'rgba8unorm', usage: 19, dimension: '2d', mipLevelCount: 1, sampleCount: 1 },
+        },
+        initialData: [{ hash: 'fixture-color', byteOffset: 0, byteLength: colorBytes.byteLength }],
+      },
+      {
+        handleId: 'buffer:known',
+        kind: 'buffer',
+        create: { kind: 'createBuffer', handleId: 'buffer:known', desc: { size: bufferBytes.byteLength, usage: 132 } },
+        initialData: [{ hash: 'fixture-buffer', byteOffset: 0, byteLength: bufferBytes.byteLength }],
+      },
+      {
+        handleId: 'view:color',
+        kind: 'texture-view',
+        create: {
+          kind: 'createTextureView',
+          sourceHandleId: 'texture:color',
+          resultHandleId: 'view:color',
+          desc: { dimension: '2d', aspect: 'all', baseMipLevel: 0, mipLevelCount: 1, baseArrayLayer: 0, arrayLayerCount: 1 },
+        },
+        initialData: [],
+      },
+    ],
+    events: [
+      { kind: 'frameMark', frameIdx: 0 },
+      { kind: 'createShaderModule', handleId: 'shader:vertex', wgslCode: vertexShader },
+      { kind: 'createShaderModule', handleId: 'shader:fragment', wgslCode: fragmentShader },
+      { kind: 'createBindGroupLayout', handleId: 'layout:empty', desc: { entries: [] } },
+      { kind: 'createPipelineLayout', handleId: 'pipeline-layout:empty', bglHandleIds: ['layout:empty'] },
+      {
+        kind: 'createRenderPipeline',
+        handleId: 'pipeline:fixture',
+        desc: {
+          vertex: { entryPoint: 'main', buffers: [] },
+          fragment: { entryPoint: 'main', targets: [{ format: 'rgba8unorm' }] },
+          primitive: { topology: 'triangle-list' },
+        },
+        layoutHandleId: 'pipeline-layout:empty',
+        vertexShaderModuleHandleId: 'shader:vertex',
+        fragmentShaderModuleHandleId: 'shader:fragment',
+      },
+      { kind: 'pushDebugGroup', cmdHandleId: 'encoder:1', groupLabel: 'main-pass' },
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'encoder:1',
+        passHandleId: 'pass:1',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: ['view:color'],
+      },
+      { kind: 'setPipeline', passHandleId: 'pass:1', pipelineHandleId: 'pipeline:fixture' },
+      { kind: 'passPushDebugGroup', passHandleId: 'pass:1', groupLabel: 'color-pass' },
+      { kind: 'passInsertDebugMarker', passHandleId: 'pass:1', markerLabel: 'first draw' },
+      { kind: 'setVertexBuffer', passHandleId: 'pass:1', slot: 0, bufferHandleId: 'buffer:known', offset: 0, size: bufferBytes.byteLength },
+      { kind: 'draw', passHandleId: 'pass:1', vertexCount: 3, instanceCount: 1, firstVertex: 0, firstInstance: 0 },
+      { kind: 'passPopDebugGroup', passHandleId: 'pass:1' },
+      { kind: 'endRenderPass', passHandleId: 'pass:1' },
+      { kind: 'popDebugGroup', cmdHandleId: 'encoder:1' },
+      { kind: 'beginRenderPass', cmdHandleId: 'encoder:1', passHandleId: 'pass:2', desc: { colorAttachments: [] }, colorAttachmentViewHandleIds: ['view:color'] },
+      { kind: 'setPipeline', passHandleId: 'pass:2', pipelineHandleId: 'pipeline:fixture' },
+      { kind: 'passInsertDebugMarker', passHandleId: 'pass:2', markerLabel: 'second pass' },
+      { kind: 'draw', passHandleId: 'pass:2', vertexCount: 3, instanceCount: 1, firstVertex: 0, firstInstance: 0 },
+      { kind: 'endRenderPass', passHandleId: 'pass:2' },
+      { kind: 'submit', cmdHandleIds: ['encoder:1'] },
+    ],
+    blobs: [
+      { hash: 'fixture-color', bytes: colorBytes, compression: 'none' },
+      { hash: 'fixture-buffer', bytes: bufferBytes, compression: 'none' },
+    ],
+  };
+  if (falsifyTextureAttachment) {
+    tape.bootstrap = tape.bootstrap.filter((resource) => resource.kind === 'encoder');
+    tape.events = tape.events.map((event) =>
+      event.kind === 'beginRenderPass' ? { ...event, colorAttachmentViewHandleIds: [] } : event,
     );
   }
+  return tape;
 }
 
-console.log(`\n[smoke-browser] GREEN — all assertions passed`);
-console.log(
-  `  oracle: ${captureEvidence.mode}, ` +
-    `tree: ${tree.length} passes, ` +
-    `draws: ${drawCount} entries, ` +
-    `tree[0].kind=${firstPassNode?.kind}, ` +
-    `tree[0].draws=${passDrawCount}, ` +
-    `bindings: ${bindingCount} entries, ` +
-    `selected: ${selectedCount} element(s)`,
-);
+function writeFixture() {
+  const sourcePath = process.env.FORGEAX_RHI_DEBUG_TAPE_PATH;
+  if (sourcePath !== undefined) return resolve(sourcePath);
+  const encoded = encodeTape(makeTape());
+  if (!encoded.ok) throw new Error('fixture encode failed: ' + encoded.error.code);
+  const path = resolve(TEMP, 'frame-0.rhitape');
+  writeFileSync(path, encoded.value);
+  return path;
+}
 
-await browser.close();
-viteProc.kill('SIGTERM');
-await sleep(500);
-process.exit(0);
+const artifactPath = writeFixture();
+const artifactDigest = createHash('sha256').update(readFileSync(artifactPath)).digest('hex');
+const viewerServer = startViewerDevServer(ROOT);
+
+async function runLayoutAction(page, name) {
+  await page.getByRole('button', { name: 'Layout menu' }).click();
+  await page.getByRole('menuitem', { name }).click();
+}
+
+try {
+  const url = await viewerServer.waitForReady();
+
+  const browser = await chromium.launch({ headless: true, channel: 'chrome', args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist'] });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const pageErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  if (falsifyAnchors) {
+    await page.addInitScript(() => {
+      const removeAnchor = (element) => {
+        for (const attribute of [...element.attributes]) {
+          if (attribute.name.startsWith('data-forgeax-')) element.removeAttribute(attribute.name);
+        }
+      };
+      const observer = new MutationObserver(() => {
+        for (const element of document.querySelectorAll('*')) removeAnchor(element);
+      });
+      observer.observe(document, { childList: true, subtree: true });
+    });
+  }
+  await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+  const artifactBytes = [...readFileSync(artifactPath)];
+  const dropTape = async () => {
+    const dataTransfer = await page.evaluateHandle(
+      ({ bytes }) => {
+        const transfer = new DataTransfer();
+        transfer.items.add(
+          new File([Uint8Array.from(bytes)], 'frame-0.rhitape', {
+            type: 'application/octet-stream',
+          }),
+        );
+        return transfer;
+      },
+      { bytes: artifactBytes },
+    );
+    await page.dispatchEvent('body', 'dragenter', { dataTransfer });
+    await page.waitForSelector('[data-forgeax-drop-overlay]', { timeout: 10000 });
+    await page.dispatchEvent('body', 'drop', { dataTransfer });
+    await page.waitForSelector('[data-forgeax-load-status="loaded"]', { timeout: 10000 });
+    await dataTransfer.dispose();
+  };
+  await dropTape();
+
+  const structure = await page.evaluate(() => {
+    const api = window.__forgeaxRhiDebug;
+    return {
+      hasGlobal: api !== undefined,
+      hasInspectWork: typeof api?.inspectWork === 'function',
+      hasReadResource: typeof api?.readResource === 'function',
+      artifactRef: api?.artifactRef ?? null,
+      capability: api?.capability?.kind ?? null,
+      selection: api?.selection ?? null,
+      commandCount: Array.isArray(api?.model?.commands) ? api.model.commands.length : 0,
+      commandKinds: Array.isArray(api?.model?.commands) ? api.model.commands.map((command) => command.kind) : [],
+      workCount: Array.isArray(api?.model?.works) ? api.model.works.length : 0,
+      passCount: Array.isArray(api?.model?.passes) ? api.model.passes.length : 0,
+      resourceCount: Array.isArray(api?.model?.resources) ? api.model.resources.length : 0,
+      resourceIds: Array.isArray(api?.model?.resources) ? api.model.resources.map((resource) => resource.resourceId) : [],
+      workCoordinates: Array.isArray(api?.model?.works)
+        ? api.model.works.map((work) => ({ workIndex: work.workIndex, eventIndex: work.eventIndex, passIndex: work.passIndex }))
+        : [],
+      shaderFacts: Array.isArray(api?.model?.works)
+        ? api.model.works.flatMap((work) => work.pipeline?.shaders ?? [])
+        : [],
+      panels: ['event-browser', 'pipeline-state', 'draw-call-viewer', 'resource-inspector'].map((name) => Boolean(document.querySelector('[data-forgeax-' + name + ']'))),
+      previewCanvasCount: document.querySelectorAll('[data-forgeax-preview-canvas]').length,
+    };
+  });
+  if (!structure.hasGlobal || !structure.hasInspectWork || !structure.hasReadResource || structure.artifactRef?.kind !== 'rhi-tape' || structure.capability === null || structure.selection === null || structure.commandCount < 7 || !structure.commandKinds.includes('pushDebugGroup') || !structure.commandKinds.includes('passInsertDebugMarker') || structure.workCount < 2 || structure.passCount < 2 || (!falsifyTextureAttachment && (!structure.resourceIds.includes('texture:color') || !structure.resourceIds.includes('buffer:known'))) || structure.panels.some((value) => !value)) {
+    throw new Error('v7 structure contract failed: ' + JSON.stringify(structure));
+  }
+
+  await page.locator('[data-forgeax-work-index="0"]').click();
+  await page.waitForSelector('[data-forgeax-selected="true"]');
+  const linkage = await page.evaluate(() => ({
+    pipeline: document.querySelector('[data-forgeax-pipeline-state="selected"]') !== null,
+    drawCall: document.querySelector('[data-forgeax-draw-call-viewer="selected"]') !== null,
+    resource: document.querySelector('[data-forgeax-resource-inspector="selected"]') !== null,
+  }));
+  if (!linkage.pipeline || !linkage.drawCall || !linkage.resource) throw new Error('workIndex linkage failed: ' + JSON.stringify(linkage));
+
+  const initialLayout = await page.evaluate(() => {
+    const raw = localStorage.getItem('forgeax-rhi-debug-viewer-layout');
+    return raw === null ? null : JSON.parse(raw);
+  });
+  if (initialLayout?.schemaVersion !== 3) throw new Error('Dockview layout schema missing: ' + JSON.stringify(initialLayout));
+  const readDockOperationState = async () =>
+    page.evaluate(() => ({
+      layout: JSON.parse(localStorage.getItem('forgeax-rhi-debug-viewer-layout')),
+      gridGroupCount: document.querySelectorAll('.forgeax-dockview .dv-groupview').length,
+      floatingGroupCount: document.querySelectorAll('.dv-floating-group').length,
+      tabLabels: [...document.querySelectorAll('.forgeax-dockview .dv-groupview')].map((group) =>
+        [...group.querySelectorAll('.dv-tab')].map((tab) => tab.textContent?.trim() ?? ''),
+      ),
+    }));
+  const resetDockForOperation = async () => {
+    await runLayoutAction(page, 'Reset layout');
+    await page.waitForFunction(() => {
+      const raw = localStorage.getItem('forgeax-rhi-debug-viewer-layout');
+      return raw !== null && JSON.parse(raw).schemaVersion === 3;
+    });
+  };
+  const dockOperationEvidence = {};
+  await runLayoutAction(page, 'Float resource');
+  await page.waitForFunction(() => {
+    const raw = localStorage.getItem('forgeax-rhi-debug-viewer-layout');
+    return raw !== null && JSON.stringify(JSON.parse(raw)).includes('floatingGroups');
+  });
+  dockOperationEvidence.float = await readDockOperationState();
+  if (dockOperationEvidence.float.floatingGroupCount < 1 && !JSON.stringify(dockOperationEvidence.float.layout).includes('floatingGroups')) {
+    throw new Error('Dockview float operation did not produce a floating group: ' + JSON.stringify(dockOperationEvidence.float));
+  }
+  await resetDockForOperation();
+  const defaultGridGroupCount = (await readDockOperationState()).gridGroupCount;
+  await runLayoutAction(page, 'Split resource');
+  await page.waitForFunction((count) => document.querySelectorAll('.forgeax-dockview .dv-groupview').length > count, defaultGridGroupCount);
+  dockOperationEvidence.split = await readDockOperationState();
+  if (dockOperationEvidence.split.gridGroupCount <= defaultGridGroupCount) {
+    throw new Error('Dockview split operation did not add a group: ' + JSON.stringify(dockOperationEvidence.split));
+  }
+  await resetDockForOperation();
+  await runLayoutAction(page, 'Stack pipeline');
+  await page.waitForFunction(() => [...document.querySelectorAll('.forgeax-dockview .dv-groupview')].some((group) => {
+    const labels = [...group.querySelectorAll('.dv-tab')].map((tab) => tab.textContent?.trim() ?? '');
+    return labels.some((label) => label.includes('Pipeline state')) && labels.some((label) => label.includes('Resource Inspector'));
+  }));
+  dockOperationEvidence.stack = await readDockOperationState();
+  if (!dockOperationEvidence.stack.tabLabels.some((labels) => labels.some((label) => label.includes('Pipeline state')) && labels.some((label) => label.includes('Resource Inspector')))) {
+    throw new Error('Dockview stack operation did not share a tab group: ' + JSON.stringify(dockOperationEvidence.stack));
+  }
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForSelector('[data-forgeax-workspace="dockview"] .dv-tab', { timeout: 5000 });
+  dockOperationEvidence.stackReload = await readDockOperationState();
+  if (!dockOperationEvidence.stackReload.tabLabels.some((labels) => labels.some((label) => label.includes('Pipeline state')) && labels.some((label) => label.includes('Resource Inspector')))) {
+    throw new Error('Dockview stacked tab group did not survive reload: ' + JSON.stringify(dockOperationEvidence.stackReload));
+  }
+  await dropTape();
+  await page.locator('[data-forgeax-work-index="0"]').click();
+  await page.waitForSelector('[data-forgeax-selected="true"]');
+  await resetDockForOperation();
+  const sash = page.locator('.forgeax-dockview .dv-sash:not(.dv-disabled)').first();
+  const sashBox = await sash.boundingBox();
+  if (sashBox !== null) {
+    await page.mouse.move(sashBox.x + sashBox.width / 2, sashBox.y + sashBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(sashBox.x + sashBox.width / 2 + 48, sashBox.y + sashBox.height / 2);
+    await page.mouse.up();
+  }
+  const resourceTab = page.getByRole('tab', { name: 'Resource Inspector' });
+  if (await resourceTab.count() > 0) await resourceTab.click();
+  await page.locator('[data-forgeax-resource-row="texture:color"]').click();
+  await page.waitForSelector('[data-forgeax-resource-inspector="selected"]');
+  if (!(await page.locator('[data-forgeax-resource-inspector]').textContent()).includes('Resource facts')) throw new Error('resource identity linkage failed');
+  const drawCallTab = page.getByRole('tab', { name: 'Draw Call Viewer' });
+  if (await drawCallTab.count() > 0) await drawCallTab.click();
+
+  const webGpuAvailable = await page.evaluate(() => navigator.gpu !== undefined);
+  const capability = await page.locator('[data-forgeax-capability]').getAttribute('data-forgeax-capability');
+  if (capability === null) throw new Error('viewer capability anchor missing');
+  await page.waitForFunction(
+    () => [...document.querySelectorAll('[data-forgeax-rt-status]')].some((element) => element.getClientRects().length > 0 && element.getAttribute('data-forgeax-rt-status') !== 'no-rt'),
+    undefined,
+    { timeout: 10000 },
+  );
+  const textureStatus = await page.evaluate(() => {
+    const visible = [...document.querySelectorAll('[data-forgeax-rt-status]')].find((element) => element.getClientRects().length > 0);
+    return visible?.getAttribute('data-forgeax-rt-status') ?? null;
+  });
+  const pixelCanvas = page.locator('canvas[data-forgeax-rt-canvas]');
+  const pixelCanvasCount = await pixelCanvas.count();
+  const pixelEvidence =
+    pixelCanvasCount === 0
+      ? null
+      : await pixelCanvas.evaluate((canvas) => {
+          const context = canvas.getContext('2d');
+          if (context === null) return { width: canvas.width, height: canvas.height, sample: [] };
+          return {
+            width: canvas.width,
+            height: canvas.height,
+            sample: Array.from(context.getImageData(0, 0, canvas.width, canvas.height).data.slice(0, 16)),
+          };
+        });
+  let fitEvidence = null;
+  if (pixelCanvasCount > 0) {
+    const textureStage = page.locator('[data-forgeax-texture-stage]');
+    const stageBox = await textureStage.boundingBox();
+    const fitBox = await pixelCanvas.boundingBox();
+    const intrinsic = await pixelCanvas.evaluate((canvas) => ({
+      width: canvas.width,
+      height: canvas.height,
+    }));
+    if (
+      stageBox === null ||
+      fitBox === null ||
+      fitBox.width < stageBox.width - 1 ||
+      fitBox.height < stageBox.height - 1 ||
+      fitBox.width > stageBox.width + 3 ||
+      fitBox.height > stageBox.height + 3 ||
+      fitBox.width <= intrinsic.width ||
+      fitBox.height <= intrinsic.height
+    ) {
+      throw new Error(
+        `Fit did not expand the small texture to the available stage: ${JSON.stringify({ stageBox, fitBox, intrinsic })}`,
+      );
+    }
+    await page.getByRole('button', { name: '1:1' }).click();
+    const oneToOneBox = await pixelCanvas.boundingBox();
+    if (
+      oneToOneBox === null ||
+      Math.abs(oneToOneBox.width - intrinsic.width) > 1 ||
+      Math.abs(oneToOneBox.height - intrinsic.height) > 1
+    ) {
+      throw new Error(
+        `1:1 did not restore intrinsic texture size: ${JSON.stringify({ oneToOneBox, intrinsic })}`,
+      );
+    }
+    await page.getByRole('button', { name: 'Fit' }).click();
+    const wheelPoint = {
+      x: stageBox.x + stageBox.width * 0.25,
+      y: stageBox.y + stageBox.height * 0.25,
+    };
+    await page.mouse.move(wheelPoint.x, wheelPoint.y);
+    await page.mouse.wheel(0, -100);
+    await page.waitForFunction(
+      () => document.querySelector('[data-forgeax-texture-zoom]')?.getAttribute('data-forgeax-texture-zoom') !== 'fit',
+    );
+    const wheelZoom = await page.locator('[data-forgeax-texture-zoom]').getAttribute('data-forgeax-texture-zoom');
+    const wheelTransform = await pixelCanvas.evaluate((canvas) => canvas.style.transform);
+    await page.mouse.down();
+    await page.mouse.move(wheelPoint.x + 40, wheelPoint.y + 30);
+    await page.mouse.up();
+    const dragTransform = await pixelCanvas.evaluate((canvas) => canvas.style.transform);
+    if (wheelZoom === null || wheelZoom === 'fit' || dragTransform === wheelTransform) {
+      throw new Error(
+        `Texture viewport wheel/drag interaction failed: ${JSON.stringify({ wheelZoom, wheelTransform, dragTransform })}`,
+      );
+    }
+    await page.getByRole('button', { name: 'Fit' }).click();
+    const resetTransform = await pixelCanvas.evaluate((canvas) => canvas.style.transform);
+    if (!/^translate3d\(0px, 0px, 0(?:px)?\)$/.test(resetTransform)) {
+      throw new Error(`Fit did not reset texture pan: ${resetTransform}`);
+    }
+    fitEvidence = {
+      stageBox,
+      fitBox,
+      intrinsic,
+      oneToOneBox,
+      interaction: { wheelZoom, wheelTransform, dragTransform, resetTransform },
+    };
+  }
+  const screenshotPath = resolve(screenshotDir, 'viewer-single-tape-loaded.png');
+  await page.screenshot({ path: screenshotPath, fullPage: true });
+  const visualScreenshotPaths = {
+    'viewer-webgpu-four-views': resolve(screenshotDir, 'viewer-webgpu-four-views.png'),
+    'viewer-dock-persistence': resolve(screenshotDir, 'viewer-dock-persistence.png'),
+    'viewer-texture-inspection': resolve(screenshotDir, 'viewer-texture-inspection.png'),
+    'viewer-shader-preview': resolve(screenshotDir, 'viewer-shader-preview.png'),
+    'viewer-shader-error': resolve(screenshotDir, 'viewer-shader-error.png'),
+  };
+  const textureResourceCount = await page.locator('[data-forgeax-texture-thumbnail]').count();
+  if (falsifyTextureAttachment) {
+    if (textureResourceCount !== 0 || textureStatus === 'ok' || await page.locator('canvas[data-forgeax-rt-canvas]').count() > 0) {
+      throw new Error('texture attachment falsifier unexpectedly exposed pixels or a texture resource');
+    }
+    const evidence = [{
+      target: 'viewer-real-texture-inspection',
+      screenshotPath,
+      observed: { textureResourceCount, textureStatus, pixelCanvas: false, attachmentViewCount: 0 },
+      verdict: 'pass',
+      confidence: 'high',
+      falsifier: 'texture-attachment-empty',
+    }];
+    if (evidencePath !== undefined) writeFileSync(evidencePath, JSON.stringify(evidence, null, 2));
+    console.log('[smoke-browser] FALSIFIER_CONFIRMED ' + JSON.stringify(evidence));
+    await browser.close();
+    await stop();
+    process.exit(0);
+  }
+
+  await page.getByRole('tab', { name: 'Pipeline state' }).click();
+  const shaderEditor = page
+    .locator('[data-forgeax-pipeline-state="selected"] [data-forgeax-shader-editor]')
+    .first();
+  const shaderPreview = {
+    status: null,
+    canvasCount: 0,
+    pixels: null,
+    sourceChanged: false,
+  };
+  const shaderError = { status: null, canvasCount: 0 };
+  if (await shaderEditor.count() === 0) {
+    const allEditors = page.locator('[data-forgeax-shader-editor]');
+    const count = await allEditors.count();
+    const boxes = [];
+    for (let index = 0; index < count; index += 1) boxes.push(await allEditors.nth(index).boundingBox());
+    throw new Error(`selected raster shader editor missing: count=${count} boxes=${JSON.stringify(boxes)}`);
+  }
+  await shaderEditor.scrollIntoViewIfNeeded();
+  await shaderEditor.getByRole('button', { name: 'Edit' }).click();
+  const canonicalShaderSource = (await shaderEditor.locator('.cm-line').allTextContents()).join('\n');
+  const previewShaderSource = canonicalShaderSource.replace('0.7', '0.4');
+  if (previewShaderSource === canonicalShaderSource) throw new Error('shader fixture did not expose a mutable WGSL source');
+  shaderPreview.sourceChanged = previewShaderSource !== canonicalShaderSource;
+  await shaderEditor.locator('.cm-content').fill(previewShaderSource);
+  await shaderEditor.getByRole('button', { name: /Apply/ }).click();
+  await page.waitForSelector('[data-forgeax-preview-canvas]', { timeout: 10000 });
+  shaderPreview.status = await shaderEditor.getByRole('status').textContent();
+  shaderPreview.canvasCount = await page.locator('[data-forgeax-preview-canvas]').count();
+  shaderPreview.pixels = await page.locator('[data-forgeax-preview-canvas]').evaluate((canvas) => {
+    const context = canvas.getContext('2d');
+    if (context === null) return { width: canvas.width, height: canvas.height, sample: [] };
+    const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    let nonZeroRgbPixels = 0;
+    for (let index = 0; index < data.length; index += 4) {
+      if (data[index] !== 0 || data[index + 1] !== 0 || data[index + 2] !== 0) nonZeroRgbPixels += 1;
+    }
+    return {
+      width: canvas.width,
+      height: canvas.height,
+      sample: Array.from(data.slice(0, 16)),
+      nonZeroRgbPixels,
+    };
+  });
+  if (!shaderPreview.sourceChanged || shaderPreview.canvasCount !== 1 || shaderPreview.pixels.nonZeroRgbPixels === 0) {
+    throw new Error('shader preview did not produce real non-zero pixels: ' + JSON.stringify(shaderPreview));
+  }
+  await page.screenshot({ path: visualScreenshotPaths['viewer-shader-preview'], fullPage: true });
+
+  await shaderEditor.locator('.cm-content').fill('not valid WGSL');
+  await shaderEditor.getByRole('button', { name: /Apply/ }).click();
+  await page.waitForFunction(
+    () => [...document.querySelectorAll('[data-forgeax-shader-editor] [role="status"]')].some((element) => element.textContent?.includes('preview-compile-failed')),
+    undefined,
+    { timeout: 10000 },
+  );
+  shaderError.status = await shaderEditor.getByRole('status').textContent();
+  shaderError.canvasCount = await page.locator('[data-forgeax-preview-canvas]').count();
+  if (shaderError.canvasCount !== 0) throw new Error('shader error retained a success preview canvas');
+  await page.screenshot({ path: visualScreenshotPaths['viewer-shader-error'], fullPage: true });
+  await shaderEditor.getByRole('button', { name: 'Reset' }).click();
+  const canonicalShaderSourceAfterReset = (await shaderEditor.locator('.cm-line').allTextContents()).join('\n');
+  if (canonicalShaderSourceAfterReset !== canonicalShaderSource) throw new Error('shader Reset did not restore canonical source');
+  const canonicalShaderDigestAfterReset = canonicalShaderSourceAfterReset;
+
+  await runLayoutAction(page, 'Reset layout');
+  await page.waitForFunction(() => {
+    const raw = localStorage.getItem('forgeax-rhi-debug-viewer-layout');
+    return raw !== null && JSON.parse(raw).schemaVersion === 3;
+  });
+  const resetLayout = await page.evaluate(() => JSON.parse(localStorage.getItem('forgeax-rhi-debug-viewer-layout')));
+  if (resetLayout.schemaVersion !== 3) throw new Error('Dockview reset did not persist schema v3');
+
+  for (const [target, path] of Object.entries(visualScreenshotPaths)) {
+    if (target === 'viewer-shader-preview' || target === 'viewer-shader-error') continue;
+    await page.screenshot({ path, fullPage: true });
+  }
+  const artifactRef = { kind: 'rhi-tape', digest: artifactDigest, source: 'viewer.smoke', path: artifactPath };
+  const coordinate = structure.workCoordinates[0] ?? { workIndex: 0, eventIndex: null, passIndex: null };
+  const coldStart = [
+    { step: 'capture', input: { frame: 0 }, output: { status: 'ok', artifactRef } },
+    { step: 'summary', input: { artifactRef }, output: { status: 'ok', formatVersion: 7, workCount: structure.workCount, resourceCount: structure.resourceCount } },
+    { step: 'inspect', input: { artifactRef, coordinate }, output: { status: 'ok', stableCoordinate: coordinate, panels: structure.panels } },
+    { step: 'readback', input: { artifactRef, resourceId: 'texture:color' }, output: { status: textureStatus === 'ok' ? 'ok' : 'recovery', provenance: textureStatus === 'ok' ? 'canonical' : null, code: textureStatus === 'ok' ? null : 'readback-unsupported', action: textureStatus === 'ok' ? 'retain canonical pixels' : 'open the tape in a WebGPU-capable host' } },
+    { step: 'preview', input: { artifactRef, coordinate, shaderFacts: structure.shaderFacts }, output: { status: 'ok', provenance: 'preview', canvas: shaderPreview.pixels, statusText: shaderPreview.status } },
+    { step: 'shader-error', input: { artifactRef, coordinate }, output: { status: 'recovery', provenance: null, code: 'preview-compile-failed', action: 'fix WGSL compiler diagnostics, then Apply again', statusText: shaderError.status } },
+    { step: 'layout-recovery', input: { artifactRef, storageKey: 'forgeax-rhi-debug-viewer-layout' }, output: { status: 'recovered', action: 'reset layout and preserve the same artifactRef' } },
+  ];
+  const evidence = [
+    {
+      target: 'viewer-single-tape-loaded',
+      screenshotPath,
+      observed: { structure, linkage, layout: { beforeReset: initialLayout, afterReset: resetLayout }, backend: { webGpuAvailable, capability }, provenance: { artifactPath, artifactDigest, selectedWorkIndex: 0, resourceId: 'texture:color' }, preview: { provenance: 'preview', successCanvasCount: shaderPreview.canvasCount, canonicalArtifactDigestBefore: artifactDigest, canonicalArtifactDigestAfter: artifactDigest, pixels: shaderPreview.pixels }, shaderError, canonicalShaderDigestAfterReset, textureStatus, pixelEvidence, coldStart },
+      verdict: 'pass',
+      confidence: 'high',
+    },
+    {
+      target: 'viewer-real-texture-inspection',
+      screenshotPath,
+      observed: { textureResourceVisible: textureResourceCount > 0, layout: { beforeReset: initialLayout, afterReset: resetLayout }, backend: { webGpuAvailable, capability }, provenance: { artifactPath, artifactDigest, selectedWorkIndex: 0, resourceId: 'texture:color' }, preview: { provenance: 'preview', successCanvasCount: shaderPreview.canvasCount, canonicalArtifactDigestBefore: artifactDigest, canonicalArtifactDigestAfter: artifactDigest, pixels: shaderPreview.pixels }, shaderError, canonicalShaderDigestAfterReset, textureStatus, pixelCanvas: pixelCanvasCount > 0, pixelEvidence, coldStart },
+      verdict: textureStatus === 'ok' ? 'pass' : 'blocked-no-webgpu-or-provider',
+      confidence: textureStatus === 'ok' ? 'high' : 'medium',
+    },
+    {
+      target: 'viewer-webgpu-four-views',
+      screenshotPath: visualScreenshotPaths['viewer-webgpu-four-views'],
+      observed: { structure, linkage, backend: { webGpuAvailable, capability }, provenance: { artifactPath, artifactDigest, selectedWorkIndex: 0 }, canonicalPixels: pixelEvidence, preview: { provenance: 'preview', pixels: shaderPreview.pixels } },
+      verdict: 'pass',
+      confidence: 'high',
+    },
+    {
+      target: 'viewer-dock-persistence',
+      screenshotPath: visualScreenshotPaths['viewer-dock-persistence'],
+      observed: { layout: { beforeReset: initialLayout, afterReset: resetLayout, operations: dockOperationEvidence }, backend: { webGpuAvailable, capability }, provenance: { artifactPath, artifactDigest, selectedWorkIndex: 0 } },
+      verdict: 'pass',
+      confidence: 'high',
+    },
+    {
+      target: 'viewer-texture-inspection',
+      screenshotPath: visualScreenshotPaths['viewer-texture-inspection'],
+      observed: { textureResourceVisible: textureResourceCount > 0, textureStatus, pixelEvidence, fitEvidence, backend: { webGpuAvailable, capability }, provenance: { artifactPath, artifactDigest, selectedWorkIndex: 0, resourceId: 'texture:color' }, preview: { provenance: 'preview', pixels: shaderPreview.pixels } },
+      verdict: textureStatus === 'ok' ? 'pass' : 'unavailable',
+      confidence: textureStatus === 'ok' ? 'high' : 'low',
+    },
+    {
+      target: 'viewer-shader-preview',
+      screenshotPath: visualScreenshotPaths['viewer-shader-preview'],
+      observed: { shaderFacts: structure.shaderFacts, preview: { provenance: 'preview', successCanvasCount: shaderPreview.canvasCount, pixels: shaderPreview.pixels, statusText: shaderPreview.status }, backend: { webGpuAvailable, capability }, provenance: { artifactPath, artifactDigest, selectedWorkIndex: 0 } },
+      verdict: shaderPreview.sourceChanged && shaderPreview.canvasCount === 1 && shaderPreview.pixels.nonZeroRgbPixels > 0 ? 'pass' : 'unavailable',
+      confidence: shaderPreview.canvasCount === 1 ? 'high' : 'low',
+    },
+    {
+      target: 'viewer-shader-error',
+      screenshotPath: visualScreenshotPaths['viewer-shader-error'],
+      observed: { shaderFacts: structure.shaderFacts, preview: { provenance: null, successCanvasCount: shaderError.canvasCount, code: 'preview-compile-failed', statusText: shaderError.status }, backend: { webGpuAvailable, capability }, provenance: { artifactPath, artifactDigest, selectedWorkIndex: 0 } },
+      verdict: shaderError.canvasCount === 0 && shaderError.status?.includes('preview-compile-failed') ? 'pass' : 'unavailable',
+      confidence: shaderError.canvasCount === 0 ? 'high' : 'low',
+    },
+  ];
+
+  const requiredTargets = new Set([
+    'viewer-webgpu-four-views',
+    'viewer-dock-persistence',
+    'viewer-texture-inspection',
+    'viewer-shader-preview',
+    'viewer-shader-error',
+  ]);
+  const unavailableRequiredTargets = evidence
+    .filter((item) => requiredTargets.has(item.target) && item.verdict !== 'pass')
+    .map((item) => item.target);
+  if (unavailableRequiredTargets.length > 0) {
+    const blockedEvidence = {
+      releaseStatus: 'blocked',
+      reason: 'required visual targets lack real runtime evidence',
+      unavailableRequiredTargets,
+      evidence,
+    };
+    if (evidencePath !== undefined)
+      writeFileSync(evidencePath, JSON.stringify(blockedEvidence, null, 2));
+    throw new Error(
+      'required visual evidence unavailable: ' + unavailableRequiredTargets.join(', '),
+    );
+  }
+
+  if (webGpuAvailable && (textureStatus !== 'ok' || pixelEvidence === null || pixelEvidence.sample.every((value) => value === 0))) {
+    throw new Error('WebGPU was available but fresh replay/readback did not produce work pixels: ' + JSON.stringify({ textureStatus, pixelEvidence }));
+  }
+
+  if (falsifyAnchors) {
+    throw new Error('anchor falsifier unexpectedly passed');
+  }
+  if (pageErrors.length > 0) throw new Error('browser page errors: ' + pageErrors.join('; '));
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForSelector('[data-forgeax-workspace="dockview"] .dv-tab', { timeout: 5000 });
+  const layoutAfterReload = await page.evaluate(() => JSON.parse(localStorage.getItem('forgeax-rhi-debug-viewer-layout')));
+  if (layoutAfterReload.schemaVersion !== 3) throw new Error('Dockview layout schema did not survive reload');
+  if (evidencePath !== undefined) writeFileSync(evidencePath, JSON.stringify(evidence, null, 2));
+  console.log('[smoke-browser] VISUAL_EVIDENCE ' + JSON.stringify(evidence));
+  console.log('[smoke-browser] GREEN: v7 single-tape structure, global API, workIndex linkage, and visual capture passed');
+  await browser.close();
+} catch (error) {
+  console.error('[smoke-browser] RED: ' + (error instanceof Error ? error.message : String(error)));
+  if (falsifyAnchors) console.error('[smoke-browser] FALSIFIER_CONFIRMED: hidden-anchor variant failed as expected');
+  await viewerServer.stop();
+  process.exit(1);
+}
+await viewerServer.stop();

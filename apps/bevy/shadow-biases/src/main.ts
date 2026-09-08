@@ -4,6 +4,7 @@
 
 import { createApp } from '@forgeax/engine-app';
 import { Update } from '@forgeax/engine-ecs';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
 import type { Handle } from '@forgeax/engine-types';
 import { Transform } from '@forgeax/engine-scene';
@@ -58,7 +59,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     after: ['input-frame-start-scan'],
     queries: [],
     fn: () => {
-      const snap = app.renderer.input.snapshot(world);
+      const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (!snap) return;
       const lightResult = world.get(lightEntity, DirectionalLight);
       if (!lightResult.ok) return;

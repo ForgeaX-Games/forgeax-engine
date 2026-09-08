@@ -17,7 +17,6 @@
 //   P3 explicit failure -- each assertion produces a clear diagnostic
 //   P4 consistent abstraction -- tests use fake canvas, not real browser PointerLock
 
-import { World } from '@forgeax/engine-ecs';
 import { snapshotFromSample } from '@forgeax/engine-input';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -128,14 +127,12 @@ describe('create-app-lock-provider (w9)', () => {
         }),
       );
 
-      const world = new World();
-
       const requestLock = vi.fn();
       const exitLock = vi.fn();
       const lockProvider = { requestLock, exitLock };
 
       const opts: InputAttachOptions = { lockProvider };
-      const handle = attachInputAuto(canvas, world, opts);
+      const handle = attachInputAuto(canvas, opts);
 
       // Dispatch a click — the backend's onCanvasClick handler should call
       // lockProvider.requestLock() (provider path takes priority over W3C).
@@ -150,9 +147,7 @@ describe('create-app-lock-provider (w9)', () => {
       expect(snap.mouse.pointerLocked).toBe(true);
 
       // Cleanup.
-      handle.cleanup({
-        onError: () => {},
-      });
+      handle.cleanup();
 
       vi.unstubAllGlobals();
     });
@@ -170,10 +165,8 @@ describe('create-app-lock-provider (w9)', () => {
         }),
       );
 
-      const world = new World();
-
       const opts: InputAttachOptions = {};
-      const handle = attachInputAuto(canvas, world, opts);
+      const handle = attachInputAuto(canvas, opts);
 
       // Dispatch a click — the backend should call requestPointerLock on
       // the canvas (W3C path, no provider).
@@ -186,7 +179,7 @@ describe('create-app-lock-provider (w9)', () => {
       const snap = snapshotFromSample(handle.backend.sample());
       expect(snap.mouse.pointerLocked).toBe(true);
 
-      handle.cleanup({ onError: () => {} });
+      handle.cleanup();
       vi.unstubAllGlobals();
     });
 
@@ -197,7 +190,7 @@ describe('create-app-lock-provider (w9)', () => {
       // tagged 'app-pointer-lock-failed'.
 
       const onErrorReceived: AppError[] = [];
-      const handle = attachInputAuto({} as HTMLCanvasElement, new World());
+      const handle = attachInputAuto({} as HTMLCanvasElement);
 
       handle.setOnErrorDispatch((err) => {
         onErrorReceived.push(err);
@@ -213,7 +206,7 @@ describe('create-app-lock-provider (w9)', () => {
       // real backend rejects — but this test validates the wiring seam.
       expect(onErrorReceived).toHaveLength(0);
 
-      handle.cleanup({ onError: () => {} });
+      handle.cleanup();
     });
   });
 });

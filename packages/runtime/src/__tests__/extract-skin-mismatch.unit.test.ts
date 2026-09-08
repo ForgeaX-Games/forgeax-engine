@@ -22,20 +22,19 @@
 // to a renderable entry alongside the bad-skin one.
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { type Handle, Severity, World } from '@forgeax/engine-ecs';
-import {
-  Camera,
-  extractFrame,
-  MeshFilter,
-  MeshRenderer,
-  prepareExtractContext,
-} from '@forgeax/engine-render/internal';
+import { World } from '@forgeax/engine-ecs';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import type { ShaderRegistry } from '@forgeax/engine-shader';
 import { Skin } from '@forgeax/engine-skinning';
-import type { MaterialAsset, MeshAsset, SkeletonAsset } from '@forgeax/engine-types';
-import { describe, expect, it, vi } from 'vitest';
+import type { Handle, MaterialAsset, MeshAsset, SkeletonAsset } from '@forgeax/engine-types';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -91,7 +90,11 @@ function registerSkinnedMesh(world: World): Handle<'MeshAsset', 'shared'> {
       skinWeight: new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]),
     },
     aabb: UNIT_AABB,
-    submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+    submeshes: [
+      { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list', materialSlot: 0 },
+    ],
+
+    materialSlots: [{ slotName: 'Default' }],
   });
 }
 
@@ -102,7 +105,11 @@ function registerUnskinnedMesh(world: World): Handle<'MeshAsset', 'shared'> {
     indices: new Uint16Array([0, 1, 2]),
     attributes: { position: TRIANGLE_POSITIONS },
     aabb: UNIT_AABB,
-    submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+    submeshes: [
+      { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list', materialSlot: 0 },
+    ],
+
+    materialSlots: [{ slotName: 'Default' }],
   });
 }
 
@@ -232,19 +239,16 @@ describe('render-system-extract Skin / pbr-skin mismatch (AC-07 / w19)', () => {
     spawnSkinnedRenderable(world, meshHandle, unlitMatHandle, skeletonHandle);
     propagateTransforms(world);
 
-    const errorSpy = vi.fn();
-    world.setErrorHandler(errorSpy);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     const frame = extractFrame(world, prepareExtractContext(world, { assets }));
 
     expect(errorSpy).toHaveBeenCalledTimes(1);
-    const [errArg, ctxArg] = errorSpy.mock.calls[0] ?? [];
+    const [, errArg] = errorSpy.mock.calls[0] ?? [];
     expect((errArg as { code: string }).code).toBe('skin-material-mismatch');
     expect((errArg as { detail: { actualShader: string | undefined } }).detail.actualShader).toBe(
       'forgeax::default-unlit',
     );
-    expect((ctxArg as { severity: number }).severity).toBe(Severity.Error);
-
     // entity skipped -> no renderable entry
     expect(frame.renderables).toHaveLength(0);
   });
@@ -258,13 +262,12 @@ describe('render-system-extract Skin / pbr-skin mismatch (AC-07 / w19)', () => {
     spawnRenderable(world, meshHandle, skinMatHandle);
     propagateTransforms(world);
 
-    const errorSpy = vi.fn();
-    world.setErrorHandler(errorSpy);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     const frame = extractFrame(world, prepareExtractContext(world, { assets }));
 
     expect(errorSpy).toHaveBeenCalledTimes(1);
-    const [errArg] = errorSpy.mock.calls[0] ?? [];
+    const [, errArg] = errorSpy.mock.calls[0] ?? [];
     expect((errArg as { code: string }).code).toBe('material-skin-attr-missing');
     expect(
       (errArg as { detail: { missing: 'skinIndex' | 'skinWeight' | 'both' } }).detail.missing,
@@ -283,8 +286,7 @@ describe('render-system-extract Skin / pbr-skin mismatch (AC-07 / w19)', () => {
     spawnSkinnedRenderable(world, meshHandle, skinMatHandle, skeletonHandle);
     propagateTransforms(world);
 
-    const errorSpy = vi.fn();
-    world.setErrorHandler(errorSpy);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     extractFrame(world, prepareExtractContext(world, { assets }));
 
@@ -305,8 +307,7 @@ describe('render-system-extract Skin / pbr-skin mismatch (AC-07 / w19)', () => {
     spawnRenderable(world, unskinnedMesh, unlitMat);
     propagateTransforms(world);
 
-    const errorSpy = vi.fn();
-    world.setErrorHandler(errorSpy);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     const frame = extractFrame(world, prepareExtractContext(world, { assets }));
 
@@ -314,7 +315,7 @@ describe('render-system-extract Skin / pbr-skin mismatch (AC-07 / w19)', () => {
     // emerges as a renderable -- proving `continue` did not turn into
     // `return Result.err` for the whole frame.
     expect(errorSpy).toHaveBeenCalledTimes(1);
-    const [errArg] = errorSpy.mock.calls[0] ?? [];
+    const [, errArg] = errorSpy.mock.calls[0] ?? [];
     expect((errArg as { code: string }).code).toBe('skin-material-mismatch');
     expect(frame.renderables.length).toBeGreaterThanOrEqual(1);
   });

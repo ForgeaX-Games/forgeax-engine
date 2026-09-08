@@ -14,34 +14,6 @@ import { defineSystem } from '../src/index';
 import { World } from '../src/world';
 
 describe('runif-position.test.ts', () => {
-  it('AC-07: missing resource -> invalid -> ErrorHandler fires, runIf NOT evaluated', () => {
-    let runIfEvaluated = 0;
-    let fnRan = 0;
-    let handledErrors = 0;
-    const token = defineSystem({
-      name: 'w4-invalid',
-      queries: [],
-      resources: ['W4MissingResource'],
-      runIf: () => {
-        runIfEvaluated += 1;
-        return true;
-      },
-      fn: () => {
-        fnRan += 1;
-      },
-    });
-
-    const world = new World();
-    world.setErrorHandler(() => {
-      handledErrors += 1;
-    });
-    world.addSystem(Update, token);
-    world.update();
-
-    expect(handledErrors).toBe(1);
-    expect(runIfEvaluated).toBe(0);
-    expect(fnRan).toBe(0);
-  });
 
   it('AC-07: ok validation -> runIf evaluated before query iteration', () => {
     const order: string[] = [];

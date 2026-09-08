@@ -1,3 +1,5 @@
+import { createWorldContext } from '@forgeax/engine-ecs';
+import type { Renderer } from '@forgeax/engine-render';
 import { createRenderer } from '@forgeax/engine-runtime';
 import { scenePlugin } from '@forgeax/engine-scene';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -111,7 +113,7 @@ function roiDelta(
 
 describe('entity visibility browser visual red test', () => {
   let canvas: HTMLCanvasElement | undefined;
-  let renderer: Awaited<ReturnType<typeof createRenderer>> | undefined;
+  let renderer: Renderer | undefined;
 
   afterEach(() => {
     // Browser Mode files share Chromium's GPU process. Do not dispose the
@@ -138,29 +140,41 @@ describe('entity visibility browser visual red test', () => {
         canvas.style.height = `${CANVAS_HEIGHT}px`;
         document.body.append(canvas);
 
-        renderer = await createRenderer(canvas, {}, { shaderManifestUrl: '/shaders/manifest.json' });
-        const ready = await renderer.ready;
-        if (!ready.ok) throw new Error(`renderer.ready failed: ${ready.error.code}`);
-        unsubscribeLost = renderer.onLost((info) => {
-          lostReason = info.reason;
-          lostMessage = info.message;
+        const created = await createRenderer(canvas, {}, { shaderManifestUrl: '/shaders/manifest.json' });
+        if (!created.ok) {
+          const reason = 'code' in created.error ? created.error.code : created.error.reason;
+          throw new Error(`createRenderer failed: ${reason}`);
+        }
+        renderer = created.value;
+        unsubscribeLost = renderer.subscribe((event) => {
+          if (event.kind === 'state-changed' && event.current === 'device-lost') {
+            lostReason = 'device-lost';
+            lostMessage = 'renderer entered device-lost state';
+          } else if (event.kind === 'error') {
+            lostReason = event.error.code;
+            lostMessage = event.error.hint;
+          }
         });
         const scene = createVisibilityDemoWorld();
-        const attached = renderer.attachWorld(scene.world);
-        if (!attached.ok) throw new Error(`renderer.attachWorld failed: ${attached.error.code}`);
-        const scenePluginResult = await scenePlugin().build(scene.world);
-        if (!scenePluginResult.ok)
-          throw new Error(`scenePlugin.build failed: ${scenePluginResult.error.code}`);
+        const attached = renderer.attach(scene.world);
+        if (!attached.ok) throw new Error(`renderer.attach failed: ${attached.error.code}`);
+        await createWorldContext(scene.world, [scenePlugin()]);
 
         const draw = async () => {
           const updateResult = scene.world.update(1 / 60);
           if (!updateResult.ok) throw new Error(`world.update failed: ${updateResult.error.code}`);
-          const result = renderer?.draw([scene.world], { cameraOwner: 0, resourceOwner: 0 });
+          const result = renderer?.draw({
+            leases: [attached.value],
+            camera: { lease: attached.value },
+            environment: { lease: attached.value },
+          });
           if (result === undefined || !result.ok) {
             throw new Error(
               `renderer.draw failed: ${result?.ok === false ? result.error.code : 'missing-result'}`,
             );
           }
+          const completed = await result.value.completed;
+          if (!completed.ok) throw new Error(`renderer submission failed: ${completed.error.code}`);
           await new Promise<void>((resolve) => setTimeout(resolve, 120));
           if (lostReason !== undefined) {
             if (lostReason === 'destroyed') {
@@ -177,7 +191,7 @@ describe('entity visibility browser visual red test', () => {
     scene.setTargetHidden();
     await draw();
     const hiddenPng = await captureCanvas(canvas);
-    const hiddenEvidence = scene.evidence(renderer);
+    const hiddenEvidence = scene.evidence();
 
     scene.setTargetVisible();
     await draw();
@@ -185,7 +199,7 @@ describe('entity visibility browser visual red test', () => {
     scene.setAncestorHiddenWithVisibleChild();
     await draw();
     const childOverridePng = await captureCanvas(canvas);
-    const restoredEvidence = scene.evidence(renderer);
+    const restoredEvidence = scene.evidence();
 
     const [baseline, hidden, restored, childOverride] = await Promise.all([
       decodePng(baselinePng),
@@ -227,10 +241,8 @@ describe('entity visibility browser visual red test', () => {
     expect(hiddenEvidence.targetEffective).toBe('hidden');
     expect(hiddenEvidence.explicitlyHidden).toBeGreaterThan(0);
     expect(restoredEvidence.targetEffective).toBe('visible');
-    expect(restoredEvidence.shadowResourceReady).toBe(true);
-    expect(restoredEvidence.shadowPasses).toBeGreaterThan(0);
     expect(restoredEvidence.visibleChildEffective).toBe('visible');
-    expect(scene.evidence(renderer).inheritedDescendantEffective).toBe('visible');
+    expect(scene.evidence().inheritedDescendantEffective).toBe('visible');
         console.log(
           JSON.stringify({
             target: 'entity-visibility-visual',

@@ -26,7 +26,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[bevy-mouse-input] app.start failed:', started.error.code, started.error.hint);
     return;
   }
-  console.warn(`[bevy-mouse-input] backend=${app.renderer.backend}`);
+  console.warn(`[bevy-mouse-input] state=${app.renderer.inspect().state}`);
   Object.assign(globalThis, { __bevyMouseInputReady: true, __bevyMouseInputState: state });
 }
 

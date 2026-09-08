@@ -211,6 +211,25 @@ export interface Texture {
   readonly [RhiTextureBrand]: void;
 }
 
+/** RHI-owned destination for queue.writeTexture. The resource handle remains opaque. */
+export interface TextureWriteDestination {
+  readonly texture: Texture;
+  readonly mipLevel?: number | undefined;
+  readonly origin?: GPUOrigin3D | undefined;
+  readonly aspect?: GPUTextureAspect | undefined;
+}
+
+/** RHI-owned destination for queue.copyExternalImageToTexture. */
+export type ExternalImageTextureDestination = Omit<
+  Pick<
+    GPUCopyExternalImageDestInfo,
+    'texture' | 'mipLevel' | 'origin' | 'aspect' | 'colorSpace' | 'premultipliedAlpha'
+  >,
+  'texture'
+> & {
+  readonly texture: Texture;
+};
+
 declare const RhiTextureViewBrand: unique symbol;
 /** GPU texture view opaque handle. */
 export interface TextureView {
@@ -588,14 +607,36 @@ export type PipelineLayoutDescriptor = ExplicitUndefined<
   bindGroupLayouts: Iterable<BindGroupLayout>;
 };
 
-/** GPU render pipeline descriptor. Field set strictly matches
- *  GPURenderPipelineDescriptor. */
+/** GPU render pipeline vertex stage with an opaque forgeax shader module. */
+export type RenderPipelineVertexState = ExplicitUndefined<
+  Omit<GPUVertexState, 'module' | 'buffers'>
+> & {
+  module: ShaderModule;
+  buffers: NonNullable<GPUVertexState['buffers']>;
+};
+
+/** GPU render pipeline fragment stage with an opaque forgeax shader module. */
+export type RenderPipelineFragmentState = ExplicitUndefined<
+  Omit<GPUFragmentState, 'module' | 'targets'>
+> & {
+  module: ShaderModule;
+  targets: NonNullable<GPUFragmentState['targets']>;
+};
+
+/** GPU render pipeline descriptor with opaque forgeax layout and shader handles. */
 export type RenderPipelineDescriptor = ExplicitUndefined<
-  Pick<
-    GPURenderPipelineDescriptor,
-    'label' | 'layout' | 'vertex' | 'primitive' | 'depthStencil' | 'multisample' | 'fragment'
+  Omit<
+    Pick<
+      GPURenderPipelineDescriptor,
+      'label' | 'layout' | 'vertex' | 'primitive' | 'depthStencil' | 'multisample' | 'fragment'
+    >,
+    'layout' | 'vertex' | 'fragment'
   >
->;
+> & {
+  layout: 'auto' | PipelineLayout;
+  vertex: RenderPipelineVertexState;
+  fragment?: RenderPipelineFragmentState | undefined;
+};
 
 // ============================================================================
 // 4 new descriptors (feat-20260508-rhi-surface-completion w8 / D-S5,
@@ -1636,7 +1677,7 @@ export interface RhiQueue {
    *   }
    */
   writeTexture(
-    destination: Pick<GPUTexelCopyTextureInfo, 'texture' | 'mipLevel' | 'origin' | 'aspect'>,
+    destination: TextureWriteDestination,
     data: ArrayBufferView | ArrayBuffer,
     dataLayout: Pick<GPUTexelCopyBufferLayout, 'offset' | 'bytesPerRow' | 'rowsPerImage'>,
     size: GPUExtent3DStrict,
@@ -1655,10 +1696,7 @@ export interface RhiQueue {
    */
   copyExternalImageToTexture(
     source: Pick<GPUCopyExternalImageSourceInfo, 'source' | 'origin' | 'flipY'>,
-    destination: Pick<
-      GPUCopyExternalImageDestInfo,
-      'texture' | 'mipLevel' | 'origin' | 'aspect' | 'colorSpace' | 'premultipliedAlpha'
-    >,
+    destination: ExternalImageTextureDestination,
     copySize: GPUExtent3DStrict,
   ): Result<void, RhiError>;
   /** Submit command buffers (single-use). */
@@ -1714,7 +1752,7 @@ export interface RhiCommandEncoder {
    * @example
    *   const pass = encoder.beginRenderPass({ colorAttachments: [{ ... }] });
    */
-  beginRenderPass(desc: GPURenderPassDescriptor): RhiRenderPassEncoder;
+  beginRenderPass(desc: RenderPassDescriptor): RhiRenderPassEncoder;
   /** Begin compute pass.
    *
    * Spec anchor: [@webgpu/types.GPUCommandEncoder.beginComputePass].

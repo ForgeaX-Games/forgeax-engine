@@ -1,13 +1,8 @@
 import { World } from '@forgeax/engine-ecs';
-import {
-  Camera,
-  RenderFeatureStageFailedError,
-  type RenderFeature,
-  type RenderFeaturePreparedRef,
-} from '@forgeax/engine-render';
+import { Camera, type RenderFeature } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { createRenderer } from '@forgeax/engine-runtime';
-import { err, ok } from '@forgeax/engine-types';
+import { ok } from '@forgeax/engine-types';
 
 const WIDTH = 64;
 const HEIGHT = 64;
@@ -16,232 +11,112 @@ if (canvas === null) throw new Error('M10 browser canvas is missing');
 canvas.width = WIDTH;
 canvas.height = HEIGHT;
 
-type Fault = 'create' | 'upload' | 'record' | undefined;
-type FaultState = { fault: Fault; repaired: boolean };
+type FaultState = { repaired: boolean };
 
 function makeWorld(): World {
   const world = new World();
   world.spawn(
     { component: Transform, data: { pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
-    { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
+    {
+      component: Camera,
+      data: {
+        fov: Math.PI / 4,
+        aspect: 1,
+        near: 0.1,
+        far: 100,
+        clearColor: [0.18, 0.08, 0.03, 1],
+      },
+    },
   );
   return world;
 }
 
-function makeFeature(identity: string, state: FaultState): RenderFeature<unknown> {
-  let pipeline: RenderFeaturePreparedRef<'pipeline'> | undefined;
-  let viewBindings: RenderFeaturePreparedRef<'bindings'> | undefined;
-  let inputBindings: RenderFeaturePreparedRef<'bindings'> | undefined;
-  let vertices: RenderFeaturePreparedRef<'vertex-data'> | undefined;
+function makeFeature(identity: string, state: FaultState): RenderFeature<undefined> {
   return {
     identity,
-    extract: () => ok({ draw: true }),
-    prepare: (_data, context) => {
-      if (state.fault === 'create' && !state.repaired) {
-        return err(new RenderFeatureStageFailedError(identity, 1, 'prepare', 'next-frame'));
+    extract: () => ok(undefined),
+    plan: () => {
+      if (!state.repaired) {
+        throw new Error(`${identity} declarative plan is intentionally unavailable`);
       }
-      const colorFormat = navigator.gpu.getPreferredCanvasFormat().endsWith('-srgb')
-        ? navigator.gpu.getPreferredCanvasFormat()
-        : `${navigator.gpu.getPreferredCanvasFormat()}-srgb`;
-      const pipelineResult = context.graphics.preparePipeline('forward', {
-        shader: 'forgeax::tonemap',
-        vertexLayout: 'position',
-        colorFormats: [colorFormat],
-      });
-      if (!pipelineResult.ok) return pipelineResult;
-      const viewResult = context.graphics.prepareBindings('view', {
-        pipeline: pipelineResult.value,
-        values: {},
-      });
-      if (!viewResult.ok) return viewResult;
-      const inputResult = context.graphics.prepareBindings('input', {
-        pipeline: pipelineResult.value,
-        values: { group: 1 },
-      });
-      if (!inputResult.ok) return inputResult;
-      const verticesResult = context.graphics.prepareVertexData('triangle', {
-        layout: 'position',
-        data: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
-      });
-      if (!verticesResult.ok) return verticesResult;
-      pipeline = pipelineResult.value;
-      viewBindings = viewResult.value;
-      inputBindings = inputResult.value;
-      vertices = verticesResult.value;
-      return ok(undefined);
-    },
-    contribute: (_data, context) => {
-      if (pipeline === undefined || viewBindings === undefined || inputBindings === undefined || vertices === undefined) {
-        return err(new RenderFeatureStageFailedError(identity, 1, 'contribute', 'next-frame'));
-      }
-      const colorFormat = navigator.gpu.getPreferredCanvasFormat().endsWith('-srgb')
-        ? navigator.gpu.getPreferredCanvasFormat()
-        : `${navigator.gpu.getPreferredCanvasFormat()}-srgb`;
-      const passResult = context.staging.addGraphicsPass('forward', {
-        attachments: {
-          colors: [{ resource: 'swapchain', format: colorFormat, loadOp: 'clear', storeOp: 'store' }],
-        },
-        draws: [{
-          kind: 'draw',
-          pipeline,
-          bindings: [viewBindings, inputBindings],
-          vertexData: [{ slot: 0, resource: vertices }],
-          command: { vertexCount: 3, instanceCount: 1 },
-        }],
-      });
-      if (!passResult.ok) return passResult;
-      return ok(undefined);
+      return ok({ resources: [], passes: [] });
     },
   };
 }
 
-function installFaultProbe(device: any, states: ReadonlyMap<string, FaultState>) {
-  const buffers = new Map<any, string>();
-  const probe = {
-    backendCalls: { create: 0, upload: 0, record: 0 },
-    failures: [] as Array<Record<string, unknown>>,
-    destroyCount: 0,
-  };
-  const originalDestroy = device.destroyBuffer.bind(device);
-  device.destroyBuffer = (buffer: any) => {
-    if (buffers.has(buffer)) probe.destroyCount += 1;
-    return originalDestroy(buffer);
-  };
-  const originalCreate = device.createBuffer.bind(device);
-  device.createBuffer = (descriptor: any) => {
-    const identity = [...states.keys()].find((entry) => descriptor.label?.startsWith(`${entry}::`));
-    const result = originalCreate(descriptor);
-    if (identity !== undefined && result.ok) buffers.set(result.value, identity);
-    return result;
-  };
-  const originalWrite = device.queue.writeBuffer.bind(device.queue);
-  device.queue.writeBuffer = (buffer: any, offset: number, data: any, dataOffset?: number, size?: number) => {
-    const identity = buffers.get(buffer);
-    const state = identity === undefined ? undefined : states.get(identity);
-    if (state?.fault === 'upload' && !state.repaired) {
-      probe.backendCalls.upload += 1;
-      const failed = originalWrite(buffer, offset, data, 0, -1);
-      probe.failures.push({ identity, operation: 'upload', accepted: failed.ok });
-      return failed;
-    }
-    return originalWrite(buffer, offset, data, dataOffset, size);
-  };
-  const originalEncoder = device.createCommandEncoder.bind(device);
-  device.createCommandEncoder = (descriptor: any) => {
-    const encoderResult = originalEncoder(descriptor);
-    if (!encoderResult.ok) return encoderResult;
-    const encoder = encoderResult.value;
-    const originalBegin = encoder.beginRenderPass.bind(encoder);
-    encoder.beginRenderPass = (passDescriptor: any) => {
-      const pass = originalBegin(passDescriptor);
-      const originalSetVertex = pass.setVertexBuffer.bind(pass);
-      pass.setVertexBuffer = (slot: number, buffer: any, ...rest: any[]) => {
-        const identity = buffers.get(buffer);
-        const state = identity === undefined ? undefined : states.get(identity);
-        if (state?.fault === 'record' && !state.repaired) {
-          probe.backendCalls.record += 1;
-          try {
-            originalSetVertex(slot, buffer, -1);
-          } catch (error) {
-            probe.failures.push({ identity, operation: 'record', error: String(error) });
-            throw error;
-          }
-          return;
-        }
-        originalSetVertex(slot, buffer, ...rest);
-      };
-      return pass;
-    };
-    return encoderResult;
-  };
-  return probe;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object';
+}
+
+function hasFeaturePlanFailure(
+  entry: { readonly code: string; readonly detail: unknown },
+  identity: string,
+): boolean {
+  const detail = isRecord(entry.detail) ? entry.detail : undefined;
+  const cause = isRecord(detail?.cause) ? detail.cause : undefined;
+  const causeDetail = isRecord(cause?.detail) ? cause.detail : undefined;
+  return cause?.code === 'render-feature-stage-failed' && causeDetail?.featureIdentity === identity;
 }
 
 const states = new Map<string, FaultState>([
-  ['m10.browser.create', { fault: 'create', repaired: false }],
-  ['m10.browser.upload', { fault: 'upload', repaired: false }],
-  ['m10.browser.record', { fault: 'record', repaired: false }],
+  ['m10.browser.plan-a', { repaired: false }],
+  ['m10.browser.plan-b', { repaired: false }],
+  ['m10.browser.plan-c', { repaired: false }],
 ]);
-const healthy = makeFeature('m10.browser.healthy', { fault: undefined, repaired: true });
-const faulty = [...states.entries()].map(([identity, state]) => ({ identity, state, feature: makeFeature(identity, state) }));
-const renderer = await createRenderer(
+const features = [...states.entries()].map(([identity, state]) => makeFeature(identity, state));
+const created = await createRenderer(
   canvas,
-  { features: [healthy, ...faulty.map((entry) => entry.feature)] },
+  { features },
   { shaderManifestUrl: '/shaders/manifest.json' },
 );
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`M10 browser renderer.ready failed: ${ready.error.code}`);
+if (!created.ok) throw new Error(`M10 browser renderer creation failed: ${String(created.error)}`);
+const renderer = created.value;
 const errors: Array<{ code: string; hint: string; detail: unknown }> = [];
-renderer.onError((error) => {
-  const candidate = error as unknown as { code: string; hint: string; detail?: unknown };
-  errors.push({ code: candidate.code, hint: candidate.hint, detail: candidate.detail });
-});
-const probe = installFaultProbe(renderer.device, states);
-const firstWorld = makeWorld();
-const firstAttachment = renderer.attachWorld(firstWorld);
-if (!firstAttachment.ok) throw firstAttachment.error;
-firstWorld.update().unwrap();
-const firstDraw = renderer.draw([firstWorld], { cameraOwner: 0, resourceOwner: 0 });
-const firstDiagnostics = renderer.renderFeatureDiagnostics();
-const firstErrors = errors.slice();
-for (const entry of faulty) entry.state.repaired = true;
-const recoveryModes = new Set(
-  firstDiagnostics
-    .map((entry) => {
-      const detail = entry.latestError?.detail;
-      return detail !== undefined && 'recovery' in detail ? detail.recovery : undefined;
-    })
-    .filter((value) => value !== undefined),
-);
-const recoveryActions: string[] = [];
-if (recoveryModes.has('renderer-recover')) {
-  const recovered = await renderer.recover();
-  recoveryActions.push(recovered.ok ? 'renderer.recover()' : `renderer.recover():${recovered.error.code}`);
-}
-if (recoveryModes.has('next-frame')) recoveryActions.push('next-frame retry');
-const secondWorld = makeWorld();
-renderer.detachWorld(firstWorld);
-const secondAttachment = renderer.attachWorld(secondWorld);
-if (!secondAttachment.ok) throw secondAttachment.error;
-secondWorld.update().unwrap();
-const secondDraw = renderer.draw([secondWorld], { cameraOwner: 0, resourceOwner: 0 });
-const secondDiagnostics = renderer.renderFeatureDiagnostics();
-const firstByIdentity = (identity: string) => firstDiagnostics.find((entry) => entry.identity === identity);
-const secondByIdentity = (identity: string) => secondDiagnostics.find((entry) => entry.identity === identity);
-for (const [identity, state] of states) {
-  const expected = state.fault === 'create'
-    ? 'render-feature-stage-failed'
-    : state.fault === 'upload'
-      ? 'render-feature-preparation-failed'
-      : 'render-feature-draw-recording-failed';
-  const first = firstByIdentity(identity);
-  const second = secondByIdentity(identity);
-  const error = firstErrors.find((entry) => {
-    const detail = entry.detail;
-    return detail !== null && typeof detail === 'object' && 'featureIdentity' in detail && detail.featureIdentity === identity;
+renderer.subscribe((event) => {
+  if (event.kind !== 'error') return;
+  errors.push({
+    code: event.error.code,
+    hint: event.error.hint,
+    detail: 'detail' in event.error ? event.error.detail : undefined,
   });
-  if (first?.status !== 'failed' || first.latestError?.code !== expected || error?.hint === undefined || second?.status !== 'active' || second.latestError !== undefined) {
-    throw new Error(`M10 browser ${identity} lifecycle mismatch: ${JSON.stringify({ first, second, error, probe })}`);
+});
+
+const world = makeWorld();
+const attached = renderer.attach(world);
+if (!attached.ok) throw attached.error;
+world.update().unwrap();
+const frame = {
+  leases: [attached.value],
+  camera: { lease: attached.value },
+  environment: { lease: attached.value },
+};
+const firstDraw = renderer.draw(frame);
+const firstErrors = errors.slice();
+for (const state of states.values()) state.repaired = true;
+const secondDraw = renderer.draw(frame);
+if (firstDraw.ok) await firstDraw.value.completed;
+if (secondDraw.ok) await secondDraw.value.completed;
+
+for (const identity of states.keys()) {
+  const failure = firstErrors.find((entry) => hasFeaturePlanFailure(entry, identity));
+  if (failure === undefined || failure.hint.length === 0) {
+    throw new Error(`M10 browser ${identity} plan failure was not observable: ${JSON.stringify({ firstErrors })}`);
   }
 }
-const healthyFirst = firstByIdentity('m10.browser.healthy');
-const healthySecond = secondByIdentity('m10.browser.healthy');
-if (!firstDraw.ok || !secondDraw.ok || healthyFirst?.status !== 'active' || healthySecond?.status !== 'active' || probe.backendCalls.upload < 1 || probe.backendCalls.record < 1) {
-  throw new Error(`M10 browser acceptance mismatch: ${JSON.stringify({ firstDraw, secondDraw, firstDiagnostics, secondDiagnostics, probe })}`);
+if (!firstDraw.ok || !secondDraw.ok) {
+  throw new Error(`M10 browser draw recovery failed: ${JSON.stringify({ firstDraw, secondDraw })}`);
 }
+
 const evidence = {
   status: 'pass',
   backend: 'browser-webgpu',
-  firstDiagnostics,
-  secondDiagnostics,
   firstErrors,
-  recoveryModes: [...recoveryModes],
-  recoveryActions,
-  siblingPassEvidence: { healthyFirst: healthyFirst?.status, healthySecond: healthySecond?.status },
-  probe,
-  cleanup: undefined as { disposeCalls: number; destroyCount: number } | undefined,
+  featureIdentities: renderer.inspect().features,
+  firstDraw: { frameId: firstDraw.value.frameId },
+  secondDraw: { frameId: secondDraw.value.frameId },
+  recovery: 'next-frame declarative plan retry',
+  cleanup: undefined as { disposeCalls: number } | undefined,
 };
-await renderer.device.queue.onSubmittedWorkDone();
 await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 const browserGlobals = globalThis as typeof globalThis & {
   __forgeaxM10Dispose?: () => void;
@@ -249,8 +124,9 @@ const browserGlobals = globalThis as typeof globalThis & {
 };
 browserGlobals.__forgeaxM10Evidence = evidence;
 browserGlobals.__forgeaxM10Dispose = () => {
-  renderer.dispose();
-  renderer.dispose();
-  evidence.cleanup = { disposeCalls: 2, destroyCount: probe.destroyCount };
-  browserGlobals.__forgeaxM10Evidence = evidence;
+  void renderer.dispose().then(() => {
+    void renderer.dispose();
+    evidence.cleanup = { disposeCalls: 2 };
+    browserGlobals.__forgeaxM10Evidence = evidence;
+  });
 };

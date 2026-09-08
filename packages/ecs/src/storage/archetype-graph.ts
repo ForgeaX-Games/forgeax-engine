@@ -5,8 +5,9 @@
 // (ArchetypeGeneration for query cache incremental update).
 
 import type { Component, ComponentId } from '../component';
+import * as componentOwner from '../component';
 import { type Archetype, type ArchetypeId, archetypeKey, createArchetype } from './archetype';
-import { createSparseTagSet, type SparseTagSet } from './sparse-tag-set';
+import { createSparseTagSet, type SparseTagSet } from './change-detection';
 import { canonicalComponents, createTable, type Table, type TableId, tableKey } from './table';
 
 /**
@@ -63,7 +64,7 @@ export function getOrCreateTable(
   const tableComponents = canonicalComponents(
     components.filter((component) => component.storage === 'table'),
   );
-  const key = tableKey(tableComponents.map((component) => component.id));
+  const key = tableKey(tableComponents.map((component) => componentOwner.componentId(component)));
   const existingId = graph.tableDedupByKey.get(key);
   if (existingId !== undefined) return getTable(graph, existingId);
   const table = createTable(tableComponents, graph.tables.length, graph.shared);
@@ -74,10 +75,10 @@ export function getOrCreateTable(
 }
 
 export function getOrCreateSparseTagSet(graph: ArchetypeGraph, component: Component): SparseTagSet {
-  const current = graph.sparseTags.get(component.id);
+  const current = graph.sparseTags.get(componentOwner.componentId(component));
   if (current !== undefined) return current;
   const set = createSparseTagSet(component);
-  graph.sparseTags.set(component.id, set);
+  graph.sparseTags.set(componentOwner.componentId(component), set);
   return set;
 }
 
@@ -126,7 +127,7 @@ export function getAddEdge(
   }
 
   // Compute target archetype: src components + new component.
-  const newIds = [...src.components.map((c) => c.id), componentId];
+  const newIds = [...src.components.map((c) => componentOwner.componentId(c)), componentId];
   const newComponents = [...src.components, component];
   const target = getOrCreateArchetype(graph, newIds, newComponents);
   src.addEdges.set(componentId, target.id);
@@ -137,7 +138,7 @@ export function getAddEdge(
  * Get the target archetype after removing `componentId` from `src`.
  * Caches the edge for O(1) subsequent lookups.
  *
- * Component list is derived from `src.components.filter(c => c.id !== componentId)`
+ * Component list is derived from `src.components.filter(c => componentOwner.componentId(c) !== componentId)`
  * (no separate componentRegistry — feat-20260611 AC-09).
  */
 export function getRemoveEdge(
@@ -155,8 +156,10 @@ export function getRemoveEdge(
 
   // Compute target archetype: src components minus removed component.
   // Derive componentIds from src.components (single-field Archetype).
-  const newIds = src.components.map((c) => c.id).filter((id) => id !== componentId);
-  const newComponents = src.components.filter((c) => c.id !== componentId);
+  const newIds = src.components
+    .map((c) => componentOwner.componentId(c))
+    .filter((id) => id !== componentId);
+  const newComponents = src.components.filter((c) => componentOwner.componentId(c) !== componentId);
   const target = getOrCreateArchetype(graph, newIds, newComponents);
   src.removeEdges.set(componentId, target.id);
   return target;

@@ -1,14 +1,15 @@
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { Update } from '@forgeax/engine-ecs';
 // 1. engine usage
 import { createApp } from '@forgeax/engine-app';
 import type { App, CanvasAppError } from '@forgeax/engine-app';
-import type { InputBackend } from '@forgeax/engine-input';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputBackend, type InputSnapshot } from '@forgeax/engine-input';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_CUBE, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { PointLight, SpotLight } from '@forgeax/engine-render';
 
 import type {
@@ -17,12 +18,13 @@ import type {
   MeshAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
-import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
+import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import materialPackJson from '../assets/material-container2.pack.json';
 import {
   addFirstPersonSystem,
   CAMERA_FOV_RADIANS,
+  captureCanvasPixels,
   createFirstPersonControls,
   createScrollFovAccumulator,
 } from '../../../../shared/src/learn-render-first-person';
@@ -32,10 +34,7 @@ const CONTAINER2_TEXTURE_GUID = '019e3969-1d46-7945-a75a-ef97d537531e';
 const CONTAINER2_SPECULAR_GUID = '019e3969-1d46-76ca-9a46-2168b746a292';
 const CUBE_MESH_GUID = '019e3968-6007-71ae-856e-1fd6c9728cfb';
 const CUBE_MATERIAL_GUID = '019e3969-2000-7000-8000-000000000003';
-const PACK_INDEX_URL = '/pack-index.json';
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-2-6-multiple-lights',
-);
+
 const CAMERA_NEAR = 0.1;
 const CAMERA_FAR = 100;
 const CAMERA_PROJECTION_PERSPECTIVE = 0;
@@ -107,7 +106,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   const bundler = {
     ...forgeaxBundlerAdapter(),
-    importTransport: createDevImportTransport(runtimeBinding),
+    importTransport: createRuntimeAssetImportTransport(runtimeBinding),
   };
   const appRes: { ok: true; value: App } | { ok: false; error: CanvasAppError } =
     overrideBackend === undefined
@@ -119,7 +118,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   const app = appRes.value;
-  const renderer = app.renderer;
   const world = app.world;
   app.onError((error) => {
     console.error('[learn-render 2.6 multiple-lights] app.onError:', error.code, error.hint);
@@ -127,9 +125,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     if (bus !== undefined) bus.push({ code: error.code, hint: error.hint });
   });
 
-  const assets = renderer.assets;
-  assets.configureRuntimeBinding(runtimeBinding);
-  assets.configurePackIndex(PACK_INDEX_URL);
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[learn-render 2.6] asset owner unavailable');
+    return;
+  }
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   const diffuseGuid = parseGuidOrAbort('container2 texture', CONTAINER2_TEXTURE_GUID);
   const specularGuid = parseGuidOrAbort('container2 specular texture', CONTAINER2_SPECULAR_GUID);
@@ -318,36 +319,34 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
   );
 
-  addFirstPersonSystem(world, renderer, {
+  addFirstPersonSystem(world, {
     name: 'learn-render-multiple-lights-first-person',
     overrideBackend,
     flashlight: { spotLightQuery: true },
   });
-  addScrollFovSystem(world, renderer);
+  addScrollFovSystem(world);
 
   const startRes = app.start();
   if (!startRes.ok) {
     console.error('[learn-render 2.6 multiple-lights] app.start failed:', startRes.error.code, startRes.error.hint);
   }
 
-  installCaptureHook(app, world);
+  installCaptureHook(target, world);
 }
 
 // RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives
-// one update + draw + readPixels so the live canvas read is anchored to the same
+// one update so the host canvas read is anchored to the same
 // frame the capture records. Only meaningful when the page is served with
 // FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
-function installCaptureHook(app: App, world: App['world']): void {
+function installCaptureHook(target: HTMLCanvasElement, world: App['world']): void {
   type CaptureHook = () => Promise<Uint8Array>;
   const win = window as unknown as { __captureMultipleLights?: CaptureHook };
-  const renderer = app.renderer;
   win.__captureMultipleLights = async (): Promise<Uint8Array> => {
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    const r = await renderer.readPixels();
+    const r = await captureCanvasPixels(target);
     if (!r.ok) {
       throw new Error(
-        `[learn-render 2.6 multiple-lights] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
+        `[learn-render 2.6 multiple-lights] canvas capture failed: ${r.error.hint}`,
       );
     }
     return r.value;
@@ -364,14 +363,14 @@ function readMaterialPackEntry(rawPack: unknown): MaterialPackEntry | null {
   return materialEntry;
 }
 
-function addScrollFovSystem(world: App['world'], renderer: App['renderer']): void {
+function addScrollFovSystem(world: App['world']): void {
   const scrollFov = createScrollFovAccumulator();
   world.addSystem(Update, {
     name: 'learn-render-multiple-lights-scroll-fov',
     after: ['input-frame-start-scan'],
     queries: [{ write: [Camera] }],
     fn: (world, queryResults) => {
-      const snapshot = renderer.input.snapshot(world);
+      const snapshot = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (snapshot === undefined) {
         return;
       }

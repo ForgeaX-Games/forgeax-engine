@@ -1,18 +1,20 @@
-import { type EntityHandle, projectComponentData, type World } from '@forgeax/engine-ecs';
+import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import { projectComponentData } from '@forgeax/engine-ecs/externalization';
 import { err, ok, type Result } from '@forgeax/engine-types';
-import {
-  encodeReplicationBatch,
-  type ReplicationBatch,
-  type ReplicationComponentRecord,
-  type ReplicationEntityRecord,
-} from './codec';
+import type { SessionId } from '../session/recovery';
+import { encodeReplicationPacket } from './codec';
 import { REPLICATION_PROTOCOL_VERSION } from './constants';
 import type { NetError } from './errors';
 import { DEFAULT_REPLICATION_LIMITS, type ReplicationProfile } from './profile';
+import type {
+  ReplicationComponentRecord,
+  ReplicationDataPacket,
+  ReplicationEntityRecord,
+} from './protocol';
 
-export interface PublishedBatch extends ReplicationBatch {
+export type PublishedPacket = ReplicationDataPacket & {
   readonly bytes: Uint8Array;
-}
+};
 interface KnownEntity {
   readonly id: number;
   readonly components: Map<string, string>;
@@ -28,20 +30,27 @@ export class AuthorityCoordinator {
   readonly #known = new Map<EntityHandle, KnownEntity>();
   #nextId = 1;
   #tick = 0;
-  constructor(world: World, profile: ReplicationProfile) {
+  #epoch = 0;
+  #sequence = 0;
+  readonly #sessionId: SessionId;
+  constructor(world: World, profile: ReplicationProfile, sessionId: SessionId = 1 as SessionId) {
     this.#world = world;
     this.#profile = profile;
+    this.#sessionId = sessionId;
   }
   idFor(entity: EntityHandle): number {
     return this.#ids.get(entity) ?? 0;
   }
-  publish(): Result<PublishedBatch, NetError> {
+  publish(): Result<PublishedPacket, NetError> {
     return this.#publish(false);
   }
-  publishFull(): Result<PublishedBatch, NetError> {
+  publishFull(): Result<PublishedPacket, NetError> {
     return this.#publish(true);
   }
-  #publish(forceFull: boolean): Result<PublishedBatch, NetError> {
+  nextPublicationEpoch(forceFull = false): number {
+    return forceFull && this.#tick > 0 ? this.#epoch + 1 : this.#epoch;
+  }
+  #publish(forceFull: boolean): Result<PublishedPacket, NetError> {
     const candidateIds = new Map(this.#ids);
     let candidateNextId = this.#nextId;
     const current = new Map<
@@ -76,6 +85,14 @@ export class AuthorityCoordinator {
     }
 
     const full = forceFull || this.#tick === 0;
+    let nextEpoch = this.#epoch;
+    let nextSequence = this.#sequence;
+    if (forceFull && this.#tick > 0) {
+      nextEpoch += 1;
+      nextSequence = 0;
+    }
+    if (full && nextSequence === 0) nextSequence = 1;
+    else nextSequence += 1;
     const entities: ReplicationEntityRecord[] = [];
     for (const [entity, entry] of current) {
       const prior = this.#known.get(entity);
@@ -114,15 +131,29 @@ export class AuthorityCoordinator {
       if (!current.has(entity)) candidateIds.delete(entity);
     }
 
-    const batch: ReplicationBatch = {
-      version: REPLICATION_PROTOCOL_VERSION,
-      fingerprint: this.#profile.fingerprint,
-      tick: this.#tick + 1,
-      full,
-      entities,
-    };
-    const encoded = encodeReplicationBatch(
-      batch,
+    const packet: ReplicationDataPacket = full
+      ? {
+          version: REPLICATION_PROTOCOL_VERSION,
+          kind: 'baseline',
+          sessionId: this.#sessionId,
+          epoch: nextEpoch,
+          sequence: nextSequence as 1,
+          fingerprint: this.#profile.fingerprint,
+          tick: this.#tick + 1,
+          entities,
+        }
+      : {
+          version: REPLICATION_PROTOCOL_VERSION,
+          kind: 'delta',
+          sessionId: this.#sessionId,
+          epoch: nextEpoch,
+          sequence: nextSequence,
+          fingerprint: this.#profile.fingerprint,
+          tick: this.#tick + 1,
+          entities,
+        };
+    const encoded = encodeReplicationPacket(
+      packet,
       this.#profile.limits ?? DEFAULT_REPLICATION_LIMITS,
     );
     if (!encoded.ok) return err(encoded.error);
@@ -132,8 +163,10 @@ export class AuthorityCoordinator {
     this.#known.clear();
     for (const [entity, known] of candidateKnown) this.#known.set(entity, known);
     this.#nextId = candidateNextId;
-    this.#tick = batch.tick;
-    return ok({ ...batch, bytes: encoded.value });
+    this.#tick = packet.tick;
+    this.#epoch = nextEpoch;
+    this.#sequence = nextSequence;
+    return ok({ ...packet, bytes: encoded.value });
   }
 }
 export function createAuthorityCoordinator(

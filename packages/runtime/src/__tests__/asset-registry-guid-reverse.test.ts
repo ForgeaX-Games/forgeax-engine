@@ -1,3 +1,5 @@
+import * as SceneOwner from '@forgeax/engine-scene';
+
 // asset-registry-guid-reverse.test.ts — M1 origin-index reverse-lookup TDD
 // (feat-20260703-collect-nested-sceneinstance-to-mount-roundtrip).
 //
@@ -13,9 +15,17 @@
 //   SceneCollectAssetGuidUnresolvedError with complete .code / .expected /
 //   .hint / .detail fields.
 
+import {
+  type Asset,
+  AssetRegistry,
+  HANDLE_CUBE,
+  resolveAssetHandle,
+  SceneCollectAssetGuidUnresolvedError,
+} from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { MeshFilter, MeshRenderer, SceneInstance } from '@forgeax/engine-render';
 import type {
   AnimationClip,
   Handle,
@@ -24,20 +34,16 @@ import type {
   SceneAsset,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import '@forgeax/engine-render/internal';
-import '@forgeax/engine-render/internal';
-import {
-  type Asset,
-  AssetRegistry,
-  resolveAssetHandle,
-  SceneCollectAssetGuidUnresolvedError,
-} from '@forgeax/engine-assets-runtime';
-import { MeshRenderer, SceneInstance } from '@forgeax/engine-render/internal';
 import { rootsToSceneAsset } from '../collect-scene-asset';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+import { registerSceneComponents } from './helpers/register-scene-components';
 
 function makeReg(): AssetRegistry {
   return new AssetRegistry(makeMockShaderRegistry());
+}
+
+function prepareWorld(world: World): void {
+  registerSceneComponents(world, [MeshFilter, MeshRenderer]);
 }
 
 function cubeMesh(): MeshAsset {
@@ -92,6 +98,7 @@ describe('m1-t1 — origin index reverse-lookup HIT', () => {
   it('_guidForAsset on instantiate-resolved copy returns the original catalog GUID', () => {
     const reg = makeReg();
     const world = new World();
+    prepareWorld(world);
 
     // Catalog the scene asset.
     const scene = makeScene();
@@ -107,7 +114,7 @@ describe('m1-t1 — origin index reverse-lookup HIT', () => {
     const root = instRes.value;
 
     // Get the SceneInstance's source handle and resolve to payload.
-    const srcHandleRes = world.getSceneAssetForInstance(root);
+    const srcHandleRes = SceneOwner.worldGetSceneAssetForInstance(world, root);
     expect(srcHandleRes.ok).toBe(true);
     if (!srcHandleRes.ok) return;
     const srcHandle = srcHandleRes.value;
@@ -145,6 +152,7 @@ describe('m1-t2 — uncatalogued scene MISS path', () => {
   it('rootsToSceneAsset on uncatalogued shared ref fails with SceneCollectAssetGuidUnresolvedError', () => {
     const reg = makeReg();
     const world = new World();
+    prepareWorld(world);
 
     // Construct a scene with an entity that carries a shared<> field
     // referencing an uncatalogued MeshAsset (never catalogued).
@@ -172,7 +180,7 @@ describe('m1-t2 — uncatalogued scene MISS path', () => {
 
     // Allocate shared ref for the scene and instantiate.
     const sceneHandle = world.allocSharedRef<'SceneAsset', SceneAsset>('SceneAsset', asset);
-    const instRes = world.instantiateScene(sceneHandle);
+    const instRes = SceneOwner.worldInstantiateScene(world, sceneHandle);
     expect(instRes.ok).toBe(true);
     if (!instRes.ok) return;
     const root = instRes.value.root;
@@ -195,6 +203,38 @@ describe('m1-t2 — uncatalogued scene MISS path', () => {
     // the collect path emits handle (not guid).
     const detail = err.detail as { field: string; handle?: number; guid?: string };
     expect(typeof detail.handle).toBe('number');
+  });
+});
+
+describe('builtin reverse lookup ownership', () => {
+  it('collects a builtin mesh GUID without cataloguing the process-static payload', () => {
+    const registry = { guidOf: () => undefined };
+    const world = new World();
+    prepareWorld(world);
+    const scene: SceneAsset = {
+      kind: 'scene',
+      entities: [
+        {
+          localId: 0 as never,
+          components: {
+            Transform: {},
+            MeshFilter: { assetHandle: HANDLE_CUBE as never },
+          },
+        },
+      ],
+    };
+    const sceneHandle = world.allocSharedRef<'SceneAsset', SceneAsset>('SceneAsset', scene);
+    const instantiated = SceneOwner.worldInstantiateScene(world, sceneHandle);
+    expect(instantiated.ok).toBe(true);
+    if (!instantiated.ok) return;
+
+    const collected = rootsToSceneAsset(registry, world, [instantiated.value.root]);
+    expect(collected.ok).toBe(true);
+    if (!collected.ok) return;
+    const meshEntity = collected.value.entities.find(
+      (entity) => entity.components.MeshFilter !== undefined,
+    );
+    expect(meshEntity?.components.MeshFilter?.assetHandle).toBe(GUID_A);
   });
 });
 
@@ -234,9 +274,79 @@ const CHILD_GUID = '22222222-3333-4444-8555-666677778888';
 const PARENT_GUID = '33333333-4444-4555-8666-777788889999';
 
 describe('w14 M4 probe — owned payload identity anchor', () => {
+  it('atomically adopts a recooked Mesh identity for old handles, repeat loads, and collect/save', async () => {
+    const reg = makeReg();
+    const world = new World();
+    prepareWorld(world);
+    expect(reg.catalog(parseGuid(MESH_GUID), cubeMesh() as Asset).ok).toBe(true);
+    const liveMesh = reg.lookup<MeshAsset>(MESH_GUID);
+    expect(liveMesh).toBeDefined();
+    if (liveMesh === undefined) return;
+    const oldHandle = world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', liveMesh);
+
+    const livePositions = liveMesh.attributes.position;
+    expect(livePositions).toBeInstanceOf(Float32Array);
+    if (!(livePositions instanceof Float32Array)) return;
+    const oldPosition = livePositions[0];
+    expect(oldPosition).toBeDefined();
+    if (oldPosition === undefined) return;
+    const recooked = cubeMesh();
+    const recookedPositions = recooked.attributes.position;
+    expect(recookedPositions).toBeInstanceOf(Float32Array);
+    if (!(recookedPositions instanceof Float32Array)) return;
+    recookedPositions[0] = oldPosition + 10;
+    Object.assign(recooked, { materialSlots: [{ slotName: 'Recooked' }] });
+    expect(reg.catalog(parseGuid(MESH_GUID), recooked as Asset).ok).toBe(true);
+    expect(reg.adoptReloadedMeshMaterialSlots(MESH_GUID, liveMesh as Asset).ok).toBe(true);
+
+    const oldResolved = resolveAssetHandle<MeshAsset>(world, oldHandle);
+    expect(oldResolved.ok).toBe(true);
+    if (!oldResolved.ok) return;
+    expect(oldResolved.value).toBe(liveMesh);
+    expect(oldResolved.value.materialSlots).toEqual([{ slotName: 'Recooked' }]);
+    expect(oldResolved.value.attributes.position).toBe(livePositions);
+    expect(livePositions[0]).toBe(oldPosition);
+
+    const repeated = await reg.loadByGuid<MeshAsset>(reg.parseGuid(MESH_GUID));
+    expect(repeated.ok).toBe(true);
+    if (!repeated.ok) return;
+    expect(repeated.value).toBe(liveMesh);
+    expect(reg._guidForAsset(repeated.value as Asset)).toBe(MESH_GUID);
+
+    const newHandle = world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', repeated.value);
+    const scene: SceneAsset = {
+      kind: 'scene',
+      entities: [
+        {
+          localId: 0 as never,
+          components: {
+            Transform: {},
+            MeshFilter: { assetHandle: newHandle as never },
+            MeshRenderer: { materials: [] },
+          },
+        },
+      ],
+    };
+    const sceneHandle = world.allocSharedRef<'SceneAsset', SceneAsset>('SceneAsset', scene);
+    const instantiated = SceneOwner.worldInstantiateScene(world, sceneHandle);
+    expect(instantiated.ok).toBe(true);
+    if (!instantiated.ok) return;
+    const collected = rootsToSceneAsset(reg, world, [instantiated.value.root]);
+    expect(collected.ok).toBe(true);
+    if (!collected.ok) return;
+    expect(collected.value.entities).toContainEqual(
+      expect.objectContaining({
+        components: expect.objectContaining({
+          MeshFilter: expect.objectContaining({ assetHandle: MESH_GUID }),
+        }),
+      }),
+    );
+  });
+
   it('basic mount preserves material payload identity end-to-end (research Finding 3)', () => {
     const reg = makeReg();
     const world = new World();
+    prepareWorld(world);
 
     const mesh = cubeMesh();
     const mat = unlitMaterial();
@@ -312,6 +422,7 @@ describe('w14 M4 probe — owned payload identity anchor', () => {
     // the FIRST object; the catalog now holds a DIFFERENT object.
     const reg = makeReg();
     const world = new World();
+    prepareWorld(world);
 
     const mat1 = unlitMaterial();
     expect(reg.catalog(parseGuid(MAT_GUID), mat1 as Asset).ok).toBe(true);
@@ -446,6 +557,7 @@ describe('w16 M4 — AC-08 reverse-lookup hit across kinds', () => {
     // and collect surfaces SceneCollectAssetGuidUnresolvedError — not a silent 0.
     const reg = makeReg();
     const world = new World();
+    prepareWorld(world);
 
     const mesh = cubeMesh();
     const mat = unlitMaterial();
@@ -483,7 +595,7 @@ describe('w16 M4 — AC-08 reverse-lookup hit across kinds', () => {
       ],
     };
     const sceneHandle = world.allocSharedRef<'SceneAsset', SceneAsset>('SceneAsset', scene);
-    const instRes = world.instantiateScene(sceneHandle);
+    const instRes = SceneOwner.worldInstantiateScene(world, sceneHandle);
     expect(instRes.ok).toBe(true);
     if (!instRes.ok) return;
 

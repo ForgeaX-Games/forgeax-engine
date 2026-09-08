@@ -27,10 +27,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     mipmap: false,
   };
   const handle = app.world.allocSharedRef('TextureAsset', texture);
-  const upload = await app.renderer.store.uploadTexture(handle, texture, {
-    bytes: pixels, width: TEXTURE_SIZE, height: TEXTURE_SIZE, mime: 'image/png', colorSpace: 'srgb', mipmap: false,
-  });
-  if (!upload.ok) return console.error('[bevy-mesh2d-alpha-mode] texture upload failed:', upload.error);
   buildMesh2dAlphaModeWorld(app.world, unwrapHandle(handle));
   const started = app.start();
   if (!started.ok) return console.error('[bevy-mesh2d-alpha-mode] app.start failed:', started.error);

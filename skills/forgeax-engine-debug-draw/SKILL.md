@@ -1,15 +1,11 @@
 ---
 name: forgeax-engine-debug-draw
 description: >-
-  forgeax-engine immediate-mode 调试可视化层：line / sphere / aabb / frustum / arrow / axes 线框 overlay，
-  runtime 自动挂载 app.debugDraw（零配置），low path 手写 RHI flush（自定义 graph / 录帧脚本）。
-  Use when visualizing positions, colliders, camera frustums, audio radii in gameplay code
-  without creating ECS entities. 与 engine-math 同层级最底层 RHI 便利封装。
+  ForgeaX immediate-mode debug geometry. Use when visualizing positions, colliders,
+  frustums, axes, or radii without creating ECS entities.
 ---
 
 # forgeax-engine-debug-draw
-
-> 基线: 首次 (`feat-20260615-debug-draw-immediate-mode-rhi-convenience-layer`)
 
 > **debug-draw 是 gameplay 调试可视化层** -- 一行 `app.debugDraw.line(a, b, RED)` 在最终渲染帧上画线框，不需要创建 ECS entity / component / system。GPU 帧回放与 RHI 调用录制走 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md) + [`forgeax-engine-cli`](../forgeax-engine-cli/SKILL.md)（rhi-debug 包）。本 skill 面向**所有 forgeax AI 用户**：写 demo、调物理参数、调相机、可视化音频半径时随时用。
 

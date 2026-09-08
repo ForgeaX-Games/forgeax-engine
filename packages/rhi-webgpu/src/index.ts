@@ -56,6 +56,7 @@ import {
   adapterUnavailable,
   featureNotEnabled,
   limitExceeded,
+  requestAdapterFailed,
   shaderCompileFailed,
 } from './errors';
 
@@ -398,19 +399,16 @@ export async function requestAdapter(
   if (ambient === undefined || ambient === null) {
     return adapterUnavailable();
   }
-  // bug-20260610: `navigator.gpu.requestAdapter()` may throw rather than return
-  // null when WebGPU is disabled at the browser level (observed on Edge with
-  // WebGPU flag off — "Failed to create WebGPU Context Provider"). Without this
-  // try/catch, the throw escapes structurally — engine `tryCreateWebGPURenderer`
-  // catches it as outcome=throw with a raw Error (no `.code`), and the rhi-wgpu
-  // wasm GL fallback never gets a chance to run on its own merits because the
-  // engine sees an unstructured failure. Treat any throw as adapter-unavailable
-  // so the structured fallback path (Channel 2 -> Channel 3) stays intact.
+  // `null` is the spec adapter-absence channel. A rejection is a different
+  // failure (permission policy, insecure context, browser/runtime fault, etc.)
+  // and must retain its cause instead of being rewritten as unsupported WebGPU.
+  // Both outcomes remain structured, so Runtime can still try its wgpu/WebGL2
+  // fallback without erasing the browser-native channel diagnosis.
   let adapter: unknown;
   try {
     adapter = await ambient.requestAdapter(opts as GPURequestAdapterOptions | undefined);
-  } catch {
-    return adapterUnavailable();
+  } catch (cause) {
+    return requestAdapterFailed(cause);
   }
   if (adapter === null) {
     return adapterUnavailable();

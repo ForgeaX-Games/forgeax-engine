@@ -42,7 +42,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = appResult.value;
-  console.warn(`[bevy-3d-rotation] backend=${app.renderer.backend}`);
+  console.warn(`[bevy-3d-rotation] state=${app.renderer.inspect().state}`);
 
   buildRotationWorld(app.world);
 

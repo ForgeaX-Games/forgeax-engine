@@ -25,6 +25,7 @@ const CAMERA = { position: [0, 1.2, 7.5], target: [0, 0.8, 0] };
 const rerunCmd = 'pnpm --filter @forgeax/hello-boss-lightning smoke';
 const falsifier = process.env.BOSS_LIGHTNING_FALSIFY ?? '';
 const m11Mode = process.env.BOSS_LIGHTNING_M11 === '1';
+const m35Mode = process.env.BOSS_LIGHTNING_M35 === '1';
 const eventScenario = 'event-sub-emitter';
 const eventOverflow = 'overflow';
 const missingDepth = 'missing-depth';
@@ -58,9 +59,9 @@ globalThis.fetch = async request => {
 
 const shim = await setupGpuShim({ width: WIDTH, height: HEIGHT, rerunCmd });
 const manifest = JSON.parse(readFileSync(resolve(distRoot, 'shaders/manifest.json'), 'utf8'));
-const { World } = await import('@forgeax/engine-ecs');
+const { createWorldContext, World } = await import('@forgeax/engine-ecs');
 const { mat4 } = await import('@forgeax/engine-math');
-const { createRenderer } = await import('@forgeax/engine-runtime');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 const { HANDLE_CUBE } = await import('@forgeax/engine-assets-runtime');
 const { Transform, scenePlugin } = await import('@forgeax/engine-scene');
@@ -80,10 +81,12 @@ const {
 const world = new World();
 let playerEntity = 0;
 let cameraEntity = 0;
+const cameraEntities = new WeakMap();
 const camera = {
   read(currentWorld) {
-    const transform = currentWorld.get(cameraEntity, Transform);
-    const cameraValue = currentWorld.get(cameraEntity, Camera);
+    const owner = cameraEntities.get(currentWorld) ?? cameraEntity;
+    const transform = currentWorld.get(owner, Transform);
+    const cameraValue = currentWorld.get(owner, Camera);
     if (!transform.ok || !cameraValue.ok) return undefined;
     return {
       position: new Float32Array(transform.value.pos),
@@ -104,35 +107,34 @@ const camera = {
 };
 const host = createVfxRuntimeHost({
   camera,
+  ...(m35Mode ? { maxQueuedTicks: 1 } : {}),
   providers: [
     createCameraProvider({ available: () => true }),
     createSceneDepthProvider({ available: () => falsifier !== missingDepth }),
   ],
 });
-const renderer = await createRenderer(
+const constructed = await constructRuntimeRendererHost(
   shim.mockCanvas,
   { features: falsifier === 'strike-only' ? [] : [host.feature] },
   { shaderManifestUrl: `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}` },
 );
+if (!constructed.ok) throw constructed.error;
+const renderer = constructed.value.renderer;
+const assets = constructed.value.assets;
 const errors = [];
 let currentFrame = -1;
-renderer.onError(error =>
+renderer.subscribe((event) => {
+  if (event.kind !== 'error') return;
   errors.push({
-    code: error.code,
-    hint: error.hint,
-    detail: error.detail,
+    code: event.error.code,
+    hint: event.error.hint,
+    detail: event.error.detail,
     frame: currentFrame,
-  }),
-);
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke-dawn] FAIL readiness=${ready.error.code} ${ready.error.hint}`);
-  process.exit(1);
-}
-const attachment = renderer.attachWorld(world);
+  });
+});
+const attachment = renderer.attach(world);
 if (!attachment.ok) throw attachment.error;
-const assets = renderer.assets;
-if (assets === null) throw new Error('AssetRegistry unavailable');
+const mainLease = attachment.value;
 assets.configurePackIndex('/pack-index.json');
 const attached = await host.attachWorld({ world, assets });
 if (!attached.ok) throw new Error(`VFX host attach failed: ${attached.error.hint}`);
@@ -145,6 +147,7 @@ cameraEntity = world.spawn(
   { component: Transform, data: { pos: [0, 1.2, 7.5] } },
   { component: Camera, data: { fov: Math.PI / 3, aspect: WIDTH / HEIGHT, near: 0.1, far: 100 } },
 ).unwrap();
+cameraEntities.set(world, cameraEntity);
 world.spawn({
   component: DirectionalLight,
   data: { direction: [-0.4, -0.8, -0.5], color: [0.6, 0.72, 1], intensity: 1.4, castShadow: false },
@@ -213,13 +216,16 @@ playerEntity = world.spawn(
   { component: Transform, data: { pos: [0, -0.2, 0] } },
   { component: ParticleEffectPlayer, data: { effect, playing: true, seed: SEED, timeScale: 1 } },
 ).unwrap();
+let healthyWorld;
+let healthyPlayerEntity;
+let healthyLease;
 const topologyShowcases = [
   { kind: 'ribbon', x: -2.2 },
   { kind: 'trail', x: 0 },
   { kind: 'beam', x: 2.2 },
 ];
 const sourceEmitter = loaded.value.program.emitters[0];
-for (const showcase of benchmarkMode ? [] : topologyShowcases) {
+for (const showcase of benchmarkMode || m35Mode ? [] : topologyShowcases) {
   const showcaseEmitter = {
     ...sourceEmitter,
     id: `showcase-${showcase.kind}`,
@@ -245,7 +251,37 @@ for (const showcase of benchmarkMode ? [] : topologyShowcases) {
     },
   ).unwrap();
 }
-scenePlugin().build(world).unwrap();
+await createWorldContext(world, [scenePlugin()]);
+
+if (m35Mode) {
+  healthyWorld = new World();
+  const healthyCameraEntity = healthyWorld
+    .spawn(
+      { component: Transform, data: { pos: [0, 1.2, 7.5] } },
+      {
+        component: Camera,
+        data: { fov: Math.PI / 3, aspect: WIDTH / HEIGHT, near: 0.1, far: 100 },
+      },
+    )
+    .unwrap();
+  cameraEntities.set(healthyWorld, healthyCameraEntity);
+  const healthyEffect = healthyWorld.allocSharedRef('ParticleEffectAsset', loaded.value);
+  healthyPlayerEntity = healthyWorld
+    .spawn(
+      { component: Transform, data: { pos: [0, -0.2, 0] } },
+      {
+        component: ParticleEffectPlayer,
+        data: { effect: healthyEffect, playing: true, seed: SEED + 1, timeScale: 1 },
+      },
+    )
+    .unwrap();
+  await createWorldContext(healthyWorld, [scenePlugin()]);
+  const rendererAttached = renderer.attach(healthyWorld);
+  if (!rendererAttached.ok) throw rendererAttached.error;
+  healthyLease = rendererAttached.value;
+  const hostAttached = await host.attachWorld({ world: healthyWorld, assets });
+  if (!hostAttached.ok) throw new Error(`healthy VFX host attach failed: ${hostAttached.error.hint}`);
+}
 
 const readiness = [];
 let firstReadinessFrame;
@@ -259,20 +295,14 @@ let lastCommitted;
 let eventSubmitted = false;
 const runtime = world.getResource(VFX_GPU_RUNTIME_RESOURCE_KEY);
 const frameDurations = [];
-for (let frame = 0; frame < frameLimit; frame += 1) {
-  const frameStart = performance.now();
-  currentFrame = frame;
-  world.update(1 / 60).unwrap();
-  if (!eventSubmitted) {
-    const instance = runtime?.getInstance(playerEntity);
-    instance?.submit({
-      channel: 'impact',
-      payload: { position: [0.25, -0.7, 0], strength: 1 },
-      sequence: 1,
-    });
-    eventSubmitted = true;
-  }
-  const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+function recordDraw(leases) {
+  const cameraLease = leases[0];
+  if (cameraLease === undefined) throw new Error('recordDraw requires a camera lease');
+  const drawn = renderer.draw({
+    leases,
+    camera: { lease: cameraLease },
+    environment: { lease: cameraLease },
+  });
   if (!drawn.ok) {
     errors.push({
       code: drawn.error.code,
@@ -281,77 +311,254 @@ for (let frame = 0; frame < frameLimit; frame += 1) {
       frame: currentFrame,
     });
   }
-  await new Promise(resolve => setImmediate(resolve));
-  if (benchmarkMode) {
-    await shim.sharedDevice?.queue.onSubmittedWorkDone();
-    if (frame >= 30) frameDurations.push(performance.now() - frameStart);
-  }
-  queuedIntents = runtime.snapshot().length;
-  runtimeDiagnostics = runtime.diagnostics();
-  const eventCounters = runtime.eventCounters(playerEntity);
-  eventDispatch = eventCounters.produced > 0;
-  subEmitterVisible = eventCounters.consumed > 0;
-  queueCleared = eventCounters.queued === 0;
-  mainEffectRunning = runtime.hasPlayer(playerEntity);
-  lastCommitted = runtime.lastCommitted(playerEntity);
-  const readyNow = runtime.hasPlayer(playerEntity) && queuedIntents === 0 && runtimeDiagnostics.length === 0;
-  readiness.push(readyNow ? 'ready' : 'warming');
-  if (firstReadinessFrame === undefined && readyNow) firstReadinessFrame = frame;
-  if (firstReadinessFrame === undefined && frame >= READINESS_FRAME_LIMIT) break;
+  return drawn;
 }
 
+let m35Recovery;
 let m11Recovery;
-if (m11Mode) {
-  const stale = runtime.getInstance(playerEntity);
-  const renderGenerationBefore = runtime.renderGeneration;
-  const featureRecovery = host.feature.recover();
-  const stalePatch = stale?.patch({});
-  world.update(1 / 60).unwrap();
-  const restarted = runtime.getInstance(playerEntity);
-  const restartedInspect = runtime.inspectPlayer(playerEntity);
-  const currentPatch = restarted?.patch({});
-  world.update(1 / 60).unwrap();
-  const currentInspect = runtime.inspectPlayer(playerEntity);
-  for (let recoveryFrame = 0; recoveryFrame < 10; recoveryFrame += 1) {
-    currentFrame += 1;
+if (m35Mode) {
+  if (healthyWorld === undefined || healthyPlayerEntity === undefined) {
+    throw new Error('M35 healthy sibling World was not initialized');
+  }
+  const affectedControl = host.acquireControl(world);
+  const healthyControl = host.acquireControl(healthyWorld);
+  if (!affectedControl.ok || !healthyControl.ok) {
+    throw new Error(`M35 public host control unavailable: ${JSON.stringify({ affectedControl, healthyControl })}`);
+  }
+  const inspectPlayer = (snapshot, player) =>
+    snapshot?.players.find(candidate => candidate.player === player);
+  const updateBoth = () => {
     world.update(1 / 60).unwrap();
-    const recoveredDraw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    if (!recoveredDraw.ok) {
-      errors.push({
-        code: recoveredDraw.error.code,
-        hint: recoveredDraw.error.hint,
-        detail: recoveredDraw.error.detail,
-        frame: currentFrame,
-      });
-    }
-    await new Promise(resolve => setImmediate(resolve));
-  }
-  queuedIntents = runtime.snapshot().length;
-  runtimeDiagnostics = runtime.diagnostics();
-  lastCommitted = runtime.lastCommitted(playerEntity);
-  m11Recovery = {
-    featureRecovery,
-    renderGenerationBefore,
-    renderGenerationAfter: runtime.renderGeneration,
-    stalePatch,
-    staleInstanceDetached: stale !== undefined && restarted !== stale,
-    restartedGeneration: restartedInspect?.values.generation ?? null,
-    currentPatch,
-    currentGeneration: currentInspect?.values.generation ?? null,
+    healthyWorld.update(1 / 60).unwrap();
   };
-  if (
-    !featureRecovery.ok ||
-    runtime.renderGeneration !== renderGenerationBefore + 1 ||
-    !m11Recovery.staleInstanceDetached ||
-    restartedInspect?.values.generation !== 0 ||
-    currentInspect?.values.generation !== 1 ||
-    queuedIntents !== 0 ||
-    runtimeDiagnostics.length !== 0
-  ) {
-    console.error(`[smoke-dawn] FAIL M11 generation fence ${JSON.stringify(m11Recovery)}`);
-    process.exit(1);
+  if (healthyLease === undefined) throw new Error('M35 healthy render lease unavailable');
+  const drawBoth = () => recordDraw([mainLease, healthyLease]);
+  let initial;
+  let initialSibling;
+  for (let warmup = 0; warmup < READINESS_FRAME_LIMIT; warmup += 1) {
+    currentFrame = warmup;
+    updateBoth();
+    if (!drawBoth().ok) throw new Error(`M35 initial composite draw failed at ${warmup}`);
+    await new Promise(resolve => setImmediate(resolve));
+    initial = host.inspect(world);
+    initialSibling = host.inspect(healthyWorld);
+    const warmPlayer = inspectPlayer(initial, playerEntity);
+    const warmSiblingPlayer = inspectPlayer(initialSibling, healthyPlayerEntity);
+    if (
+      warmPlayer?.queuedIntents === 0 &&
+      warmSiblingPlayer?.queuedIntents === 0 &&
+      initial?.diagnostics.length === 0 &&
+      initialSibling?.diagnostics.length === 0 &&
+      warmPlayer?.lastCommitted !== null &&
+      warmPlayer?.lastCommitted !== undefined &&
+      warmSiblingPlayer?.lastCommitted !== null &&
+      warmSiblingPlayer?.lastCommitted !== undefined
+    ) {
+      break;
+    }
   }
-  console.log(`[m11-vfx] Dawn generation fence: PASS ${JSON.stringify(m11Recovery)}`);
+  const initialPlayer = inspectPlayer(initial, playerEntity);
+  const initialSiblingPlayer = inspectPlayer(initialSibling, healthyPlayerEntity);
+  if (initialPlayer?.lastCommitted === null || initialSiblingPlayer?.lastCommitted === null) {
+    throw new Error(`M35 players did not commit a visible baseline: ${JSON.stringify({ initial, initialSibling })}`);
+  }
+  const initialCommitted = initialPlayer?.lastCommitted;
+  const initialSiblingCommitted = initialSiblingPlayer?.lastCommitted;
+  const paused = affectedControl.value.setPlayerRenderConsumption({
+    player: playerEntity,
+    enabled: false,
+  });
+  if (!paused.ok) throw new Error(`M35 render pause failed: ${JSON.stringify(paused)}`);
+  const pausedFrames = [];
+  for (let index = 0; index < 3; index += 1) {
+    currentFrame += 1;
+    updateBoth();
+    if (!drawBoth().ok) throw new Error(`M35 paused composite draw failed at ${index}`);
+    await new Promise(resolve => setImmediate(resolve));
+    const affected = host.inspect(world);
+    const sibling = host.inspect(healthyWorld);
+    const affectedPlayer = inspectPlayer(affected, playerEntity);
+    const siblingPlayer = inspectPlayer(sibling, healthyPlayerEntity);
+    pausedFrames.push({
+      frame: currentFrame,
+      queuedIntents: affectedPlayer?.queuedIntents ?? -1,
+      queuedTicks: affectedPlayer?.queuedTicks ?? -1,
+      diagnostics: affected?.diagnostics ?? [],
+      lastCommitted: affectedPlayer?.lastCommitted,
+      siblingLastCommitted: siblingPlayer?.lastCommitted,
+      siblingDiagnostics: sibling?.diagnostics ?? [],
+    });
+  }
+  const overflow = host.inspect(world);
+  const overflowPlayer = inspectPlayer(overflow, playerEntity);
+  const overflowDiagnostics =
+    overflow?.diagnostics.filter(diagnostic => diagnostic.detail.player === playerEntity) ?? [];
+  const pendingBeforeReplay = pausedFrames.at(-1)?.lastCommitted?.sequence ?? -1;
+  if (
+    overflowPlayer === undefined ||
+    overflowPlayer.queuedIntents > loaded.value.program.emitters.length ||
+    overflowPlayer.queuedTicks > 1 ||
+    overflowDiagnostics.length !== 1 ||
+    overflowDiagnostics[0]?.code !== 'vfx-intent-queue-overflow' ||
+    overflowDiagnostics[0]?.detail.maxQueuedTicks !== 1 ||
+    overflowPlayer.lastCommitted?.sequence !== initialCommitted?.sequence ||
+    overflowPlayer.lastCommitted?.tick !== initialCommitted?.tick ||
+    overflowPlayer.lastCommitted?.phaseTick !== initialCommitted?.phaseTick ||
+    overflowPlayer.lastCommitted?.playCycle !== initialCommitted?.playCycle ||
+    pausedFrames.some(frame => frame.siblingDiagnostics.length !== 0) ||
+    (pausedFrames.at(-1)?.siblingLastCommitted?.tick ?? -1) <= (initialSiblingCommitted?.tick ?? -1)
+  ) {
+    throw new Error(`M35 overflow contract failed: ${JSON.stringify({ initial, overflow, pausedFrames })}`);
+  }
+  const resumed = affectedControl.value.setPlayerRenderConsumption({
+    player: playerEntity,
+    enabled: true,
+  });
+  if (!resumed.ok) throw new Error(`M35 render resume failed: ${JSON.stringify(resumed)}`);
+  currentFrame += 1;
+  updateBoth();
+  if (!drawBoth().ok) throw new Error('M35 resumed composite draw failed');
+  await new Promise(resolve => setImmediate(resolve));
+  const afterResume = host.inspect(world);
+  const afterResumePlayer = inspectPlayer(afterResume, playerEntity);
+  if (
+    afterResumePlayer?.queuedIntents !== 0 ||
+    afterResume?.diagnostics.length !== 0 ||
+    afterResumePlayer?.lastCommitted?.playCycle !== initialCommitted?.playCycle ||
+    afterResumePlayer?.lastCommitted?.phaseTick !== (initialCommitted?.phaseTick ?? 0) + 1
+  ) {
+    throw new Error(`M35 resume contract failed: ${JSON.stringify({ afterResume, overflow })}`);
+  }
+  const replayed = affectedControl.value.replay({ player: playerEntity });
+  if (!replayed.ok) throw new Error(`M35 public replay failed: ${JSON.stringify(replayed)}`);
+  currentFrame += 1;
+  updateBoth();
+  if (!drawBoth().ok) throw new Error('M35 replay composite draw failed');
+  await new Promise(resolve => setImmediate(resolve));
+  const afterReplay = host.inspect(world);
+  const afterReplaySibling = host.inspect(healthyWorld);
+  const afterReplayPlayer = inspectPlayer(afterReplay, playerEntity);
+  const afterReplaySiblingPlayer = inspectPlayer(afterReplaySibling, healthyPlayerEntity);
+  const replayCommitted = afterReplayPlayer?.lastCommitted;
+  if (
+    afterReplayPlayer?.queuedIntents !== 0 ||
+    afterReplay?.diagnostics.length !== 0 ||
+    replayCommitted?.reset !== true ||
+    replayCommitted?.phaseTick !== 0 ||
+    replayCommitted?.playCycle !== (initialCommitted?.playCycle ?? -1) + 1 ||
+    replayCommitted?.firstParticleId !== 0 ||
+    replayCommitted?.sequence <= pendingBeforeReplay ||
+    (afterReplaySiblingPlayer?.lastCommitted?.tick ?? -1) <= (initialSiblingCommitted?.tick ?? -1) ||
+    afterReplaySibling?.diagnostics.length !== 0
+  ) {
+    throw new Error(`M35 replay contract failed: ${JSON.stringify({ afterReplay, afterReplaySibling, pendingBeforeReplay })}`);
+  }
+  queuedIntents = afterReplayPlayer.queuedIntents;
+  runtimeDiagnostics = afterReplay?.diagnostics ?? [];
+  lastCommitted = runtime.lastCommitted(playerEntity);
+  readiness.push('ready');
+  firstReadinessFrame = currentFrame;
+  m35Recovery = {
+    maxQueuedTicks: 1,
+    maxQueuedIntents: loaded.value.program.emitters.length,
+    initial: { player: initialPlayer, sibling: initialSiblingPlayer },
+    pausedFrames,
+    overflow: { player: overflowPlayer, diagnostics: overflowDiagnostics },
+    resume: { player: afterResumePlayer },
+    replay: { player: afterReplayPlayer, sibling: afterReplaySiblingPlayer },
+  };
+  console.log(
+    `[m35-vfx] Dawn overflow/restart: PASS ${JSON.stringify({
+      maxQueuedTicks: m35Recovery.maxQueuedTicks,
+      maxQueuedIntents: m35Recovery.maxQueuedIntents,
+      overflowDiagnostics: m35Recovery.overflow.diagnostics.length,
+      pausedQueue: m35Recovery.overflow.player.queuedIntents,
+      pausedTicks: m35Recovery.overflow.player.queuedTicks,
+      lkg: m35Recovery.overflow.player.lastCommitted,
+      replay: m35Recovery.replay.player.lastCommitted,
+      sibling: m35Recovery.replay.sibling.lastCommitted,
+    })}`,
+  );
+} else {
+  for (let frame = 0; frame < frameLimit; frame += 1) {
+    const frameStart = performance.now();
+    currentFrame = frame;
+    world.update(1 / 60).unwrap();
+    if (!eventSubmitted) {
+      const instance = runtime?.getInstance(playerEntity);
+      instance?.submit({
+        channel: 'impact',
+        payload: { position: [0.25, -0.7, 0], strength: 1 },
+        sequence: 1,
+      });
+      eventSubmitted = true;
+    }
+    const drawn = recordDraw([mainLease]);
+    if (!drawn.ok) throw new Error(`Boss Lightning draw failed at frame ${frame}`);
+    await new Promise(resolve => setImmediate(resolve));
+    if (benchmarkMode) {
+      await shim.sharedDevice?.queue.onSubmittedWorkDone();
+      if (frame >= 30) frameDurations.push(performance.now() - frameStart);
+    }
+    queuedIntents = runtime.snapshot().length;
+    runtimeDiagnostics = runtime.diagnostics();
+    const eventCounters = runtime.eventCounters(playerEntity);
+    eventDispatch = eventCounters.produced > 0;
+    subEmitterVisible = eventCounters.consumed > 0;
+    queueCleared = eventCounters.queued === 0;
+    mainEffectRunning = runtime.hasPlayer(playerEntity);
+    lastCommitted = runtime.lastCommitted(playerEntity);
+    const readyNow = runtime.hasPlayer(playerEntity) && queuedIntents === 0 && runtimeDiagnostics.length === 0;
+    readiness.push(readyNow ? 'ready' : 'warming');
+    if (firstReadinessFrame === undefined && readyNow) firstReadinessFrame = frame;
+    if (firstReadinessFrame === undefined && frame >= READINESS_FRAME_LIMIT) break;
+  }
+
+  if (m11Mode) {
+    const stale = runtime.getInstance(playerEntity);
+    const renderGenerationBefore = runtime.renderGeneration;
+    const featureRecovery = host.feature.recover();
+    const stalePatch = stale?.patch({});
+    world.update(1 / 60).unwrap();
+    const restarted = runtime.getInstance(playerEntity);
+    const restartedInspect = runtime.inspectPlayer(playerEntity);
+    const currentPatch = restarted?.patch({});
+    world.update(1 / 60).unwrap();
+    const currentInspect = runtime.inspectPlayer(playerEntity);
+    for (let recoveryFrame = 0; recoveryFrame < 10; recoveryFrame += 1) {
+      currentFrame += 1;
+      world.update(1 / 60).unwrap();
+      const recoveredDraw = recordDraw([mainLease]);
+      if (!recoveredDraw.ok) throw new Error(`M11 recovery draw failed at frame ${recoveryFrame}`);
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    queuedIntents = runtime.snapshot().length;
+    runtimeDiagnostics = runtime.diagnostics();
+    lastCommitted = runtime.lastCommitted(playerEntity);
+    m11Recovery = {
+      featureRecovery,
+      renderGenerationBefore,
+      renderGenerationAfter: runtime.renderGeneration,
+      stalePatch,
+      staleInstanceDetached: stale !== undefined && restarted !== stale,
+      restartedGeneration: restartedInspect?.values.generation ?? null,
+      currentPatch,
+      currentGeneration: currentInspect?.values.generation ?? null,
+    };
+    if (
+      !featureRecovery.ok ||
+      runtime.renderGeneration !== renderGenerationBefore + 1 ||
+      !m11Recovery.staleInstanceDetached ||
+      restartedInspect?.values.generation !== 0 ||
+      currentInspect?.values.generation !== 1 ||
+      queuedIntents !== 0 ||
+      runtimeDiagnostics.length !== 0
+    ) {
+      console.error(`[smoke-dawn] FAIL M11 generation fence ${JSON.stringify(m11Recovery)}`);
+      process.exit(1);
+    }
+    console.log(`[m11-vfx] Dawn generation fence: PASS ${JSON.stringify(m11Recovery)}`);
+  }
 }
 
 if (falsifier === 'strike-only') {
@@ -417,6 +624,29 @@ const topologyZones = {
   trail: zoneEnergy(75, 125, 75, 145),
   beam: zoneEnergy(125, 180, 75, 145),
 };
+if (m35Mode) {
+  if (healthyWorld === undefined || m35Recovery === undefined) {
+    throw new Error('M35 recovery result is unavailable before cleanup');
+  }
+  const detachAffected = await host.detachWorld({ world });
+  const detachAffectedAgain = await host.detachWorld({ world });
+  const detachHealthy = await host.detachWorld({ world: healthyWorld });
+  const detachHealthyAgain = await host.detachWorld({ world: healthyWorld });
+  mainLease.dispose();
+  healthyLease?.dispose();
+  await renderer.dispose();
+  await renderer.dispose();
+  m35Recovery = {
+    ...m35Recovery,
+    cleanup: {
+      detachAffected,
+      detachAffectedAgain,
+      detachHealthy,
+      detachHealthyAgain,
+      rendererDisposedTwice: true,
+    },
+  };
+}
 const strikeOnly = false;
 const recovery = typeof renderer.recover === 'function';
 const lastWarmupErrorFrame = errors
@@ -481,6 +711,7 @@ const result = {
   readinessFrame,
   readinessFrameLimit: READINESS_FRAME_LIMIT,
   recovery,
+  ...(m35Recovery === undefined ? {} : { m35Recovery }),
   ...(m11Recovery === undefined ? {} : { m11Recovery }),
   strikeOnly,
   errors,
@@ -511,7 +742,8 @@ if (
   readinessFrame > READINESS_FRAME_LIMIT ||
   persistentErrors.length > 0 ||
   queuedIntents !== 0 ||
-  runtimeDiagnostics.length > 0
+  runtimeDiagnostics.length > 0 ||
+  (m35Mode && (!m35Recovery?.cleanup || m35Recovery.overflow.diagnostics.length !== 1))
 ) {
   console.error(`[smoke-dawn] FAIL ${JSON.stringify(result)}`);
   process.exit(1);
@@ -520,15 +752,15 @@ if (billboardEnergy <= 0 || meshEnergy <= 0) {
   console.error(`[smoke-dawn] FAIL particle pixel zones are empty ${JSON.stringify(result)}`);
   process.exit(1);
 }
-if (!benchmarkMode && falsifier.length === 0 && !result.arcNovaLayerRunning) {
+if (!m35Mode && !benchmarkMode && falsifier.length === 0 && !result.arcNovaLayerRunning) {
   console.error(`[smoke-dawn] FAIL Arc Nova GPU layer is not running ${JSON.stringify(result)}`);
   process.exit(1);
 }
-if (!['ribbon', 'trail', 'beam'].every(kind => result.indirectDraws.includes(kind))) {
+if (!m35Mode && !['ribbon', 'trail', 'beam'].every(kind => result.indirectDraws.includes(kind))) {
   console.error(`[smoke-dawn] FAIL independent topology evidence is missing ${JSON.stringify(result)}`);
   process.exit(1);
 }
-if (Object.values(topologyPixels).some(count => count < 20)) {
+if (!m35Mode && Object.values(topologyPixels).some(count => count < 20)) {
   console.error(`[smoke-dawn] FAIL advanced topology pixels are missing ${JSON.stringify(result)}`);
   process.exit(1);
 }

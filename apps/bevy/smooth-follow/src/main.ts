@@ -41,7 +41,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = appResult.value;
-  console.warn(`[bevy-smooth-follow] backend=${app.renderer.backend}`);
+  console.warn(`[bevy-smooth-follow] state=${app.renderer.inspect().state}`);
 
   buildSmoothFollowWorld(app.world);
 

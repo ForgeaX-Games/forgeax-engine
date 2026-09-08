@@ -1,9 +1,9 @@
+import { projectImportProductForBuild } from '@forgeax/engine-import';
 import { describe, expect, it } from 'vitest';
-import { logicalPackageFromImportProduct } from '../import-products.js';
 
 describe('UI Pack v2 artifact transport', () => {
   it('keeps companion bytes asset-local instead of publishing top-level payload URLs', () => {
-    const pack = logicalPackageFromImportProduct({
+    const pack = projectImportProductForBuild({
       assets: [
         {
           guid: 'ui-guid',
@@ -25,7 +25,7 @@ describe('UI Pack v2 artifact transport', () => {
   });
 
   it('normalises typed-array payload fields before JSON transport', () => {
-    const pack = logicalPackageFromImportProduct({
+    const pack = projectImportProductForBuild({
       assets: [
         {
           guid: 'skeleton-guid',

@@ -20,8 +20,7 @@ describe('render feature hidden entity report contract', () => {
         context.reportHiddenEntity?.({ world, entity: 9 as never });
         return ok({ count: context.worlds.length });
       },
-      prepare: () => ok(undefined),
-      contribute: () => ok(undefined),
+      plan: () => ok({ resources: [], passes: [] }),
     };
     const host = createRenderFeatureHost([feature]).unwrap();
     const result = runRenderFeatureFrame(host, {

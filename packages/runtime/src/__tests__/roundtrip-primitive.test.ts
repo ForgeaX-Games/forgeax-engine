@@ -11,10 +11,24 @@ import type { Asset } from '@forgeax/engine-assets-runtime';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { defineComponent, type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { Children } from '@forgeax/engine-scene';
+import { ChildOf } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 import { rootsToSceneAsset } from '../collect-scene-asset';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+
+function linkChildren(
+  world: World,
+  parent: EntityHandle,
+  children: readonly (EntityHandle | number)[],
+): void {
+  for (const child of children) {
+    const result = world.addComponent(child as EntityHandle, {
+      component: ChildOf,
+      data: { parent },
+    });
+    if (!result.ok) throw new Error(result.error.code);
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Helpers
@@ -26,6 +40,13 @@ function makeRegistry(): AssetRegistry {
 
 function makePayload(kind: Asset['kind']): Asset {
   return { kind } as Asset;
+}
+
+function registerComponents(
+  world: World,
+  ...components: readonly Parameters<World['components']['register']>[0][]
+): void {
+  for (const component of components) world.components.register(component).unwrap();
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: test helper bridging typed component tokens to World.spawn
@@ -45,6 +66,7 @@ describe('m3-t3(a): individual primitive field round-trip', () => {
     const Test_F32 = defineComponent('Test_RT_F32', { val: 'f32' });
 
     const world = new World();
+    registerComponents(world, Test_F32);
     const reg = makeRegistry();
     // 1.5 is exactly representable in f32.
     const r0 = s(world, Test_F32, { val: 1.5 });
@@ -68,6 +90,7 @@ describe('m3-t3(a): individual primitive field round-trip', () => {
     const Test_F64 = defineComponent('Test_RT_F64', { val: 'f64' });
 
     const world = new World();
+    registerComponents(world, Test_F64);
     const reg = makeRegistry();
     const r0 = s(world, Test_F64, { val: 1.7976931348623157e308 });
 
@@ -91,6 +114,7 @@ describe('m3-t3(a): individual primitive field round-trip', () => {
     const Test_I32 = defineComponent('Test_RT_I32', { val: 'i32' });
 
     const world = new World();
+    registerComponents(world, Test_I32);
     const reg = makeRegistry();
     const r0 = s(world, Test_I32, { val: -42 });
 
@@ -113,6 +137,7 @@ describe('m3-t3(a): individual primitive field round-trip', () => {
     const Test_U32 = defineComponent('Test_RT_U32', { val: 'u32' });
 
     const world = new World();
+    registerComponents(world, Test_U32);
     const reg = makeRegistry();
     const r0 = s(world, Test_U32, { val: 4294967295 });
 
@@ -135,13 +160,11 @@ describe('m3-t3(a): individual primitive field round-trip', () => {
     const Test_Bool = defineComponent('Test_RT_BOOL', { flag: 'bool' });
 
     const world = new World();
+    registerComponents(world, Test_Bool, ChildOf);
     const reg = makeRegistry();
     const r0 = s(world, Test_Bool, { flag: true });
     const r1 = s(world, Test_Bool, { flag: false });
-    world.addComponent(r0 as EntityHandle, {
-      component: Children,
-      data: { entities: [r1 as EntityHandle] },
-    });
+    linkChildren(world, r0 as EntityHandle, [r1 as EntityHandle]);
 
     const collected = rootsToSceneAsset(reg, world, [r0 as EntityHandle]);
     expect(collected.ok).toBe(true);
@@ -166,6 +189,7 @@ describe('m3-t3(a): individual primitive field round-trip', () => {
     const Test_Str = defineComponent('Test_RT_STR', { label: 'string' });
 
     const world = new World();
+    registerComponents(world, Test_Str);
     const reg = makeRegistry();
     const r0 = s(world, Test_Str, { label: 'hello-primitive-test' });
 
@@ -219,6 +243,7 @@ describe('m3-t3(b): mixed entity+shared+primitive round-trip', () => {
 
     const world = new World();
     const handle = world.allocSharedRef('', assetPayload);
+    registerComponents(world, Test_MixedPrim, Test_EntityRef, Test_HasShared, ChildOf);
 
     // Spawn entity A (primitive holder) as root.
     const r0 = s(world, Test_MixedPrim, {
@@ -239,10 +264,7 @@ describe('m3-t3(b): mixed entity+shared+primitive round-trip', () => {
     });
 
     // Link r0 → r1 via Children so both are in the BFS closure.
-    world.addComponent(r0 as EntityHandle, {
-      component: Children,
-      data: { entities: [r1 as EntityHandle] },
-    });
+    linkChildren(world, r0 as EntityHandle, [r1 as EntityHandle]);
 
     const collected = rootsToSceneAsset(reg, world, [r0 as EntityHandle]);
     expect(collected.ok).toBe(true);
@@ -292,6 +314,7 @@ describe('m3-t3(c): TypedArray->Array round-trip normalization', () => {
     });
 
     const world = new World();
+    registerComponents(world, Test_ArrF32);
     const reg = makeRegistry();
     const arr = new Float32Array([1.0, 2.5, 3.75, 4.0, 5.125]);
     const r0 = s(world, Test_ArrF32, {

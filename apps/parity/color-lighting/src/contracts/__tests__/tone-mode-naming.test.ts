@@ -7,10 +7,48 @@ import {
   TONEMAP_NEUTRAL,
   TONEMAP_REINHARD,
   TONEMAP_REINHARD_EXTENDED,
-  tonemapFromF32,
-  tonemapToU32,
 } from '@forgeax/engine-render';
 import { THREE_R184_TONE_MODES } from '../../analytic/three-r184-tonemap';
+
+function tonemapToU32(mode: string): number {
+  switch (mode) {
+    case 'linear':
+      return TONEMAP_LINEAR;
+    case 'reinhard':
+      return TONEMAP_REINHARD;
+    case 'cineon':
+      return TONEMAP_CINEON;
+    case 'aces-filmic':
+      return TONEMAP_ACES_FILMIC;
+    case 'agx':
+      return TONEMAP_AGX;
+    case 'neutral':
+      return TONEMAP_NEUTRAL;
+    default:
+      throw new Error(`unknown tone mode: ${mode}`);
+  }
+}
+
+function tonemapFromF32(value: number): string {
+  switch (value) {
+    case TONEMAP_LINEAR:
+      return 'linear';
+    case TONEMAP_REINHARD:
+      return 'reinhard';
+    case TONEMAP_CINEON:
+      return 'cineon';
+    case TONEMAP_ACES_FILMIC:
+      return 'aces-filmic';
+    case TONEMAP_AGX:
+      return 'agx';
+    case TONEMAP_NEUTRAL:
+      return 'neutral';
+    case TONEMAP_REINHARD_EXTENDED:
+      return 'reinhard-extended';
+    default:
+      return 'none';
+  }
+}
 
 describe('public tone mode naming', () => {
   it('maps every Three r184 name to one public numeric mode', () => {

@@ -1,8 +1,11 @@
 import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { imageImporter } from '@forgeax/engine-image/image-importer';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
+import { optionalAssetPack } from '../../shared/src/optional-asset-pack.js';
 
 // hello-text vite config (feat-20260531 + tweak-20260610).
 //
@@ -22,6 +25,7 @@ const legacyFontRoots = [
   resolve(dejavuFonts, 'DejaVuSansMono.atlas.png.meta.json'),
   resolve(dejavuFonts, 'DejaVuSansMono.font.pack.json'),
 ];
+const runtimeBinding = createStandaloneRuntimeAssetBinding('hello-text');
 
 export default defineConfig({
   plugins: [
@@ -29,7 +33,9 @@ export default defineConfig({
     // Keep this legacy-only oracle on the checked-in pack. The sibling TTF
     // importer belongs to game-default/Preview and must not be silently
     // discovered by a demo that has not registered the font plugin.
-    pluginPack({ roots: legacyFontRoots, refresh: reloadAssetHost() }),
+    ...optionalAssetPack(legacyFontRoots, () =>
+      pluginPack({ runtimeBinding, roots: legacyFontRoots, importers: [imageImporter], refresh: reloadAssetHost() }),
+    ),
   ],
   server: {
     fs: {

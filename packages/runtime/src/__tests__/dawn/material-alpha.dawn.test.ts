@@ -6,11 +6,11 @@ import {
   Materials,
   MeshFilter,
   MeshRenderer,
-} from '@forgeax/engine-render/internal';
-import { createRenderer } from '@forgeax/engine-runtime';
+} from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import type { TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { constructRuntimeRendererHost } from '../../renderer-host';
 
 const WIDTH = 64;
 const HEIGHT = 64;
@@ -175,18 +175,25 @@ async function captureCase(testCase: AlphaCase): Promise<[number, number, number
     addEventListener() {},
     removeEventListener() {},
   } as unknown as HTMLCanvasElement;
-  let renderer: Awaited<ReturnType<typeof createRenderer>>;
+  let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
   try {
-    renderer = await createRenderer(canvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+    host = await constructRuntimeRendererHost(
+      canvas,
+      {},
+      {
+        shaderManifestUrl: ENGINE_MANIFEST_URL,
+      },
+    );
   } finally {
     globalThis.navigator.gpu.requestAdapter = original;
   }
-  const ready = await renderer.ready;
-  expect(ready.ok).toBe(true);
-  if (!ready.ok || device === undefined) throw new Error('runtime Dawn renderer not ready');
+  expect(host.ok).toBe(true);
+  if (!host.ok || device === undefined) throw new Error('runtime Dawn renderer not ready');
+  const { renderer } = host.value;
+  expect(renderer.inspect().state).toBe('alive');
 
   const world = new World();
-  const attachment = renderer.attachWorld(world);
+  const attachment = renderer.attach(world);
   if (!attachment.ok) throw attachment.error;
   const plane = createPlaneGeometry(2.8, 2.8);
   expect(plane.ok).toBe(true);
@@ -196,18 +203,8 @@ async function captureCase(testCase: AlphaCase): Promise<[number, number, number
     testCase.textureColor === undefined ? undefined : makeTexture(testCase.textureColor);
   const textureHandle =
     texture === undefined ? undefined : world.allocSharedRef('TextureAsset', texture);
-  if (texture !== undefined && textureHandle !== undefined) {
-    const uploaded = await renderer.store.uploadTexture(textureHandle, texture, {
-      bytes: texture.data,
-      width: 1,
-      height: 1,
-      mime: 'image/png',
-      colorSpace: 'srgb',
-      mipmap: false,
-    });
-    expect(uploaded.ok).toBe(true);
-    if (!uploaded.ok) throw new Error('texture upload failed');
-  }
+  // The renderer-owned record stage derives GPU residency from this world
+  // asset. No renderer store upload is part of the public contract.
   const renderState =
     testCase.mode === 'BLEND'
       ? {
@@ -265,7 +262,11 @@ async function captureCase(testCase: AlphaCase): Promise<[number, number, number
     data: { direction: [0, 0, -1], color: [1, 1, 1], intensity: 1, castShadow: false },
   });
   world.update().unwrap();
-  const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const drawn = renderer.draw({
+    leases: [attachment.value],
+    camera: { lease: attachment.value },
+    environment: { lease: attachment.value },
+  });
   expect(drawn.ok).toBe(true);
   if (!drawn.ok) throw new Error(`draw failed: ${drawn.error.code}`);
   await device.queue.onSubmittedWorkDone();

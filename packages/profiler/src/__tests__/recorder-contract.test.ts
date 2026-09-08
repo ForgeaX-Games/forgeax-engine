@@ -67,6 +67,57 @@ describe('bounded profiler recorder contract', () => {
     expect(artifact.records[0]?.kind).toBe('phase');
   });
 
+  it('defers capture event object materialization until finish', () => {
+    const allocationReport = { profilerEventObjectAllocations: 0 };
+    const profiler = createProfiler({
+      clock: createClock(),
+      phaseCatalog: TEST_PHASE_CATALOG,
+      allocationReport,
+    });
+    const session = expectOk(profiler.startCapture({ frameLimit: 1, eventLimit: 2 }));
+
+    expectOk(session.beginFrame(1));
+    expectOk(session.beginPhase({ source: 'app', phase: 'frame-total' }));
+    expectOk(session.endPhase());
+    expect(allocationReport.profilerEventObjectAllocations).toBe(0);
+    expectOk(session.endFrame());
+    expectOk(session.finish());
+    expect(allocationReport.profilerEventObjectAllocations).toBe(1);
+  });
+
+  it('accepts a phase catalog registered after capture starts', () => {
+    const profiler = createProfiler({ clock: createClock() });
+    const session = expectOk(profiler.startCapture({ frameLimit: 1, eventLimit: 2 }));
+
+    expectOk(profiler.registerPhaseCatalog('app', TEST_PHASE_CATALOG.app));
+    expectOk(session.beginFrame(1));
+    expectOk(session.beginPhase('app', 'frame-total'));
+    expectOk(session.endPhase());
+    expectOk(session.endFrame());
+    const artifact = expectOk(session.finish());
+
+    expect(artifact.records).toHaveLength(1);
+    expect(artifact.records[0]?.kind).toBe('phase');
+  });
+
+  it('releases a phase catalog lease without mutating a finished capture', () => {
+    const profiler = createProfiler({ clock: createClock() });
+    const release = expectOk(profiler.registerPhaseCatalog('app', TEST_PHASE_CATALOG.app));
+    const session = expectOk(profiler.startCapture({ frameLimit: 1, eventLimit: 2 }));
+
+    expectOk(session.beginFrame(1));
+    expectOk(session.beginPhase('app', 'frame-total'));
+    expectOk(session.endPhase());
+    expectOk(session.endFrame());
+    const artifact = expectOk(session.finish());
+    release();
+    release();
+
+    expect(profiler.phaseCatalog.app).toEqual([]);
+    expect(artifact.phaseCatalog.app).toEqual(TEST_PHASE_CATALOG.app);
+    expect(profiler.registerPhaseCatalog('app', TEST_PHASE_CATALOG.app).ok).toBe(true);
+  });
+
   it('stops record growth after event overflow while retaining scalar accounting', () => {
     const profiler = createProfiler({ clock: createClock(), phaseCatalog: TEST_PHASE_CATALOG });
     const session = expectOk(profiler.startCapture({ frameLimit: 20, eventLimit: 2 }));

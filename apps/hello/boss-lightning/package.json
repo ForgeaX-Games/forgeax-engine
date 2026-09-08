@@ -83,6 +83,8 @@
     "@forgeax/engine-vfx-render": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/apps-shared": "workspace:*",
+    "@forgeax/engine-shader-compiler": "workspace:*",
     "@forgeax/engine-vfx-compiler": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",

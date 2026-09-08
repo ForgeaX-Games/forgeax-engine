@@ -62,6 +62,8 @@ import { makeRhiCommandEncoder, type RawCommandEncoderLike } from './command-enc
 import { descriptorInvalid, featureNotEnabled, webgpuRuntimeError } from './errors';
 import { makeRhiQueue, type RawQueueLike } from './queue';
 
+type RhiWgpuDeviceLost = Awaited<RhiDevice['lost']>;
+
 /**
  * Per-handle lifecycle marker for `RhiDevice.destroyTexture` fail-fast
  * (feat-20260612 D-7). Mirrors @forgeax/engine-rhi-webgpu TextureMeta.destroyed but as
@@ -185,7 +187,7 @@ class RhiWgpuDeviceImpl implements RhiDevice {
   readonly caps: RhiCaps;
   readonly queue: RhiQueue;
   // forgeax-async-whitelist: wasm-bindgen — wgpu-wasm `Device.lost` Promise (spec mirror)
-  readonly lost: Promise<{ readonly reason: 'destroyed' | 'unknown'; readonly message: string }>;
+  readonly lost: Promise<RhiWgpuDeviceLost>;
 
   private readonly raw: RawDeviceLike;
 
@@ -266,21 +268,13 @@ class RhiWgpuDeviceImpl implements RhiDevice {
       raw.queue === undefined || raw.queue === null
         ? makeRhiQueue({})
         : makeRhiQueue(raw.queue as RawQueueLike);
-    let lostResolve:
-      | ((value: { reason: 'destroyed' | 'unknown'; message: string }) => void)
-      | undefined;
+    let lostResolve: ((value: RhiWgpuDeviceLost) => void) | undefined;
     this.lost =
       raw.lost === undefined
-        ? new Promise<{
-            readonly reason: 'destroyed' | 'unknown';
-            readonly message: string;
-          }>((resolve) => {
+        ? new Promise<RhiWgpuDeviceLost>((resolve) => {
             lostResolve = resolve;
           })
-        : (raw.lost as unknown as Promise<{
-            readonly reason: 'destroyed' | 'unknown';
-            readonly message: string;
-          }>);
+        : (raw.lost as unknown as Promise<RhiWgpuDeviceLost>);
 
     // F4 (feat-20260622-s5): when on the wasm path (raw.lost === undefined),
     // wire the real Promise resolver to wgpu-wasm's register_lost_callback
@@ -298,7 +292,7 @@ class RhiWgpuDeviceImpl implements RhiDevice {
           configurable: false,
         });
         raw.registerLostCallback((reason: string, message: string) => {
-          lostResolve?.({ reason: reason as 'destroyed' | 'unknown', message });
+          lostResolve?.({ reason: reason as RhiWgpuDeviceLost['reason'], message });
         });
       }
     }

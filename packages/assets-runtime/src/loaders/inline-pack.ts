@@ -3,24 +3,31 @@
 // Pure move from asset-registry.ts; zero identifier changes.
 
 import { PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type {
   AddressMode,
   AnimationChannel,
   AnimationGraph,
   AnimationGraphNode,
   Asset,
+  AssetGuid as AssetGuidType,
+  AudioClipAsset,
   CompareFunction,
   FilterMode,
-  Handle,
   LoadContext,
   Loader,
   MaterialAsset,
   MaterialPass,
+  MaterialTextureCoordinates,
   ParseErrorDetail,
+  ParticleEffectAsset,
   MeshAsset as TypesMeshAsset,
 } from '@forgeax/engine-types';
-import { unpackMeshBin } from '../mesh-bin';
+import { resolveMaterialTextureCoordinates } from '@forgeax/engine-types';
+import { MeshBinAssetError } from '../errors/asset';
 import { parseScenePayload } from '../scene-payload';
+import { unpackMeshBinV4 } from './mesh-bin';
+import { renderPipelineLoader, tilesetLoader } from './pack-artifact';
 
 // === Inline pack-payload loader bodies (feat-20260603-asset-import-loader-injection
 // M1 / w4) ===
@@ -61,6 +68,47 @@ export const meshLoader: Loader = {
       aabb = new Float32Array(rawAabb as number[]);
     } else if (rawAabb !== undefined) {
       return undefined;
+    }
+
+    let morphTargets: TypesMeshAsset['morphTargets'];
+    const rawMorphTargets = payload.morphTargets;
+    if (rawMorphTargets !== undefined) {
+      if (
+        !Array.isArray(rawMorphTargets) ||
+        rawMorphTargets.length < 1 ||
+        rawMorphTargets.length > 8
+      ) {
+        return undefined;
+      }
+      const parsedTargets: NonNullable<TypesMeshAsset['morphTargets']>[number][] = [];
+      for (const rawTarget of rawMorphTargets) {
+        if (typeof rawTarget !== 'object' || rawTarget === null) return undefined;
+        const source = rawTarget as Record<string, unknown>;
+        const target: {
+          position?: Float32Array;
+          normal?: Float32Array;
+          tangent?: Float32Array;
+        } = {};
+        for (const [key, value] of Object.entries(source)) {
+          if (key !== 'position' && key !== 'normal' && key !== 'tangent') return undefined;
+          if (value instanceof Float32Array) target[key] = new Float32Array(value);
+          else if (Array.isArray(value)) target[key] = new Float32Array(value as number[]);
+          else return undefined;
+        }
+        if (Object.keys(target).length === 0) return undefined;
+        parsedTargets.push(target);
+      }
+      morphTargets = parsedTargets;
+    }
+    let morphWeights: Float32Array | undefined;
+    const rawMorphWeights = payload.morphWeights;
+    if (rawMorphWeights !== undefined) {
+      if (rawMorphWeights instanceof Float32Array) morphWeights = new Float32Array(rawMorphWeights);
+      else if (Array.isArray(rawMorphWeights))
+        morphWeights = new Float32Array(rawMorphWeights as number[]);
+      else return undefined;
+      if (morphTargets !== undefined && morphWeights.length !== morphTargets.length)
+        return undefined;
     }
 
     const skinIndexRaw = rawAttributes.skinIndex;
@@ -135,7 +183,7 @@ export const meshLoader: Loader = {
     // (gltf importer emits one per primitive), respect it. The
     // `triangle-list 0..indices.length` default fits only single-prim packs.
     const payloadSubmeshes = payload.submeshes;
-    const submeshes =
+    const rawSubmeshes =
       Array.isArray(payloadSubmeshes) && payloadSubmeshes.length > 0
         ? (payloadSubmeshes as unknown as TypesMeshAsset['submeshes'])
         : [
@@ -146,6 +194,36 @@ export const meshLoader: Loader = {
               topology: 'triangle-list' as const,
             },
           ];
+    const payloadSlots = payload.materialSlots;
+    const materialSlots: TypesMeshAsset['materialSlots'] = Array.isArray(payloadSlots)
+      ? payloadSlots.map((raw, slotIndex) => {
+          if (typeof raw !== 'object' || raw === null)
+            return { slotName: `LegacySlot_${slotIndex}` };
+          const slot = raw as Record<string, unknown>;
+          let defaultMaterial: AssetGuidType | undefined;
+          if (slot.defaultMaterial instanceof Uint8Array) {
+            defaultMaterial = slot.defaultMaterial as AssetGuidType;
+          } else if (typeof slot.defaultMaterial === 'string') {
+            const parsed = AssetGuid.parse(slot.defaultMaterial);
+            if (!parsed.ok) return { slotName: `LegacySlot_${slotIndex}` };
+            defaultMaterial = parsed.value;
+          }
+          return {
+            slotName:
+              typeof slot.slotName === 'string' && slot.slotName.trim().length > 0
+                ? slot.slotName
+                : `LegacySlot_${slotIndex}`,
+            ...(typeof slot.sourceKey === 'string' ? { sourceKey: slot.sourceKey } : {}),
+            ...(defaultMaterial !== undefined ? { defaultMaterial } : {}),
+          };
+        })
+      : rawSubmeshes.map((_, slotIndex) => ({ slotName: `LegacySlot_${slotIndex}` }));
+    const submeshes = rawSubmeshes.map((submesh, submeshIndex) => ({
+      ...submesh,
+      materialSlot: Number.isInteger((submesh as { materialSlot?: unknown }).materialSlot)
+        ? (submesh as { materialSlot: number }).materialSlot
+        : submeshIndex,
+    }));
 
     return {
       kind: 'mesh',
@@ -153,55 +231,61 @@ export const meshLoader: Loader = {
       ...(indices !== undefined ? { indices } : {}),
       attributes: attributes as TypesMeshAsset['attributes'],
       ...(aabb !== undefined ? { aabb } : {}),
+      ...(morphTargets !== undefined ? { morphTargets } : {}),
+      ...(morphWeights !== undefined ? { morphWeights } : {}),
       submeshes,
+      materialSlots,
     };
   },
   loadPack(input, ctx) {
     const artifact = input.artifacts.body;
     if (artifact === undefined) return meshLoader.load(input.payload, input.refs, ctx);
-    const decoded = unpackMeshBin(artifact.bytes);
-    if (decoded === undefined) return undefined;
-
-    // The packed v2 header is the SSOT for the interleaved vertex stride and
-    // UV-set count. `uv1`…`uv7` are not standalone binary sections: they live
-    // after the base (or skinned) vertex fields. Reconstruct their attribute
-    // arrays here so the registry validator and GPU layout derive the same
-    // stride that the importer wrote. Without this bridge, a valid 14F mesh
-    // (two UV sets) loses `uv1` on load and is rejected as a malformed 12F mesh.
-    const extraUvAttributes: Record<string, Float32Array> = {};
-    const uvSetCount = decoded.uvSetCount ?? 1;
-    const floatsPerVertex = decoded.floatsPerVertex;
-    if (
-      uvSetCount > 1 &&
-      floatsPerVertex !== undefined &&
-      decoded.vertices.length % floatsPerVertex === 0
-    ) {
-      const hasSkin = floatsPerVertex === 18 + (uvSetCount - 1) * 2;
-      const firstExtraUvOffset = hasSkin ? 18 : PROCEDURAL_FLOATS_PER_VERTEX;
-      const vertexCount = decoded.vertices.length / floatsPerVertex;
-      for (let set = 1; set < uvSetCount; set++) {
-        const values = new Float32Array(vertexCount * 2);
-        const sourceOffset = firstExtraUvOffset + (set - 1) * 2;
-        for (let vertex = 0; vertex < vertexCount; vertex++) {
-          const source = vertex * floatsPerVertex + sourceOffset;
-          const target = vertex * 2;
-          values[target] = decoded.vertices[source] ?? 0;
-          values[target + 1] = decoded.vertices[source + 1] ?? 0;
-        }
-        extraUvAttributes[`uv${set}`] = values;
+    const decoded = unpackMeshBinV4(artifact.bytes, input.guid);
+    if (!decoded.ok) return { ok: false, error: decoded.error } as never;
+    const materialSlots = decoded.value.materialSlots.map((slot) => {
+      const refIndex = slot.defaultMaterialRef;
+      const ref = refIndex === undefined ? undefined : input.refs[refIndex];
+      if (refIndex !== undefined && ref === undefined) return undefined;
+      if (ref === undefined) {
+        return {
+          slotName: String(slot.slotName),
+          ...(typeof slot.sourceKey === 'string' ? { sourceKey: slot.sourceKey } : {}),
+        };
       }
+      const parsed = AssetGuid.parse(ref);
+      if (!parsed.ok) return undefined;
+      return {
+        slotName: String(slot.slotName),
+        ...(typeof slot.sourceKey === 'string' ? { sourceKey: slot.sourceKey } : {}),
+        defaultMaterial: parsed.value,
+      };
+    });
+    if (materialSlots.some((slot) => slot === undefined)) {
+      return {
+        ok: false,
+        error: new MeshBinAssetError({
+          sourceKey: input.guid,
+          expected: 'material slot references must resolve through the pack refs table',
+          actual: 'material reference is out of bounds or is not a valid AssetGuid',
+          reason: 'metadata-invalid',
+          actualFacts: { field: 'metadata' },
+        }),
+      } as never;
     }
     return meshLoader.load(
       {
-        vertices: decoded.vertices,
-        ...(decoded.indices !== undefined ? { indices: decoded.indices } : {}),
-        ...(decoded.submeshes !== undefined ? { submeshes: decoded.submeshes } : {}),
-        ...(decoded.aabb !== undefined ? { aabb: decoded.aabb } : {}),
-        attributes: {
-          ...extraUvAttributes,
-          ...(decoded.skinIndex !== undefined ? { skinIndex: decoded.skinIndex } : {}),
-          ...(decoded.skinWeight !== undefined ? { skinWeight: decoded.skinWeight } : {}),
-        },
+        vertices: decoded.value.vertices,
+        ...(decoded.value.indices !== undefined ? { indices: decoded.value.indices } : {}),
+        submeshes: decoded.value.submeshes,
+        materialSlots,
+        ...(decoded.value.aabb !== undefined ? { aabb: decoded.value.aabb } : {}),
+        ...(decoded.value.morphTargets !== undefined
+          ? { morphTargets: decoded.value.morphTargets }
+          : {}),
+        ...(decoded.value.morphWeights !== undefined
+          ? { morphWeights: decoded.value.morphWeights }
+          : {}),
+        attributes: decoded.value.attributes,
       },
       input.refs,
       ctx,
@@ -265,6 +349,43 @@ function refGuidAt(refs: readonly unknown[] | undefined, index: number): string 
     return typeof nestedGuid === 'string' ? nestedGuid : undefined;
   }
   return undefined;
+}
+
+function isIdentityTextureCoordinates(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const coordinates = value as Record<string, unknown>;
+  if (Object.keys(coordinates).some((key) => key !== 'set' && key !== 'transform')) return false;
+  const transform = coordinates.transform;
+  if (
+    transform !== undefined &&
+    (typeof transform !== 'object' || transform === null || Array.isArray(transform))
+  ) {
+    return false;
+  }
+  if (
+    transform !== undefined &&
+    Object.keys(transform as Record<string, unknown>).some(
+      (key) => key !== 'offset' && key !== 'scale' && key !== 'rotation',
+    )
+  ) {
+    return false;
+  }
+  const resolved = resolveMaterialTextureCoordinates(coordinates as MaterialTextureCoordinates);
+  return (
+    resolved.set === 0 &&
+    resolved.transform.offset[0] === 0 &&
+    resolved.transform.offset[1] === 0 &&
+    resolved.transform.scale[0] === 1 &&
+    resolved.transform.scale[1] === 1 &&
+    resolved.transform.rotation === 0
+  );
+}
+
+function compactTextureValue(value: Record<string, unknown>): unknown {
+  const compact = { ...value };
+  if (isIdentityTextureCoordinates(compact.coordinates)) delete compact.coordinates;
+  return compact;
 }
 
 /** material loader — passes + values + serialized parent GUID -> parentGuid. */
@@ -374,7 +495,7 @@ export const materialLoader: Loader = {
             if (samplerGuid === undefined) delete resolved.sampler;
             else resolved.sampler = samplerGuid;
           }
-          values[fieldName] = resolved;
+          values[fieldName] = compactTextureValue(resolved);
         }
       }
     }
@@ -552,7 +673,12 @@ export const animationClipLoader: Loader = {
       ) {
         return undefined;
       }
-      if (property !== 'translation' && property !== 'rotation' && property !== 'scale')
+      if (
+        property !== 'translation' &&
+        property !== 'rotation' &&
+        property !== 'scale' &&
+        property !== 'weights'
+      )
         return undefined;
       if (samplerObj === undefined) return undefined;
       const inputRaw = samplerObj.input;
@@ -577,7 +703,7 @@ export const animationClipLoader: Loader = {
       if (interpolation !== 'LINEAR' && interpolation !== 'STEP') return undefined;
       channels.push({
         targetId: targetId as AnimationChannel['targetId'],
-        property: property as 'translation' | 'rotation' | 'scale',
+        property: property as AnimationChannel['property'],
         sampler: { input, output, interpolation },
       });
     }
@@ -629,7 +755,7 @@ export const animationGraphLoader: Loader = {
         // GUID verbatim at load; re-resolved to a handle at use time (D-19).
         nodes.push({
           type: 'clip',
-          clip: guid as unknown as Handle<'AnimationClip', 'shared'>,
+          clip: guid,
           weight,
         });
       } else if (node.type === 'blend') {
@@ -651,6 +777,44 @@ export const animationGraphLoader: Loader = {
   },
 };
 
+/** audio loader -- restore the durable descriptor; host decode stays elsewhere. */
+export const audioLoader: Loader = {
+  kind: 'audio',
+  load(payload) {
+    const sourceKey = payload.sourceKey;
+    const mediaType = payload.mediaType;
+    if (typeof sourceKey !== 'string' || sourceKey.length === 0) return undefined;
+    if (typeof mediaType !== 'string' || mediaType.length === 0) return undefined;
+    const rawBytes = payload.bytes;
+    const bytes =
+      rawBytes instanceof Uint8Array
+        ? rawBytes
+        : Array.isArray(rawBytes)
+          ? new Uint8Array(rawBytes as number[])
+          : undefined;
+    return {
+      kind: 'audio',
+      sourceKey,
+      mediaType,
+      ...(bytes === undefined ? {} : { bytes }),
+    } as AudioClipAsset;
+  },
+};
+
+/** particle loader -- restore the complete cooked program without a GPU device. */
+export const particleEffectLoader: Loader = {
+  kind: 'particle-effect',
+  load(payload) {
+    if (typeof payload.program !== 'object' || payload.program === null) return undefined;
+    if (typeof (payload.program as Record<string, unknown>).fingerprint !== 'string') {
+      return undefined;
+    }
+    return { ...payload, kind: 'particle-effect' } as ParticleEffectAsset;
+  },
+};
+
+export { renderPipelineLoader, tilesetLoader } from './pack-artifact';
+
 /**
  * The eight inline pack-payload loaders, in the historical `if`-chain order
  * (the animation-graph loader, feat-20260713 M4 / w30, appends after the clip
@@ -666,4 +830,8 @@ export const INLINE_PACK_LOADERS: readonly Loader[] = [
   skinLoader,
   animationClipLoader,
   animationGraphLoader,
+  renderPipelineLoader,
+  tilesetLoader,
+  audioLoader,
+  particleEffectLoader,
 ];

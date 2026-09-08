@@ -25,7 +25,7 @@
 // `src/__tests__/` (TS rootDir = `./src`); the plan-tasks.json target
 // path matches this layout.
 
-import type { InstancesData } from '@forgeax/engine-render/internal';
+import type { InstancesData } from '@forgeax/engine-render';
 import { describe, expectTypeOf, it } from 'vitest';
 
 describe('InstancesData shape (AC-06 ECS-managed array<f32> form)', () => {

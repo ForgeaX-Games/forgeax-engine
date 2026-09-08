@@ -106,8 +106,10 @@ pub fn emit_reflection(validated: &ValidatedModule, options_json: &str) -> Resul
     let bgls = derive_bgls(&validated.module, &validated.info, &options);
     let uv_set_count = derive_uv_set_count(&validated.module);
     let output = ReflectionOutput {
-        bindings: bgls,
+        schema_version: "shader-reflection/2",
+        bound_globals: derive_bound_globals(&validated.module, &validated.info),
         uv_set_count,
+        bindings: bgls,
     };
     serde_json::to_string(&output)
         .map_err(|e| JsError::new(&format!("reflection serialize failed: {e}")))
@@ -180,13 +182,159 @@ struct StorageTextureBinding {
     view_dimension: &'static str,
 }
 
-// === Reflection output shape (m4-w2: wraps BGLs + uvSetCount) =====================
+// === Generic shader-reflection/2 output ===========================================
+
+#[derive(Serialize)]
+struct BoundGlobal {
+    group: u32,
+    binding: u32,
+    #[serde(rename = "addressSpace")]
+    address_space: &'static str,
+    #[serde(rename = "resourceKind")]
+    resource_kind: &'static str,
+    visibility: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    members: Option<Vec<ReflectionMember>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    span: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct ReflectionMember {
+    name: String,
+    #[serde(rename = "type")]
+    ty: String,
+    offset: u32,
+    size: u32,
+    alignment: u32,
+}
 
 #[derive(Serialize)]
 struct ReflectionOutput {
-    bindings: Vec<Bgl>,
+    #[serde(rename = "schemaVersion")]
+    schema_version: &'static str,
+    #[serde(rename = "boundGlobals")]
+    bound_globals: Vec<BoundGlobal>,
     #[serde(rename = "uvSetCount")]
     uv_set_count: u32,
+    // Keep the generic BGL projection in this wire during the one-cut reader
+    // migration. It has no Material classification and is removed once all
+    // consumers read boundGlobals directly.
+    bindings: Vec<Bgl>,
+}
+
+fn derive_bound_globals(module: &Module, info: &ModuleInfo) -> Vec<BoundGlobal> {
+    let mut globals = Vec::new();
+    for (handle, variable) in module.global_variables.iter() {
+        let Some(binding) = variable.binding else { continue };
+        let visibility = compute_visibility(module, info, handle);
+        let (members, span) = match variable.space {
+            AddressSpace::Uniform | AddressSpace::Storage { .. } => {
+                let ty = &module.types[variable.ty];
+                match &ty.inner {
+                    TypeInner::Struct { members, span } => (
+                        Some(
+                            members
+                                .iter()
+                                .filter_map(|member| {
+                                    let name = member.name.as_ref()?;
+                                    let member_ty = &module.types[member.ty];
+                                    Some(ReflectionMember {
+                                        name: name.clone(),
+                                        ty: reflection_type_name(member_ty),
+                                        offset: member.offset,
+                                        size: member_ty.inner.try_size(module.to_ctx()).unwrap_or(0),
+                                        alignment: reflection_alignment(member_ty),
+                                    })
+                                })
+                                .collect(),
+                        ),
+                        Some(*span),
+                    ),
+                    _ => (Some(Vec::new()), Some(0)),
+                }
+            }
+            _ => (None, None),
+        };
+        globals.push(BoundGlobal {
+            group: binding.group,
+            binding: binding.binding,
+            address_space: reflection_address_space(&variable.space),
+            resource_kind: reflection_resource_kind(module, variable),
+            visibility,
+            name: variable.name.clone(),
+            members,
+            span,
+        });
+    }
+    globals.sort_by_key(|global| (global.group, global.binding));
+    globals
+}
+
+fn reflection_address_space(space: &AddressSpace) -> &'static str {
+    match space {
+        AddressSpace::Uniform => "uniform",
+        AddressSpace::Storage { .. } => "storage",
+        AddressSpace::Handle => "handle",
+        _ => "other",
+    }
+}
+
+fn reflection_resource_kind(module: &Module, variable: &naga::GlobalVariable) -> &'static str {
+    match (&variable.space, &module.types[variable.ty].inner) {
+        (AddressSpace::Uniform, _) => "buffer",
+        (AddressSpace::Storage { .. }, _) => "storage-buffer",
+        (AddressSpace::Handle, TypeInner::Sampler { .. }) => "sampler",
+        (AddressSpace::Handle, TypeInner::Image { .. }) => "texture",
+        _ => "unknown",
+    }
+}
+
+fn reflection_type_name(ty: &naga::Type) -> String {
+    match ty.inner {
+        TypeInner::Scalar(scalar) => scalar_name(scalar).to_string(),
+        TypeInner::Vector { size, scalar } => {
+            format!("vec{}<{}>", u8::from(size), scalar_name(scalar))
+        }
+        TypeInner::Matrix { columns, rows, scalar } => format!(
+            "mat{}x{}<{}>",
+            u8::from(columns),
+            u8::from(rows),
+            scalar_name(scalar)
+        ),
+        _ => "struct".to_string(),
+    }
+}
+
+fn scalar_name(scalar: Scalar) -> &'static str {
+    match scalar.kind {
+        ScalarKind::Float => "f32",
+        ScalarKind::Sint => "i32",
+        ScalarKind::Uint => "u32",
+        ScalarKind::Bool => "bool",
+        ScalarKind::AbstractInt => "abstract-int",
+        ScalarKind::AbstractFloat => "abstract-float",
+    }
+}
+
+fn reflection_alignment(ty: &naga::Type) -> u32 {
+    match ty.inner {
+        TypeInner::Scalar(scalar) => scalar.width as u32,
+        TypeInner::Vector { size, scalar } => {
+            let components = u8::from(size) as u32;
+            if components >= 3 {
+                scalar.width as u32 * 4
+            } else {
+                scalar.width as u32 * components
+            }
+        }
+        TypeInner::Matrix { rows, scalar, .. } => {
+            scalar.width as u32 * u8::from(rows) as u32
+        }
+        _ => 1,
+    }
 }
 
 // === uvSetCount derivation from vertex @location (D-4 convention) ==================

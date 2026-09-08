@@ -39,6 +39,8 @@ export interface GltfSubAssetEntry {
   readonly sourceIndex: number;
   readonly kind: string;
   readonly sourceKey?: string;
+  /** Optional display name copied from the current glTF output. */
+  readonly name?: string;
 }
 
 export interface GltfMetaJson {
@@ -47,6 +49,8 @@ export interface GltfMetaJson {
   readonly importer: 'gltf';
   readonly source: string;
   readonly subAssets: readonly GltfSubAssetEntry[];
+  readonly sourceOverrides?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+  readonly sourceOverrideDescriptors?: readonly import('@forgeax/engine-types').SourceOverrideDescriptor[];
   readonly importSettings: {
     readonly defaultSceneIndex: number;
     readonly standardMaterialGuid?: string;
@@ -84,14 +88,9 @@ export function reimportReuseMeta(
   const stage2Index = new Map<string, GltfSubAssetEntry>();
   if (existingMeta !== undefined) {
     for (const entry of existingMeta.subAssets) {
-      // Existing meta carries no `name` field (storage schema is GUID +
-      // sourceIndex + kind only), so stage 1 reuse is keyed by
-      // (kind, sourceIndex) which IS the indexFallback - the new-item's
-      // name + indexFallback combination still acts as the stage 1 input
-      // because the only existing entries that match the new (kind, name,
-      // indexFallback) tuple are those whose stored indexFallback equals
-      // the new one. Stage 2 is the same physical map; the discriminator
-      // is whether the new item's group is conflicted.
+      // Source names are display metadata, not identity. Semantic sourceKey
+      // remains the stage-1 identity and (kind, sourceIndex) remains the
+      // stage-2 locator fallback.
       if (entry.sourceKey !== undefined) stage1Index.set(entry.sourceKey, entry);
       stage2Index.set(`${entry.kind} ${entry.sourceIndex}`, entry);
     }
@@ -103,8 +102,8 @@ export function reimportReuseMeta(
     const indexKey = `${item.kind} ${item.sourceIndex}`;
     let reused: GltfSubAssetEntry | undefined;
 
-    // Stage 1: semantic sourceKey match. Existing entries do not store
-    // `name`, so the sourceKey is the only stable identity available here.
+    // Stage 1: semantic sourceKey match. Names are copied from the current
+    // source output below, but never participate in identity matching.
     if (sourceKey !== undefined) reused = stage1Index.get(sourceKey);
     // Stage 2: (kind, indexFallback) only.
     if (reused === undefined) {
@@ -117,6 +116,7 @@ export function reimportReuseMeta(
         sourceIndex: item.sourceIndex,
         kind: item.kind,
         ...(sourceKey === undefined ? {} : { sourceKey }),
+        ...(item.name === undefined ? {} : { name: item.name }),
       });
     } else {
       const fresh = AssetGuid.random();
@@ -125,6 +125,7 @@ export function reimportReuseMeta(
         sourceIndex: item.sourceIndex,
         kind: item.kind,
         ...(sourceKey === undefined ? {} : { sourceKey }),
+        ...(item.name === undefined ? {} : { name: item.name }),
       });
     }
   }

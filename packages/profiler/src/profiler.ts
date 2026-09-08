@@ -18,7 +18,7 @@ export interface Profiler {
   registerPhaseCatalog(
     source: ProfilerCatalogSource,
     phases: readonly string[],
-  ): ProfilerResult<void>;
+  ): ProfilerResult<() => void>;
   startCapture(limits: RecorderLimits): ProfilerResult<RecorderSession>;
   activeCaptureId(): string | undefined;
   activeSession(): RecorderSession | undefined;
@@ -60,9 +60,20 @@ export function createProfiler(options: ProfilerOptions = {}): Profiler {
           },
         };
       }
-      Object.assign(phaseCatalog, { [source]: [...phases] });
+      const definition = [...phases];
+      Object.assign(phaseCatalog, { [source]: definition });
       registeredSources.add(source);
-      return { ok: true, value: undefined };
+      let active = true;
+      return {
+        ok: true,
+        value: () => {
+          if (!active) return;
+          active = false;
+          if (phaseCatalog[source] !== definition) return;
+          Object.assign(phaseCatalog, { [source]: [] });
+          registeredSources.delete(source);
+        },
+      };
     },
     startCapture(limits) {
       if (!enabled) {

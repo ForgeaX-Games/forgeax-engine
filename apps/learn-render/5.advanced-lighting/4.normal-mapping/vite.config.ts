@@ -4,6 +4,7 @@ import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { withRhiDebug } from '../../../shared/src/rhi-debug-vite-preset';
+import { optionalAssetPack } from '../../../shared/src/optional-asset-pack.js';
 
 // RHI-debug frame capture wired via the shared preset (forgeaxShader +
 // vitePluginRhiDebug + fs.allow). The demo's LearnOpenGL textures are served via
@@ -11,6 +12,7 @@ import { withRhiDebug } from '../../../shared/src/rhi-debug-vite-preset';
 // capture plugins. Capture stays gated behind FORGEAX_ENGINE_RHI_DEBUG=1.
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
+const assetRoots = [resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures')];
 const runtimeBinding = createStandaloneRuntimeAssetBinding('learn-render-5-4-normal-mapping');
 
 export default withRhiDebug({
@@ -19,11 +21,8 @@ export default withRhiDebug({
   port: 5177,
   keepBinExternal: true,
   extraPlugins: [
-    pluginPack({
-      runtimeBinding,
-      refresh: reloadAssetHost(),
-      importers: [imageImporter],
-      roots: [resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures')],
-    }),
+    ...optionalAssetPack(assetRoots, () =>
+      pluginPack({ runtimeBinding, refresh: reloadAssetHost(), importers: [imageImporter], roots: assetRoots }),
+    ),
   ],
 });

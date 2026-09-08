@@ -1,5 +1,16 @@
 # @forgeax/engine-shader-compiler
 
+## MaterialAsset 唯一成功路径
+
+编译器位于 `paramSchema -> derive -> compile/reflect -> cook/load -> extract/record`
+主线的 compile/reflect 阶段：它校验 WGSL producer 与派生 schema，产出可供
+cook 使用的 reflection 与 artifact 输入。`coordinateSet`、transform 和
+`physicalUvScale` 是 schema/data contract 的字段，不是 app 侧补写的偏移。
+
+> [!CAUTION]
+> 失败时按结构化 error `code`、`detail`、`hint` 修复 WGSL 或 schema 输入，
+> 然后 recook；不要复制 source-owned error union。
+
 > **build-time WGSL compilation core with naga_oil 0.22 composition + 7-member error taxonomy + cross-file HMR propagation support.** AI users call a single pure-function entry; errors are machine-readable `Result.err(ShaderError)` with typed `.detail` discriminated union; no `err.message.match()` anywhere downstream (charter proposition 3 + AC-15).
 
 ---
@@ -58,12 +69,13 @@ if (result.ok) {
 
 ### naga_oil integration path
 
-`compileShader` runs a deterministic 4-stage pipeline:
+`compileShader` runs a deterministic 5-stage pipeline:
 
 1. **`#define` pre-scan** (`define-scan.ts`) — parse `#define NAME` lines in all `imports` + the root source; reject duplicate `NAME` across modules with `shader-define-conflict`. `#define NAME value` (value form) rejected per D-05 OOS-1.
 2. **Cycle pre-detection** (`cycle-detect.ts`) — DFS tri-colour over `#import x::y` edges; raise `shader-circular-import` with first+last repeated chain before invoking naga_oil. Catches cycles the naga_oil Composer would otherwise surface as prose-only error text.
 3. **naga_oil compose** (wasm `compose_shader`) — `@forgeax/engine-wgpu-wasm` hosts a `naga_oil::compose::Composer`. Each module registered via `add_composable_module` with `as_name = moduleId`; root compiled with `make_naga_module`. Composer flattens `#import` graph, expands `#ifdef` conditionals against the `defines` set, produces a single naga `Module`.
-4. **Error mapper** (`error-mapper.ts`) — wasm `JsError` prefixes map to closed-set codes: `IMPORT_NOT_FOUND:` → `shader-import-not-found`; `CIRCULAR:` → `shader-circular-import` (fallback if step 2 missed); anything else → `shader-compile-failed` with raw `compilerMessages`.
+4. **Portable WGSL canonicalization** (`wgsl-compat.ts`) — one internal `canonicalizePortableWgsl` façade owns post-Naga portability rewrites. The current rule uses a small lexical scan so only the affected numeric token changes; the canonical source then feeds parse, validate, reflection, hashing, and the manifest. Future rules extend this owner rather than adding a nested `normalizeX(normalizeY(...))` call chain in `compileShader`.
+5. **Error mapper** (`error-mapper.ts`) — wasm `JsError` prefixes map to closed-set codes: `IMPORT_NOT_FOUND:` → `shader-import-not-found`; `CIRCULAR:` → `shader-circular-import` (fallback if step 2 missed); anything else → `shader-compile-failed` with raw `compilerMessages`.
 
 ### Bevy-style `moduleId` naming
 

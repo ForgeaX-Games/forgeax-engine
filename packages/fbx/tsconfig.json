@@ -11,5 +11,13 @@
     "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
   "include": ["src/**/*"],
-  "references": [{ "path": "../math" }, { "path": "../types" }, { "path": "../ecs" }, { "path": "../import" }, { "path": "../runtime" }, { "path": "../picking" }]
+  "references": [
+    { "path": "../math" },
+    { "path": "../types" },
+    { "path": "../ecs" },
+    { "path": "../pack" },
+    { "path": "../import" },
+    { "path": "../runtime" },
+    { "path": "../picking" }
+  ]
 }

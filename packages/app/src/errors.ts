@@ -46,7 +46,6 @@
 // alongside RhiErrorCode et al.); charter P3 (explicit failure) + P4
 // (closed-union exhaustive switch).
 
-import type { PluginError } from '@forgeax/engine-plugin';
 import type { RhiError } from '@forgeax/engine-rhi/errors';
 import type { ExecutionCapabilityName, ExecutionTier } from './execution/types';
 
@@ -58,7 +57,7 @@ import type { ExecutionCapabilityName, ExecutionTier } from './execution/types';
  * | `'app-not-started'` | `stop()` / `pause()` / `resume()` invoked while the rAF loop is in the terminal `'idle'` or `'stopped'` state (post-device-lost terminal sink). The handle has no live frame to interrupt; AI users either call `start()` first or accept that this handle is dead and rebuild via `createApp({...})`. |
  * | `'app-already-running'` | second `start()` invocation against an already-running handle; the call is a no-op state-machine-wise (state preserved). |
  * | `'app-canvas-detached'` | `createApp(canvas)` thin wrapper found `canvas.isConnected === false` at entry. Detail carries optional `canvasId` so the host can surface the offending canvas in a multi-canvas page (D-2 minor). |
- * | `'app-system-update-failed'` | `world.update(...)` or `world.removeSystem(Update, ...)` (input-attach cleanup path) threw or returned `Result.err`; the original failure value is forwarded on `detail.cause` so AI users can two-level narrow (`detail.cause instanceof EcsError` etc.). `detail.systemName` is optional and present when the call site can name the offending system (e.g. input-attach reports `FRAME_START_SCAN_SYSTEM_NAME`). |
+ * | `'app-system-update-failed'` | World update, renderer draw, or a frame-loop callback failed; the original failure value is forwarded on `detail.cause`. `detail.systemName` is optional when the call site can name the failing owner. |
  * | `'app-pointer-lock-failed'` | `attachInputAuto`'s `onLockError` callback received a lock failure from the input backend. `detail.path` carries `'w3c'` (W3C `requestPointerLock` rejection) or `'provider'` (host-injected `lockProvider.requestLock` throw/reject). `detail.cause` carries the original rejection value verbatim. The host recovers by remaining in unlocked state; the next trusted click will retry the lock request. |
  *
  * Plan-strategy D-4 locked the count at 6; device-lost rides RhiErrorCode.
@@ -123,6 +122,11 @@ export interface AppDetailExecutionBootstrapFailed {
   readonly cause: unknown;
 }
 
+/** Original startup failure thrown by a Cordis plugin fiber. */
+export interface AppDetailPluginActivationFailed {
+  readonly cause: unknown;
+}
+
 export interface AppDetailExecutionDeadlineExceeded {
   readonly phase: 'startup' | 'handshake' | 'frame';
   readonly timeoutMs: number;
@@ -170,19 +174,21 @@ export type AppErrorDetailFor<C extends AppErrorCode> = C extends 'app-canvas-de
       ? AppDetailSystemUpdateFailed
       : C extends 'app-pointer-lock-failed'
         ? AppDetailPointerLockFailed
-        : C extends 'app-execution-tier-unavailable'
-          ? AppDetailExecutionTierUnavailable
-          : C extends 'app-execution-bootstrap-failed'
-            ? AppDetailExecutionBootstrapFailed
-            : C extends 'app-execution-deadline-exceeded'
-              ? AppDetailExecutionDeadlineExceeded
-              : C extends 'app-execution-kernel-failed'
-                ? AppDetailExecutionKernelFailed
-                : C extends 'app-execution-stale-world'
-                  ? AppDetailExecutionStaleWorld
-                  : C extends 'app-execution-rebuild-failed'
-                    ? AppDetailExecutionRebuildFailed
-                    : AppDetailEmpty;
+        : C extends 'app-plugin-activation-failed'
+          ? AppDetailPluginActivationFailed
+          : C extends 'app-execution-tier-unavailable'
+            ? AppDetailExecutionTierUnavailable
+            : C extends 'app-execution-bootstrap-failed'
+              ? AppDetailExecutionBootstrapFailed
+              : C extends 'app-execution-deadline-exceeded'
+                ? AppDetailExecutionDeadlineExceeded
+                : C extends 'app-execution-kernel-failed'
+                  ? AppDetailExecutionKernelFailed
+                  : C extends 'app-execution-stale-world'
+                    ? AppDetailExecutionStaleWorld
+                    : C extends 'app-execution-rebuild-failed'
+                      ? AppDetailExecutionRebuildFailed
+                      : AppDetailEmpty;
 
 /**
  * Tagged union of `.detail` payloads carried by structured AppError.
@@ -254,6 +260,9 @@ class AppErrorClass extends Error {
     } else if (args.code === 'app-pointer-lock-failed') {
       const d = args.detail as AppDetailPointerLockFailed;
       causeSuffix = `; path: ${d.path}; cause: ${summarizeCause(d.cause)}`;
+    } else if (args.code === 'app-plugin-activation-failed') {
+      const d = args.detail as AppDetailPluginActivationFailed;
+      causeSuffix = `; cause: ${summarizeCause(d.cause)}`;
     } else if (args.code === 'app-execution-bootstrap-failed') {
       const d = args.detail as AppDetailExecutionBootstrapFailed;
       causeSuffix = `; phase: ${d.phase}; cause: ${summarizeCause(d.cause)}`;
@@ -363,13 +372,17 @@ const appErrorPolicy = {
   },
   'app-system-update-failed': {
     expected:
-      'world.update(world) and renderer.draw(world) complete synchronously each frame; world.removeSystem(Update, name) returns Result.ok during cleanup',
+      'world.update(world), renderer.draw(world), and frame-loop callbacks complete without failure',
     hint: 'inspect detail.cause for the original thrown value (EcsError / RhiError / host system bug); detail.systemName names the offending system when the call site can supply it',
   },
   'app-pointer-lock-failed': {
     expected:
       'pointer-lock request (W3C requestPointerLock or host lockProvider.requestLock) to succeed; failure signals the browser rejected the lock or the host provider threw',
     hint: 'remain in unlocked state; the next trusted click will automatically retry the lock request. inspect detail.path ("w3c" or "provider") and detail.cause to determine the root cause',
+  },
+  'app-plugin-activation-failed': {
+    expected: 'every requested Cordis plugin fiber reaches a stable active or pending state',
+    hint: 'inspect detail.cause and the plugin fiber effects; repair the failing activation before creating the App again',
   },
   'app-execution-tier-unavailable': {
     expected:
@@ -378,8 +391,8 @@ const appErrorPolicy = {
   },
   'app-execution-bootstrap-failed': {
     expected:
-      'the bootstrap URL imports a module whose default export completes as a BootstrapEntry in the selected Engine Realm',
-    hint: 'inspect detail.phase, moduleUrl and cause; export one default BootstrapEntry that creates only realm-local engine state',
+      'the bootstrap URL imports a module whose default export completes as an ExecutionBootstrapEntry in the selected Engine Realm',
+    hint: 'inspect detail.phase, moduleUrl and cause; export one default ExecutionBootstrapEntry that creates only realm-local engine state',
   },
   'app-execution-deadline-exceeded': {
     expected:
@@ -421,11 +434,9 @@ export const APP_ERROR_HINTS: Readonly<Record<AppErrorCode, string>> = Object.fr
  * canonical idiom in JSDoc / README so AI users do not need to reason
  * about cross-realm `instanceof` quirks.
  *
- * Accepts PluginError in the parameter union (feat-20260623-plugin-system-unify
- * M2 / D-7) so callers who pass the full CanvasAppError don't get TS2379.
- * The instanceof AppErrorClass gate still returns false for PluginErrors
- * (PluginErrorClass is a separate class hierarchy from AppErrorClass).
+ * The parameter accepts the complete App/RHI boundary union so callers can
+ * narrow the error without casts.
  */
-export function isAppError(err: AppError | RhiError | PluginError): err is AppError {
+export function isAppError(err: AppError | RhiError): err is AppError {
   return err instanceof AppErrorClass;
 }

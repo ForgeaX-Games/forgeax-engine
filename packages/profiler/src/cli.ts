@@ -4,6 +4,7 @@ import type { ProfileComparisonProjection } from './compare.js';
 import { compareProfileCaptures } from './compare.js';
 import type { ProfileModel } from './model.js';
 import { buildProfileModel } from './model.js';
+import type { ProfileSource } from './types.js';
 
 export interface ProfilerCliResult {
   readonly stdout: string;
@@ -14,7 +15,7 @@ export interface ProfilerCliResult {
 type CliCommand =
   | { readonly kind: 'summary' }
   | { readonly kind: 'frame'; readonly frameId: number }
-  | { readonly kind: 'phase'; readonly source: 'app' | 'render'; readonly phase: string }
+  | { readonly kind: 'phase'; readonly source: ProfileSource; readonly phase: string }
   | { readonly kind: 'compare' };
 
 type CliArguments = {
@@ -69,7 +70,7 @@ function parsePositiveSafeInteger(value: string, argument: string): number | Cli
 type ParseState = {
   kind: 'summary' | 'frame' | 'phase' | 'compare';
   frameId: number | undefined;
-  source: 'app' | 'render' | undefined;
+  source: ProfileSource | undefined;
   phase: string | undefined;
   filePath: string | undefined;
   leftFilePath: string | undefined;
@@ -197,7 +198,7 @@ function toCliArguments(state: ParseState): CliArguments {
   return {
     command: {
       kind: state.kind,
-      source: state.source as 'app' | 'render',
+      source: state.source as ProfileSource,
       phase: state.phase as string,
     },
     ...(state.filePath === undefined ? {} : { filePath: state.filePath }),

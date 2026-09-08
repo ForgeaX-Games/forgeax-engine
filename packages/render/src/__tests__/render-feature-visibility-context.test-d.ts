@@ -27,12 +27,7 @@ const feature = {
     consumeContext(context);
     return ok<Frame>({ count: context.worlds.length });
   },
-  prepare() {
-    return ok(undefined);
-  },
-  contribute() {
-    return ok(undefined);
-  },
+  plan: () => ok({ resources: [], passes: [] }),
 } satisfies RenderFeature<Frame>;
 
 void feature;

@@ -4,7 +4,7 @@
 // Dawn integration test mirroring the hello-transform-hierarchy smoke
 // (apps/hello/transform-hierarchy/scripts/smoke-dawn.mjs): AC-08
 // parent-moves-child-follows. Single World wires the consume path
-// through renderer.attachWorld, spawns a non-identity parent + a ChildOf
+// through renderer.attach, spawns a non-identity parent + a ChildOf
 // child + a static reference sphere, then proves moving the PARENT moves the
 // CHILD's rendered world position (the child gets no Transform write of its
 // own between frames; the only change is the parent's resolved Transform.world
@@ -18,15 +18,10 @@
 
 import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
-import {
-  Camera,
-  DirectionalLight,
-  MeshFilter,
-  MeshRenderer,
-} from '@forgeax/engine-render/internal';
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { ChildOf, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import { createRenderer } from '../index';
+import { constructRuntimeRendererHost } from '../renderer-host';
 
 const WIDTH = 256;
 const HEIGHT = 256;
@@ -139,28 +134,31 @@ describe('feat-20260531 M3 w13: AC-08 parent moves -> child follows (dawn)', () 
       removeEventListener() {},
     } as unknown as HTMLCanvasElement;
 
-    let renderer: Awaited<ReturnType<typeof createRenderer>>;
+    let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
     try {
-      renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+      host = await constructRuntimeRendererHost(
+        mockCanvas,
+        {},
+        {
+          shaderManifestUrl: ENGINE_MANIFEST_URL,
+        },
+      );
     } finally {
       globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
     }
-    expect(renderer.backend).toBe('webgpu');
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
-    if (!ready.ok) return;
+    expect(host.ok).toBe(true);
+    if (!host.ok) throw host.error;
+    const { renderer } = host.value;
+    expect(renderer.inspect().state).toBe('alive');
     const device = sharedDevice;
     if (device === undefined) throw new Error('GPUDevice not captured');
 
-    const assets = renderer.assets;
-    if (assets === null) throw new Error('AssetRegistry is null');
-
-    // Single World wires the consume path through renderer.attachWorld so the
+    // Single World wires the consume path through renderer.attach so the
     // child's resolved Transform.world mat4 is derived each frame. feat-20260614
     // M8: the material is a per-World column handle minted via allocSharedRef
     // (AssetRegistry has no handle concept).
     const world = new World();
-    const attachment = renderer.attachWorld(world);
+    const attachment = renderer.attach(world);
     if (!attachment.ok) throw attachment.error;
 
     const materialHandle = world.allocSharedRef('MaterialAsset', {
@@ -239,7 +237,11 @@ describe('feat-20260531 M3 w13: AC-08 parent moves -> child follows (dawn)', () 
 
     // Frame A: parent at rest. world.update(1 / 60).unwrap() runs propagateTransforms.
     world.update(1 / 60).unwrap();
-    const drawA = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const drawA = renderer.draw({
+      leases: [attachment.value],
+      camera: { lease: attachment.value },
+      environment: { lease: attachment.value },
+    });
     expect(drawA.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
     if (renderTarget === undefined) throw new Error('renderTarget not configured');
@@ -247,7 +249,11 @@ describe('feat-20260531 M3 w13: AC-08 parent moves -> child follows (dawn)', () 
 
     // Stability: a second render of the rest scene must be pixel-stable.
     world.update(1 / 60).unwrap();
-    const drawAA = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const drawAA = renderer.draw({
+      leases: [attachment.value],
+      camera: { lease: attachment.value },
+      environment: { lease: attachment.value },
+    });
     expect(drawAA.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
     const pixelsAA = await doReadPixels(device, renderTarget);
@@ -257,7 +263,11 @@ describe('feat-20260531 M3 w13: AC-08 parent moves -> child follows (dawn)', () 
     const setRes = world.set(parent, Transform, { pos: [PARENT_X_MOVED, 0, 0] });
     expect(setRes.ok).toBe(true);
     world.update(1 / 60).unwrap();
-    const drawB = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const drawB = renderer.draw({
+      leases: [attachment.value],
+      camera: { lease: attachment.value },
+      environment: { lease: attachment.value },
+    });
     expect(drawB.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
     const pixelsB = await doReadPixels(device, renderTarget);

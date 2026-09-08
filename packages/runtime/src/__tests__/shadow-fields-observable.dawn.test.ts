@@ -8,23 +8,25 @@
 // ShadowCaster pass (nothing written into shadow depth atlas), (b) floor
 // position outside camera frustum. Both fixed in the harness below.
 //
-// Each pixel A/B pair gets its own `it()` with a fresh createRenderer call --
+// Each pixel A/B pair gets its own `it()` with a fresh runtime host --
 // shadow-atlas state and device-lost crashes from prior A/B rounds cannot
 // contaminate the current comparison.
 
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
+import type { Renderer } from '@forgeax/engine-render';
 import {
   Camera,
   DirectionalLight,
   Instances,
   MeshFilter,
   MeshRenderer,
-} from '@forgeax/engine-render/internal';
-import { createRenderer } from '@forgeax/engine-runtime';
+} from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { validateDirectionalLightData } from '../../../render/src/components/light-helpers';
+import { constructRuntimeRendererHost } from '../renderer-host';
 import { drawPublished } from './draw-published';
 
 const WIDTH = 256;
@@ -270,30 +272,45 @@ async function renderConfig(
     removeEventListener() {},
   } as unknown as HTMLCanvasElement;
 
-  let renderer: Awaited<ReturnType<typeof createRenderer>>;
+  let renderer: Renderer | undefined;
   try {
-    renderer = await createRenderer(mc, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
-  } finally {
-    globalThis.navigator.gpu.requestAdapter = _s;
-  }
-  const ready = await renderer.ready;
-  if (!ready.ok) throw ready.error;
-  if (sd === undefined) throw new Error('device not initialized');
-  const dev = sd;
+    try {
+      const host = await constructRuntimeRendererHost(
+        mc,
+        {},
+        {
+          shaderManifestUrl: ENGINE_MANIFEST_URL,
+        },
+      );
+      if (!host.ok) throw host.error;
+      renderer = host.value.renderer;
+    } finally {
+      globalThis.navigator.gpu.requestAdapter = _s;
+    }
+    if (renderer === undefined) throw new Error('renderer not initialized');
+    if (renderer.inspect().state !== 'alive') throw new Error('renderer not alive');
+    if (sd === undefined) throw new Error('device not initialized');
+    const dev = sd;
 
-  const w = new World();
-  spawnScene(w, castShadow, depthBias, normalBias, pcf, mapSize);
-  let de = 0;
-  for (let i = 0; i < 300; i++) {
-    const r = drawPublished(renderer, w);
-    if (!r.ok) de++;
+    const w = new World();
+    spawnScene(w, castShadow, depthBias, normalBias, pcf, mapSize);
+    let de = 0;
+    for (let i = 0; i < 300; i++) {
+      const r = drawPublished(renderer, w);
+      if (!r.ok) de++;
+    }
+    if (de > 0) throw new Error(`draw errors: ${de}`);
+    // rt is created lazily by the canvas configure()/getCurrentTexture path during
+    // the first draw, so it is only guaranteed present after the draw loop.
+    if (rt === undefined) throw new Error('render target not initialized');
+    await dev.queue.onSubmittedWorkDone();
+    const pixels = await readback(dev, rt);
+    return pixels;
+  } finally {
+    renderer?.dispose();
+    rt?.destroy();
+    sd?.destroy();
   }
-  if (de > 0) throw new Error(`draw errors: ${de}`);
-  // rt is created lazily by the canvas configure()/getCurrentTexture path during
-  // the first draw, so it is only guaranteed present after the draw loop.
-  if (rt === undefined) throw new Error('render target not initialized');
-  await dev.queue.onSubmittedWorkDone();
-  return readback(dev, rt);
 }
 
 async function renderConfigWithSpy(
@@ -376,27 +393,41 @@ async function renderConfigWithSpy(
     removeEventListener() {},
   } as unknown as HTMLCanvasElement;
 
-  let renderer: Awaited<ReturnType<typeof createRenderer>>;
+  let renderer: Renderer | undefined;
   try {
-    renderer = await createRenderer(mc, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
-  } finally {
-    globalThis.navigator.gpu.requestAdapter = _s;
-  }
-  const ready = await renderer.ready;
-  if (!ready.ok) throw ready.error;
-  if (sd === undefined) throw new Error('device not initialized');
-  const dev = sd;
+    try {
+      const host = await constructRuntimeRendererHost(
+        mc,
+        {},
+        {
+          shaderManifestUrl: ENGINE_MANIFEST_URL,
+        },
+      );
+      if (!host.ok) throw host.error;
+      renderer = host.value.renderer;
+    } finally {
+      globalThis.navigator.gpu.requestAdapter = _s;
+    }
+    if (renderer === undefined) throw new Error('renderer not initialized');
+    if (renderer.inspect().state !== 'alive') throw new Error('renderer not alive');
+    if (sd === undefined) throw new Error('device not initialized');
+    const dev = sd;
 
-  const w = new World();
-  spawnScene(w, castShadow, depthBias, normalBias, pcf, mapSize);
-  let de = 0;
-  for (let i = 0; i < 10; i++) {
-    const r = drawPublished(renderer, w);
-    if (!r.ok) de++;
+    const w = new World();
+    spawnScene(w, castShadow, depthBias, normalBias, pcf, mapSize);
+    let de = 0;
+    for (let i = 0; i < 10; i++) {
+      const r = drawPublished(renderer, w);
+      if (!r.ok) de++;
+    }
+    if (de > 0) throw new Error(`draw errors: ${de}`);
+    await dev.queue.onSubmittedWorkDone();
+    return { pixels: new Uint8Array(0), captured };
+  } finally {
+    renderer?.dispose();
+    rt?.destroy();
+    sd?.destroy();
   }
-  if (de > 0) throw new Error(`draw errors: ${de}`);
-  await dev.queue.onSubmittedWorkDone();
-  return { pixels: new Uint8Array(0), captured };
 }
 
 describe('M6 shadow fields observability', () => {
@@ -435,49 +466,43 @@ describe('M6 shadow fields observability', () => {
 
   // --- Gate D: validate() rejections ---
   it('validate() accepts pcfKernelSize=9 (odd), rejects 2 (even) and 0', () => {
-    const v = (
-      DirectionalLight as {
-        validate?: (
-          d: Record<string, number | boolean | readonly number[]>,
-        ) => { code: string } | null;
-      }
-    ).validate;
-    expect(
-      v?.({
-        direction: [0, -1, 0],
-        castShadow: true,
-        cascadeCount: 4,
-        splitLambda: 0.75,
-        cascadeBlend: 0.2,
-        mapSize: 2048,
-        shadowDistance: 50,
-        pcfKernelSize: 9,
-      }),
-    ).toBeNull();
-    expect(
-      v?.({
-        direction: [0, -1, 0],
-        castShadow: true,
-        cascadeCount: 4,
-        splitLambda: 0.75,
-        cascadeBlend: 0.2,
-        mapSize: 2048,
-        shadowDistance: 50,
-        pcfKernelSize: 2,
-      })?.code,
-    ).toBe('shadow-invalid-config');
-    expect(
-      v?.({
-        direction: [0, -1, 0],
-        castShadow: true,
-        cascadeCount: 4,
-        splitLambda: 0.75,
-        cascadeBlend: 0.2,
-        mapSize: 2048,
-        shadowDistance: 50,
-        pcfKernelSize: 0,
-      })?.code,
-    ).toBe('shadow-invalid-config');
+    const valid = validateDirectionalLightData({
+      direction: [0, -1, 0],
+      castShadow: true,
+      cascadeCount: 4,
+      splitLambda: 0.75,
+      cascadeBlend: 0.2,
+      mapSize: 2048,
+      shadowDistance: 50,
+      pcfKernelSize: 9,
+    });
+    expect(valid.ok).toBe(true);
+
+    const even = validateDirectionalLightData({
+      direction: [0, -1, 0],
+      castShadow: true,
+      cascadeCount: 4,
+      splitLambda: 0.75,
+      cascadeBlend: 0.2,
+      mapSize: 2048,
+      shadowDistance: 50,
+      pcfKernelSize: 2,
+    });
+    expect(even.ok).toBe(false);
+    if (!even.ok) expect(even.error.code).toBe('shadow-invalid-config');
+
+    const zero = validateDirectionalLightData({
+      direction: [0, -1, 0],
+      castShadow: true,
+      cascadeCount: 4,
+      splitLambda: 0.75,
+      cascadeBlend: 0.2,
+      mapSize: 2048,
+      shadowDistance: 50,
+      pcfKernelSize: 0,
+    });
+    expect(zero.ok).toBe(false);
+    if (!zero.ok) expect(zero.error.code).toBe('shadow-invalid-config');
   });
 
   // --- Gate C: pixel A/B — castShadow ON vs OFF (control) ---

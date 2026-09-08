@@ -16,6 +16,8 @@
 //   - requirements AC-09 (two paths left in place, capability probe explicit).
 //   - plan-strategy D-2 (grep-able capability branch, not a TODO).
 
+import type { RhiCaps } from '@forgeax/engine-rhi';
+
 /**
  * Minimal device shape the high-perf capability probe inspects: the backend
  * kind plus the (currently-absent) `importExternalTexture` method. Declared
@@ -23,7 +25,7 @@
  * unit tests drive it with a small object.
  */
 export interface VideoCapabilityDevice {
-  readonly caps: { readonly backendKind: 'webgpu' | 'wgpu-native' | 'wgpu-webgl2' | 'null' };
+  readonly caps: Pick<RhiCaps, 'backendKind'>;
   /**
    * The WebGPU zero-copy video import entry point. forgeax exposes NO such RHI
    * method today (research Finding 4 confirmed `importExternalTexture` grep=0),

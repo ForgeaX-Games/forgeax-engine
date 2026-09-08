@@ -1,16 +1,20 @@
 import { createApp } from '@forgeax/engine-app';
 import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } from '@forgeax/engine-render';
-import { createDevImportTransport } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import { assertMaterialAsset, type MaterialAsset, type TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import materialPackage from './shader-defs.pack.json';
+import redMaterialPackage from './shader-defs-red.pack.json';
 import './shader-defs.wgsl';
+import './shader-defs-red.wgsl';
 
 const authoredPayload = materialPackage.assets[0]?.payload;
 assertMaterialAsset(authoredPayload, 'shader-defs.pack.json');
 const authoredMaterial: MaterialAsset = authoredPayload;
+const redAuthoredPayload = redMaterialPackage.assets[0]?.payload;
+assertMaterialAsset(redAuthoredPayload, 'shader-defs-red.pack.json');
+const redAuthoredMaterial: MaterialAsset = redAuthoredPayload;
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('bevy-shader-defs: missing <canvas id="app">');
@@ -21,7 +25,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appResult = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter() },
   );
   if (!appResult.ok) {
     console.error('[bevy-shader-defs] createApp failed:', appResult.error);
@@ -49,8 +53,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     colorSpace: 'linear',
     mipmap: false,
   });
-  const blue = makeMaterial(app.world, [0.05, 0.25, 1], false, texture);
-  const greenWithRedDefine = makeMaterial(app.world, [0.05, 1, 0.1], true, texture);
+  const blue = makeMaterial(app.world, authoredMaterial, [0.05, 0.25, 1], texture);
+  const red = makeMaterial(app.world, redAuthoredMaterial, [0.05, 1, 0.1], texture);
 
   app.world.spawn(
     { component: Transform, data: { pos: [-0.9, 0, 0] } },
@@ -60,7 +64,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   app.world.spawn(
     { component: Transform, data: { pos: [0.9, 0, 0] } },
     { component: MeshFilter, data: { assetHandle: mesh } },
-    { component: MeshRenderer, data: { materials: [greenWithRedDefine] } },
+    { component: MeshRenderer, data: { materials: [red] } },
   );
   app.world.spawn(
     { component: Transform, data: { pos: [0, 0, 3], quat: [0, 0, 0, 1] } },
@@ -78,20 +82,19 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
 function makeMaterial(
   world: import('@forgeax/engine-ecs').World,
+  sourceMaterial: MaterialAsset,
   baseColor: readonly [number, number, number],
-  isRed: boolean,
   texture: import('@forgeax/engine-types').Handle<'TextureAsset', 'shared'>,
 ): import('@forgeax/engine-types').Handle<'MaterialAsset', 'shared'> {
-  const [authoredPass] = authoredMaterial.passes ?? [];
+  const [authoredPass] = sourceMaterial.passes ?? [];
   if (authoredPass === undefined) throw new Error('shader-defs material pack has no pass');
   const material = {
-    ...authoredMaterial,
+    ...sourceMaterial,
     passes: [{
       ...authoredPass,
-      program: { ...authoredPass.program, moduleSlots: { IS_RED: String(isRed) } },
       renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
     }],
-    values: { baseColor: [...baseColor, 1], time: 0, speed: 1, baseColorTexture: texture, IS_RED: isRed },
+    values: { baseColor: [...baseColor, 1], time: 0, speed: 1, baseColorTexture: texture },
   } satisfies MaterialAsset;
   return world.allocSharedRef('MaterialAsset', material);
 }

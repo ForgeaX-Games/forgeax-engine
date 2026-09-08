@@ -26,11 +26,11 @@ never the reverse.
   sorted by `screenDist`. `pickVertexOnEntity` queries one entity; `pickVertex`
   walks the whole scene (AABB coarse cull, then per-entity vertex collect).
 - **`pickTile(world, tilemapEntity, worldX, worldY)`** — cell-level Tilemap query:
-  converts world coordinates to the tilemap's local cell grid, walks child
-  `TileLayer`s in descending `layerOrder`, and returns
-  `Result.ok(PickTileHit { layerEntity, cellX, cellY, tileId })` for the topmost
-  non-zero cell, `Result.ok(null)` for empty / out-of-bounds, or
-  `Result.err(PickTileError)` for a structural break.
+  converts world coordinates through the full inverse of the propagated
+  `Transform.world` affine matrix, walks child `TileLayer`s in descending
+  `layerOrder`, and returns `Result.ok(PickTileHit { layerEntity, cellX, cellY,
+  tileId })` for the topmost non-zero cell, `Result.ok(null)` for empty /
+  out-of-bounds, or `Result.err(PickTileError)` for a structural break.
 - **`PickError` / `PickErrorCode`** — closed single-member error union
   (`'camera-component-missing'`); the SSOT for the picking error surface. A
   `cameraEntity` without a `Camera` component throws `PickError`; ordinary "ray
@@ -89,6 +89,14 @@ The returned ray uses the same top-left/y-down viewport coordinates as `pick`.
 It is the low-level cursor-to-world front door: intersect it with the game
 surface you own, then place an entity or debug primitive at the result.
 
+> [!IMPORTANT]
+> **Viewport validity** — if either viewport dimension is zero, negative,
+> `NaN`, or `Infinity`, `pick`, `viewportToWorld`, `pickVertex`, and
+> `pickVertexOnEntity` return their ordinary no-ray/no-hit shape (`undefined`
+> or `[]`). They do not delegate an invalid viewport to a fabricated origin
+> ray. Restore positive, finite dimensions and retry on the same World; the
+> normal mesh, vertex, and ray results recover without rebuilding the scene.
+
 ### Vertex-level (`pickVertex` / `pickVertexOnEntity`)
 
 | Function | Signature | Return |
@@ -115,11 +123,14 @@ Only `triangle-list` submeshes participate; skinned meshes report
 |:--|:--|:--|
 | `pickTile` | `(world, tilemapEntity, worldX, worldY)` | `Result<PickTileHit \| null, PickTileError>` |
 
-`PickTileHit = { layerEntity, cellX, cellY, tileId }`. `Result.ok(null)` = empty
-cell or out-of-bounds; `Result.err` only for structural breaks (entity carries
-no `Tilemap`). `PickTileError` is a closed two-member discriminated union
-(`'tilemap-not-found'` / `'tilemap-component-missing'`), runtime-local (not
-exported through `@forgeax/engine-types`).
+`PickTileHit = { layerEntity, cellX, cellY, tileId }`. Callers propagate the
+World before picking so `Transform.world` is current; an entity without a
+Transform retains the origin-default path. `Result.ok(null)` = empty cell or
+out-of-bounds. A dead handle returns `tilemap-not-found`; a live entity without
+`Tilemap` returns `tilemap-component-missing`. `PickTileError` is a closed
+two-member discriminated union, runtime-local (not exported through
+`@forgeax/engine-types`). Singular transforms use the shared `mat4.invert`
+identity fallback deterministically, without widening the error union.
 
 ## Error model
 

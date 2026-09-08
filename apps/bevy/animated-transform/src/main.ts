@@ -7,6 +7,8 @@ import { Transform } from '@forgeax/engine-scene';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import {
   buildAnimatedTransformWorld,
+  TRANSFORM_CLIP_GUID,
+  transformClip,
   replayAnimatedTransform,
   setAnimatedTransformPaused,
   setAnimatedTransformSpeed,
@@ -29,7 +31,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const created = await createApp(target, {}, forgeaxBundlerAdapter());
   if (!created.ok) throw created.error;
   const app = created.value;
-  const demo = buildAnimatedTransformWorld(app.world);
+  const clip = transformClip();
+  if (app.assets === undefined) throw new Error('bevy-animated-transform: assets unavailable');
+  app.assets.catalog(TRANSFORM_CLIP_GUID, clip).unwrap();
+  const demo = buildAnimatedTransformWorld(app.world, clip);
 
   const materials = [
     app.world.allocSharedRef<'MaterialAsset', MaterialAsset>(

@@ -1,3 +1,5 @@
+// @perf-budget-skip: intentional generated-artifact freshness subprocess gate.
+
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 

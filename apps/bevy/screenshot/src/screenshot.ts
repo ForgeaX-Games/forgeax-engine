@@ -3,9 +3,9 @@
 //
 // Reproduces Bevy's `window/screenshot` example (references/repos/bevy/
 // examples/window/screenshot.rs): plane + cube + PointLight + camera,
-// Space saves a screenshot via renderer.readPixels().
+// Space requests a screenshot from the host canvas.
 // forgeax mapping:
-//   - Screenshot::primary_window() -> renderer.readPixels() → Uint8Array
+//   - Screenshot::primary_window() -> host canvas capture → Uint8Array
 //   - save_to_disk(path)           -> browser: download Blob; smoke: writeFileSync
 //   - Camera3d + looking_at        -> Transform + Camera (perspective) + quat.fromLookAt
 
@@ -68,7 +68,7 @@ let wasSpaceDown = false;
 
 /**
  * On Space rising edge, return true to signal a screenshot should be taken.
- * Caller (app or smoke) calls renderer.readPixels() separately.
+ * Caller (app or smoke) performs the host-owned capture separately.
  */
 export function stepScreenshot(_world: World, snapshot: InputSnapshot | null): boolean {
   if (!snapshot) return false;

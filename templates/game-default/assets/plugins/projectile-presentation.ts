@@ -1,9 +1,9 @@
-import type { BootstrapContext } from '@forgeax/engine-app';
+import type { GameHost } from '@forgeax/engine-app';
 import { HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
 import { createCapsuleGeometry } from '@forgeax/engine-geometry';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { Materials, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { setTransparentSortConfig, TRANSPARENT_SORT_MODE_DISTANCE, TRANSPARENT_SORT_MODE_LAYER_Z } from '@forgeax/engine-render/authoring';
+import { TransparentSort } from '@forgeax/engine-render/authoring';
 import type { Handle, MaterialAsset } from '@forgeax/engine-runtime';
 import type { MeshAsset } from '@forgeax/engine-types';
 import type { ChromaticAberrationHandle } from './chromatic-aberration';
@@ -40,7 +40,7 @@ export type ProjectilePresentation = {
 
 type ProjectilePresentationArgs = {
   readonly world: World;
-  readonly host: BootstrapContext | undefined;
+  readonly host: GameHost | undefined;
   readonly player: EntityHandle | undefined;
   readonly primaryTarget: () => EntityHandle | undefined;
   readonly targetEntities: () => readonly EntityHandle[];
@@ -71,9 +71,9 @@ export async function createProjectilePresentation(args: ProjectilePresentationA
     emissiveIntensity: 7,
   }));
   const bulletMesh = bulletMeshResult.ok ? args.world.allocSharedRef('MeshAsset', bulletMeshResult.value) : HANDLE_SPHERE;
-  const customProjectile = args.host?.renderer === undefined
+  const customProjectile = args.host === undefined
     ? undefined
-    : await createCustomProjectileMesh(args.world, args.host.renderer);
+    : await createCustomProjectileMesh(args.world);
   const spriteAtlasLoop = customProjectile === undefined
     ? undefined
     : await createSpriteAtlasLoop(args.world, args.host?.assets, customProjectile.spriteMaterialHandle, customProjectile.spriteLitMaterialHandle);
@@ -88,8 +88,8 @@ export async function createProjectilePresentation(args: ProjectilePresentationA
   };
   const setProjectileVisual = (visual: ProjectileVisual): void => {
     if (args.player !== undefined) args.world.set(args.player, ProjectilePolicy, { visualMode: visualIndex(visual) });
-    const sort = setTransparentSortConfig(args.world, {
-      mode: visual === 'mesh' ? TRANSPARENT_SORT_MODE_LAYER_Z : TRANSPARENT_SORT_MODE_DISTANCE,
+    const sort = TransparentSort.configure(args.world, {
+      mode: visual === 'mesh' ? TransparentSort.layerZ : TransparentSort.distance,
       yzAlpha: 1,
     });
     if (!sort.ok) console.error('[game] projectile transparent-sort setup failed:', sort.error.code, sort.error.expected, sort.error.hint);

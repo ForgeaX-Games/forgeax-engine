@@ -56,7 +56,7 @@ Do not fetch a pack-index row or call `loadAudioClipByGuid` at app level. That f
 
 ## Host consumer
 
-`createHostAudioConsumer()` consumes the closed `AudioIntent` union from `@forgeax/engine-audio`. It decodes bytes once per `sourceKey`, caches the `AudioBuffer`, fences stale play completions by entity epoch, and reports structured decode failure through its `AudioState`. `dispose()` clears the cache and closes the underlying engine exactly once.
+`createHostAudioConsumer()` consumes the closed `AudioIntent` union from `@forgeax/engine-audio`. It decodes identical bytes once per `sourceKey`, replaces the decode authority when bytes change under that stable key, fences stale play completions by entity epoch and source-key entry identity, and reports structured decode failure through its `AudioState`. A failed current decode keeps its bytes available for an explicit retry or a later content replacement; an older pending completion cannot delete or supersede a newer entry. `dispose()` clears the cache and closes the underlying engine exactly once.
 
 `createWebAudioBackend()` is the main-thread adapter over the same consumer. Worker tiers use the intent backend in the Engine Worker and deliver the batch to a Host consumer after each accepted frame credit. No `AudioContext`, `AudioBuffer`, or Web Audio node crosses a realm boundary.
 
@@ -65,7 +65,7 @@ Do not fetch a pack-index row or call `loadAudioClipByGuid` at app level. That f
 ### AudioContext lifecycle (plan-strategy D-3)
 
 - **Lazy creation**: AudioContext is NOT created until first `play()` call.
-- **Gesture resume**: If AudioContext starts suspended (autoplay gate), a one-shot `document.addEventListener('click'/'keydown'/'touchstart', resumeOnce, { once: true })` is registered. The tick system defers playback until context state becomes `'running'`.
+- **Gesture resume**: If AudioContext is suspended (autoplay gate), one bounded set of one-shot `document.addEventListener('click'/'keydown'/'touchstart', resumeOnce, { once: true })` listeners is registered. A rejected `resume()` keeps the same context suspended, records `context-suspended`, and re-arms that set for the next gesture; listeners are removed only after the existing context reports `'running'`. No polling, automatic resume, or context reconstruction is used.
 - **Irreversible close**: `destroy()` calls `ctx.close()`; to restart audio after destroy, create a new backend via `createWebAudioBackend()`.
 
 ### Bus topology (plan-strategy D-5)
@@ -123,7 +123,7 @@ Requires Web Audio API (`AudioContext`, `AudioBuffer`, `AudioBufferSourceNode`, 
 |:--|:--|:--|
 | `context-creation-failed` | `new AudioContext()` threw or returned null | check browser supports AudioContext; verify no privacy extension blocks audio |
 | `decode-failed` | `decodeAudioData(arrayBuffer)` rejected | ensure audio file is a valid wav/mp3/ogg/flac at the GUID path |
-| `context-suspended` | play called while ctx is suspended and gesture listener failed | call play after user gesture (click/tap/keydown) to trigger resume() |
+| `context-suspended` | `AudioContext.resume()` was refused while the existing context remained suspended | retry after the next user gesture (click/tap/keydown); the backend keeps the same context and re-arms its bounded listeners |
 | `invalid-clip-handle` | AudioSource.clip handle is dangling | verify clip was registered via AssetRegistry.register() before spawning |
 | `bus-not-found` | AudioSource.bus outside `'sfx' \| 'music'` | use 'sfx' or 'music' bus literal; custom bus names not supported in v1 |
 

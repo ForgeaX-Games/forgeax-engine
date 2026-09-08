@@ -27,12 +27,10 @@
 // to collapse the dual-component spawn into a single component (D-6 primary
 // decision). castShadow defaults to true so zero-config spawns get shadows
 // by default; set castShadow=false to opt out. D-6 directional stays
-// first-hit-wins -- no cardinality cap. The separate DirectionalLightShadow
-// component and its cardinality bound are deleted in m1-t6.
+// first-hit-wins -- no ECS cardinality cap. Renderer allocation policy stays
+// with the shadow atlas owner.
 
 import { defineComponent } from '@forgeax/engine-ecs';
-import { ShadowInvalidConfigError } from '../errors/render';
-import { validateDirection } from './light-helpers';
 
 /**
  * Directional light (sun-like infinite light source) with merged shadow
@@ -95,74 +93,28 @@ import { validateDirection } from './light-helpers';
  *   await renderer.ready;
  *   renderer.draw(world); // standard material renders black; switch to an unlit shader (Materials.unlit(...)) for an unlit display
  */
-export const DirectionalLight = defineComponent(
-  'DirectionalLight',
-  {
-    // direction is the ONLY field with no default (D-5): omitting it lands the
-    // array layer-3 all-zero [0,0,0], which validate() rejects -- there is no
-    // universal default direction, so "default is illegal" forces an explicit
-    // non-zero value. color carries an explicit layer-2 default [1,1,1] (white);
-    // the array layer-3 fallback is all-zero, so the default MUST be explicit.
-    direction: { type: 'array<f32, 3>' },
-    color: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
-    intensity: { type: 'f32', default: 1 },
-    // Shadow opt-out gate: defaults to true so zero-config spawns get shadows.
-    castShadow: { type: 'bool', default: true },
-    // 9 shadow fields migrated from DirectionalLightShadow (feat-20260621 M1).
-    cascadeCount: { type: 'f32', default: 4 },
-    splitLambda: { type: 'f32', default: 0.75 },
-    cascadeBlend: { type: 'f32', default: 0.2 },
-    mapSize: { type: 'f32', default: 2048 },
-    depthBias: { type: 'f32', default: 0.005 },
-    normalBias: { type: 'f32', default: 0.05 },
-    // Sole shadow coverage knob (feat replaces nearPlane/farPlane). The PSSM
-    // near end derives from the active camera near; shadowDistance is the far
-    // reach. Default 200 world units (matches UE-style "dynamic shadow
-    // distance"; the old farPlane default was 50).
-    shadowDistance: { type: 'f32', default: 200 },
-    pcfKernelSize: { type: 'f32', default: 3 },
-  },
-  {
-    validate(data) {
-      // D-1: reject a missing or zero-vector direction (shared SSOT helper).
-      const dirErr = validateDirection(
-        'DirectionalLight',
-        data.direction as ArrayLike<number> | undefined,
-      );
-      if (dirErr !== null) return dirErr;
-      // castShadow may be undefined when validation runs before defaults fill
-      // (not the case in the current ECS pipeline — defaults fill first per
-      // world.ts:740-743). But defend against the edge: undefined = default true.
-      const cs = data.castShadow;
-      if (cs === false) {
-        return null;
-      }
-      // When castShadow is true (or undefined/default-true), enforce constraints.
-      const ms = data.mapSize as number | undefined;
-      if (ms !== undefined && ms < 1) {
-        return new ShadowInvalidConfigError('mapSize', ms, 1);
-      }
-      const cc = data.cascadeCount as number | undefined;
-      if (cc !== undefined && (cc < 1 || cc > 4 || !Number.isInteger(cc))) {
-        return new ShadowInvalidConfigError('cascadeCount', cc, 1, 4);
-      }
-      const sl = data.splitLambda as number | undefined;
-      if (sl !== undefined && (sl < 0 || sl > 1)) {
-        return new ShadowInvalidConfigError('splitLambda', sl, 0, 1);
-      }
-      const cb = data.cascadeBlend as number | undefined;
-      if (cb !== undefined && (cb < 0 || cb > 0.5)) {
-        return new ShadowInvalidConfigError('cascadeBlend', cb, 0, 0.5);
-      }
-      const pcf = data.pcfKernelSize as number | undefined;
-      if (pcf !== undefined && (pcf < 1 || pcf % 2 === 0)) {
-        return new ShadowInvalidConfigError('pcfKernelSize', pcf, 1);
-      }
-      const sd = data.shadowDistance as number | undefined;
-      if (sd !== undefined && sd <= 0) {
-        return new ShadowInvalidConfigError('shadowDistance', sd, 0, '>');
-      }
-      return null;
-    },
-  },
-);
+export const DirectionalLight = defineComponent('DirectionalLight', {
+  // direction is the ONLY field with no default (D-5): omitting it lands the
+  // array layer-3 all-zero [0,0,0], which the renderer owner rejects -- there is no
+  // universal default direction, so "default is illegal" forces an explicit
+  // non-zero value. color carries an explicit layer-2 default [1,1,1] (white);
+  // the array layer-3 fallback is all-zero, so the default MUST be explicit.
+  direction: { type: 'array<f32, 3>' },
+  color: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
+  intensity: { type: 'f32', default: 1 },
+  // Shadow opt-out gate: defaults to true so zero-config spawns get shadows.
+  castShadow: { type: 'bool', default: true },
+  // 9 shadow fields migrated from DirectionalLightShadow (feat-20260621 M1).
+  cascadeCount: { type: 'f32', default: 4 },
+  splitLambda: { type: 'f32', default: 0.75 },
+  cascadeBlend: { type: 'f32', default: 0.2 },
+  mapSize: { type: 'f32', default: 2048 },
+  depthBias: { type: 'f32', default: 0.005 },
+  normalBias: { type: 'f32', default: 0.05 },
+  // Sole shadow coverage knob (feat replaces nearPlane/farPlane). The PSSM
+  // near end derives from the active camera near; shadowDistance is the far
+  // reach. Default 200 world units (matches UE-style "dynamic shadow
+  // distance"; the old farPlane default was 50).
+  shadowDistance: { type: 'f32', default: 200 },
+  pcfKernelSize: { type: 'f32', default: 3 },
+});

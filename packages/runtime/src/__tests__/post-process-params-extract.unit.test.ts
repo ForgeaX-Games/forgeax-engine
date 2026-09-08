@@ -8,12 +8,9 @@
 // collects into Map<shaderId, AllowSharedBufferSource>.
 
 import { World } from '@forgeax/engine-ecs';
-import {
-  extractFrame,
-  PostProcessParams,
-  prepareExtractContext,
-} from '@forgeax/engine-render/internal';
+import { PostProcessParams } from '@forgeax/engine-render';
 import { describe, expect, it } from 'vitest';
+import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
 
 describe('extractFrame PostProcessParams snapshot collection', () => {
   it('should contain postProcessParams empty map when no PostProcessParams entities exist', () => {

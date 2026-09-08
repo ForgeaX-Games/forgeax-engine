@@ -78,6 +78,12 @@ const EXEMPT_DEMOS = [
     reason:
       'onerror-gate browser test requires vite dev server for POST /__import; covered by sibling smoke-dawn.mjs (Sponza 300-frame end-to-end)',
   },
+  {
+    demoDir: 'apps/learn-render/4.advanced-opengl/9.instancing',
+    siblingSmoke: 'scripts/smoke-dawn.mjs',
+    reason:
+      'the browser tripwire duplicated the asset/import path through an unbounded dev-server bootstrap; the CI-owned sibling smoke exercises all four assets, WebGPU instancing, 300 frames, pixel evidence, and the RHI error contract deterministically',
+  },
 ];
 
 const learnRenderDir = join(repoRoot, 'apps', 'learn-render');
@@ -158,7 +164,7 @@ for (const dir of demoDirs) {
     if (!content.includes('createDevImportTransport(runtimeBinding)')) {
       violations.push({ dim: 'unscoped-import-transport', path: entryRelative });
     }
-    if (!content.includes('configureRuntimeBinding(runtimeBinding)')) {
+    if (!content.includes('configureRuntimeAssetCatalog(assets, runtimeBinding)')) {
       violations.push({ dim: 'unscoped-asset-registry', path: entryRelative });
     }
 

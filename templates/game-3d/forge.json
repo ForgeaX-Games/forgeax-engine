@@ -1,0 +1,15 @@
+{
+  "id": "template-game-3d",
+  "name": "Game 3D",
+  "schemaVersion": "1.0.0",
+  "entry": "src/main.ts",
+  "physics": "3d",
+  "defaultScene": "019fb7ce-3400-7000-8000-000000000001",
+  "plugins": [
+    {
+      "id": "gameplay",
+      "name": "./src/main.ts",
+      "realm": "engine"
+    }
+  ]
+}

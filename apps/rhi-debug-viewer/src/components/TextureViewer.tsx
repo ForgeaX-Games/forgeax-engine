@@ -1,978 +1,563 @@
-// TextureViewer.tsx — texture viewer panel: thumbnail strip + real rendered preview.
-//
-// Absorbs the former RtPanel: the main preview area mounts a live <canvas> and, on
-// thumbnail selection, renders ACTUAL pixels (not placeholder text):
-//   - Color RT  -> ensureReplaySession + commitThroughDraw + renderRtToCanvas (the
-//     proven RT readback flow; this is what reconnects the browser smoke's
-//     data-forgeax-rt-status / data-forgeax-rt-canvas anchors to the live layout).
-//   - Depth (copyable: depth32float / depth16unorm) -> readbackDepthTexture +
-//     normalizeDepth -> grayscale putImageData.
-//   - Depth (non-copyable: depth24plus*) -> honest message: WebGPU forbids
-//     copyTextureToBuffer on these formats; re-capture with depth32float to preview.
-//   - Bound textures -> previewed when array-sliceable (2d / 2d-array / cube /
-//     cube-array) and either any uncompressed color format (decoded to RGBA8 on the
-//     host by decodeToRgba8 — any channels/bit-width, floats clamped to [0,1]) or any
-//     depth format (grayscale via readbackDepthAuto). cube/array textures get a
-//     per-slice selector (baseArrayLayer); compressed (BC/ETC/ASTC) and 3d fall back
-//     to an honest message.
-//   - A zoom toolbar (Fit / 1:1 / +/- ladder / percentage input) scales the preview;
-//     magnification is pixelated so 1x1 / small textures blow up crisp.
-//
-// Status anchor values (data-forgeax-rt-status): ok | no-rt | no-webgpu | error.
-//
-// Related: requirements AC-06/AC-16/AC-18/AC-26; plan-strategy D-4/D-5.
-
-/// <reference types="@webgpu/types" />
-
-import type { RhiCallEvent } from '@forgeax/engine-rhi-debug';
+import { decodeToRgba8, type RhiDebugError } from '@forgeax/engine-rhi-debug';
 import {
-  adaptReplayFormat,
-  bytesPerTexel,
-  decodeTexelRaw,
-  decodeToRgba8,
-  formatInfo,
-  readbackDrawRt,
-  readbackTexturePixels,
-  resolveTextureDescriptor,
-} from '@forgeax/engine-rhi-debug';
-import { renderRtToCanvas } from '@forgeax/engine-rhi-debug/rt-to-canvas';
-import { createShaderModule } from '@forgeax/engine-rhi-webgpu';
-import type { IDockviewPanelProps } from 'dockview-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { normalizeDepth } from '../depth-normalize';
-import { ensureReplaySession } from '../replay-session';
+  type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
+import { drawCallTextures, resolveTextureResource } from '../draw-call-resources';
 import { useSelection } from '../selection-context';
-import type { RtStatus } from '../selectors';
 import {
-  rtCanvasAnchor,
+  capabilityAnchor,
+  drawCallViewerAnchor,
   rtStatusAnchor,
   texelInfoAnchor,
   textureSliceAnchor,
-  textureThumbnailAnchor,
-  textureViewerAnchor,
   textureZoomAnchor,
 } from '../selectors';
-import { canvasToTexel } from '../texel-coord';
-import { sampleScalar } from '../texel-scalar';
 import {
-  isDepthFormat,
-  readbackDepthAuto,
-  readbackStencilTexture,
-  resolveDepthTextureDescriptor,
-} from '../texture-readback';
-import type { TextureDescriptor, TextureStatusEntry } from '../texture-status';
-import { computeTextureStatus } from '../texture-status';
-import { useTape, useViewModel } from '../viewer-context';
-import type { DrawEntry, ViewModel } from '../viewer-model';
+  DEFAULT_TEXTURE_VIEW_STATE,
+  type TextureViewState,
+  textureAspectOptions,
+  textureDescriptorFacts,
+} from '../texture-view-state';
+import {
+  useInspectWork,
+  useReadResource,
+  useViewerCapability,
+  useViewModel,
+} from '../viewer-context';
 
-/** A thumbnail entry representing one texture attached to the selected draw. */
-interface ThumbnailEntry {
-  readonly handleId: string;
-  readonly label: string;
-  readonly format: string;
-  readonly kind: 'color-rt' | 'depth' | 'stencil' | 'bound-texture';
-  readonly status: TextureStatusEntry;
-  /** Texture/view dimension ('2d' | 'cube' | ...); set for bound textures to gate preview. */
-  readonly dimension?: string;
-  /** Source texture's depthOrArrayLayers; drives the slice selector for cube/array textures. */
-  readonly arrayLayers?: number;
+type PixelStatus = 'no-rt' | 'no-webgpu' | 'loading' | 'ok' | 'error';
+interface PixelPreview {
+  readonly width: number;
+  readonly height: number;
+  readonly rgba: Uint8ClampedArray<ArrayBuffer>;
 }
 
-/** True when a depth format carries a stencil plane (which IS copyable via aspect:'stencil-only'). */
-function hasStencil(format: string): boolean {
-  return format.includes('stencil8');
+interface TexturePan {
+  readonly x: number;
+  readonly y: number;
 }
 
-// Stable empty singletons so useMemo dependencies don't churn when a tape / draw
-// is absent (a fresh [] each render would defeat the memoization).
-const EMPTY_EVENTS: readonly RhiCallEvent[] = [];
-const EMPTY_THUMBS: readonly ThumbnailEntry[] = [];
-
-// Array-sliceable dimensions: each slice is an independent 2D image selected via
-// baseArrayLayer. '3d' is excluded (its depth slices are not array layers and the
-// readback path does not select them); cube/cube-array/2d-array all qualify.
-const SLICEABLE_DIMENSIONS = new Set(['2d', '2d-array', 'cube', 'cube-array']);
-
-// Cube face order matches cubeArrayDepthFaceView (packages/rhi): +X/-X/+Y/-Y/+Z/-Z.
-const CUBE_FACE_NAMES = ['+X', '-X', '+Y', '-Y', '+Z', '-Z'] as const;
-
-/** Number of previewable slices for a texture: cube=6, cube-array/2d-array=layers, else 1. */
-function sliceCount(dimension: string, arrayLayers: number): number {
-  if (dimension === 'cube') return 6;
-  if (dimension === 'cube-array' || dimension === '2d-array') return Math.max(1, arrayLayers);
-  return 1;
+interface TextureDrag {
+  readonly pointerId: number;
+  readonly originX: number;
+  readonly originY: number;
+  readonly pan: TexturePan;
 }
 
-/** Human label for one slice: face-aware for cube types, "Layer N" for 2d-array. */
-function sliceLabel(dimension: string, slice: number): string {
-  if (dimension === 'cube' || dimension === 'cube-array') {
-    const face = CUBE_FACE_NAMES[slice % 6] ?? '?';
-    return dimension === 'cube' ? `${face}` : `L${Math.floor(slice / 6)} ${face}`;
-  }
-  return `Layer ${slice}`;
+const ZERO_TEXTURE_PAN: TexturePan = { x: 0, y: 0 };
+const MIN_TEXTURE_ZOOM = 1;
+const MAX_TEXTURE_ZOOM = 65_536;
+const WHEEL_ZOOM_RATE = 0.002;
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value));
 }
 
-// A bound texture is previewable when its selected slice (a 2D image) is either an
-// uncompressed color format (any channels/bit-width — decoded on the host by
-// decodeToRgba8) or ANY depth format (grayscale via readbackDepthAuto), and its
-// dimension is array-sliceable (2d / 2d-array / cube / cube-array). cube/array
-// textures preview one slice at a time via baseArrayLayer. Compressed (BC/ETC/ASTC),
-// 3d, and depth/stencil have no formatInfo entry -> fall back to an honest message.
-function isBoundPreviewable(dimension: string, format: string): boolean {
-  if (!SLICEABLE_DIMENSIONS.has(dimension)) return false;
-  return formatInfo(format) !== undefined || isDepthFormat(format);
-}
-
-/**
- * Stable, collision-free React key for a thumbnail button. `handleId` alone is
- * NOT unique: a depth24plus-stencil8 attachment yields a Depth and a Stencil
- * entry sharing the depthStencilViewHandleId, and across draws the same view
- * handle can be a bound texture in one draw and the depth attachment in another
- * (the CSM capture aliases textureView:1467 this way). Folding `kind` + list
- * index keeps every entry distinct so React never reuses the wrong DOM node when
- * the selected draw changes (bug #3: phantom depth thumbnail).
- */
-export function thumbnailKey(thumb: ThumbnailEntry, index: number): string {
-  return `${thumb.kind}:${thumb.handleId}:${index}`;
-}
-
-/**
- * Map the previously-selected thumbnail to the equivalent one in a new draw's
- * thumbnail list, so stepping between draws KEEPS the texture kind the user was
- * inspecting (bug #7: viewing Depth then stepping a draw used to snap back to
- * Color RT, making depth look like it never updated per draw). Matches on kind +
- * label (label disambiguates Depth vs Stencil and per-slot bound textures);
- * falls back to 0 when the kind is absent in the new draw.
- */
-export function preserveThumbIndex(
-  prev: readonly ThumbnailEntry[],
-  next: readonly ThumbnailEntry[],
-  prevIndex: number,
-): number {
-  const was = prev[prevIndex];
-  if (!was) return 0;
-  const found = next.findIndex((t) => t.kind === was.kind && t.label === was.label);
-  return found >= 0 ? found : 0;
-}
-
-export function collectThumbnails(
-  draw: DrawEntry,
-  events: readonly RhiCallEvent[],
-): readonly ThumbnailEntry[] {
-  const entries: ThumbnailEntry[] = [];
-
-  // Color RT
-  if (draw.colorAttachmentHandleId !== undefined) {
-    const desc = resolveTextureDescriptor(events, draw.colorAttachmentHandleId);
-    const format = adaptReplayFormat(desc?.format) ?? 'unknown';
-    entries.push({
-      handleId: draw.colorAttachmentHandleId,
-      label: 'Color RT 0',
-      format,
-      kind: 'color-rt',
-      status: { handleId: draw.colorAttachmentHandleId, status: 'ok', format },
-    });
-  }
-
-  // Depth-stencil. Read the real attachment format from pipelineState so a
-  // non-copyable depth format degrades through computeTextureStatus (AC-18).
-  if (draw.depthStencil.depthStencilViewHandleId !== undefined) {
-    const depthFormat = draw.pipelineState.depthStencil.format;
-    const dsHandle = draw.depthStencil.depthStencilViewHandleId;
-    entries.push({
-      handleId: dsHandle,
-      label: 'Depth',
-      format: depthFormat,
-      kind: 'depth',
-      status: { handleId: dsHandle, status: 'ok', format: depthFormat },
-    });
-    // A combined depth-stencil format exposes a separately previewable stencil
-    // plane (stencil8 IS copyable even when the depth plane is not).
-    if (hasStencil(depthFormat)) {
-      entries.push({
-        handleId: dsHandle,
-        label: 'Stencil',
-        format: depthFormat,
-        kind: 'stencil',
-        status: { handleId: dsHandle, status: 'ok', format: depthFormat },
-      });
-    }
-  }
-
-  // Bound textures from bindings. Resolve the real createTexture descriptor so the
-  // strip shows the true format (not a hard-coded 'unknown') and the preview path can
-  // decide previewability from format + dimension.
-  const seen = new Set<string>();
-  for (const binding of draw.bindings) {
-    if (binding.kind === 'texture' || binding.kind === 'textureView') {
-      const handleId = binding.handleId;
-      if (!seen.has(handleId)) {
-        seen.add(handleId);
-        const desc = resolveTextureDescriptor(events, handleId);
-        const format = adaptReplayFormat(desc?.format) ?? 'unknown';
-        entries.push({
-          handleId,
-          label: `Texture ${handleId}`,
-          format,
-          kind: 'bound-texture',
-          status: { handleId, status: 'ok', format },
-          dimension: desc?.dimension ?? '2d',
-          arrayLayers: desc?.arrayLayers ?? 1,
-        });
-      }
-    }
-  }
-
-  // Apply per-texture status matrix. Depth + stencil are now always previewable
-  // (depth24plus depth plane via the sampling blit, stencil plane via stencil-only
-  // copy), so they keep their 'ok' badge and bypass computeTextureStatus's
-  // copyability-based 'error' downgrade (which only flagged depth24plus*).
-  const descriptors: readonly TextureDescriptor[] = entries.map((e) => ({
-    handleId: e.handleId,
-    format: e.format,
-  }));
-  const statuses = computeTextureStatus(descriptors, true);
-  return entries.map((e, i) => {
-    if (e.kind === 'depth' || e.kind === 'stencil') return e;
-    const st = statuses[i];
-    return st ? { ...e, status: st } : e;
-  });
-}
-
-/**
- * Optimistic status the panel shows synchronously before the async replay
- * resolves — mirrors the former RtPanel.deriveStatus so the data-forgeax-rt-status
- * anchor reads a meaningful value immediately (consumers poll the canvas pixels
- * for the real-paint confirmation). Color RT / depth / stencil with WebGPU start
- * 'ok' (depth24plus depth now previews via the sampling blit, stencil via
- * stencil-only copy); bound textures / no-WebGPU start at their terminal state.
- */
-function deriveInitialStatus(thumb: ThumbnailEntry | undefined): RtStatus {
-  if (!thumb) return 'no-rt';
-  if (thumb.kind === 'bound-texture') {
-    // Non-previewable bound formats (3d / non-8-bit color / ...) seed 'no-rt'
-    // (honest fallback). Previewable bound textures (sliceable dim + depth/8-bit
-    // color) seed 'ok' (or 'no-webgpu') so the anchor is meaningful before replay.
-    if (!isBoundPreviewable(thumb.dimension ?? '2d', thumb.format)) return 'no-rt';
-    if (typeof navigator === 'undefined' || navigator.gpu === undefined) return 'no-webgpu';
-    return 'ok';
-  }
-  if (typeof navigator === 'undefined' || navigator.gpu === undefined) return 'no-webgpu';
-  return 'ok';
-}
-
-function statusColor(status: string): string {
-  switch (status) {
-    case 'ok':
-      return 'bg-success/15 text-success';
-    case 'no-rt':
-      return 'bg-warning/15 text-warning';
-    case 'no-webgpu':
-    case 'error':
-      return 'bg-danger/15 text-danger';
-    default:
-      return 'bg-muted text-muted-foreground';
-  }
-}
-
-/** Paint a normalized depth Float32Array ([0,1], tight) as grayscale onto the canvas. */
-function paintDepthGrayscale(canvas: HTMLCanvasElement, depth: Float32Array, w: number, h: number) {
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return false;
-  const rgba = new Uint8ClampedArray(w * h * 4);
-  for (let i = 0; i < w * h; i++) {
-    const g = Math.round((depth[i] ?? 0) * 255);
-    rgba[i * 4] = g;
-    rgba[i * 4 + 1] = g;
-    rgba[i * 4 + 2] = g;
-    rgba[i * 4 + 3] = 255;
-  }
-  ctx.putImageData(new ImageData(rgba, w, h), 0, 0);
-  return true;
-}
-
-/**
- * Decode tight raw readback bytes of any uncompressed color format into RGBA8 and
- * paint them onto the canvas. decodeToRgba8 (texel-decode) handles channels,
- * bit-width, BGRA swizzle, packed formats, and the [0,1]-clamp display map for
- * floats. Returns false on a missing 2d context or an undecodable format.
- */
-function paintColorPixels(
-  canvas: HTMLCanvasElement,
-  pixels: Uint8Array,
-  w: number,
-  h: number,
-  format: string,
-): boolean {
-  const rgba = decodeToRgba8(pixels, format, w, h);
-  if (!rgba) return false;
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return false;
-  ctx.putImageData(new ImageData(rgba, w, h), 0, 0);
-  return true;
-}
-
-// Zoom is either fit-to-window or an explicit scale factor. The ladder is the
-// +/- button step sequence; the percentage input accepts any value in [1, 1600]%.
-type Zoom = 'fit' | number;
-const ZOOM_LADDER = [0.25, 0.5, 1, 2, 4, 8, 16] as const;
-const ZOOM_MIN = 0.01;
-const ZOOM_MAX = 16;
-
-/** Step the zoom up/down one ladder rung. 'fit' steps relative to 1x. */
-function stepZoom(zoom: Zoom, dir: 1 | -1): number {
-  const current = zoom === 'fit' ? 1 : zoom;
-  if (dir === 1) {
-    return ZOOM_LADDER.find((z) => z > current + 1e-6) ?? ZOOM_MAX;
-  }
-  return [...ZOOM_LADDER].reverse().find((z) => z < current - 1e-6) ?? ZOOM_MIN;
-}
-
-export function TextureViewer(_props: IDockviewPanelProps) {
-  const vm = useViewModel();
-  const tape = useTape();
-  const { selectedDrawIdx } = useSelection();
-  const [selectedThumb, setSelectedThumb] = useState(0);
-  const [selectedSlice, setSelectedSlice] = useState(0);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [status, setStatus] = useState<RtStatus>('no-rt');
-  const [message, setMessage] = useState<string | null>(null);
-  // Zoom toolbar: 'fit' auto-sizes; a number scales the canvas in CSS px relative
-  // to its texture dimensions (`dims`, set when a preview paints).
-  const [zoom, setZoom] = useState<Zoom>('fit');
-  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
-  // texel picker: texel coordinate under cursor + the value there. Color textures
-  // carry raw RGBA (float, no clamp per D-4); depth/stencil carry a single scalar.
-  const [texelInfo, setTexelInfo] = useState<{
-    x: number;
-    y: number;
-    rgba?: readonly [number, number, number, number];
-    scalar?: number;
-    scalarLabel?: 'depth' | 'stencil';
-  } | null>(null);
-  // Cached raw readback bytes for the current color preview (D-4 raw byte bypass).
-  const rawPixelsRef = useRef<{ bytes: Uint8Array; format: string } | null>(null);
-  // Cached tight scalar array for the current depth/stencil preview (bug #4 readout).
-  const rawScalarRef = useRef<{
-    data: Float32Array;
-    w: number;
-    h: number;
-    label: 'depth' | 'stencil';
-  } | null>(null);
-  // Auto-normalize window of the current depth/stencil preview. Surfaced in the
-  // header so the per-draw depth change is legible even though the grayscale is
-  // re-stretched to [0,1] each readback (bug #7).
-  const [scalarStats, setScalarStats] = useState<{
-    min: number;
-    max: number;
-    label: 'depth' | 'stencil';
-  } | null>(null);
-
-  /** Handle canvas mousemove: map to texel -> raw color RGBA or depth/stencil scalar. */
-  function handleCanvasMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
-    const canvas = canvasRef.current;
-    if (!canvas || !selected || !dims) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-
-    const coord = canvasToTexel(mouseX, mouseY, rect.width, rect.height, dims.w, dims.h, zoom);
-    if (!coord) {
-      setTexelInfo(null);
-      return;
-    }
-
-    // Depth / Stencil: single-channel scalar readout (bug #4). Report the raw
-    // value from the tight scalar array, not the normalized grayscale.
-    if (selected.kind === 'depth' || selected.kind === 'stencil') {
-      const s = rawScalarRef.current;
-      const value = s ? sampleScalar(s.data, s.w, s.h, coord.x, coord.y) : null;
-      setTexelInfo(
-        value === null
-          ? { x: coord.x, y: coord.y }
-          : {
-              x: coord.x,
-              y: coord.y,
-              scalar: value,
-              scalarLabel: s?.label ?? 'depth',
-            },
-      );
-      return;
-    }
-
-    const raw = rawPixelsRef.current;
-    if (!raw) {
-      // No cached raw bytes yet — show coordinate only.
-      setTexelInfo({ x: coord.x, y: coord.y });
-      return;
-    }
-
-    const rgba = decodeTexelRaw(raw.bytes, raw.format, dims.w, dims.h, coord.x, coord.y);
-    setTexelInfo(rgba ? { x: coord.x, y: coord.y, rgba } : { x: coord.x, y: coord.y });
-  }
-
-  const noDraw = !vm || selectedDrawIdx < 0 || selectedDrawIdx >= vm.draws.length;
-  const draw = noDraw ? undefined : (vm as ViewModel).draws[selectedDrawIdx];
-  // Memoize so `thumbnails` (and thus `selected`) keep a STABLE identity across
-  // re-renders. Without this, collectThumbnails returned fresh objects every
-  // render, so the preview effect (which depends on `selected`) re-fired on every
-  // setTexelInfo -> it wiped texelInfo one frame later and re-ran the GPU replay
-  // per mouse move (bug #1: pixel info flashed once then vanished). `draw` comes
-  // from the FrameModel and only changes when the selection/tape changes.
-  const events = tape?.events ?? EMPTY_EVENTS;
-  const thumbnails = useMemo(
-    () => (draw ? collectThumbnails(draw, events) : EMPTY_THUMBS),
-    [draw, events],
+export function DrawCallViewer(_props?: { readonly className?: string }) {
+  const model = useViewModel();
+  const inspectWork = useInspectWork();
+  const readResource = useReadResource();
+  const capability = useViewerCapability();
+  const { selectedWorkIndex, selectedResourceId, selectResource } = useSelection();
+  const [status, setStatus] = useState<PixelStatus | null>(null);
+  const [readbackError, setReadbackError] = useState<RhiDebugError | null>(null);
+  const [pixels, setPixels] = useState<PixelPreview | null>(null);
+  const [viewState, setViewState] = useState<TextureViewState>(DEFAULT_TEXTURE_VIEW_STATE);
+  const [pan, setPan] = useState<TexturePan>(ZERO_TEXTURE_PAN);
+  const [dragging, setDragging] = useState(false);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const dragRef = useRef<TextureDrag | null>(null);
+  const works = model?.works ?? [];
+  const work = works.find((candidate) => candidate.workIndex === selectedWorkIndex);
+  const textures = model === null ? [] : drawCallTextures(model, work);
+  const selectedResourceTexture =
+    model !== null && selectedResourceId !== null
+      ? resolveTextureResource(model, selectedResourceId)
+      : undefined;
+  const explicitTexture = textures.find(
+    (resource) => resource.resourceId === selectedResourceTexture?.resourceId,
   );
-  const selected = thumbnails[selectedThumb];
-  const slices = selected ? sliceCount(selected.dimension ?? '2d', selected.arrayLayers ?? 1) : 1;
+  const workTexture = textures[0];
+  const selectedTexture = explicitTexture ?? workTexture;
+  const textureFacts = textureDescriptorFacts(selectedTexture?.descriptor);
+  const aspectOptions = textureAspectOptions(textureFacts.format);
+  const effectiveAspect = aspectOptions.includes(viewState.aspect)
+    ? viewState.aspect
+    : aspectOptions[0];
+  const selected = work !== undefined;
+  const pixelStatus = !selected
+    ? 'no-rt'
+    : (status ?? (capability.kind === 'webgpu' ? 'loading' : 'no-webgpu'));
 
-  // When the draw changes, remap the selection to the SAME texture kind in the new
-  // draw (bug #7): stepping draws while inspecting Depth used to snap back to Color
-  // RT, so depth looked like it never updated per draw. prevThumbsRef holds the
-  // list the current selectedThumb indexes into; on a draw change we reconcile.
-  const prevThumbsRef = useRef<readonly ThumbnailEntry[]>(thumbnails);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reconcile only on draw change; thumbnails read via ref
   useEffect(() => {
-    setSelectedThumb((idx) => preserveThumbIndex(prevThumbsRef.current, thumbnails, idx));
-    // eslint react-hooks: thumbnails intentionally excluded (see comment)
-  }, [selectedDrawIdx]);
-  // Keep the ref current for the NEXT draw-change reconciliation.
-  useEffect(() => {
-    prevThumbsRef.current = thumbnails;
-  }, [thumbnails]);
+    if (pixels === null || canvasRef.current === null) return;
+    const canvas = canvasRef.current;
+    canvas.width = pixels.width;
+    canvas.height = pixels.height;
+    const context = canvas.getContext('2d');
+    if (context === null) return;
+    const image = context.createImageData(pixels.width, pixels.height);
+    image.data.set(pixels.rgba);
+    context.putImageData(image, 0, 0);
+  }, [pixels]);
 
-  // Reset the slice selector when the selected thumbnail changes (a different
-  // texture has a different slice count).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional reset on thumbnail change only
-  useEffect(() => {
-    setSelectedSlice(0);
-  }, [selectedThumb]);
+  const resetViewTransform = useCallback((zoom: TextureViewState['zoom']) => {
+    setPan(ZERO_TEXTURE_PAN);
+    setViewState((state) => ({ ...state, zoom }));
+  }, []);
 
-  // Render the selected thumbnail's real pixels.
-  useEffect(() => {
-    let cancelled = false;
+  const handleWheel = useCallback(
+    (event: ReactWheelEvent<HTMLDivElement>) => {
+      if (pixels === null) return;
+      event.preventDefault();
+      const stage = event.currentTarget.getBoundingClientRect();
+      if (stage.width <= 0 || stage.height <= 0) return;
 
-    // Record the painted texture's true dimensions for the zoom toolbar. Functional
-    // update returns the SAME object when unchanged so React bails (no setState loop).
-    const markDims = (w: number, h: number) =>
-      setDims((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }));
-
-    // Cache a depth/stencil preview's tight scalar array + its auto-normalize
-    // window so the picker reports the raw value (bug #4) and the header shows the
-    // per-draw range (bug #7). The readback buffer is tight (stride = width).
-    const cacheScalar = (
-      data: Float32Array,
-      w: number,
-      h: number,
-      label: 'depth' | 'stencil',
-      min: number,
-      max: number,
-    ) => {
-      rawScalarRef.current = { data, w, h, label };
-      setScalarStats({ min, max, label });
-    };
-
-    // Seed the optimistic status synchronously so the data-forgeax-rt-status
-    // anchor is meaningful before the async replay resolves (the real paint is
-    // confirmed by polling canvas pixels). Cleared message until render decides.
-    // Reset texel picker when the selected texture changes.
-    setStatus(deriveInitialStatus(selected));
-    setMessage(null);
-    setTexelInfo(null);
-    setScalarStats(null);
-    rawPixelsRef.current = null;
-    rawScalarRef.current = null;
-
-    async function render() {
-      if (!tape || !draw || !selected) {
-        setStatus('no-rt');
-        setMessage(null);
-        return;
-      }
-
-      // Non-previewable bound textures (3d, non-8-bit color, compressed, ...) have
-      // no scoped readback path — honest message, no GPU attempt. Previewable bound
-      // textures (sliceable dim + depth/8-bit color) fall through to the readback below.
-      if (
-        selected.kind === 'bound-texture' &&
-        !isBoundPreviewable(selected.dimension ?? '2d', selected.format)
-      ) {
-        setStatus('no-rt');
-        setMessage(
-          `${selected.format} (${selected.dimension ?? '2d'}) bound texture is not directly previewable here — ` +
-            'inspect it via the Resource Inspector.',
-        );
-        return;
-      }
-
-      if (typeof navigator === 'undefined' || navigator.gpu === undefined) {
-        setStatus('no-webgpu');
-        setMessage(null);
-        return;
-      }
-
-      const sessionResult = await ensureReplaySession(tape);
-      if (cancelled) return;
-      if (!sessionResult.ok) {
-        if (sessionResult.error.kind === 'no-webgpu') {
-          setStatus('no-webgpu');
-          setMessage(null);
-        } else {
-          setStatus('error');
-          setMessage(sessionResult.error.message);
-        }
-        return;
-      }
-      const { replay, device } = sessionResult.value;
-
-      // Rewind then commit through the selected draw so the attachment holds the
-      // cumulative draws-0..N pixels (selecting draw #N shows the frame after N).
-      replay.reset();
-      const commitResult = await replay.commitThroughDraw(selectedDrawIdx);
-      if (cancelled) return;
-      if (!commitResult.ok) {
-        setStatus('error');
-        setMessage(`Replay failed: ${commitResult.error.code}`);
-        return;
-      }
-
-      const canvas = canvasRef.current;
-      if (!canvas) {
-        setStatus('error');
-        setMessage('Canvas element not mounted');
-        return;
-      }
-
-      if (selected.kind === 'color-rt') {
-        if (!commitResult.value.committed) {
-          setStatus('no-rt');
-          setMessage('This draw has no color render target');
-          return;
-        }
-        const rtResult = await renderRtToCanvas(replay, selectedDrawIdx, device, canvas);
-        if (cancelled) return;
-        if (!rtResult.ok) {
-          setStatus('no-rt');
-          setMessage(null);
-          return;
-        }
-        // renderRtToCanvas resizes the canvas drawing buffer to the RT dims.
-        if (canvas.width > 0 && canvas.height > 0) markDims(canvas.width, canvas.height);
-        // Cache the same native-format bytes the canvas decoder just painted.
-        const rtReadback = await readbackDrawRt(replay, selectedDrawIdx, device);
-        if (cancelled) return;
-        if (rtReadback.ok) {
-          rawPixelsRef.current = {
-            bytes: rtReadback.value.pixels,
-            format: rtReadback.value.format,
-          };
-        }
-        setStatus('ok');
-        setMessage(null);
-        return;
-      }
-
-      // Previewable bound texture: resolve the source texture, read it back, paint.
-      // The binding's source texture is live after commitThroughDraw (it was created
-      // and seeded before this draw sampled it).
-      if (selected.kind === 'bound-texture') {
-        const desc = resolveTextureDescriptor(tape.events, selected.handleId);
-        if (!desc) {
-          setStatus('no-rt');
-          setMessage('Bound texture not found in tape');
-          return;
-        }
-        const liveTexture = replay._resolveHandle(desc.handleId);
-        if (!liveTexture) {
-          setStatus('error');
-          setMessage('Bound texture not live after replay');
-          return;
-        }
-        // Clamp the slice to the texture's range (state may lag a thumbnail change).
-        const layer = Math.min(selectedSlice, Math.max(0, desc.arrayLayers - 1));
-        const format = adaptReplayFormat(desc.format) ?? desc.format;
-        try {
-          if (isDepthFormat(format)) {
-            // Bound depth texture: same faithful depth path as the depth attachment
-            // (readbackDepthAuto branches direct-readback vs blit by format), then
-            // normalize + grayscale. `layer` selects one cube/array slice.
-            const depth = await readbackDepthAuto(
-              device,
-              createShaderModule,
-              liveTexture,
-              format,
-              desc.width,
-              desc.height,
-              layer,
-            );
-            if (cancelled) return;
-            const { data, min, max } = normalizeDepth(
-              depth.buffer,
-              desc.width,
-              desc.height,
-              desc.width * 4,
-            );
-            cacheScalar(new Float32Array(depth.buffer), desc.width, desc.height, 'depth', min, max);
-            const painted = paintDepthGrayscale(canvas, data, desc.width, desc.height);
-            if (painted) markDims(desc.width, desc.height);
-            setStatus(painted ? 'ok' : 'error');
-            setMessage(painted ? null : '2d canvas context unavailable');
-          } else {
-            // bytesPerTexel(format) sizes the readback (rgba16float = 8 B, etc.);
-            // the default 4 would misread anything wider/narrower than rgba8.
-            const pixels = await readbackTexturePixels(
-              device,
-              liveTexture,
-              desc.width,
-              desc.height,
-              { baseArrayLayer: layer, bytesPerTexel: bytesPerTexel(format as never) ?? 4 },
-            );
-            if (cancelled) return;
-            // Cache raw readback bytes for D-4 texel picker (raw byte bypass).
-            rawPixelsRef.current = { bytes: pixels, format };
-            const painted = paintColorPixels(canvas, pixels, desc.width, desc.height, format);
-            if (painted) markDims(desc.width, desc.height);
-            setStatus(painted ? 'ok' : 'error');
-            setMessage(painted ? null : '2d canvas context unavailable');
-          }
-        } catch (e) {
-          if (cancelled) return;
-          setStatus('error');
-          setMessage(
-            `Bound texture readback failed: ${e instanceof Error ? e.message : String(e)}`,
-          );
-        }
-        return;
-      }
-
-      // Depth / Stencil: resolve the source depth-stencil texture (shared by both).
-      const desc = resolveDepthTextureDescriptor(
-        tape.events,
-        draw.depthStencil.depthStencilViewHandleId,
+      const currentScale =
+        viewState.zoom === 'fit'
+          ? Math.min(stage.width / pixels.width, stage.height / pixels.height)
+          : viewState.zoom / 100;
+      const currentWidth = pixels.width * currentScale;
+      const currentHeight = pixels.height * currentScale;
+      const currentLeft = stage.left + (stage.width - currentWidth) / 2 + pan.x;
+      const currentTop = stage.top + (stage.height - currentHeight) / 2 + pan.y;
+      const anchorX = clamp((event.clientX - currentLeft) / currentWidth, 0, 1);
+      const anchorY = clamp((event.clientY - currentTop) / currentHeight, 0, 1);
+      const wheelDelta =
+        event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? stage.height : 1);
+      const nextZoom = Math.round(
+        clamp(
+          currentScale * Math.exp(-wheelDelta * WHEEL_ZOOM_RATE) * 100,
+          MIN_TEXTURE_ZOOM,
+          MAX_TEXTURE_ZOOM,
+        ),
       );
-      if (!desc) {
-        setStatus('no-rt');
-        setMessage('Depth attachment texture not found in tape');
-        return;
-      }
-      const liveTexture = replay._resolveHandle(desc.handleId);
-      if (!liveTexture) {
-        setStatus('error');
-        setMessage('Depth texture not live after replay');
-        return;
-      }
+      const nextWidth = pixels.width * (nextZoom / 100);
+      const nextHeight = pixels.height * (nextZoom / 100);
+      const nextBaseLeft = stage.left + (stage.width - nextWidth) / 2;
+      const nextBaseTop = stage.top + (stage.height - nextHeight) / 2;
 
-      // Stencil plane: stencil8 IS copyable (aspect:'stencil-only'); read it
-      // directly and normalize to grayscale (raw stencil values are tiny ints).
-      if (selected.kind === 'stencil') {
-        try {
-          const stencil = await readbackStencilTexture(
-            device,
-            liveTexture,
-            desc.width,
-            desc.height,
-          );
-          if (cancelled) return;
-          // Widen u8 -> f32 so normalizeDepth (min/max stretch) applies uniformly.
-          const f = new Float32Array(stencil.length);
-          for (let i = 0; i < stencil.length; i++) f[i] = stencil[i] ?? 0;
-          const { data, min, max } = normalizeDepth(
-            f.buffer,
-            desc.width,
-            desc.height,
-            desc.width * 4,
-          );
-          cacheScalar(f, desc.width, desc.height, 'stencil', min, max);
-          const painted = paintDepthGrayscale(canvas, data, desc.width, desc.height);
-          if (painted) markDims(desc.width, desc.height);
-          setStatus(painted ? 'ok' : 'error');
-          setMessage(painted ? null : '2d canvas context unavailable');
-        } catch (e) {
-          if (cancelled) return;
-          setStatus('error');
-          setMessage(`Stencil readback failed: ${e instanceof Error ? e.message : String(e)}`);
-        }
-        return;
-      }
+      setPan({
+        x: event.clientX - anchorX * nextWidth - nextBaseLeft,
+        y: event.clientY - anchorY * nextHeight - nextBaseTop,
+      });
+      setViewState((state) => ({ ...state, zoom: nextZoom }));
+    },
+    [pan.x, pan.y, pixels, viewState.zoom],
+  );
 
-      // Depth plane. readbackDepthAuto picks the faithful path by format: depth24plus*
-      // forbids copyTextureToBuffer on the depth plane, so it samples into an r32float
-      // RT via the blit (no format change); copyable formats read back directly.
-      try {
-        const depth = await readbackDepthAuto(
-          device,
-          createShaderModule,
-          liveTexture,
-          selected.format,
-          desc.width,
-          desc.height,
-        );
-        if (cancelled) return;
-        // Both paths return a tight Float32Array (stride = width) -> width*4 bytes.
-        const { data, min, max } = normalizeDepth(
-          depth.buffer,
-          desc.width,
-          desc.height,
-          desc.width * 4,
-        );
-        cacheScalar(new Float32Array(depth.buffer), desc.width, desc.height, 'depth', min, max);
-        const painted = paintDepthGrayscale(canvas, data, desc.width, desc.height);
-        if (painted) markDims(desc.width, desc.height);
-        setStatus(painted ? 'ok' : 'error');
-        setMessage(painted ? null : '2d canvas context unavailable');
-      } catch (e) {
-        if (cancelled) return;
-        setStatus('error');
-        setMessage(`Depth readback failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
+  const handlePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0 || pixels === null) return;
+      event.preventDefault();
+      dragRef.current = {
+        pointerId: event.pointerId,
+        originX: event.clientX,
+        originY: event.clientY,
+        pan,
+      };
+      setDragging(true);
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    },
+    [pan, pixels],
+  );
+
+  const handlePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    setPan({
+      x: drag.pan.x + event.clientX - drag.originX,
+      y: drag.pan.y + event.clientY - drag.originY,
+    });
+  }, []);
+
+  const finishPointerDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    setDragging(false);
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
     }
+  }, []);
 
-    render();
-    return () => {
-      cancelled = true;
-    };
-    // `selected` / `draw` now have STABLE identity (thumbnails is useMemo'd), so
-    // depending on them no longer re-fires per mouse move (bug #1). selectedSlice
-    // covers the cube/array layer selector.
-  }, [tape, draw, selected, selectedDrawIdx, selectedSlice]);
+  const inspectPixels = useCallback(
+    async (signal?: AbortSignal) => {
+      if (explicitTexture === undefined && (work === undefined || inspectWork === null)) return;
+      setStatus(capability.kind === 'webgpu' ? 'loading' : 'no-webgpu');
+      setReadbackError(null);
+      const result =
+        explicitTexture !== undefined && readResource !== null
+          ? await readResource(
+              explicitTexture.resourceId,
+              {
+                mipLevel: viewState.mipLevel,
+                arrayLayer: viewState.arrayLayer,
+                aspect: effectiveAspect,
+              },
+              signal,
+            )
+          : work === undefined || inspectWork === null
+            ? null
+            : await inspectWork(work.workIndex, ['pixels'], signal);
+      if (signal?.aborted) return;
+      const noWebGpu = capability.kind === 'no-webgpu';
+      if (result === null) return;
+      if (!result.ok) {
+        setPixels(null);
+        setReadbackError(result.error);
+        setStatus(noWebGpu ? 'no-webgpu' : 'error');
+        return;
+      }
+      setReadbackError(null);
+      const attachment = 'attachment' in result.value ? result.value.attachment : result.value;
+      if (
+        attachment?.kind !== 'texture' ||
+        attachment.format === undefined ||
+        attachment.width === undefined ||
+        attachment.height === undefined
+      ) {
+        setPixels(null);
+        setReadbackError({
+          code: 'readback-failed',
+          expected: 'a texture attachment with format, width, height, and bytes',
+          hint: 'inspect the selected resource descriptor and retry the readback operation',
+          detail: {
+            stage: 'readback',
+            cause: 'canonical readback did not contain a decodable texture attachment',
+          },
+        });
+        setStatus('error');
+        return;
+      }
+      const rgba = decodeToRgba8(
+        attachment.bytes,
+        attachment.format,
+        attachment.width,
+        attachment.height,
+        effectiveAspect,
+      );
+      if (rgba === null) {
+        setPixels(null);
+        setReadbackError({
+          code: 'readback-failed',
+          expected: 'a decodable color texture readback',
+          hint: 'inspect the recorded texture format and retry the readback operation',
+          detail: {
+            stage: 'readback',
+            cause: `texture format ${attachment.format} could not be decoded by the viewer`,
+          },
+        });
+        setStatus('error');
+        return;
+      }
+      setPixels({ width: attachment.width, height: attachment.height, rgba });
+      setStatus('ok');
+    },
+    [
+      capability.kind,
+      explicitTexture,
+      inspectWork,
+      readResource,
+      viewState.arrayLayer,
+      effectiveAspect,
+      viewState.mipLevel,
+      work,
+    ],
+  );
 
-  // Reset zoom to fit when the selected texture changes (different size, fresh view).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional reset on thumbnail change only
   useEffect(() => {
-    setZoom('fit');
-  }, [selectedThumb, selectedDrawIdx]);
-
-  const mode: 'selected' | 'default' = noDraw ? 'default' : 'selected';
-
-  if (noDraw || !draw) {
-    return (
-      <div
-        className="p-4 h-full bg-background flex items-center justify-center"
-        {...{ [textureViewerAnchor()]: mode, [rtStatusAnchor()]: 'no-rt' }}
-      >
-        <p className="text-xs text-muted-foreground">Select a draw command to view textures</p>
-      </div>
-    );
-  }
+    if (!selected) return;
+    const request = new AbortController();
+    void inspectPixels(request.signal);
+    return () => request.abort();
+  }, [inspectPixels, selected]);
 
   return (
-    <div
-      className="h-full bg-background flex flex-row"
-      {...{ [textureViewerAnchor()]: mode, [rtStatusAnchor()]: status }}
+    <section
+      className="forgeax-panel overflow-auto"
+      {...{ [drawCallViewerAnchor()]: selected ? 'selected' : 'default' }}
+      {...{ [capabilityAnchor()]: capability.kind }}
     >
-      {/* Left: Thumbnail strip */}
-      <div className="w-36 shrink-0 overflow-y-auto border-r border-border p-1 space-y-1">
-        {thumbnails.length === 0 ? (
-          <p className="text-xs text-muted-foreground p-2">No textures</p>
-        ) : (
-          thumbnails.map((t, i) => (
-            <button
-              key={thumbnailKey(t, i)}
-              type="button"
-              onClick={() => setSelectedThumb(i)}
-              className={`w-full text-left p-1 rounded text-xs border transition-colors ${
-                i === selectedThumb
-                  ? 'border-brand/50 bg-brand/10'
-                  : 'border-border hover:border-muted-foreground/40'
-              }`}
-              {...{ [textureThumbnailAnchor()]: String(i) }}
+      <header className="forgeax-panel-header">
+        <span>Draw Call Viewer</span>
+        {selected && <span className="forgeax-badge">work {work.workIndex}</span>}
+      </header>
+      {!selected ? (
+        <p className="p-4 text-xs text-muted-foreground">
+          Select a work item to inspect its attachment
+        </p>
+      ) : (
+        <div className="space-y-3 p-3 text-xs">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-muted-foreground">
+              {explicitTexture === undefined ? 'Draw attachment' : 'Selected resource'}
+            </span>
+            <span
+              className={
+                pixelStatus === 'ok'
+                  ? 'forgeax-badge border-success/30 bg-success/10 text-success'
+                  : pixelStatus === 'error'
+                    ? 'forgeax-badge border-danger/30 bg-danger/10 text-danger'
+                    : 'forgeax-badge'
+              }
+              {...{ [rtStatusAnchor()]: pixelStatus }}
             >
-              <div className="flex items-center gap-1 mb-1">
-                <span
-                  className={`w-2 h-2 rounded-full shrink-0 ${
-                    t.kind === 'color-rt'
-                      ? 'bg-brand'
-                      : t.kind === 'depth'
-                        ? 'bg-info'
-                        : t.kind === 'stencil'
-                          ? 'bg-success'
-                          : 'bg-warning'
-                  }`}
-                />
-                <span className="truncate text-foreground">{t.label}</span>
+              {pixelStatus === 'ok' ? 'pixels ready' : pixelStatus}
+            </span>
+          </div>
+          {selectedTexture !== undefined && (
+            <div className="space-y-1">
+              <div className="font-mono text-[11px] text-brand">
+                {explicitTexture === undefined ? 'attachment' : 'resource'} ·{' '}
+                {selectedTexture.resourceId}
               </div>
-              <div className="mt-0.5">
-                <span
-                  className={`inline-block px-1 py-0.5 rounded text-[10px] ${statusColor(t.status.status)}`}
-                >
-                  {t.status.status}
-                </span>
+              <div className="forgeax-code-block break-all">
+                {JSON.stringify(selectedTexture.descriptor)}
               </div>
-            </button>
-          ))
-        )}
-      </div>
-
-      {/* Right: Main preview area */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {selected ? (
-          <>
-            <div className="px-3 py-2 border-b border-border shrink-0 flex items-center gap-2">
-              <span className="text-xs text-foreground">{selected.label}</span>
-              <span className="text-xs text-muted-foreground">format: {selected.format}</span>
-              {dims && (
-                <span className="text-xs text-muted-foreground">
-                  {dims.w}&times;{dims.h}
-                </span>
-              )}
-              {/* Auto-normalize window for depth/stencil so the per-draw depth change
-                  is legible even though the grayscale is re-stretched each readback
-                  (bug #7): the range shifts across draws even when the image looks static. */}
-              {scalarStats && (
-                <span className="text-xs text-muted-foreground font-mono">
-                  {scalarStats.label} range [{scalarStats.min.toFixed(4)},{' '}
-                  {scalarStats.max.toFixed(4)}]
-                </span>
-              )}
-              {texelInfo && (
-                <span
-                  className="text-xs text-foreground font-mono"
-                  {...{ [texelInfoAnchor()]: '' }}
-                >
-                  ({texelInfo.x},{texelInfo.y}){' '}
-                  {texelInfo.rgba
-                    ? `R:${texelInfo.rgba[0].toFixed(3)} G:${texelInfo.rgba[1].toFixed(3)} B:${texelInfo.rgba[2].toFixed(3)} A:${texelInfo.rgba[3].toFixed(3)}`
-                    : texelInfo.scalar !== undefined
-                      ? `${texelInfo.scalarLabel}:${texelInfo.scalar.toFixed(6)}`
-                      : ''}
-                </span>
-              )}
-              <span
-                className={`inline-block px-1 py-0.5 rounded text-[10px] ${statusColor(status)}`}
+            </div>
+          )}
+          <div className="flex flex-wrap items-end gap-2 rounded-lg border border-border/70 bg-background/45 p-2">
+            <div className="forgeax-segmented">
+              <button
+                type="button"
+                className={viewState.zoom === 'fit' ? 'forgeax-segment-active' : 'forgeax-segment'}
+                onClick={() => resetViewTransform('fit')}
               >
-                {status}
-              </span>
-              {/* Slice selector for cube / cube-array / 2d-array bound textures — each
-                  slice is one 2D image previewed via baseArrayLayer. */}
-              {slices > 1 && (
-                <select
-                  value={selectedSlice}
-                  onChange={(e) => setSelectedSlice(Number(e.target.value))}
-                  className="text-[10px] bg-muted text-foreground rounded px-1 py-0.5 border border-border"
-                  {...{ [textureSliceAnchor()]: String(selectedSlice) }}
-                >
-                  {Array.from({ length: slices }, (_, s) =>
-                    sliceLabel(selected.dimension ?? '2d', s),
-                  ).map((label, s) => (
-                    // Label is unique + stable per slice (face/layer name) — safe key.
-                    <option key={label} value={s}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
+                Fit
+              </button>
+              <button
+                type="button"
+                className={viewState.zoom === 100 ? 'forgeax-segment-active' : 'forgeax-segment'}
+                onClick={() => resetViewTransform(100)}
+              >
+                1:1
+              </button>
+            </div>
+            <label className="forgeax-field-label">
+              <span>Zoom</span>
+              <input
+                aria-label="Texture zoom"
+                className="w-16 font-mono"
+                value={viewState.zoom === 'fit' ? 'fit' : viewState.zoom}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  resetViewTransform(
+                    Number.isFinite(value)
+                      ? clamp(Math.round(value), MIN_TEXTURE_ZOOM, MAX_TEXTURE_ZOOM)
+                      : 'fit',
+                  );
+                }}
+                {...{
+                  [textureZoomAnchor()]: viewState.zoom === 'fit' ? 'fit' : String(viewState.zoom),
+                }}
+              />
+            </label>
+            <label className="forgeax-field-label">
+              <span>Mip</span>
+              <select
+                className="min-w-14 font-mono"
+                value={viewState.mipLevel}
+                onChange={(event) =>
+                  setViewState((state) => ({ ...state, mipLevel: Number(event.target.value) }))
+                }
+              >
+                {Array.from({ length: textureFacts.mipLevelCount }, (_, value) => ({
+                  key: `mip-${value}`,
+                  value,
+                })).map((option) => (
+                  <option key={option.key} value={option.value}>
+                    {option.value}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="forgeax-field-label">
+              <span>Slice</span>
+              <select
+                className="min-w-14 font-mono"
+                value={viewState.arrayLayer}
+                onChange={(event) =>
+                  setViewState((state) => ({ ...state, arrayLayer: Number(event.target.value) }))
+                }
+                {...{ [textureSliceAnchor()]: String(viewState.arrayLayer) }}
+              >
+                {Array.from({ length: textureFacts.arrayLayerCount }, (_, value) => ({
+                  key: `layer-${value}`,
+                  value,
+                })).map((option) => (
+                  <option key={option.key} value={option.value}>
+                    {option.value}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="forgeax-field-label">
+              <span>Aspect</span>
+              <select
+                className="min-w-24"
+                value={effectiveAspect}
+                onChange={(event) =>
+                  setViewState((state) => ({
+                    ...state,
+                    aspect: event.target.value as TextureViewState['aspect'],
+                  }))
+                }
+              >
+                {aspectOptions.map((aspect) => (
+                  <option key={aspect} value={aspect}>
+                    {aspect}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span className="ml-auto text-[10px] text-muted-foreground">
+              Wheel zoom · left-drag pan
+            </span>
+          </div>
+          <div className="forgeax-status-card space-y-2" {...{ [rtStatusAnchor()]: pixelStatus }}>
+            <div
+              className={`forgeax-texture-stage ${dragging ? 'is-dragging' : ''}`}
+              data-forgeax-texture-stage=""
+              onWheel={handleWheel}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={finishPointerDrag}
+              onPointerCancel={finishPointerDrag}
+              onLostPointerCapture={finishPointerDrag}
+            >
+              {pixels !== null && (
+                <canvas
+                  aria-label="RHI debug texture pixels"
+                  data-forgeax-rt-canvas=""
+                  ref={canvasRef}
+                  className="image-pixelated"
+                  style={
+                    pixels === null || viewState.zoom === 'fit'
+                      ? {
+                          width: '100%',
+                          height: '100%',
+                          maxWidth: '100%',
+                          maxHeight: '100%',
+                          objectFit: 'contain',
+                          transform: `translate3d(${pan.x}px, ${pan.y}px, 0)`,
+                        }
+                      : {
+                          width: `${Math.max(1, pixels.width * (viewState.zoom / 100))}px`,
+                          height: `${Math.max(1, pixels.height * (viewState.zoom / 100))}px`,
+                          maxWidth: 'none',
+                          maxHeight: 'none',
+                          transform: `translate3d(${pan.x}px, ${pan.y}px, 0)`,
+                        }
+                  }
+                />
               )}
-              {/* Zoom toolbar — shown once a preview paints. Buttons step the ladder;
-                  the percentage input commits any value (pixelated magnification). */}
-              {status === 'ok' && (
-                <div className="ml-auto flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setZoom(stepZoom(zoom, -1))}
-                    className="text-[10px] px-1.5 py-0.5 rounded border border-border bg-muted text-foreground hover:border-muted-foreground/40"
-                    title="Zoom out"
-                  >
-                    −
-                  </button>
-                  <input
-                    type="number"
-                    min={1}
-                    max={1600}
-                    value={zoom === 'fit' ? '' : Math.round(zoom * 100)}
-                    placeholder={zoom === 'fit' ? 'fit' : '100'}
-                    onChange={(e) => {
-                      const pct = Number(e.target.value);
-                      if (!Number.isFinite(pct) || pct <= 0) return;
-                      setZoom(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, pct / 100)));
-                    }}
-                    className="w-12 text-[10px] bg-muted text-foreground rounded px-1 py-0.5 border border-border text-right"
-                    {...{
-                      [textureZoomAnchor()]:
-                        zoom === 'fit' ? 'fit' : String(Math.round(zoom * 100)),
-                    }}
-                  />
-                  <span className="text-[10px] text-muted-foreground">%</span>
-                  <button
-                    type="button"
-                    onClick={() => setZoom(stepZoom(zoom, 1))}
-                    className="text-[10px] px-1.5 py-0.5 rounded border border-border bg-muted text-foreground hover:border-muted-foreground/40"
-                    title="Zoom in"
-                  >
-                    +
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setZoom('fit')}
-                    className={`text-[10px] px-1.5 py-0.5 rounded border ${
-                      zoom === 'fit'
-                        ? 'border-brand/50 bg-brand/10 text-foreground'
-                        : 'border-border bg-muted text-foreground hover:border-muted-foreground/40'
-                    }`}
-                    title="Fit to window"
-                  >
-                    Fit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setZoom(1)}
-                    className={`text-[10px] px-1.5 py-0.5 rounded border ${
-                      zoom === 1
-                        ? 'border-brand/50 bg-brand/10 text-foreground'
-                        : 'border-border bg-muted text-foreground hover:border-muted-foreground/40'
-                    }`}
-                    title="Actual size (1:1)"
-                  >
-                    1:1
-                  </button>
+              {pixelStatus !== 'ok' && (
+                <div
+                  className="absolute inset-0 z-10 grid place-items-center overflow-auto bg-background/72 p-4 text-center backdrop-blur-[2px]"
+                  data-forgeax-texture-overlay={pixelStatus}
+                >
+                  {pixelStatus === 'no-webgpu' ? (
+                    <div className="max-w-md space-y-1">
+                      <strong>Pixels unavailable: no WebGPU</strong>
+                      <p className="text-muted-foreground">
+                        Structure is available; open this tape in a WebGPU host to inspect pixels.
+                      </p>
+                      {readbackError !== null && (
+                        <div
+                          className="text-danger space-y-1"
+                          data-forgeax-readback-error={readbackError.code}
+                        >
+                          <strong>{readbackError.code}</strong>
+                          <p data-forgeax-readback-detail>{JSON.stringify(readbackError.detail)}</p>
+                          <p data-forgeax-readback-expected>{readbackError.expected}</p>
+                          <p data-forgeax-readback-hint>{readbackError.hint}</p>
+                        </div>
+                      )}
+                    </div>
+                  ) : pixelStatus === 'no-rt' ? (
+                    <div className="text-muted-foreground">
+                      <p className="font-medium text-foreground">Pixel replay is ready</p>
+                      <p className="mt-1">
+                        Inspect the selected draw attachment or choose a texture.
+                      </p>
+                    </div>
+                  ) : pixelStatus === 'loading' ? (
+                    <div data-forgeax-texture-loading-overlay="">
+                      <div className="mx-auto h-5 w-5 animate-spin rounded-full border-2 border-brand/20 border-t-brand" />
+                      <p className="mt-3 font-medium text-foreground">Replaying selected work</p>
+                      <p className="mt-1 text-muted-foreground">
+                        Keeping the viewport stable until fresh pixels arrive
+                      </p>
+                    </div>
+                  ) : (
+                    <div
+                      className="text-danger max-w-md space-y-1"
+                      data-forgeax-readback-error={readbackError?.code ?? 'readback-failed'}
+                    >
+                      <strong>{readbackError?.code ?? 'readback-failed'}</strong>
+                      <p data-forgeax-readback-detail>
+                        {readbackError === null
+                          ? 'Pixel inspection failed.'
+                          : JSON.stringify(readbackError.detail)}
+                      </p>
+                      <p data-forgeax-readback-expected>
+                        {readbackError?.expected ?? 'a successful canonical readback'}
+                      </p>
+                      <p data-forgeax-readback-hint>
+                        {readbackError?.hint ?? 'retry the readback operation'}
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
-            <div className="flex-1 flex items-center justify-center p-4 min-h-0 overflow-auto">
-              {/* Canvas stays mounted whenever rendering is possible (avoids the
-                  "canvas not mounted" race when status flips); hidden unless ok. */}
-              <canvas
-                ref={canvasRef}
-                onMouseMove={handleCanvasMouseMove}
-                {...{ [rtCanvasAnchor()]: '' }}
-                className={
-                  zoom === 'fit'
-                    ? // Fit fills the viewport and object-contain scales the bitmap to
-                      // it preserving aspect — so a 1x1 / tiny texture is UPSCALED to a
-                      // crisp pixelated block, not left at its 1px intrinsic size.
-                      'w-full h-full object-contain block bg-[#0a0a0a] rounded'
-                    : 'block bg-[#0a0a0a] rounded shrink-0'
-                }
-                style={{
-                  display: status === 'ok' ? 'block' : 'none',
-                  // Crisp magnification: small / 1x1 textures blow up pixelated, not blurred.
-                  imageRendering: 'pixelated',
-                  // Explicit CSS size when a scale is chosen (drawing buffer stays = texture size).
-                  ...(zoom !== 'fit' && dims
-                    ? { width: `${dims.w * zoom}px`, height: `${dims.h * zoom}px` }
-                    : {}),
-                }}
-              />
-              {status !== 'ok' && (
-                <p className="text-xs text-muted-foreground text-center px-4">
-                  {message ??
-                    (status === 'no-webgpu'
-                      ? 'WebGPU not available — preview requires a WebGPU-enabled browser'
-                      : 'No preview for this attachment')}
-                </p>
-              )}
-            </div>
-          </>
-        ) : (
-          <div className="flex-1 flex items-center justify-center">
-            <p className="text-xs text-muted-foreground">No texture selected</p>
           </div>
-        )}
-      </div>
-    </div>
+          <span className="text-[10px] text-muted-foreground" {...{ [texelInfoAnchor()]: '' }}>
+            {pixels === null
+              ? pixelStatus === 'loading'
+                ? 'Automatic readback in progress'
+                : 'Replay has not produced texels yet'
+              : `${pixels.width}×${pixels.height} · first texel ${Array.from(pixels.rgba.slice(0, 4)).join(', ')}`}
+          </span>
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Draw textures
+              </div>
+              <span className="forgeax-badge">{textures.length}</span>
+            </div>
+            {textures.length === 0 ? (
+              <p className="text-muted-foreground">
+                No texture attachments or bindings for this work
+              </p>
+            ) : (
+              <div className="grid max-h-44 grid-cols-2 gap-1 overflow-auto pr-1">
+                {textures.map((resource, index) => (
+                  <button
+                    type="button"
+                    key={resource.resourceId}
+                    className={
+                      explicitTexture?.resourceId === resource.resourceId
+                        ? 'rounded-md border border-brand/45 bg-brand/10 px-2 py-1.5 text-left font-mono text-[10px] text-brand'
+                        : 'rounded-md border border-border/70 bg-background/35 px-2 py-1.5 text-left font-mono text-[10px] text-muted-foreground hover:border-brand/25 hover:text-foreground'
+                    }
+                    onClick={() => selectResource(resource.resourceId)}
+                    data-forgeax-texture-thumbnail={String(index)}
+                  >
+                    {resource.resourceId}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }

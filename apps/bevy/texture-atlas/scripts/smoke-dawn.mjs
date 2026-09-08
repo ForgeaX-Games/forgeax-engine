@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,29 +26,25 @@ const { createRenderer } = await import('@forgeax/engine-runtime');
 const { unwrapHandle } = await import('@forgeax/engine-types');
 const { buildTextureAtlasWorld, makeAtlas } = await import(resolve(here, '..', 'src', 'texture-atlas.ts'));
 const manifestPath = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
-const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}` });
+const renderer = await createSmokeRenderer(createRenderer, canvas, {}, { shaderManifestUrl: `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}` });
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 gpu.requestAdapter = originalRequestAdapter;
 const errors = [];
-renderer.onError((error) => errors.push(error));
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
+subscribeSmokeErrors(renderer, (error) => errors.push(error));
 const variants = [];
 for (const [variant, filter] of [['unpadding', 'linear'], ['padding', 'nearest'], ['unpadding', 'linear'], ['padding', 'nearest']]) {
   const atlas = makeAtlas(variant);
   const texture = { kind: 'texture', width: atlas.size, height: atlas.size, format: 'rgba8unorm-srgb', data: atlas.pixels, colorSpace: 'srgb', mipmap: false };
   const textureHandle = world.allocSharedRef('TextureAsset', texture);
-  const upload = await renderer.store.uploadTexture(textureHandle, texture, { bytes: atlas.pixels, width: atlas.size, height: atlas.size, mime: 'image/png', colorSpace: 'srgb', mipmap: false });
-  if (!upload.ok) throw new Error(`${upload.error.code}: ${upload.error.hint}`);
   const samplerHandle = world.allocSharedRef('SamplerAsset', { kind: 'sampler', magFilter: filter, minFilter: filter, addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
   variants.push({ texture: unwrapHandle(textureHandle), sampler: unwrapHandle(samplerHandle), atlas });
 }
 buildTextureAtlasWorld(world, variants);
 for (let i = 0; i < frames; i += 1) {
   world.update().unwrap();
-  const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const result = drawSmokeFrame(renderer, world);
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.hint}`);
 }
 await device.queue.onSubmittedWorkDone();
@@ -72,6 +69,6 @@ const outDir = process.env.SMOKE_PNG_DIR ?? resolve(here, '..', 'artifacts');
 mkdirSync(outDir, { recursive: true });
 writeFileSync(resolve(outDir, 'texture-atlas.png'), writeReferencePng(tight, width, height));
 console.log(`[smoke] frames=${frames} coloredPixels=${coloredPixels} colorBuckets=${colorBuckets.size} errors=${errors.length}`);
-if (renderer.backend !== 'webgpu' || frames < 100 || coloredPixels < 1500 || colorBuckets.size < 4 || errors.length > 0) { console.error('[smoke] FAIL - atlas variants must be visible with multiple sprite colors and zero RHI errors'); process.exit(1); }
+if (rendererBackend(renderer) !== 'webgpu' || frames < 100 || coloredPixels < 1500 || colorBuckets.size < 4 || errors.length > 0) { console.error('[smoke] FAIL - atlas variants must be visible with multiple sprite colors and zero RHI errors'); process.exit(1); }
 console.log('[smoke] PASS - backend=webgpu, visible padded/unpadded atlas variants, errors=0');
 device.destroy?.();

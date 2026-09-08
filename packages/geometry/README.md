@@ -28,6 +28,24 @@ forgeax-engine. A **leaf** package: depends on `@forgeax/engine-ecs` (`Result`),
   human-readable `.detail` string. No silent fallback, no `console.warn`,
   no `null` return (charter P3).
 
+## Vertex color contract
+
+`MeshAsset.attributes.color` is the optional geometry-owned vertex color: a
+linear RGBA `Float32Array`, with exactly four finite values per vertex. It is
+not an sRGB input and does not add a material flag. Procedural authors can set
+the field directly; glTF `COLOR_0` is normalized into this same field at the
+import boundary. Missing color is a real absence and keeps the color stream
+out of the packed bytes.
+
+Use `deriveVertexLayoutProjection` and
+`packInterleavedVertexAttributes(attributes, vertexCount)` for layout and
+packing. The packer returns a `Result`; callers branch on `ok` before
+publishing vertex bytes. The immutable projection owns canonical offsets, stride, mask and
+digest; color is host `@location(13)` (`float32x4`, 16 bytes), while existing
+locations `0..12` remain unchanged. Render and asset consumers carry this
+projection instead of calculating offsets or a parallel stride. See
+[`VertexAttributeMap`](../types/src/index.ts) for the public POD shape.
+
 ### 30s hands-on example
 
 ```ts
@@ -46,8 +64,9 @@ const sphere = createSphereGeometry(1, 32, 24);
 ```
 
 The 7 factories cover the most common procedural primitives. For an imported
-glTF / FBX mesh, use `@forgeax/engine-assets` (`loadByGuid` / sidecar pipeline)
-instead of this package.
+glTF mesh, use `@forgeax/engine-gltf`; FBX follows the same source-plus-Meta
+route through `@forgeax/engine-fbx`. Runtime consumption is
+`@forgeax/engine-assets-runtime` after the owning importer has cooked the asset.
 
 ### 2D primitive geometry
 
@@ -91,23 +110,39 @@ time; expanded to the 12-float runtime layout (adds tangent vec4) by
 | `createTorusGeometry` | `(radius, tube, radSeg?, tubSeg?)` | radSeg >= 3, tubSeg >= 3 |
 
 All factories populate `position` / `normal` / `uv` attributes with lowercase
-Three.js-r184 key naming. The `VertexAttributeMap` is the 6-member closed set
-`'position' | 'normal' | 'uv' | 'tangent' | 'skinIndex' | 'skinWeight'`; see
+Three.js-r184 key naming. `VertexAttributeMap` also accepts optional `color`
+linear RGBA data; see
 the [attribute layout](#vertex-attribute-layout-ssot) section.
 
 ### Tangent and interleave helpers
 
 | Symbol | Kind | Purpose |
 |:--|:--|:--|
-| `computeTangentVec4(positions, normals, uvs, indices?)` | fn | Per-vertex tangent (vec4): face-area-weighted average + Gram-Schmidt orthogonalise + handedness sign packed into `.w` channel. Returns `Float32Array(vertexCount * 4)`. Compatible with MikkTSpace / glTF 2.0. |
-| `meshFromInterleaved(vertices, indices)` | fn | Expands the 8-float interleaved buffer to the 12-float runtime layout by appending per-vertex tangent vec4. Returns `MeshAsset`. |
+| `computeTangentVec4(positions, normals, uvs, indices?)` | fn | Preflights attribute cardinality, triangle topology, and index range, then returns `Result<Float32Array, AssetError>`. Success is the per-vertex tangent (vec4): face-area-weighted average + Gram-Schmidt orthogonalise + handedness sign packed into `.w`. |
+| `meshFromInterleaved(vertices, indices)` | fn | Preflights the 8-float interleaved stride and triangle index topology before slicing or allocating output, then returns `Result<MeshAsset, AssetError>` with the 12-float runtime layout. |
 | `PROCEDURAL_FLOATS_PER_VERTEX` | const | `12` -- the runtime interleaved stride: position (3) + normal (3) + uv (2) + tangent (4). |
+
+Both helpers return the existing `AssetError` vocabulary with
+`error.code === 'asset-parse-failed'` for malformed input. The error detail
+identifies the rejected `field`, observed `value`, and `reason`; no tangent,
+mesh, or working buffer is allocated before this preflight completes. The
+helpers are stateless, so corrected arrays can be passed to the next call and
+produce the normal vec4 or mesh result.
+
+| Preflight | Rejected input |
+|:--|:--|
+| Attribute cardinality | `positions.length` not divisible by 3, or `normals` / `uvs` not matching the derived vertex count |
+| Triangle cardinality | Non-indexed vertex count or indexed index count not divisible by 3 |
+| Index range | Any index that is not an integer in `[0, vertexCount)` |
 
 ### Vertex attribute layout SSOT
 
 | Symbol | Kind | Purpose |
 |:--|:--|:--|
-| `deriveVertexBufferLayout(map, opts?)` | fn | Derives a fixed-order `GpuVertexBufferLayoutEntry[]` from a `VertexAttributeMap`. The canonical 13-key order (position / normal / uv / tangent / skinIndex / skinWeight / uv1..uv7) assigns `@location(N)` per key. Absent keys reserve no space; `opts.shaderUvSetCount` enables clamp-to-last alias for UV sets. |
+| `deriveVertexBufferLayout(map, opts?)` | fn | Derives a fixed-order `GpuVertexBufferLayoutEntry[]` from a `VertexAttributeMap`. The canonical 14-key order (position / normal / uv / tangent / skinIndex / skinWeight / uv1..uv7 / color) assigns `@location(N)` per key. Absent keys reserve no space; `opts.shaderUvSetCount` enables clamp-to-last alias for UV sets. |
+| `deriveVertexLayoutProjection(map)` | fn | Creates the immutable canonical projection (`schemaVersion`, attributes, mask, stride, digest). `color` is fixed at host location 13 and `float32x4`. |
+| `packInterleavedVertexAttributes(map, vertexCount)` | fn | Packs attribute arrays using that projection and returns `Result<{ projection, vertices }, VertexAttributePackError>`; closed detail reasons identify storage, cardinality, vertex-count, or non-finite failures. |
+| `deriveVertexLayoutProjectionFromMask(mask)` | fn | Reconstructs a wire projection through the same canonical key owner; returns a typed error for empty or unknown mask bits. |
 | `buildMeshAttributeMapForUvSets(uvSetCount)` | fn | Synthesise a `VertexAttributeMap` with empty `Float32Array(0)` placeholders for `uv` + `uv1..uvN-1`. Used by the forward record stage to pre-declare UV-set slots before interleaving. |
 | `GpuVertexBufferLayoutEntry` | type | `{ shaderLocation: number; offset: number; format: GPUVertexFormat }` -- one GPU vertex buffer layout entry. |
 
@@ -158,7 +193,7 @@ Key differences from Three.js:
 
 | Not doing | Why |
 |:--|:--|
-| Loading external mesh formats (glTF, FBX, OBJ) | That is `@forgeax/engine-assets` (`loadByGuid` + sidecar pipeline) |
+| Loading external mesh formats (glTF, FBX, OBJ) | glTF and FBX are owned by `@forgeax/engine-gltf` / `@forgeax/engine-fbx`; runtime consumption uses `@forgeax/engine-assets-runtime` after the source-plus-Meta sidecar pipeline |
 | GPU upload / handle minting | Geometry is pure-function CPU POD; registration and GPU residency are `AssetRegistry` + `GpuResourceStore` in `@forgeax/engine-runtime` |
 | Procedural mesh editing (extrude, bevel, CSG) | Out of scope for the leaf geometry package; these are future `@forgeax/engine-geometry-edit` or equivalent |
 | Non-procedural mesh data (skinned vertices, morph targets) | Skin data lives on the `MeshAsset` POD after import; this package only populates position / normal / uv |
@@ -171,18 +206,18 @@ Key differences from Three.js:
 | "I want a box / sphere / plane / cylinder / cone / torus from code" | `@forgeax/engine-geometry` (this package) |
 | "I want to register the mesh and get a handle" | `@forgeax/engine-runtime` (`renderer.assets.register(meshAsset)`) |
 | "I want to spawn an entity with this mesh" | `@forgeax/engine-runtime` (`MeshFilter` + `MeshRenderer` + `MaterialAsset`) -- see `forgeax-engine-material` skill |
-| "I want to load a glTF file" | `@forgeax/engine-assets` (`loadByGuid`) |
+| "I want to load a glTF file" | `@forgeax/engine-gltf` importer, then `@forgeax/engine-assets-runtime` (`loadByGuid`) |
 | "I want to read the world-space position / forward / up from a spawned entity" | `@forgeax/engine-math` (`mat4.getTranslation` / `getForward` / `getUp`) |
 
 ## Knowledge-base references
 
 Cross-vendor reading for contributors:
 
-- `.forgeax-harness/knowledge-base/wiki/typescript-branded-types.md` -- brand pattern SSOT
-- `packages/math/README.md` -- leaf-package README paradigm (progressive disclosure)
-- `packages/runtime/README.md` -- MeshFilter / MeshRenderer / AssetRegistry API
+- [`../../.forgeax-harness/knowledge-base/wiki/typescript-branded-types.md`](../../.forgeax-harness/knowledge-base/wiki/typescript-branded-types.md) -- brand pattern SSOT
+- [`../math/README.md`](../math/README.md) -- leaf-package README paradigm (progressive disclosure)
+- [`../runtime/README.md`](../runtime/README.md) -- MeshFilter / MeshRenderer / AssetRegistry API
   SSOT
-- `packages/types/src/index.ts` -- `MeshAsset` / `AssetError` / `VertexAttributeMap`
+- [`../types/src/index.ts`](../types/src/index.ts) -- `MeshAsset` / `AssetError` / `VertexAttributeMap`
   type definitions
 
 ## License

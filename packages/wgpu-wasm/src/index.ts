@@ -13,7 +13,8 @@
 //    the original error is surfaced on each attempt, but the caller may retry).
 //
 // Three-scenario wasm asset resolution (research F-4):
-// - Browser / Vite: the Vite ?url import resolves to a fetch-able asset URL.
+// - Browser / Vite: generated glue is fetched through Vite's ?raw form so its
+//   source bytes remain identical to the provenance manifest.
 // - Node runtime (no Vite): detected via process.versions.node + absent document;
 //   the wasm bytes are read via fs.readFile relative to import.meta.url.
 // - vitest node environment: the ?url import resolves through Vite's bundler to a
@@ -58,18 +59,134 @@ interface NodeUrlLike {
   fileURLToPath(url: URL): string;
 }
 
+interface WasmProvenance {
+  readonly schemaVersion: 'wgpu-wasm-provenance/1';
+  readonly sourceContentKey: string;
+  readonly artifactSha256: string;
+  readonly artifactBytes: number;
+  readonly glueSha256: string;
+  readonly glueBytes: number;
+  readonly toolchain: Readonly<Record<string, string>>;
+  readonly dependencies: Readonly<Record<string, string>>;
+  readonly compilerFingerprint: string;
+}
+
+interface NodeCryptoLike {
+  createHash(name: string): {
+    update(value: Uint8Array | string): {
+      digest(encoding: 'hex'): string;
+    };
+  };
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const subtle = globalThis.crypto?.subtle;
+  if (subtle !== undefined) {
+    const digest = await subtle.digest('SHA-256', bytes as unknown as BufferSource);
+    return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, '0')).join('');
+  }
+  const cryptoModuleId = 'node:crypto';
+  const crypto = (await import(/* @vite-ignore */ cryptoModuleId)) as unknown as NodeCryptoLike;
+  return crypto.createHash('sha256').update(bytes).digest('hex');
+}
+
+function provenanceFingerprintInput(manifest: WasmProvenance): string {
+  return JSON.stringify({
+    schemaVersion: manifest.schemaVersion,
+    sourceContentKey: manifest.sourceContentKey,
+    artifactSha256: manifest.artifactSha256,
+    glueSha256: manifest.glueSha256,
+    toolchain: manifest.toolchain,
+    dependencies: manifest.dependencies,
+  });
+}
+
+async function verifyProvenance(
+  manifestBytes: Uint8Array,
+  artifactBytes: Uint8Array,
+  glueBytes: Uint8Array,
+): Promise<WasmProvenance> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(manifestBytes));
+  } catch {
+    throw new Error('wgpu-wasm provenance manifest is not valid JSON');
+  }
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    (parsed as { schemaVersion?: unknown }).schemaVersion !== 'wgpu-wasm-provenance/1'
+  ) {
+    throw new Error('wgpu-wasm provenance manifest has an unsupported schemaVersion');
+  }
+  const manifest = parsed as WasmProvenance;
+  const artifactSha256 = await sha256Hex(artifactBytes);
+  const glueSha256 = await sha256Hex(glueBytes);
+  if (
+    artifactSha256 !== manifest.artifactSha256 ||
+    artifactBytes.byteLength !== manifest.artifactBytes
+  ) {
+    throw new Error('wgpu-wasm artifact bytes do not match provenance manifest');
+  }
+  if (glueSha256 !== manifest.glueSha256 || glueBytes.byteLength !== manifest.glueBytes) {
+    throw new Error('wgpu-wasm glue bytes do not match provenance manifest');
+  }
+  const fingerprint = `sha256-${await sha256Hex(
+    new TextEncoder().encode(provenanceFingerprintInput(manifest)),
+  )}`;
+  if (fingerprint !== manifest.compilerFingerprint) {
+    throw new Error('wgpu-wasm compiler fingerprint does not match provenance manifest');
+  }
+  return manifest;
+}
+
+function rawGluePath(path: URL): URL {
+  const rawPath = new URL(path.href);
+  rawPath.search = `${rawPath.search}${rawPath.search === '' ? '?' : '&'}raw`;
+  return rawPath;
+}
+
+async function readBrowserGlueBytes(response: Response): Promise<Uint8Array> {
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const text = new TextDecoder().decode(bytes);
+  const prefix = 'export default ';
+  if (!text.startsWith(prefix)) {
+    return bytes;
+  }
+
+  // Vite's ?raw module wraps the original source as a JSON string. Decode the
+  // wrapper before hashing; a static server that ignores the query returns the
+  // original glue bytes and takes the branch above.
+  let payload = text.slice(prefix.length).trim();
+  if (payload.endsWith(';')) {
+    payload = payload.slice(0, -1).trim();
+  }
+  try {
+    const decoded = JSON.parse(payload) as unknown;
+    if (typeof decoded === 'string') {
+      return new TextEncoder().encode(decoded);
+    }
+  } catch {
+    // Leave malformed or non-Vite responses untouched so provenance rejects
+    // them instead of allowing an integrity check bypass.
+  }
+  return bytes;
+}
+
 async function _loadWasm(): Promise<WgpuWasm> {
   // Branch: Node when process.versions.node exists. Browser path is the default
-  // wasm-bindgen fetch via the Vite-resolved ?url asset string.
+  // wasm-bindgen fetch via URL assets; Vite's raw wrapper is normalized below.
   const proc = (globalThis as unknown as { process?: NodeProcessLike }).process;
   const isNode = typeof proc?.versions?.node === 'string';
 
   // Reach packages/wgpu-wasm/pkg/wgpu_wasm_bg.wasm relative to this module
   // (src/index.ts during vitest; dist/index.mjs after tsup build — both sit
   // one directory up from pkg/). This URL form works in both Node and browser
-  // import.meta contexts and avoids the Vite-only `?url` suffix at module
-  // top level (which Node interprets as a wasm module import).
+  // import.meta contexts and avoids a Vite-only top-level `?url` import (which
+  // Node interprets as a wasm module import).
   const wasmPath = new URL('../pkg/wgpu_wasm_bg.wasm', import.meta.url);
+  const manifestPath = new URL('../pkg/provenance.json', import.meta.url);
+  const gluePath = new URL('../pkg/wgpu_wasm.js', import.meta.url);
 
   if (isNode) {
     // Dynamic imports via string literals avoid triggering missing @types/node
@@ -79,9 +196,30 @@ async function _loadWasm(): Promise<WgpuWasm> {
     const fs = (await import(/* @vite-ignore */ fsModuleId)) as NodeFsLike;
     const url = (await import(/* @vite-ignore */ urlModuleId)) as NodeUrlLike;
     const wasmBytes = await fs.readFile(url.fileURLToPath(wasmPath));
+    const manifestBytes = await fs.readFile(url.fileURLToPath(manifestPath));
+    const glueBytes = await fs.readFile(url.fileURLToPath(gluePath));
+    await verifyProvenance(manifestBytes, wasmBytes, glueBytes);
     await init({ module_or_path: wasmBytes });
   } else {
-    await init(wasmPath);
+    const [manifestResponse, wasmResponse, glueResponse] = await Promise.all([
+      fetch(manifestPath),
+      fetch(wasmPath),
+      fetch(rawGluePath(gluePath)),
+    ]);
+    if (!manifestResponse.ok || !wasmResponse.ok || !glueResponse.ok) {
+      throw new Error('wgpu-wasm provenance or generated bytes could not be fetched');
+    }
+    const [manifestBytes, wasmBytes, glueBytes] = await Promise.all([
+      manifestResponse.arrayBuffer(),
+      wasmResponse.arrayBuffer(),
+      readBrowserGlueBytes(glueResponse),
+    ]);
+    await verifyProvenance(
+      new Uint8Array(manifestBytes),
+      new Uint8Array(wasmBytes),
+      new Uint8Array(glueBytes),
+    );
+    await init({ module_or_path: wasmBytes });
   }
   return wasm as WgpuWasm;
 }

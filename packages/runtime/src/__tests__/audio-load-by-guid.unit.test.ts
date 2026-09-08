@@ -18,7 +18,7 @@ function audioPack(byteLength = 16) {
       {
         guid: AUDIO_GUID,
         kind: 'audio',
-        payload: { kind: 'audio' },
+        payload: { kind: 'audio', mediaType: 'audio/wav' },
         refs: [],
         artifacts: {
           source: {
@@ -81,6 +81,7 @@ describe('audio loadByGuid', () => {
     expect(first.value).toEqual({
       kind: 'audio',
       sourceKey: AUDIO_GUID,
+      mediaType: 'audio/wav',
       bytes: new Uint8Array(audioData),
     });
     expect(second.value).toBe(first.value);

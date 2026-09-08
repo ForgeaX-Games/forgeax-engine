@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "contractId": "full-run-terminal-slo",
+  "terminalWall": {
+    "formula": "terminalAt - createdAt",
+    "maxSeconds": 1200,
+    "comparison": "less-than-or-equal",
+    "clockSource": "same-run-same-attempt"
+  },
+  "identity": {
+    "fields": ["runId", "runAttempt", "headSha", "treatmentId"],
+    "provenanceFields": ["producerId", "fingerprint"],
+    "fingerprintAlgorithm": "sha256"
+  },
+  "rosterAuthority": {
+    "path": "scripts/ci/required-ci-checks.json",
+    "setEquality": "exact",
+    "fingerprintAlgorithm": "sha256"
+  },
+  "classifications": [
+    "executed-success",
+    "executed-failure",
+    "intentional-skip",
+    "missing",
+    "cancelled",
+    "superseded",
+    "nonterminal"
+  ],
+  "verdicts": [
+    "slo-pass",
+    "slo-breach",
+    "correctness-failure",
+    "invalid-evidence",
+    "unknown-evidence",
+    "rollback-required"
+  ],
+  "recovery": {
+    "requiredFields": [
+      "code",
+      "failureLayer",
+      "property",
+      "expected",
+      "observed",
+      "detail",
+      "action"
+    ],
+    "failureLayers": ["source", "terminal", "delivery", "comparison"],
+    "actions": [
+      "recollect-evidence",
+      "wait-for-terminality",
+      "restore-roster-classification",
+      "discard-foreign-evidence",
+      "measure-capacity"
+    ],
+    "orderedCollectionField": "recoveryActions",
+    "ordering": "failureLayers declaration order",
+    "primaryField": "recoveryAction"
+  },
+  "admission": {
+    "projection": "scripts/ci/check-ci-admission.mjs",
+    "resultFields": [
+      "status",
+      "fallbackEligible",
+      "identity",
+      "roster",
+      "evidence",
+      "recoveryAction",
+      "recoveryActions"
+    ],
+    "statusAuthority": "scripts/ci/required-ci-checks.mjs#REQUIRED_CONTEXT_ADMISSION_STATUSES",
+    "rosterAuthority": "scripts/ci/required-ci-checks.json",
+    "recoveryAuthority": "#/recovery"
+  },
+  "capacityPools": {
+    "standard": { "vcpus": 4, "memoryGiB": 8 },
+    "heavy": { "vcpus": 8, "memoryGiB": 16 }
+  }
+}

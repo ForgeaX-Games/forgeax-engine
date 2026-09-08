@@ -1,3 +1,4 @@
+import * as SceneOwner from '@forgeax/engine-scene';
 // feat-20260608-scene-nesting-ecs-fication M2 / w18 (red phase) — nested /
 // cross-boundary / deep / multi-mount cases.
 //
@@ -14,13 +15,16 @@
 //   - AC-26 (same prefab mounted multiple times: mappings disjoint, overrides
 //     do not leak across mount instances)
 
-import { defineComponent, err, ok, World } from '@forgeax/engine-ecs';
-import { SceneInstance } from '@forgeax/engine-render/internal';
+import { defineComponent, World } from '@forgeax/engine-ecs';
+import { SceneInstance } from '@forgeax/engine-render';
 import { ChildOf } from '@forgeax/engine-scene';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
+import { err, ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { registerSceneComponents } from './helpers/register-scene-components';
 
 function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
+  registerSceneComponents(world);
   return world.allocSharedRef('SceneAsset', asset);
 }
 
@@ -73,7 +77,7 @@ describe('AC-23 double-nested A -> B -> C', () => {
     // unit test creates raw POD assets in-memory without `refs`, the
     // implementation must accept an explicit resolver arm — see
     // _setSceneAssetResolver below.
-    world._setSceneAssetResolver?.((sourceIdx, parentHandle) => {
+    SceneOwner.worldSetSceneAssetResolver(world, (sourceIdx, parentHandle) => {
       void sourceIdx;
       const parentManagedRaw = parentHandle as unknown as number;
       // Parent A handle u32 -> handle B; parent B handle u32 -> handle C.
@@ -82,7 +86,7 @@ describe('AC-23 double-nested A -> B -> C', () => {
       return err({ code: 'asset-not-found' });
     });
 
-    const r = world.instantiateScene(handleA);
+    const r = SceneOwner.worldInstantiateScene(world, handleA);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
 
@@ -123,7 +127,7 @@ describe('AC-25 deep nesting >=5 layers — no stack overflow', () => {
       // totalSlots = 1 entity + 1 mount.localId + memberCount slots
       childTotalSlots = k < 5 ? 1 + 1 + childTotalSlots : 1;
     }
-    world._setSceneAssetResolver?.((sourceIdx, parentHandle) => {
+    SceneOwner.worldSetSceneAssetResolver(world, (sourceIdx, parentHandle) => {
       void sourceIdx;
       const raw = parentHandle as unknown as number;
       for (let k = 0; k < handles.length - 1; k += 1) {
@@ -135,7 +139,7 @@ describe('AC-25 deep nesting >=5 layers — no stack overflow', () => {
       }
       return err({ code: 'asset-not-found' });
     });
-    const r = world.instantiateScene(handles[0] as Handle<'SceneAsset', 'shared'>);
+    const r = SceneOwner.worldInstantiateScene(world, handles[0] as Handle<'SceneAsset', 'shared'>);
     expect(r.ok).toBe(true);
   });
 });
@@ -158,12 +162,12 @@ describe('AC-26 same prefab mounted multiple times — disjoint mappings', () =>
       ],
     };
     const parentHandle = registerSceneAsset(world, parent);
-    world._setSceneAssetResolver?.((sourceIdx, parentH) => {
+    SceneOwner.worldSetSceneAssetResolver(world, (sourceIdx, parentH) => {
       void sourceIdx;
       void parentH;
       return ok(childHandle);
     });
-    const r = world.instantiateScene(parentHandle);
+    const r = SceneOwner.worldInstantiateScene(world, parentHandle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const inst = world.get(r.value.root, SceneInstance);
@@ -204,8 +208,8 @@ describe('AC-24 outer entity ChildOf points into mount sub-region', () => {
       mounts: [{ localId: 2 as never, source: 0, memberFirst: 3 as never, memberCount: 2 }],
     };
     const parentHandle = registerSceneAsset(world, parent);
-    world._setSceneAssetResolver?.(() => ok(childHandle));
-    const r = world.instantiateScene(parentHandle);
+    SceneOwner.worldSetSceneAssetResolver(world, () => ok(childHandle));
+    const r = SceneOwner.worldInstantiateScene(world, parentHandle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const inst = world.get(r.value.root, SceneInstance);

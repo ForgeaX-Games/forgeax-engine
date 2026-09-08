@@ -1,19 +1,24 @@
 import type { CookedMaterialRecord } from '@forgeax/engine-pack';
 import { describe, expect, it, vi } from 'vitest';
-import { assembleMaterialProjection } from '../renderer/material/assembly.js';
+import { assembleMaterialProjection } from '../assembly/material/assembly.js';
 import {
   routeMaterialPipeline,
   updateMaterialRuntimeValues,
-} from '../renderer/material/pipeline-projection.js';
+} from '../assembly/material/pipeline-projection.js';
 
 const record: CookedMaterialRecord = {
-  schemaVersion: 'material-cook/1',
+  schemaVersion: 'material-cook/3',
   guid: 'material-route',
+  specializationKey: 'route-key',
+  authored: {
+    kind: 'material',
+    values: { useNormalMap: false },
+  },
   resolved: {
     passes: [{ name: 'forward', program: { module: 'project::standard' } }],
     parameters: [
       { name: 'baseColor', type: 'color' },
-      { name: 'useNormalMap', type: 'bool', static: true },
+      { name: 'useNormalMap', type: 'bool' },
     ],
     values: { baseColor: [1, 1, 1, 1], useNormalMap: false },
   },
@@ -25,11 +30,31 @@ const record: CookedMaterialRecord = {
     bytes: new Uint8Array([4]),
   },
   receipt: {
+    schemaVersion: 'material-cook/3',
     sourceClosure: ['project::standard'],
     profile: 'forgeax-material-wgsl-v1',
     compilerVersion: 'compiler/1',
-    inputDigest: 'route-key',
-    outputDigest: 'sha256:route',
+    identity: {
+      materialContractDigest: 'sha256:contract',
+      sourceRevision: 'sha256:source',
+      sourceClosureDigest: 'sha256:closure',
+      layoutIdentity: 'sha256:layout',
+      programIdentity: 'sha256:program',
+      pipelineIdentity: 'sha256:pipeline',
+      materialPublicationIdentity: 'sha256:publication',
+      cookIdentity: 'sha256:input',
+      compilerFingerprint: 'sha256:compiler',
+      wasm: {
+        sourceContentKey: 'unavailable',
+        artifactSha256: 'unavailable',
+        glueSha256: 'unavailable',
+      },
+      artifactDigest: 'sha256:route',
+      valueGeneration: 1,
+      dependencyGeneration: 1,
+      cookGeneration: 1,
+    },
+    derivedInterface: { layoutIdentity: 'sha256:layout' },
   },
 };
 
@@ -60,7 +85,10 @@ describe('cooked material static and dynamic routing', () => {
     });
     expect(missing).toMatchObject({
       kind: 'error',
-      error: { code: 'material-specialization-not-cooked' },
+      error: {
+        code: 'material-specialization-not-cooked',
+        detail: { specializationKey: 'uncooked-static-selection' },
+      },
     });
   });
 });

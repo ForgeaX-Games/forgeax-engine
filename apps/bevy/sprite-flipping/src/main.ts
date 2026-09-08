@@ -27,7 +27,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = appResult.value;
-  console.warn(`[bevy-sprite-flipping] backend=${app.renderer.backend}`);
+  console.warn(`[bevy-sprite-flipping] state=${app.renderer.inspect().state}`);
 
   const spritePixels = makeSpritePixels();
   const texPod = {
@@ -42,18 +42,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const texHandle = app.world.allocSharedRef('TextureAsset', texPod);
   const texId = unwrapHandle(texHandle);
 
-  const uploadRes = await app.renderer.store.uploadTexture(texHandle, texPod, {
-    bytes: spritePixels,
-    width: SPRITE_SIZE,
-    height: SPRITE_SIZE,
-    mime: 'image/png',
-    colorSpace: 'srgb',
-    mipmap: false,
-  });
-  if (!uploadRes.ok) {
-    console.error('[bevy-sprite-flipping] texture upload failed:', uploadRes.error.code, uploadRes.error.hint);
-    return;
-  }
 
   buildSpriteFlippingWorld(app.world, texId);
   const started = app.start();

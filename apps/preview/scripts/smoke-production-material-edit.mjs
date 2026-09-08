@@ -119,7 +119,7 @@ async function capture(label, browser) {
     const origin = `http://127.0.0.1:${port}`;
     await page.goto(`${origin}/?game=game-default&asset-evidence=1`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     await page.waitForFunction(() => globalThis.__forgeaxGameDefaultAssetEvidence !== undefined, null, { timeout: 30_000 });
-    await page.waitForFunction(() => globalThis.__forgeaxGameDefaultAssetEvidence?.snapshot().passNames.includes('skybox') ?? false, null, { timeout: 30_000 });
+    await page.waitForFunction(() => globalThis.__forgeaxGameDefaultAssetEvidence?.snapshot().load.ok ?? false, null, { timeout: 30_000 });
     await page.waitForFunction(() => {
       const listed = globalThis.__forgeaxPreviewInspection?.list();
       return (listed?.actions.length ?? 0) >= 4 && (listed?.reads.length ?? 0) >= 2;

@@ -6,8 +6,6 @@ import {
   MeshRenderer,
   orthographic,
   perspective,
-  SkyboxBackground,
-  Skylight,
 } from '../index';
 
 describe('render schema parity', () => {
@@ -16,8 +14,6 @@ describe('render schema parity', () => {
     expect(DirectionalLight.fields.direction.type).toBe('array<f32, 3>');
     expect(DirectionalLight.fields.castShadow.default).toBe(true);
     expect(MeshRenderer.fields.materials.type).toBe('array<shared<MaterialAsset>>');
-    expect(Skylight.fields.equirect.simulationTransient).toBe(true);
-    expect(SkyboxBackground.fields.equirect.simulationTransient).toBe(true);
   });
 
   it('exposes both camera projection variants and helpers', () => {

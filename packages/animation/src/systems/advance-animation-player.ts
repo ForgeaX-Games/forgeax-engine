@@ -45,14 +45,16 @@ import { Time, Update } from '@forgeax/engine-ecs';
 // Decision anchors:
 //   - requirements IS-2 / AC-03 / AC-04 / AC-05 (best-effort N-way blend)
 //   - plan-strategy D-1 (TRS accumulators + nlerp), D-3 (public Query, no
-//     _getGraph), D-7 (clamp without write-back), D-9 (negative speed
+//     query-backed lookup), D-7 (clamp without write-back), D-9 (negative speed
 //     natural reverse)
 //   - charter P4 (single Transform write per joint per tick)
 
 import type { EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
 import { defineSystem, defineSystemSet, ENTITY_NULL_RAW } from '@forgeax/engine-ecs';
-import { Transform } from '@forgeax/engine-scene';
+import { createWorldProjection, type WorldProjection } from '@forgeax/engine-ecs/projection';
+import { MorphWeights, Transform } from '@forgeax/engine-scene';
 import type { AnimationChannel, AnimationClip, AnimationSampler } from '@forgeax/engine-types';
+import { toShared } from '@forgeax/engine-types';
 import {
   emitAnimationDiagnostic,
   isAnimationDevMode,
@@ -61,7 +63,6 @@ import {
 import { AnimationPlayer } from '../animation-player';
 import { AnimationTargetId, AnimationTargets } from '../animation-target';
 import { AnimationPlayerSlotLengthMismatchError } from '../player-errors';
-import { resolveAnimationAsset } from '../resolve-animation-asset';
 
 /**
  * System name used when `registerAdvanceAnimationPlayer` installs the system
@@ -179,10 +180,11 @@ function collectActiveSlotsAndAdvanceTimes(
   for (let i = 0; i < count; i++) {
     const clipHandleRaw = ap.clips[i] ?? 0;
     if (clipHandleRaw === 0) continue;
-    const clipLookup = resolveAnimationAsset<AnimationClip>(world, clipHandleRaw, 'animation-clip');
+    const clipLookup = world.sharedRefs.resolve<'AnimationClip', AnimationClip>(
+      toShared<'AnimationClip'>(clipHandleRaw),
+    );
     if (!clipLookup.ok) throw clipLookup.error;
     const clip = clipLookup.value;
-    if (clip === undefined) continue;
 
     const speed = ap.speeds[i] ?? 0;
     let newTime = paused ? (ap.times[i] ?? 0) : (ap.times[i] ?? 0) + speed * dt;
@@ -233,32 +235,33 @@ interface TargetMap {
 }
 
 interface WorldTargetMapCache {
-  structureEpoch: number;
-  targetsEpoch: number;
-  targetIdEpoch: number;
+  readonly projection: WorldProjection;
   readonly players: Map<number, TargetMap>;
 }
 
 const targetMapCacheByWorld = new WeakMap<World, WorldTargetMapCache>();
 
 function targetMapForPlayer(world: World, player: EntityHandle): TargetMap {
-  const structureEpoch = world._getStructureEpoch();
-  const targetsEpoch = world._getComponentMutationEpoch(AnimationTargets.id);
-  const targetIdEpoch = world._getComponentMutationEpoch(AnimationTargetId.id);
   let cache = targetMapCacheByWorld.get(world);
-  if (
-    cache === undefined ||
-    cache.structureEpoch !== structureEpoch ||
-    cache.targetsEpoch !== targetsEpoch ||
-    cache.targetIdEpoch !== targetIdEpoch
-  ) {
+  if (cache === undefined) {
     cache = {
-      structureEpoch,
-      targetsEpoch,
-      targetIdEpoch,
+      projection: createWorldProjection(world, {
+        components: [AnimationTargets, AnimationTargetId],
+      }),
       players: new Map(),
     };
     targetMapCacheByWorld.set(world, cache);
+  } else {
+    const changes = cache.projection.poll();
+    if (changes.status === 'rebuild' || changes.changes.length > 0) {
+      cache = {
+        projection: createWorldProjection(world, {
+          components: [AnimationTargets, AnimationTargetId],
+        }),
+        players: new Map(),
+      };
+      targetMapCacheByWorld.set(world, cache);
+    }
   }
 
   const cached = cache.players.get(player as number);
@@ -325,6 +328,7 @@ function tickEntityTargets(
   // A Map keyed by jointIndex keeps the typical case (a few animated
   // joints out of 20+) sparse rather than allocating for every joint.
   const accumulators: Map<number, JointAccumulator> = new Map();
+  const morphAccumulators: Map<number, MorphWeightAccumulator> = new Map();
   // Per-slot signature of (joint, channel-kind) coverage — used to detect
   // channel-missing-on-some-slot once at the end of the channel walk. Lazy
   // build only when there are 2+ active slots and dev-mode is on (warn pass
@@ -342,12 +346,43 @@ function tickEntityTargets(
     for (let chIdx = 0; chIdx < slot.clip.channels.length; chIdx++) {
       // biome-ignore lint/style/noNonNullAssertion: bounded by channels.length
       const channel = slot.clip.channels[chIdx]!;
-      const target = resolvedTargets[chIdx];
+      const sampled = sampleChannel(channel.sampler, slot.time, channel.property);
+      if (sampled === undefined) continue;
+      const target =
+        channel.property === 'weights'
+          ? resolveChannelTarget(
+              world,
+              entityRaw,
+              slot.clipHandleRaw,
+              chIdx,
+              channel.targetId,
+              channel.property,
+              sampled.length,
+              targetMap,
+            )
+          : resolvedTargets[chIdx];
       if (target === undefined) continue;
       const targetRaw = target as number;
 
-      const sampled = sampleChannel(channel.sampler, slot.time);
-      if (sampled === undefined) continue;
+      if (channel.property === 'weights') {
+        let weights = morphAccumulators.get(targetRaw);
+        if (weights === undefined) {
+          weights = { values: new Float32Array(sampled.length), sumW: 0 };
+          morphAccumulators.set(targetRaw, weights);
+        }
+        if (weights.values.length !== sampled.length) continue;
+        for (let i = 0; i < sampled.length; i++) {
+          weights.values[i] = (weights.values[i] ?? 0) + slot.weight * (sampled[i] ?? 0);
+        }
+        weights.sumW += slot.weight;
+        if (wantsCoverage) {
+          const coverage = slotCoverage[slotIdx];
+          if (coverage !== undefined) {
+            recordSlotCoverage(coverage, channel.targetId, channel.property, chIdx);
+          }
+        }
+        continue;
+      }
 
       let acc = accumulators.get(targetRaw);
       if (acc === undefined) {
@@ -375,6 +410,16 @@ function tickEntityTargets(
       world.set(target, Transform as never, partial as never);
     }
   }
+  for (const [targetRaw, acc] of morphAccumulators) {
+    if (acc.sumW <= 0) continue;
+    const target = targetRaw as EntityHandle;
+    const weights = world.get(target, MorphWeights);
+    if (weights.ok && weights.value.weights.length === acc.values.length) {
+      const next = new Float32Array(acc.values.length);
+      for (let i = 0; i < next.length; i++) next[i] = (acc.values[i] ?? 0) / acc.sumW;
+      world.set(target, MorphWeights, { weights: next });
+    }
+  }
 }
 
 function resolveClipTargets(
@@ -387,14 +432,18 @@ function resolveClipTargets(
   if (cached !== undefined) return cached;
 
   const targets = slot.clip.channels.map((channel, channelIndex) =>
-    resolveChannelTarget(
-      world,
-      player,
-      slot.clipHandleRaw,
-      channelIndex,
-      channel.targetId,
-      targetMap,
-    ),
+    channel.property === 'weights'
+      ? undefined
+      : resolveChannelTarget(
+          world,
+          player,
+          slot.clipHandleRaw,
+          channelIndex,
+          channel.targetId,
+          channel.property,
+          undefined,
+          targetMap,
+        ),
   );
   targetMap.resolvedClips.set(slot.clip, targets);
   return targets;
@@ -406,6 +455,8 @@ function resolveChannelTarget(
   clip: number,
   channel: number,
   targetId: string,
+  property: ChannelKind,
+  expectedWeightCount: number | undefined,
   targetMap: TargetMap,
 ): EntityHandle | undefined {
   if (targetMap.duplicateIds.has(targetId)) {
@@ -449,6 +500,59 @@ function resolveChannelTarget(
       targetMap.hasStaleTarget
         ? 'remove the stale target relation or bind a live replacement'
         : 'bind the matching AnimationTargetId to this player',
+    );
+    return undefined;
+  }
+  if (property === 'weights') {
+    const weights = world.get(target, MorphWeights);
+    if (!weights.ok) {
+      emitAnimationDiagnostic(world, {
+        code: 'animation-target-morph-weights-missing',
+        hint: 'attach MorphWeights to the morph target entity before playing a weights channel',
+        detail: {
+          player,
+          clip,
+          channel,
+          targetId,
+          reason: 'morph-weights-missing',
+          target: target as number,
+          property,
+          ...(expectedWeightCount === undefined ? {} : { expectedWeightCount }),
+        },
+      });
+      return undefined;
+    }
+    if (expectedWeightCount !== undefined && weights.value.weights.length !== expectedWeightCount) {
+      emitAnimationDiagnostic(world, {
+        code: 'animation-morph-weight-count-mismatch',
+        hint: 'make MorphWeights.length equal the animation channel output width',
+        detail: {
+          player,
+          clip,
+          channel,
+          targetId,
+          reason: 'morph-weight-count-mismatch',
+          target: target as number,
+          property,
+          expectedWeightCount,
+          actualWeightCount: weights.value.weights.length,
+        },
+      });
+      return undefined;
+    }
+    return target;
+  }
+  if (!world.get(target, Transform).ok) {
+    emitTargetDiagnostic(
+      world,
+      player,
+      clip,
+      channel,
+      targetId,
+      'animation-target-transform-missing',
+      'transform-missing',
+      'attach Transform to the bound animation target',
+      target as number,
     );
     return undefined;
   }
@@ -581,10 +685,11 @@ function emitMissingOnSomeSlotWarns(
  */
 function foldChannelIntoAccumulator(
   acc: JointAccumulator,
-  property: 'translation' | 'rotation' | 'scale',
+  property: ChannelKind,
   sampled: number[],
   weight: number,
 ): void {
+  if (property === 'weights') return;
   if (property === 'translation' && sampled.length >= 3) {
     acc.posX += weight * (sampled[0] ?? 0);
     acc.posY += weight * (sampled[1] ?? 0);
@@ -701,6 +806,11 @@ interface JointAccumulator {
   hasScale: boolean;
 }
 
+interface MorphWeightAccumulator {
+  readonly values: Float32Array;
+  sumW: number;
+}
+
 function createAccumulator(): JointAccumulator {
   return {
     posX: 0,
@@ -733,7 +843,11 @@ function createAccumulator(): JointAccumulator {
  *   - translation / scale: 3 floats (vec3)
  *   - rotation: 4 floats (quat)
  */
-function sampleChannel(sampler: AnimationSampler, time: number): number[] | undefined {
+function sampleChannel(
+  sampler: AnimationSampler,
+  time: number,
+  property: ChannelKind,
+): number[] | undefined {
   const { input, output, interpolation } = sampler;
   if (input.length === 0) return undefined;
 
@@ -776,7 +890,7 @@ function sampleChannel(sampler: AnimationSampler, time: number): number[] | unde
   const prevValues = sliceOutput(output, prev, elementCount);
   const nextValues = sliceOutput(output, next, elementCount);
 
-  if (elementCount === 4) {
+  if (property === 'rotation') {
     // Per-sampler quat slerp at the bracket level — multi-slot blending is
     // a separate stage (nlerp at the entity level, in advanceAnimationPlayer).
     const px = prevValues[0] ?? 0;
@@ -811,12 +925,7 @@ function sampleChannel(sampler: AnimationSampler, time: number): number[] | unde
     return [px * sa + nx * sb, py * sa + ny * sb, pz * sa + nz * sb, pw * sa + nw * sb];
   }
 
-  // Vec3 lerp for translation / scale.
-  return [
-    (prevValues[0] ?? 0) + alpha * ((nextValues[0] ?? 0) - (prevValues[0] ?? 0)),
-    (prevValues[1] ?? 0) + alpha * ((nextValues[1] ?? 0) - (prevValues[1] ?? 0)),
-    (prevValues[2] ?? 0) + alpha * ((nextValues[2] ?? 0) - (prevValues[2] ?? 0)),
-  ];
+  return prevValues.map((value, index) => value + alpha * ((nextValues[index] ?? value) - value));
 }
 
 function sliceOutput(output: Float32Array, index: number, elementCount: number): number[] {
@@ -854,6 +963,9 @@ export const AdvanceAnimationPlayer: SystemHandle<readonly []> = defineSystem({
  *   registerAdvanceAnimationPlayer(world);
  *   // ...system will run each world.update() before propagateTransforms...
  */
-export function registerAdvanceAnimationPlayer(world: World): void {
-  world.addSystems(Update, AnimationSet, [AdvanceAnimationPlayer]);
+export function registerAdvanceAnimationPlayer(world: World): () => void {
+  world.addSystems(Update, AnimationSet, [AdvanceAnimationPlayer]).unwrap();
+  return () => {
+    world.removeSystem(Update, ADVANCE_ANIMATION_PLAYER_SYSTEM);
+  };
 }

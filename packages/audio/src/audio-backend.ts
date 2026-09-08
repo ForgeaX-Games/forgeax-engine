@@ -7,13 +7,11 @@
 // - requirements S-7 (entity despawn cleanup: stop + disconnect)
 // - charter P4 (consistent abstraction: structurally parallel to InputBackend)
 
-import type { SimulationParticipant } from '@forgeax/engine-ecs';
 import type { AudioClipAsset, AudioError } from '@forgeax/engine-types';
 
 export type BusName = 'sfx' | 'music';
 
 export const AUDIO_ENGINE_RESOURCE_KEY = 'AudioEngine' as const;
-export const ASSET_REGISTRY_RESOURCE_KEY = 'AssetRegistry' as const;
 
 export interface AudioPlayOptions {
   readonly loop: boolean;
@@ -50,6 +48,4 @@ export interface AudioBackend {
   getState(): AudioState;
   getActiveSourceCount(): number;
   destroy(): void;
-  /** Optional producer-owned host projection (Web Audio supplies this). */
-  readonly simulationParticipant?: SimulationParticipant;
 }

@@ -1,6 +1,6 @@
 // device-lost.browser.test.ts -- M4 (w12) acceptanceCheck: 4-path coverage
-// for the device-lost internal subscription + cleanup landing in
-// packages/app/src/create-app.ts (w13) and packages/app/src/internal/cleanup.ts.
+// for the device-lost internal subscription and App lifecycle in
+// packages/app/src/create-app.ts.
 //
 // Anchors:
 //   - plan-strategy D-2: device loss is a recoverable renderer-owned interval.
@@ -13,9 +13,9 @@
 //     BEFORE renderer.onError(internal) subscribes. If renderer late-attach
 //     replays a lost event immediately, the listener cancels a still-null
 //     rafHandle. We assert no NPE on that timing.
-//   - plan-strategy R-4 (research section 7.3 / D-2): explicit stop and
-//     exception cleanup remain centralized. Device loss does not run the
-//     terminal cleanup funnel, so a successful Renderer.recover() can re-enter
+//   - plan-strategy R-4 (research section 7.3 / D-2): explicit dispose and
+//     explicit disposal remains centralized. Device loss does not dispose the
+//     App Fiber, so a successful Renderer.recover() can re-enter
 //     through the same App frame loop.
 //   - research section 7.7: 'device-lost' is already in RhiErrorCode 18-member
 //     union (no new AppError member).
@@ -24,26 +24,32 @@
 //   - P3 explicit failure: device-lost is a loud signal (host listener +
 //     recoverable renderer health + lastError captured) -- never silent.
 
-import { ScheduleMutationError, Update, World, type Result } from '@forgeax/engine-ecs';
+import { Update, World } from '@forgeax/engine-ecs';
 import {
   FRAME_START_SCAN_SYSTEM_NAME,
-  INPUT_BACKEND_KEY,
   type InputBackend,
+  inputBackendPlugin,
 } from '@forgeax/engine-input';
-import { Camera, perspective, type RendererLostListener } from '@forgeax/engine-render';
-import { RhiError } from '@forgeax/engine-runtime';
-import type { RendererErrorListener } from '@forgeax/engine-render';
+import {
+  Camera,
+  perspective,
+  type Renderer,
+  type RendererEvent,
+  type RenderError,
+} from '@forgeax/engine-render';
+import { createRenderReadLease } from '@forgeax/engine-ecs/projection';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createApp, inputPlugin } from '../src/index';
 import type { App, AppError } from '../src/types';
 
+type RendererEventListener = (event: RendererEvent) => void;
+
 // -------- helpers ----------------------------------------------------
 
 interface FakeRendererState {
-  readonly errorListeners: Set<RendererErrorListener>;
-  readonly lostListeners: Set<RendererLostListener>;
+  readonly eventListeners: Set<RendererEventListener>;
   drawCalls: number;
   reason: 'alive' | 'device-lost';
   fireDeviceLost: () => void;
@@ -51,62 +57,84 @@ interface FakeRendererState {
 
 function makeFakeRenderer(opts?: {
   fireOnSubscribe?: boolean;
-}): { renderer: ReturnType<typeof Object.assign>; state: FakeRendererState } {
-  const errorListeners = new Set<RendererErrorListener>();
-  const lostListeners = new Set<RendererLostListener>();
+}): { renderer: Renderer; state: FakeRendererState } {
+  const eventListeners = new Set<RendererEventListener>();
   const state = {
-    errorListeners,
-    lostListeners,
+    eventListeners,
     drawCalls: 0,
     reason: 'alive' as 'alive' | 'device-lost',
     fireDeviceLost: () => {
       // no-op until reset below
     },
   };
-  const lostError = new RhiError({
-    code: 'device-lost',
-    expected: 'device must remain alive',
-    hint: 'reload the page or rebuild the Renderer via createRenderer({...})',
-  });
+  const lostError = {
+    name: 'RendererOperationError',
+    code: 'device-operation-failed',
+    expected: 'the active device generation completes the renderer-owned operation',
+    hint: 'inspect renderer state and recover before retrying',
+    detail: {
+      operation: 'renderer-event',
+      cause: {
+        code: 'device-lost',
+        expected: 'device must remain alive',
+        hint: 'recover the Renderer or rebuild it through createApp({...})',
+      },
+    },
+  } as unknown as RenderError;
   state.fireDeviceLost = () => {
     state.reason = 'device-lost';
-    for (const cb of Array.from(errorListeners)) {
-      cb(lostError);
+    for (const cb of Array.from(eventListeners)) {
+      cb({ kind: 'error', error: lostError });
     }
   };
   const renderer = {
-    backend: 'webgpu' as const,
-    ready: Promise.resolve({ ok: true, value: undefined }),
-    health: () => ({ reason: state.reason, recoverable: state.reason === 'device-lost' }),
-    attachWorld(): Result<void, never> {
-      return { ok: true, value: undefined };
+    attach(world: World) {
+      return { ok: true as const, value: createRenderReadLease(world) };
     },
-    detachWorld(): void {},
-    draw(): void {
-      state.drawCalls++;
+    draw() {
+      if (state.reason === 'alive') state.drawCalls++;
+      return {
+        ok: true as const,
+        value: {
+          frameId: state.drawCalls,
+          deviceGeneration: 0,
+          completed: Promise.resolve({ ok: true as const, value: undefined }),
+        },
+      };
     },
-    dispose(): void {},
-    onError(cb: RendererErrorListener): () => void {
-      errorListeners.add(cb);
+    setProfile() {
+      return { ok: true as const, value: undefined };
+    },
+    state: () => (state.reason === 'alive' ? ('alive' as const) : ('device-lost' as const)),
+    inspect: () => undefined as never,
+    observe: async () => undefined as never,
+    subscribe(cb: RendererEventListener): () => void {
+      eventListeners.add(cb);
       if (opts?.fireOnSubscribe === true) {
-        // simulate Renderer.LostListenerRegistry late-attach replay --
+        // simulate the host event source late-attach replay --
         // a freshly registered listener is invoked synchronously with
         // the persisted lost event before this call returns.
-        cb(lostError);
+        cb({ kind: 'error', error: lostError });
       }
       return () => {
-        errorListeners.delete(cb);
+        eventListeners.delete(cb);
       };
     },
-    onLost(cb: RendererLostListener): () => void {
-      lostListeners.add(cb);
-      return () => {
-        lostListeners.delete(cb);
-      };
+    releaseSurface() {
+      return { ok: true as const, value: undefined };
+    },
+    restoreSurface() {
+      return { ok: true as const, value: undefined };
+    },
+    recover: async () => {
+      state.reason = 'alive';
+      return { ok: true as const, value: undefined };
+    },
+    dispose: async () => {
+      return { ok: true as const, value: undefined };
     },
   };
-  // biome-ignore lint/suspicious/noExplicitAny: test stub signature widens at boundary
-  return { renderer: renderer as any, state };
+  return { renderer, state };
 }
 
 function makeFakeBackend(): { backend: InputBackend; detachCalls: number; getDetachCalls(): number } {
@@ -182,7 +210,7 @@ describe('device-lost path 2 -- error fans out to host onError listener verbatim
     if (!result.ok) return;
     const app = result.value;
 
-    const received: Array<AppError | RhiError> = [];
+    const received: Array<AppError | RenderError> = [];
     try {
       app.onError((e) => {
         received.push(e);
@@ -193,11 +221,12 @@ describe('device-lost path 2 -- error fans out to host onError listener verbatim
       state.fireDeviceLost();
 
       const lostEvent = received.find(
-        (e) => e instanceof RhiError && e.code === 'device-lost',
+        (e) => e.code === 'device-operation-failed' && e.detail.cause.code === 'device-lost',
       );
       expect(lostEvent).toBeDefined();
-      if (!(lostEvent instanceof RhiError)) return;
-      expect(lostEvent.code).toBe('device-lost');
+      if (lostEvent === undefined || lostEvent.code !== 'device-operation-failed') return;
+      expect(lostEvent.code).toBe('device-operation-failed');
+      expect(lostEvent.detail.cause.code).toBe('device-lost');
     } finally {
       app.stop();
     }
@@ -241,10 +270,10 @@ describe('device-lost path 3 -- late-attach replay does not throw NPE', () => {
   });
 });
 
-// -------- path 4: explicit stop remains the cleanup owner -------------
+// -------- path 4: explicit dispose owns cleanup -----------------------
 
-describe('device-lost path 4 -- explicit stop owns cleanup (R-4)', () => {
-  it('device-lost path triggers attachInputAuto detach + world.removeSystem', async () => {
+describe('device-lost path 4 -- explicit dispose owns cleanup (R-4)', () => {
+  it('device-lost still permits explicit disposal of the input Fiber', async () => {
     const { renderer, state } = makeFakeRenderer();
     const world = new World();
 
@@ -256,11 +285,13 @@ describe('device-lost path 4 -- explicit stop owns cleanup (R-4)', () => {
     // not the assemble form). For the assemble form path, host owns
     // input lifetime, so we focus on state -> stopped + draw stop.
     const fakeBackend = makeFakeBackend();
-    // Pre-inject the input backend as a world resource (D-3): inputPlugin.build
-    // finds INPUT_BACKEND_KEY and registers the frame-start scan system. The old
-    // AppAssembleArgs.input opt was deleted in the plugin-system unify (M3).
-    world.insertResource(INPUT_BACKEND_KEY, fakeBackend.backend);
-    const result = await createApp({ renderer, world, plugins: [inputPlugin()] });
+    // Assemble-form capabilities provide the backend through the same Cordis
+    // service graph consumed by inputPlugin.
+    const result = await createApp({
+      renderer,
+      world,
+      plugins: [inputBackendPlugin(fakeBackend.backend), inputPlugin()],
+    });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const app: App = result.value;
@@ -276,26 +307,15 @@ describe('device-lost path 4 -- explicit stop owns cleanup (R-4)', () => {
     // submitted until recovery.
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     expect(state.drawCalls).toBe(drawCallsBefore);
-    // Explicit stop remains the cleanup owner and is still valid after a loss.
+    // Stop only controls scheduling; dispose remains valid after a loss.
     const stopResult = app.stop();
     expect(stopResult.ok).toBe(true);
+    const disposeResult = await app.dispose();
+    expect(disposeResult.ok).toBe(true);
   });
 
-  it('device-lost path on canvas form -- removeSystem called via cleanup funnel', async () => {
-    // Spy World.prototype.removeSystem so the cleanup funnel is observed
-    // even though we used the assemble form here (cleanup is engaged via
-    // the canvas form -- this fixture drives the canvas form to confirm
-    // the device-lost cleanup path actually crosses the input cleanup).
-    const removeSpy = vi
-      .spyOn(World.prototype, 'removeSystem')
-      .mockImplementation(
-        function (this: World, name: string): Result<void, ScheduleMutationError> {
-          if (name === FRAME_START_SCAN_SYSTEM_NAME) {
-            return { ok: true, value: undefined };
-          }
-          return { ok: true, value: undefined };
-        },
-      );
+  it('canvas dispose lets the input Fiber remove its scan system exactly once', async () => {
+    const removeSpy = vi.spyOn(World.prototype, 'removeSystem');
 
     try {
       const canvas = document.createElement('canvas');
@@ -321,20 +341,18 @@ describe('device-lost path 4 -- explicit stop owns cleanup (R-4)', () => {
         // the real dispose so the GPUDevice is released before that process
         // hands control to the next split group.
         const disposeSpy = vi.spyOn(app.renderer, 'dispose');
-        // Replace renderer's onError with a controllable one before start
-        // is not possible here -- the real renderer is wired. Instead, we
-        // assert the canvas-form path engages cleanup on stop; the
-        // device-lost cleanup reuses the same funnel (R-4). This path
-        // assertion is a proxy for "cleanup() is wired into the canvas
-        // form".
         app.start();
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
         const stopResult = app.stop();
         expect(stopResult.ok).toBe(true);
+        expect(disposeSpy).not.toHaveBeenCalled();
+        const disposeResult = await app.dispose();
+        expect(disposeResult.ok).toBe(true);
         expect(disposeSpy).toHaveBeenCalledTimes(1);
-        // cleanup funnel reached removeSystem at least once with the
-        // scan system name (R-4 cleanup proxy).
-        expect(removeSpy).toHaveBeenCalledWith(Update, FRAME_START_SCAN_SYSTEM_NAME);
+        const scanRemovals = removeSpy.mock.calls.filter(
+          ([schedule, name]) => schedule === Update && name === FRAME_START_SCAN_SYSTEM_NAME,
+        );
+        expect(scanRemovals).toHaveLength(1);
         disposeSpy.mockRestore();
       } finally {
         canvas.remove();

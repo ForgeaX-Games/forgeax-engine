@@ -32,11 +32,11 @@ import {
   Instances,
   MeshFilter,
   MeshRenderer,
-} from '@forgeax/engine-render/internal';
-import { createRenderer } from '@forgeax/engine-runtime';
+} from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { constructRuntimeRendererHost } from '../../renderer-host';
 import { drawPublished } from '../draw-published';
 
 const WIDTH = 512;
@@ -147,21 +147,23 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
       removeEventListener() {},
     } as unknown as HTMLCanvasElement;
 
-    let renderer: Awaited<ReturnType<typeof createRenderer>>;
+    let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
     try {
-      renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+      host = await constructRuntimeRendererHost(
+        mockCanvas,
+        {},
+        {
+          shaderManifestUrl: ENGINE_MANIFEST_URL,
+        },
+      );
     } finally {
       globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
     }
-    expect(renderer.backend).toBe('webgpu');
-
-    const assets = renderer.assets;
-    if (assets === null) throw new Error('AssetRegistry null on dawn path');
+    expect(host.ok).toBe(true);
+    if (!host.ok) throw host.error;
+    const { renderer, assets } = host.value;
+    expect(renderer.inspect().state).toBe('alive');
     expect(assets).toBeInstanceOf(AssetRegistry);
-
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
-    if (!ready.ok) return;
 
     // Material creation (PBR standard). D-18: a shared-ref handle is per-World;
     // each frame's World allocs the same payload to get a handle it can resolve.
@@ -430,21 +432,23 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
       removeEventListener() {},
     } as unknown as HTMLCanvasElement;
 
-    let renderer2: Awaited<ReturnType<typeof createRenderer>>;
+    let host2: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
     try {
-      renderer2 = await createRenderer(mockCanvas2, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+      host2 = await constructRuntimeRendererHost(
+        mockCanvas2,
+        {},
+        {
+          shaderManifestUrl: ENGINE_MANIFEST_URL,
+        },
+      );
     } finally {
       globalThis.navigator.gpu.requestAdapter = origReqAdapter2;
     }
-    expect(renderer2.backend).toBe('webgpu');
-
-    const assets2 = renderer2.assets;
-    if (assets2 === null) throw new Error('AssetRegistry null');
+    expect(host2.ok).toBe(true);
+    if (!host2.ok) throw host2.error;
+    const { renderer: renderer2, assets: assets2 } = host2.value;
+    expect(renderer2.inspect().state).toBe('alive');
     expect(assets2).toBeInstanceOf(AssetRegistry);
-
-    const ready2 = await renderer2.ready;
-    expect(ready2.ok).toBe(true);
-    if (!ready2.ok) return;
 
     // Unlit material
     const matAsset2: MaterialAsset = {
@@ -491,11 +495,17 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
       },
       { component: Camera, data: { fov: (45 * Math.PI) / 180, aspect: 1, near: 0.1, far: 200 } },
     );
-    expect(renderer2.attachWorld(worldN2).ok).toBe(true);
+    const attachmentN2 = renderer2.attach(worldN2);
+    expect(attachmentN2.ok).toBe(true);
+    if (!attachmentN2.ok) throw attachmentN2.error;
 
     for (let i = 0; i < 5; i++) {
       worldN2.update(1 / 60).unwrap();
-      const r = renderer2.draw([worldN2], { cameraOwner: 0, resourceOwner: 0 });
+      const r = renderer2.draw({
+        leases: [attachmentN2.value],
+        camera: { lease: attachmentN2.value },
+        environment: { lease: attachmentN2.value },
+      });
       if (!r.ok) throw new Error(`draw N frame ${i} error: ${r.error.code}`);
     }
 
@@ -564,11 +574,17 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
       },
       { component: Camera, data: { fov: (45 * Math.PI) / 180, aspect: 1, near: 0.1, far: 200 } },
     );
-    expect(renderer2.attachWorld(world12).ok).toBe(true);
+    const attachment12 = renderer2.attach(world12);
+    expect(attachment12.ok).toBe(true);
+    if (!attachment12.ok) throw attachment12.error;
 
     for (let i = 0; i < 5; i++) {
       world12.update(1 / 60).unwrap();
-      const r = renderer2.draw([world12], { cameraOwner: 0, resourceOwner: 0 });
+      const r = renderer2.draw({
+        leases: [attachment12.value],
+        camera: { lease: attachment12.value },
+        environment: { lease: attachment12.value },
+      });
       if (!r.ok) throw new Error(`draw 1 frame ${i} error: ${r.error.code}`);
     }
     await device2.queue.onSubmittedWorkDone();

@@ -14,11 +14,10 @@
 // to compile. After w14 each illegal graph returns the matching structured code.
 
 import { type AnimationGraphNodeRef, defineAnimationGraph } from '@forgeax/engine-animation';
-import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
-function clipHandle(id: number) {
-  return toShared<'AnimationClip'>(id);
+function clipGuid(id: number) {
+  return `test/animation-clip-${id}`;
 }
 
 // Cast a raw index to a node ref — the illegal-graph tests deliberately forge
@@ -40,7 +39,7 @@ describe('AnimationGraph — illegal construction errors (M2 / w10)', () => {
 
   it('out-of-range child reference -> animation-graph-node-out-of-range', () => {
     const result = defineAnimationGraph((b) => {
-      b.clip(clipHandle(1)); // node 0
+      b.clip(clipGuid(1)); // node 0
       // A blend that references index 99 (nonexistent).
       return b.blend([forgeRef(99)]);
     });
@@ -60,7 +59,7 @@ describe('AnimationGraph — illegal construction errors (M2 / w10)', () => {
   });
 
   it('negative node weight -> animation-graph-node-weight-invalid', () => {
-    const result = defineAnimationGraph((b) => b.clip(clipHandle(1), -0.5));
+    const result = defineAnimationGraph((b) => b.clip(clipGuid(1), -0.5));
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.code).toBe('animation-graph-node-weight-invalid');
@@ -68,7 +67,7 @@ describe('AnimationGraph — illegal construction errors (M2 / w10)', () => {
   });
 
   it('NaN node weight -> animation-graph-node-weight-invalid', () => {
-    const result = defineAnimationGraph((b) => b.clip(clipHandle(1), Number.NaN));
+    const result = defineAnimationGraph((b) => b.clip(clipGuid(1), Number.NaN));
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.code).toBe('animation-graph-node-weight-invalid');

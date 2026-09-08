@@ -57,7 +57,7 @@ function makeArtifact(
     pipelineId,
     runtimeId,
     backendId: runtimeId === 'browser' ? 'webgpu' : 'dawn',
-    frameId: 3,
+    frameId: pipelineId === 'forgeax::urp' ? 3 : 299,
     copySrc: true,
     lifetime: 'active',
     semantic: 'linear-hdr',
@@ -81,7 +81,7 @@ function makeArtifact(
       format: 'rgba16float',
       size,
       rawHash: hashBytes(linearBytes),
-      frameId: 3,
+      frameId: pipelineId === 'forgeax::urp' ? 3 : 299,
       pipelineId,
       backendId: runtimeId === 'browser' ? 'webgpu' : 'dawn',
     },
@@ -92,7 +92,7 @@ function makeArtifact(
       format: 'rgba8unorm',
       size,
       rawHash: hashBytes(finalBytes),
-      frameId: 3,
+      frameId: pipelineId === 'forgeax::urp' ? 3 : 299,
       pipelineId,
       backendId: runtimeId === 'browser' ? 'webgpu' : 'dawn',
     },
@@ -121,6 +121,7 @@ describe('cross-runtime closure contract', () => {
     expect(result.value.report.attachmentEvidence.producers).toHaveLength(2);
     expect(result.value.report.attachmentEvidence.capturedPipelineIds).toEqual(['urp', 'hdrp']);
     expect(result.value.report.attachmentEvidence.missingPipelineIds).toEqual([]);
+    expect(result.value.report.attachmentEvidence.producers.map((entry) => entry.frameId)).toEqual([3, 299]);
   });
 
   it.each([

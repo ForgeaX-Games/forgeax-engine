@@ -1,15 +1,28 @@
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
-import { AUDIO_ENGINE_RESOURCE_KEY, AudioSource, type AudioBackend, type AudioClipAsset, audioPlugin } from '@forgeax/engine-audio';
-import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
+import {
+  AUDIO_ENGINE_RESOURCE_KEY,
+  AUDIO_TICK_SYSTEM_NAME,
+  AudioSource,
+  type AudioBackend,
+  type AudioClipAsset,
+  audioPlugin,
+} from '@forgeax/engine-audio';
+import { webAudioPlugin } from '@forgeax/engine-audio-webaudio';
+import {
+  FRAME_START_SCAN_SYSTEM_NAME,
+  INPUT_SNAPSHOT_RESOURCE_KEY,
+  type InputSnapshot,
+} from '@forgeax/engine-input';
 import { FixedTime, Update, FixedUpdate } from '@forgeax/engine-ecs';
 import { physicsPlugin, CollidingEntities } from '@forgeax/engine-physics';
 import { pick } from '@forgeax/engine-picking';
 import { MeshRenderer } from '@forgeax/engine-render';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { createDevImportTransport } from '@forgeax/engine-runtime';
+
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { addOnEnter, defineState, getState, setNextState } from '@forgeax/engine-state';
-import type { Handle, MaterialAsset, TextureAsset } from '@forgeax/engine-types';
+import { type Handle, type MaterialAsset, type TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { CapstoneVelocity, buildCapstoneScene } from './scene';
 import './pulse-material.wgsl';
@@ -26,19 +39,17 @@ const appResult = await createApp(
   canvas,
   {
     time: { fixedDeltaSeconds: 1 / 60, maxStepsPerUpdate: 4, maxDeltaSeconds: 0.1 },
-    plugins: [audioPlugin(), physicsPlugin('rapier-3d')],
+    plugins: [webAudioPlugin(), audioPlugin(), physicsPlugin('rapier-3d')],
   },
-  { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+  { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
 );
 if (!appResult.ok) throw new Error(`m8-capstone createApp failed: ${appResult.error instanceof Error ? appResult.error.message : String(appResult.error)}`);
 
 const app = appResult.value;
-const ready = await app.renderer.ready;
-if (!ready.ok) throw new Error(`m8-capstone renderer.ready failed: ${ready.error.code}`);
 const world = app.world;
-const assets = app.renderer.assets;
-if (assets === null) throw new Error('m8-capstone: renderer assets unavailable');
-assets.configurePackIndex('/pack-index.json');
+const assets = app.assets;
+if (assets === undefined) throw new Error('m8-capstone: app asset owner unavailable');
+configureRuntimeAssetCatalog(assets, runtimeBinding);
 assets.loaders.register(capstoneContentLoader());
 
 const scene = buildCapstoneScene(world);
@@ -138,10 +149,13 @@ world.addSystem(FixedUpdate, {
 
 world.addSystem(Update, {
   name: 'm8-capstone-observe-input',
+  after: [FRAME_START_SCAN_SYSTEM_NAME],
+  before: [AUDIO_TICK_SYSTEM_NAME],
   queries: [],
   fn: () => {
     const input = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
-    if (!rearmAudio && input.keyboard.up(' ') && clipHandle !== (0 as unknown as Handle<'AudioClipAsset', 'shared'>)) {
+    const spaceUp = input.keyboard.up(' ');
+    if (!rearmAudio && spaceUp && clipHandle !== (0 as unknown as Handle<'AudioClipAsset', 'shared'>)) {
       world.set(scene.emitter, AudioSource, { clip: clipHandle, playing: true, spatialBlend: 1, bus: 'sfx' });
       rearmAudio = true;
     } else if (rearmAudio) {
@@ -225,8 +239,8 @@ if (new URLSearchParams(location.search).has('m8-probe')) {
       switchRender,
       injectFault,
       recover,
-      draw: () => app.renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }),
-      capture: () => (app as typeof app & { _debugAdapter?: unknown })._debugAdapter,
+      health: () => app.renderer.inspect().state,
+      rhiCaptureAvailable: () => app.rhiCapture !== undefined,
     },
   });
 }

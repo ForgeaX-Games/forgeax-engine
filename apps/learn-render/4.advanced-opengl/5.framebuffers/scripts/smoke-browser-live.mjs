@@ -4,14 +4,17 @@
 // RHI-debug capture hook; this smoke drives those browser-visible surfaces.
 
 import { chromium } from 'playwright';
-import { spawn, execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { writeReferencePng } from '../../../../shared/png-codec.mjs';
+import { buildFrameModel, decodeTape, openReplay } from '@forgeax/engine-rhi-debug';
+import { bootstrapDawn } from '../../../../shared/scripts/rhi-debug-verify.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(HERE, '..');
@@ -20,6 +23,8 @@ const { PNG } = createRequire(resolve(REPO_ROOT, 'packages/rhi-debug/package.jso
 const ARTIFACT_DIR = resolve(
   process.env.FORGEAX_M3_ARTIFACT_DIR ?? resolve(APP_ROOT, '.forgeax-debug', 'm3-browser-live'),
 );
+const RAW_TAPE_ROUTE = '/__forgeax-debug/tape';
+const RHITAPE_MIME = 'application/x-forgeax-rhitape';
 mkdirSync(ARTIFACT_DIR, { recursive: true });
 
 const viteProc = spawn('pnpm', ['-F', '@forgeax/app-learn-render-4-advanced-opengl-5-framebuffers', 'dev'], {
@@ -102,12 +107,21 @@ function resolveArtifact(path) {
 }
 
 async function capture(page, label) {
-  const result = await page.evaluate(async () => {
+  const result = await page.evaluate(async ({ route, mime }) => {
     const captureFrame = globalThis.__forgeax?.captureFrame;
     const readPixels = globalThis.__captureFramebuffers;
     if (typeof captureFrame !== 'function') throw new Error('window.__forgeax.captureFrame is unavailable');
     if (typeof readPixels !== 'function') throw new Error('window.__captureFramebuffers is unavailable');
-    const tape = await captureFrame(1);
+    const capture = await captureFrame();
+    if (!capture?.ok) throw new Error(`captureFrame failed: ${JSON.stringify(capture?.error)}`);
+    const runId = `m3-live-${Date.now()}-${crypto.randomUUID().replaceAll('-', '')}`;
+    const response = await fetch(`${location.origin}${route}?runId=${runId}`, {
+      method: 'POST',
+      headers: { 'content-type': mime },
+      body: capture.value.bytes,
+    });
+    const artifact = await response.json();
+    if (!response.ok) throw new Error(`raw tape upload failed: ${JSON.stringify(artifact)}`);
     const raw = await readPixels();
     const pixels = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
     let binary = '';
@@ -117,13 +131,13 @@ async function capture(page, label) {
     }
     const canvas = document.querySelector('#app');
     return {
-      tape,
+      tape: { ...artifact, runId },
       pixelsB64: btoa(binary),
       width: canvas?.width ?? 0,
       height: canvas?.height ?? 0,
       hud: document.querySelector('#hud')?.textContent ?? '',
     };
-  });
+  }, { route: RAW_TAPE_ROUTE, mime: RHITAPE_MIME });
   const pixels = decodePixels(result.pixelsB64);
   if (result.width <= 0 || result.height <= 0 || pixels.length !== result.width * result.height * 4) {
     throw new Error(`invalid ${label} capture dimensions: ${JSON.stringify(result)}`);
@@ -139,15 +153,16 @@ async function capture(page, label) {
   return { ...value, pngPath, stats: pixelStats(pixels) };
 }
 
-async function publicSwitchCapture(page, method, label) {
-  const result = await page.evaluate(async (methodName) => {
+async function publicSwitchCapture(page, method, label, { driveFrame = false } = {}) {
+  const result = await page.evaluate(async ({ methodName, driveFrame: shouldDriveFrame }) => {
     const api = globalThis.__learnRenderFramebuffers;
+    const captureFrame = globalThis.__captureFramebuffers;
     const readPixels = globalThis.__captureFramebuffers;
-    if (api === undefined || typeof readPixels !== 'function') {
+    if (api === undefined || typeof captureFrame !== 'function' || typeof readPixels !== 'function') {
       throw new Error('public framebuffers recovery seam is unavailable');
     }
     const install = api[methodName]();
-    const raw = await readPixels();
+    const raw = shouldDriveFrame ? await captureFrame() : await readPixels();
     const pixels = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
     let binary = '';
     const chunk = 0x2000;
@@ -163,7 +178,7 @@ async function publicSwitchCapture(page, method, label) {
       hud: document.querySelector('#hud')?.textContent ?? '',
       state: api.getState(),
     };
-  }, method);
+  }, { methodName: method, driveFrame });
   const pixels = decodePixels(result.pixelsB64);
   if (result.width <= 0 || result.height <= 0 || pixels.length !== result.width * result.height * 4) {
     throw new Error(`invalid ${label} capture dimensions: ${result.width}x${result.height}`);
@@ -190,6 +205,7 @@ try {
     headless: true,
     channel: 'chrome',
     args: [
+      '--disable-features=MacAppCodeSignClone',
       '--enable-unsafe-webgpu',
       '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
       '--ignore-gpu-blocklist',
@@ -229,6 +245,13 @@ try {
     // expires without a replacement submission, while the visible canvas still
     // retains the last healthy frame.
     const healthyCanvas = await captureCanvasScreenshot(page, 'pipeline-healthy-canvas');
+    const invalidFormat = await publicSwitchCapture(
+      page,
+      'installInvalidFormatPipeline',
+      'pipeline-invalid-format',
+      { driveFrame: true },
+    );
+    const invalidFormatCanvas = await captureCanvasScreenshot(page, 'pipeline-invalid-format-canvas');
     const cycle = await publicSwitchCapture(page, 'installCyclePipeline', 'pipeline-cycle-fault');
     const cycleCanvas = await captureCanvasScreenshot(page, 'pipeline-cycle-fault-canvas');
     const repaired = await publicSwitchCapture(page, 'installRepairedPipeline', 'pipeline-cycle-repaired');
@@ -265,21 +288,60 @@ try {
 
     const switchDelta = changedPixels(baseline, inversion);
     const edgeDelta = changedPixels(resized, edge);
-    const tapePath = resolveArtifact(edge.tape?.tapePath);
-    const reportPath = resolveArtifact(edge.tape?.reportPath);
+    const tapePath = resolveArtifact(edge.tape?.path);
     const rhiDir = resolve(ARTIFACT_DIR, 'rhi');
     mkdirSync(rhiDir, { recursive: true });
     const retainedTape = resolve(rhiDir, 'edge-frame.tape.bin');
-    const retainedReport = resolve(rhiDir, 'edge-frame.report.json');
     copyFileSync(tapePath, retainedTape);
-    copyFileSync(reportPath, retainedReport);
-
-    const cliPath = resolve(REPO_ROOT, 'packages/rhi-debug/dist/cli.mjs');
-    const summaryRaw = execFileSync('node', [cliPath, 'summary', retainedTape], { encoding: 'utf8' });
-    const summary = JSON.parse(summaryRaw);
-    const drawIdx = Math.max(0, (summary.draws?.length ?? 1) - 1);
-    const inspectRaw = execFileSync('node', [cliPath, 'inspect-offline', retainedTape, String(drawIdx), '--fields=bindings,drawCall,rt'], { encoding: 'utf8' });
-    const inspect = JSON.parse(inspectRaw);
+    const tapeBytes = new Uint8Array(readFileSync(retainedTape));
+    const digest = `sha256:${createHash('sha256').update(tapeBytes).digest('hex')}`;
+    if (edge.tape?.digest !== digest) throw new Error(`raw tape digest mismatch: ${edge.tape?.digest} != ${digest}`);
+    const decoded = decodeTape(tapeBytes);
+    if (!decoded.ok) throw new Error(`strict v7 decode failed: ${decoded.error.code}`);
+    const tape = decoded.value;
+    const model = buildFrameModel(tape);
+    if (model.works.length === 0) throw new Error('decoded tape has no work entries');
+    const inspectedWork = model.works.length - 1;
+    const { freshDevice, rhiWebgpu } = await bootstrapDawn('m3-programmable');
+    const replayResult = await openReplay(tape, {
+      device: freshDevice,
+      createShaderModule: rhiWebgpu.createShaderModule,
+    });
+    if (!replayResult.ok) {
+      freshDevice.destroy?.();
+      throw new Error(`openReplay failed: ${replayResult.error.code}`);
+    }
+    const replay = replayResult.value;
+    const inspectionResult = await replay.inspectWork(inspectedWork, ['bindings', 'pixels']);
+    if (!inspectionResult.ok) {
+      await replay.dispose();
+      freshDevice.destroy?.();
+      throw new Error(`inspectWork(${inspectedWork}) failed: ${inspectionResult.error.code}`);
+    }
+    const inspection = inspectionResult.value;
+    await replay.dispose();
+    freshDevice.destroy?.();
+    const drawCount = model.works.filter((work) => work.kind === 'draw' || work.kind === 'drawIndexed').length;
+    const summary = {
+      workCount: model.works.length,
+      passCount: model.passes.length,
+      bindingCount: tape.events.filter((event) => event.kind === 'setBindGroup').length,
+    };
+    const inspect = {
+      workIndex: inspection.workIndex,
+      eventIndex: inspection.eventIndex,
+      passIndex: inspection.passIndex,
+      attachment: inspection.attachment === undefined
+        ? undefined
+        : {
+            resourceId: inspection.attachment.resourceId,
+            kind: inspection.attachment.kind,
+            format: inspection.attachment.format,
+            width: inspection.attachment.width,
+            height: inspection.attachment.height,
+            byteLength: inspection.attachment.bytes.byteLength,
+          },
+    };
     writeFileSync(resolve(rhiDir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
     writeFileSync(resolve(rhiDir, 'inspect.json'), `${JSON.stringify(inspect, null, 2)}\n`);
     writeFileSync(resolve(ARTIFACT_DIR, 'browser-live.json'), `${JSON.stringify({
@@ -287,10 +349,16 @@ try {
       cycle: {
         install: cycle.install,
         code: cycle.state.cycleDiagnostic?.code,
-        cycle: cycle.state.cycleDiagnostic?.detail?.cycle ?? [],
+        futureRead: cycle.state.cycleDiagnostic?.detail,
         drawSubmitted: cycle.state.cycleDrawSubmitted,
         activePipelineId: cycle.state.activePipelineId,
         healthyCanvasPixelsChanged: changedPngPixels(healthyCanvas.png, cycleCanvas.png),
+      },
+      invalidFormat: {
+        install: invalidFormat.install,
+        diagnostic: invalidFormat.state.invalidFormatDiagnostic,
+        activePipelineId: invalidFormat.state.activePipelineId,
+        healthyCanvasPixelsChanged: changedPngPixels(healthyCanvas.png, invalidFormatCanvas.png),
       },
       repaired: {
         install: repaired.install,
@@ -308,9 +376,8 @@ try {
       switchCanvasPixels: changedPngPixels(repairedCanvas.png, inversionCanvas.png),
       edgeDelta,
       tape: retainedTape,
-      report: retainedReport,
-      draws: summary.draws?.length ?? 0,
-      inspectedDraw: drawIdx,
+      draws: drawCount,
+      inspectedWork,
       cleanup,
     }, null, 2)}\n`);
 
@@ -320,9 +387,24 @@ try {
     if (baseline.hud !== 'passthrough' || inversion.hud !== 'inversion' || edge.hud !== 'edge-detection') {
       throw new Error(`HUD did not track public pipeline switches: ${baseline.hud}, ${inversion.hud}, ${edge.hud}`);
     }
-    const cycleNames = cycle.state.cycleDiagnostic?.detail?.cycle ?? [];
-    if (cycle.state.cycleDiagnostic?.code !== 'cyclic-dependency' || !cycleNames.includes('cycle-pass-a') || !cycleNames.includes('cycle-pass-b')) {
-      throw new Error(`cycle diagnostic incomplete: ${JSON.stringify(cycle.state.cycleDiagnostic)}`);
+    const futureRead = cycle.state.cycleDiagnostic?.detail;
+    if (cycle.state.cycleDiagnostic?.code !== 'uninitialized-read' || futureRead?.passName !== 'cycle-pass-a' || futureRead?.resourceLabel !== 'cycle-resource-b') {
+      throw new Error(`temporal diagnostic incomplete: ${JSON.stringify(cycle.state.cycleDiagnostic)}`);
+    }
+    const invalidDetail = invalidFormat.state.invalidFormatDiagnostic?.detail;
+    const hasSupportedSurfaceFormat = invalidDetail?.expected.some(
+      (format) => format === 'rgba8unorm' || format === 'rgba8unorm-srgb' || format === 'bgra8unorm' || format === 'bgra8unorm-srgb',
+    ) === true;
+    if (
+      invalidFormat.install.ok !== true ||
+      invalidFormat.state.invalidFormatDiagnostic?.code !== 'invalid-format' ||
+      invalidDetail?.resourceKey !== 'offscreenColor' ||
+      invalidDetail.format !== 'not-a-gpu-texture-format' ||
+      !invalidDetail.expected.includes('bgra8unorm') ||
+      invalidFormat.state.activePipelineId !== 'learn-render-5-pipeline::passthrough' ||
+      changedPngPixels(healthyCanvas.png, invalidFormatCanvas.png) !== 0
+    ) {
+      throw new Error(`invalid-format recovery evidence incomplete: ${JSON.stringify(invalidFormat)}`);
     }
     if (cycle.state.cycleDrawSubmitted !== false || changedPngPixels(healthyCanvas.png, cycleCanvas.png) !== 0) {
       throw new Error(`cycle contaminated/submitted: submitted=${cycle.state.cycleDrawSubmitted} canvasChanged=${changedPngPixels(healthyCanvas.png, cycleCanvas.png)}`);
@@ -338,12 +420,12 @@ try {
     }
     if (changedPngPixels(repairedCanvas.png, inversionCanvas.png) === 0) throw new Error('healthy switch did not change the canvas');
     if (resized.width !== 640 || resized.height !== 360) throw new Error(`resize dimensions wrong: ${resized.width}x${resized.height}`);
-    if (!Array.isArray(summary.draws) || summary.draws.length === 0 || inspect.drawCall === undefined) {
-      throw new Error(`RHI inspect missing draw evidence: draws=${summary.draws?.length ?? 0}`);
+    if (drawCount === 0 || inspect.attachment === undefined || summary.bindingCount === 0) {
+      throw new Error(`RHI inspect missing draw evidence: draws=${drawCount} bindings=${summary.bindingCount}`);
     }
     console.log(`[m3-programmable] browser live artifacts: baseline=${baseline.pngPath} inversion=${inversion.pngPath} resized=${resized.pngPath} edge=${edge.pngPath}`);
-    console.log(`[m3-programmable] browser live RHI: tape=${retainedTape} draws=${summary.draws.length} inspectedDraw=${drawIdx}`);
-    console.log(`[m24] browser live cycle/recovery: PASS cycle=cyclic-dependency cyclePasses=${cycle.state.cycleDiagnostic.detail.cycle.join('>')} cycleSubmitted=false repairedPasses=${repaired.state.lastPassNames.join('>')} recoveredBytes=0 healthyChangedPixels=${changedPixels(repaired, inversion)} cleanup=idempotent`);
+    console.log(`[m3-programmable] browser live RHI: tape=${retainedTape} draws=${drawCount} inspectedWork=${inspectedWork} bindings=${summary.bindingCount}`);
+    console.log(`[m24] browser live temporal/recovery: PASS temporal=uninitialized-read futureRead=${futureRead.passName}:${futureRead.resourceLabel} submitted=false repairedPasses=${repaired.state.lastPassNames.join('>')} recoveredBytes=0 healthyChangedPixels=${changedPixels(repaired, inversion)} cleanup=idempotent`);
     console.log(`[m3-programmable] browser live pipeline: PASS switchChangedPixels=${switchDelta} edgeChangedPixels=${edgeDelta} resized=${resized.width}x${resized.height}`);
   } finally {
     await browser.close();

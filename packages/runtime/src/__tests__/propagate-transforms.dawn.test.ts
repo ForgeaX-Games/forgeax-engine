@@ -23,10 +23,10 @@
 
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
-import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
+import { readRenderArrayView } from '@forgeax/engine-ecs/projection';
 import { ChildOf, propagateTransforms, Transform } from '@forgeax/engine-scene';
-import { type TilesetAsset, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { TileLayer, Tilemap } from '../../../render/src/components';
 
 function identityTransformData() {
   return {
@@ -39,13 +39,9 @@ function identityTransformData() {
 // Read the resolved world mat4 (column-major 16 floats) from the Transform
 // world column array view. Translation lives in column 3 (m[12,13,14]).
 function worldOf(world: World, entity: EntityHandle): Float32Array {
-  const view = (
-    world as unknown as {
-      _getArrayView(e: EntityHandle, c: typeof Transform, f: string): Float32Array | undefined;
-    }
-  )._getArrayView(entity, Transform, 'world');
+  const view = readRenderArrayView(world, entity, Transform, 'world');
   if (view === undefined) throw new Error('Transform.world view missing');
-  return view;
+  return view as Float32Array;
 }
 
 describe('propagate-transforms.dawn - root-down DFS + stale ChildOf fail-fast (AC-04)', () => {
@@ -171,29 +167,17 @@ describe('propagate-transforms.dawn - root-down DFS + stale ChildOf fail-fast (A
   // default case.
   it('AC-07: identity TileLayer middle node -> Transform.world byte-identical to Tilemap parent', () => {
     const world = new World();
+    for (const component of [ChildOf, TileLayer, Tilemap, Transform]) {
+      world.components.register(component).unwrap();
+    }
     // Parent Tilemap carries a non-identity translation so that the identity /
     // non-identity distinction is observable in the low three translation
     // slots of the 16-float world mat4.
-    const tileset: TilesetAsset = {
-      kind: 'tileset',
-      guid: 'test/tileset-ac07',
-      atlases: [toShared<'TextureAsset'>(1)],
-      tileWidth: 16,
-      tileHeight: 16,
-      columns: 1,
-      rows: 1,
-      regions: [{ x: 0, y: 0, width: 16, height: 16 }],
-      tiles: [{ regionIndex: 0 }],
-    };
-    const tilesetHandle = world.allocSharedRef<'TilesetAsset', TilesetAsset>(
-      'TilesetAsset',
-      tileset,
-    );
     const tilemap = world
       .spawn(
         {
           component: Tilemap,
-          data: { cols: 1, rows: 1, tileSize: [1, 1], chunkSize: 16, tileset: tilesetHandle },
+          data: { cols: 1, rows: 1, tileSize: [1, 1], chunkSize: 16, tileset: 'test/tileset' },
         },
         {
           component: Transform,
@@ -205,10 +189,9 @@ describe('propagate-transforms.dawn - root-down DFS + stale ChildOf fail-fast (A
         },
       )
       .unwrap();
-    // TileLayer spawn -- caller supplies NO Transform. M1's coAttach injects
-    // identity Transform automatically. This mirrors the demo spawn pattern
-    // in apps/hello/tilemap/**, so AC-07 verifies the same code path AC-09
-    // relies on.
+    // TileLayer carries an explicit identity Transform in the current ECS
+    // component vocabulary. This mirrors the demo spawn pattern in
+    // apps/hello/tilemap/** and keeps the hierarchy contract explicit.
     const layer = world
       .spawn(
         {
@@ -221,6 +204,7 @@ describe('propagate-transforms.dawn - root-down DFS + stale ChildOf fail-fast (A
           },
         },
         { component: ChildOf, data: { parent: tilemap } },
+        { component: Transform, data: identityTransformData() },
       )
       .unwrap();
     const r = propagateTransforms(world);

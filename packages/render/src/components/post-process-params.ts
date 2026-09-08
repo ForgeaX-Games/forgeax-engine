@@ -3,10 +3,10 @@
 // Schema: { shader: 'string', data: 'buffer' }.
 //
 // `shader` identifies the fullscreen post-process shader (the same id as passed to
-// `renderer.postProcess.register(id, entry)`). `data` carries the per-frame params
+// the feature host registers for `id`). `data` carries the per-frame params
 // bytes as a variable-byte ECS managed buffer slot. The write side (world.spawn /
-// world.set) accepts any AllowSharedBufferSource (Float32Array / ArrayBuffer /
-// Uint8Array / any TypedArray) and the ECS normalizes it to Uint8Array bytes
+// world.set) accepts every AllowSharedBufferSource (Float32Array / ArrayBuffer /
+// Uint8Array / typed array) and the ECS normalizes it to Uint8Array bytes
 // (feat-20260621 V2 / AC-A4); the read side (world.get) returns Uint8Array, which
 // satisfies AllowSharedBufferSource for GPU queue.writeBuffer ingestion.
 //

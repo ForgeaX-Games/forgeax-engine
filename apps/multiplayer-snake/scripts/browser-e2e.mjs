@@ -1,14 +1,221 @@
 import { execFile, spawn } from 'node:child_process';
-import { access } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { chromium } from 'playwright';
+import { DEFAULT_REPLICATION_LIMITS, decodeReplicationPacket } from '@forgeax/engine-net';
 import { startAuthority } from './authority-e2e.mjs';
+import { startChaosWebSocketProxy } from './chaos-websocket.mjs';
 
-const REQUIRED_PHASES = ['join', 'input-isolation', 'growth', 'death', 'respawn', 'late-join', 'disconnect'];
+export const RECONNECT_TARGET_ID = 'multiplayer-snake-reconnect';
+export const RECONNECT_EXPECTATIONS = Object.freeze([
+  {
+    id: 'authority-derived-convergence',
+    statement: 'The post-resync scene shows the authority-derived multiplayer state without visible stale or duplicate replicated entities.',
+  },
+  {
+    id: 'continued-browser-operation',
+    statement: 'Rendering and interaction remain visibly active after recovery instead of freezing on the disconnected frame or showing a blank or broken scene.',
+  },
+]);
+const REQUIRED_PHASES = ['join', 'input-isolation', 'growth', 'death', 'respawn', 'late-join', 'recovery', 'disconnect'];
+const BROWSER_STARTUP_TIMEOUT_MS = 60_000;
 const execFileAsync = promisify(execFile);
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+const defaultEvidenceDirectory = resolve(
+  repositoryRoot,
+  '.forgeax-harness',
+  'forgeax-loop',
+  'feat-20260826-m16-network-reconnect-resync-protocol',
+  'artifacts',
+  'browser-reconnect',
+);
+
+function pendingVisualAssessment(invocationId) {
+  return {
+    invocationId,
+    status: 'pending',
+    verdict: 'unreviewed',
+    expectations: RECONNECT_EXPECTATIONS.map((expectation) => ({
+      id: expectation.id,
+      statement: expectation.statement,
+      observed: '',
+      verdict: 'unreviewed',
+      confidence: 'unrated',
+    })),
+  };
+}
+
+function normalizeVisualAssessment(input, invocationId) {
+  const source = input ?? {};
+  const entries = new Map(
+    (Array.isArray(source.expectations) ? source.expectations : [])
+      .filter((entry) => entry !== null && typeof entry === 'object' && typeof entry.id === 'string')
+      .map((entry) => [entry.id, entry]),
+  );
+  return {
+    invocationId,
+    status: source.status === 'passed' || source.status === 'failed' ? source.status : 'pending',
+    verdict: source.verdict === 'pass' || source.verdict === 'fail' ? source.verdict : 'unreviewed',
+    expectations: RECONNECT_EXPECTATIONS.map((expectation) => {
+      const entry = entries.get(expectation.id);
+      return {
+        id: expectation.id,
+        statement: expectation.statement,
+        observed: typeof entry?.observed === 'string' ? entry.observed : '',
+        verdict: entry?.verdict === 'pass' || entry?.verdict === 'fail' ? entry.verdict : 'unreviewed',
+        confidence: ['high', 'medium', 'low'].includes(entry?.confidence) ? entry.confidence : 'unrated',
+      };
+    }),
+  };
+}
+
+export function validateReconnectTrace(trace) {
+  const failures = [];
+  if (trace?.schemaVersion !== 1) failures.push({ code: 'trace-schema-mismatch' });
+  if (trace?.targetId !== RECONNECT_TARGET_ID) failures.push({ code: 'trace-target-mismatch' });
+  if (!trace?.invocationId) failures.push({ code: 'trace-invocation-missing' });
+  const lifecycle = trace?.recovery?.lifecycle ?? [];
+  const kinds = lifecycle.map((sample) => sample?.snapshot?.state?.kind);
+  for (const kind of ['recovering', 'resyncing', 'active']) {
+    if (!kinds.includes(kind)) failures.push({ code: `trace-missing-${kind}` });
+  }
+  const before = trace?.recovery?.before?.snapshot;
+  const baseline = trace?.recovery?.baseline;
+  const firstActive = baseline?.firstActive;
+  const baselinePacket = baseline?.packet;
+  if (!['started', 'already-recovering'].includes(trace?.recovery?.outcome?.kind))
+    failures.push({ code: 'recovery-not-started' });
+  if (before?.sessionId !== firstActive?.sessionId) failures.push({ code: 'session-identity-changed' });
+  if (!Number.isSafeInteger(baseline?.freshEpoch) || baseline.freshEpoch <= (before?.epoch ?? -1)) {
+    failures.push({ code: 'fresh-baseline-not-proven' });
+  }
+  if (baselinePacket?.kind !== 'baseline' || baselinePacket.sequence !== 1) {
+    failures.push({ code: 'baseline-sequence-not-one' });
+  }
+  if (baselinePacket?.epoch !== firstActive?.epoch) {
+    failures.push({ code: 'baseline-packet-mismatch' });
+  }
+  const preBaselineAttempt = trace?.recovery?.preBaselineAttempt;
+  if (preBaselineAttempt?.accepted !== false || preBaselineAttempt.beforeSendCount !== preBaselineAttempt.afterSendCount) {
+    failures.push({ code: 'pre-baseline-command-accepted' });
+  }
+  const convergence = trace?.recovery?.convergence;
+  if (convergence?.uniqueIdentityCount !== convergence?.identityCount ||
+    convergence?.uniquePlayerCount !== convergence?.playerCount) failures.push({ code: 'duplicate-replicated-identity' });
+  const interaction = trace?.recovery?.interaction;
+  if (interaction?.accepted !== true || interaction?.afterSendCount <= interaction?.beforeSendCount) {
+    failures.push({ code: 'post-recovery-interaction-missing' });
+  }
+  if (!trace?.cleanup?.allRetired || trace?.cleanup?.allZeroOwnedResources !== true) {
+    failures.push({ code: 'cleanup-not-proven' });
+  }
+  return { ok: failures.length === 0, failures };
+}
+
+export function validateReconnectVisualReport(report) {
+  const failures = [];
+  if (report?.schemaVersion !== 1) failures.push({ code: 'report-schema-mismatch' });
+  if (report?.targetId !== RECONNECT_TARGET_ID) failures.push({ code: 'report-target-mismatch' });
+  if (!report?.invocationId || report?.visualAssessment?.invocationId !== report.invocationId) {
+    failures.push({ code: 'report-invocation-mismatch' });
+  }
+  if (report?.trace?.targetId !== RECONNECT_TARGET_ID || report?.trace?.invocationId !== report.invocationId) {
+    failures.push({ code: 'report-trace-mismatch' });
+  }
+  if (report?.screenshot?.targetId !== RECONNECT_TARGET_ID || report?.screenshot?.bytes <= 0 ||
+    report?.screenshot?.width !== 1280 || report?.screenshot?.height !== 720) {
+    failures.push({ code: 'report-screenshot-missing' });
+  }
+  const assessment = report?.visualAssessment;
+  if (assessment?.status !== 'passed' || assessment?.verdict !== 'pass') {
+    failures.push({ code: 'visual-assessment-pending' });
+  }
+  const entries = new Map((assessment?.expectations ?? []).map((entry) => [entry?.id, entry]));
+  for (const expectation of RECONNECT_EXPECTATIONS) {
+    const entry = entries.get(expectation.id);
+    if (entry?.verdict === 'fail') {
+      failures.push({ code: 'visual-expectation-failed', expectationId: expectation.id });
+    } else if (entry?.verdict !== 'pass' || typeof entry.observed !== 'string' || entry.observed.length === 0 ||
+      !['high', 'medium', 'low'].includes(entry.confidence)) {
+      failures.push({ code: 'visual-expectation-incomplete', expectationId: expectation.id });
+    }
+  }
+  return { ok: failures.length === 0, failures };
+}
+
+function createInvocationId() {
+  return `${new Date().toISOString().replace(/[-:.TZ]/g, '')}-${process.pid}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function inspectScreenshot(bytes, path) {
+  if (bytes.length < 24 || bytes[0] !== 137 || bytes.toString('ascii', 1, 4) !== 'PNG') {
+    throw new Error('reconnect-visual: screenshot is not a PNG');
+  }
+  return {
+    targetId: RECONNECT_TARGET_ID,
+    path,
+    bytes: bytes.length,
+    width: bytes.readUInt32BE(16),
+    height: bytes.readUInt32BE(20),
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+  };
+}
+
+function falsifierAssessment(trace, invocationId) {
+  const checks = trace.visual?.checks;
+  if (checks === undefined || (checks.authorityDerivedConvergence && checks.continuedBrowserOperation)) {
+    return undefined;
+  }
+  const verdicts = {
+    'authority-derived-convergence': checks.authorityDerivedConvergence ? 'pass' : 'fail',
+    'continued-browser-operation': checks.continuedBrowserOperation ? 'pass' : 'fail',
+  };
+  return {
+    invocationId,
+    status: 'failed',
+    verdict: 'fail',
+    expectations: RECONNECT_EXPECTATIONS.map((expectation) => ({
+      id: expectation.id,
+      statement: expectation.statement,
+      observed: `falsifier trace recorded ${expectation.id}=${verdicts[expectation.id]}`,
+      verdict: verdicts[expectation.id],
+      confidence: 'high',
+    })),
+  };
+}
+
+async function readVisualAssessment(trace, invocationId) {
+  const assessmentPath = process.env.FORGEAX_VISUAL_ASSESSMENT_PATH;
+  if (assessmentPath !== undefined && assessmentPath.length > 0) {
+    return normalizeVisualAssessment(JSON.parse(await readFile(assessmentPath, 'utf8')), invocationId);
+  }
+  return falsifierAssessment(trace, invocationId) ?? pendingVisualAssessment(invocationId);
+}
+
+async function publishReconnectEvidence({ trace, screenshot, invocationId, url, outputDirectory }) {
+  await mkdir(outputDirectory, { recursive: true });
+  const tracePath = resolve(outputDirectory, `${RECONNECT_TARGET_ID}.trace.json`);
+  const reportPath = resolve(outputDirectory, `${RECONNECT_TARGET_ID}.visual.json`);
+  const visualAssessment = await readVisualAssessment(trace, invocationId);
+  const report = {
+    schemaVersion: 1,
+    targetId: RECONNECT_TARGET_ID,
+    invocationId,
+    url,
+    browser: 'chrome-beta',
+    viewport: { width: 1280, height: 720 },
+    tracePath,
+    screenshot,
+    trace,
+    visualAssessment,
+  };
+  await writeFile(tracePath, `${JSON.stringify(trace, null, 2)}\n`);
+  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+  return { tracePath, reportPath, report, validation: validateReconnectVisualReport(report) };
+}
 
 function assertNamedPhases(phases) {
   for (const phase of REQUIRED_PHASES) {
@@ -65,23 +272,59 @@ async function main() {
   // Playwright's internal timeout handles are unref'ed. Keep this process alive
   // until a pending browser assertion either resolves or reports its timeout.
   const keepAlive = setInterval(() => {}, 1_000);
+  const invocationId = createInvocationId();
+  const outputDirectory = resolve(process.env.FORGEAX_VISUAL_EVIDENCE_DIR || defaultEvidenceDirectory);
+  const sabotage = process.env.SNAKE_SABOTAGE ?? process.env.M17_SABOTAGE ?? '';
+  const chaosMode = process.env.M17_CHAOS_MODE ?? '';
   let authority;
+  let chaosProxy;
   let vite;
   let browser;
+  let lateBrowser;
   const contexts = [];
   const errors = [];
   const phases = [];
+  const recoveryLifecycle = [];
+  let reconnectTrace;
+  let screenshot;
+  let chaosEvidence;
   try {
-    authority = await startAuthority({ tickMs: 15 });
+    authority = await startAuthority({ tickMs: 15, observablePeerChangeDelayMs: 1_000 });
+    const directConnectionUrl = `ws://127.0.0.1:${authority.port}`;
+    if (chaosMode.length > 0) {
+      chaosProxy = await startChaosWebSocketProxy({
+        targetUrl: directConnectionUrl,
+        mode: chaosMode,
+        sabotage,
+        delayMs: 40,
+      });
+    }
+    const connectionUrl = chaosProxy?.url ?? directConnectionUrl;
     vite = startVite();
     const base = await vite.url;
-    browser = await chromium.launch({ channel: 'chrome-beta', headless: true, args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer', '--ignore-gpu-blocklist'] });
+    const browserHeadless = (process.env.FORGEAX_BROWSER_HEADLESS ?? '1').toLowerCase() !== '0';
+    const launchBrowser = () => chromium.launch({
+      channel: 'chrome-beta',
+      headless: browserHeadless,
+      args: [
+        '--disable-features=MacAppCodeSignClone',
+        '--enable-unsafe-webgpu',
+        '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
+        '--use-vulkan=swiftshader',
+        '--disable-vulkan-surface',
+        '--ignore-gpu-blocklist',
+        '--disable-gpu-driver-bug-workarounds',
+        '--disable-dawn-features=disallow_unsafe_apis',
+        '--autoplay-policy=no-user-gesture-required',
+      ],
+    });
+    browser = await launchBrowser();
     // Observe the production lifecycle before gameplay: renderer readiness and
     // the join command are surfaced by the app, then the first client remains
     // at tick 0 until a second peer joins and starts the authority.
     const initialPages = [];
     for (let i = 0; i < 2; i += 1) {
-      const context = await browser.newContext();
+      const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
       contexts.push(context);
       const page = await context.newPage();
       page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
@@ -89,57 +332,153 @@ async function main() {
       initialPages.push(page);
     }
     const readState = async (page) => JSON.parse(await page.locator('[data-testid="snake-state"]').textContent());
+    const waitForAuthority = async (predicate, label, timeout = 10_000) => {
+      const deadline = Date.now() + timeout;
+      let latest;
+      while (Date.now() < deadline) {
+        latest = authority.observations().at(-1);
+        if (latest !== undefined && predicate(latest)) return latest;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      throw new Error(`authority ${label} timeout: ${JSON.stringify(latest)}`);
+    };
+    const waitForBrowserReady = async (page, label) => {
+      try {
+        await page.locator('[data-testid="snake-state"][data-renderer-ready="true"][data-join-sent="true"]').waitFor({
+          state: 'attached',
+          timeout: BROWSER_STARTUP_TIMEOUT_MS,
+        });
+      } catch (error) {
+        const diagnostics = await page.evaluate(() => {
+          const node = document.querySelector('[data-testid="snake-state"]');
+          return {
+            state: node?.textContent ?? null,
+            datasets: node === null ? null : { ...node.dataset },
+          };
+        }).catch((cause) => ({ evaluateError: String(cause) }));
+        throw new Error(`browser readiness timeout (${label}): ${JSON.stringify({ diagnostics, errors })}`, { cause: error });
+      }
+    };
     const canvasEvidence = [];
+    const recoveryPackets = [];
+    let captureRecoveryPackets = false;
     const captureCanvasEvidence = async (page, label) => {
-      await page.waitForFunction(() => {
-        const text = document.querySelector('[data-testid="snake-state"]')?.textContent ?? '';
-        if (!text.startsWith('{')) return false;
-        const state = JSON.parse(text);
-        const rendered = Number(document.querySelector('[data-testid="snake-state"]')?.getAttribute('data-render-entity-count') ?? -1);
-        const expected = state.snakes.reduce((total, snake) => total + snake.bodyLength, 0);
-        return state.tick > 0 && state.snakes.length > 0 && rendered === expected;
-      }, undefined, { timeout: 10_000 });
-      const state = await readState(page);
+      const allowMismatch = sabotage === 'visual-hide-body';
+      const deadline = Date.now() + 10_000;
+      let state;
+      let renderEntityCount;
+      while (true) {
+        const timeout = deadline - Date.now();
+        if (timeout <= 0) throw new Error(`canvas-rendered: unstable state/render sample at ${label}`);
+        await page.waitForFunction((allowMismatch) => {
+          const text = document.querySelector('[data-testid="snake-state"]')?.textContent ?? '';
+          if (!text.startsWith('{')) return false;
+          const state = JSON.parse(text);
+          const rendered = Number(document.querySelector('[data-testid="snake-state"]')?.getAttribute('data-render-entity-count') ?? -1);
+          const expected = state.snakes.reduce((total, snake) => total + snake.bodyLength, 0);
+          return state.tick > 0 && state.snakes.length > 0 && (allowMismatch || rendered === expected);
+        }, allowMismatch, { timeout });
+        const sample = await page.evaluate(() => {
+          const node = document.querySelector('[data-testid="snake-state"]');
+          const text = node?.textContent ?? '{}';
+          return {
+            state: JSON.parse(text),
+            renderEntityCount: Number(node?.getAttribute('data-render-entity-count') ?? -1),
+          };
+        });
+        const expected = sample.state.snakes.reduce((total, snake) => total + snake.bodyLength, 0);
+        if (allowMismatch || sample.renderEntityCount === expected) {
+          state = sample.state;
+          renderEntityCount = sample.renderEntityCount;
+          break;
+        }
+      }
       canvasEvidence.push({
+        label,
         state,
-        renderEntityCount: state.snakes.reduce((total, snake) => total + snake.bodyLength, 0),
+        renderEntityCount,
+        expectedRenderEntityCount: state.snakes.reduce((total, snake) => total + snake.bodyLength, 0),
       });
+      return canvasEvidence.at(-1);
+    };
+    const readRecoverySnapshot = async (page) => page.evaluate(() => globalThis.__forgeaxSnake?.snapshot() ?? null);
+    const recordRecoverySample = async (page, label, snapshotOverride) => {
+      const snapshot = snapshotOverride ?? await readRecoverySnapshot(page);
+      if (snapshot === null) throw new Error(`recovery-trace: public browser probe unavailable at ${label}`);
+      const state = await readState(page);
+      const sample = {
+        label,
+        snapshot,
+        state: {
+          tick: state.tick,
+          identities: state.snakes.map((snake) => `${snake.playerNetworkId}:${snake.networkEntityId}`),
+          bodyLength: state.snakes.reduce((total, snake) => total + snake.bodyLength, 0),
+          renderEntityCount: Number(await page.locator('[data-testid="snake-state"]').getAttribute('data-render-entity-count') ?? -1),
+        },
+      };
+      recoveryLifecycle.push(sample);
+      return sample;
     };
     const firstPage = initialPages[0];
     const secondPage = initialPages[1];
     if (firstPage === undefined || secondPage === undefined) throw new Error('lifecycle: initial pages missing');
+    firstPage.on('websocket', (webSocket) => {
+      webSocket.on('framereceived', ({ payload }) => {
+        if (!captureRecoveryPackets) return;
+        const bytes = typeof payload === 'string' ? Buffer.from(payload, 'utf8') : payload;
+        const decoded = decodeReplicationPacket(bytes, DEFAULT_REPLICATION_LIMITS);
+        if (!decoded.ok || (decoded.value.kind !== 'baseline' && decoded.value.kind !== 'delta')) return;
+        recoveryPackets.push({
+          kind: decoded.value.kind,
+          sessionId: decoded.value.sessionId,
+          epoch: decoded.value.epoch,
+          sequence: decoded.value.sequence,
+          tick: decoded.value.tick,
+        });
+      });
+    });
     const visualSabotage = process.env.SNAKE_SABOTAGE === 'visual-hide-body' ? '&visual-sabotage=hide-body' : '';
-    await firstPage.goto(`${base}?server=ws://127.0.0.1:${authority.port}${visualSabotage}`, { waitUntil: 'domcontentloaded' });
-    await firstPage.locator('[data-testid="snake-state"][data-renderer-ready="true"][data-join-sent="true"]').waitFor({ state: 'attached', timeout: 15_000 });
+    const reconnectProbe = '&m16-reconnect=1';
+    await firstPage.goto(`${base}?server=${connectionUrl}${reconnectProbe}${visualSabotage}`, { waitUntil: 'domcontentloaded' });
+    await waitForBrowserReady(firstPage, 'primary');
     try {
       await firstPage.waitForFunction(() => {
         const text = document.querySelector('[data-testid="snake-state"]')?.textContent ?? '';
         if (!text.startsWith('{')) return false;
         const state = JSON.parse(text);
-        return state.session?.started === false && state.session?.gameplayTick === 0;
-      }, undefined, { timeout: 15_000 });
+        return state.snakes.length === 0 && state.session?.started === false;
+      }, undefined, { timeout: BROWSER_STARTUP_TIMEOUT_MS });
     } catch (error) {
       const state = await firstPage.locator('[data-testid="snake-state"]').evaluate((node) => ({
         state: node.textContent,
         rendererReady: node.dataset.rendererReady,
         joinSent: node.dataset.joinSent,
+        appErrorTail: node.dataset.appErrorTail,
       }));
       throw new Error(`waiting-state timeout: ${JSON.stringify({ state, errors })}`, { cause: error });
     }
     const waitingState = await readState(firstPage);
-    await secondPage.goto(`${base}?server=ws://127.0.0.1:${authority.port}${visualSabotage}`, { waitUntil: 'domcontentloaded' });
-    await secondPage.locator('[data-testid="snake-state"][data-renderer-ready="true"][data-join-sent="true"]').waitFor({ state: 'attached', timeout: 15_000 });
-    await firstPage.waitForFunction(() => {
-      const text = document.querySelector('[data-testid="snake-state"]')?.textContent ?? '';
-      if (!text.startsWith('{')) return false;
-      const state = JSON.parse(text);
-      return state.session?.started === true && state.session?.startedAtGameplayTick === 0 && state.session?.gameplayTick >= 1;
-    }, undefined, { timeout: 15_000 });
+    await secondPage.goto(`${base}?server=${connectionUrl}${reconnectProbe}${visualSabotage}`, { waitUntil: 'domcontentloaded' });
+    await waitForBrowserReady(secondPage, 'secondary');
+    try {
+      await firstPage.waitForFunction(() => {
+        const text = document.querySelector('[data-testid="snake-state"]')?.textContent ?? '';
+        if (!text.startsWith('{')) return false;
+        const state = JSON.parse(text);
+        return state.session?.started === true && state.session?.startedAtGameplayTick === 0 && state.session?.gameplayTick >= 1;
+      }, undefined, { timeout: BROWSER_STARTUP_TIMEOUT_MS });
+    } catch (error) {
+      const diagnostics = await Promise.all(initialPages.map(async (candidate) => candidate.locator('[data-testid="snake-state"]').evaluate((node) => ({
+        state: node.textContent,
+        datasets: { ...node.dataset },
+        probe: globalThis.__forgeaxSnake?.snapshot() ?? null,
+      }))));
+      throw new Error(`gameplay timeout: ${JSON.stringify({ diagnostics, authority: authority.observations().slice(-12), errors })}`, { cause: error });
+    }
     const firstGameplayState = await readState(firstPage);
-    if (waitingState.session?.started !== false || waitingState.session?.gameplayTick !== 0 ||
+    if (waitingState.snakes.length !== 0 || waitingState.session?.started !== false ||
       firstGameplayState.session?.started !== true || firstGameplayState.session?.startedAtGameplayTick !== 0 || firstGameplayState.session?.gameplayTick < 1)
       throw new Error('session-lifecycle: waiting, start-at-zero, and first-gameplay-tick evidence is incomplete');
-    const sabotage = process.env.SNAKE_SABOTAGE ?? '';
     const initialPlayerIds = new Set(
       (await Promise.all(contexts.map((context) => readState(context.pages()[0]))))
         .flatMap((state) => state.snakes.map((snake) => snake.playerNetworkId)),
@@ -399,19 +738,23 @@ async function main() {
     phases.push('respawn');
     console.log(JSON.stringify({ phase: 'respawn', before: deathAfter, after: respawnAfter }));
     const knownPlayerIds = initialPlayerIds;
-    const lateContext = await browser.newContext();
+    // A fresh browser process keeps a third WebGPU device from contending with
+    // the two already-running replicas on headed Linux runners.
+    lateBrowser = await launchBrowser();
+    const lateContext = await lateBrowser.newContext();
     contexts.push(lateContext);
     const latePage = await lateContext.newPage();
     latePage.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
     latePage.on('pageerror', (error) => errors.push(error.message));
-    await latePage.goto(`${base}?server=ws://127.0.0.1:${authority.port}`, { waitUntil: 'domcontentloaded' });
-    await latePage.locator('[data-testid="snake-state"][data-renderer-ready="true"][data-join-sent="true"]').waitFor({ state: 'attached', timeout: 15_000 });
+    if (chaosProxy !== undefined) chaosProxy.markLateJoin();
+    await latePage.goto(`${base}?server=${connectionUrl}&m16-reconnect=1`, { waitUntil: 'domcontentloaded' });
+    await waitForBrowserReady(latePage, 'late-join');
     const cAppeared = await latePage.waitForFunction((known) => {
       const text = document.querySelector('[data-testid="snake-state"]')?.textContent ?? '';
       if (!text.startsWith('{')) return false;
       const value = JSON.parse(text);
       return value.snakes.some((snake) => !known.includes(snake.playerNetworkId));
-    }, [...knownPlayerIds], { timeout: 15_000 }).then(() => true).catch(() => false);
+    }, [...knownPlayerIds], { timeout: BROWSER_STARTUP_TIMEOUT_MS }).then(() => true).catch(() => false);
     if (!cAppeared) throw new Error(`c-baseline-identity: no new peer in ${JSON.stringify(await readState(latePage))}`);
     const cBaseline = await readState(latePage);
     const newPlayers = cBaseline.snakes.filter((snake) => !knownPlayerIds.has(snake.playerNetworkId));
@@ -428,26 +771,88 @@ async function main() {
     phases.push('late-join');
     await captureCanvasEvidence(page, 'a');
     if (process.env.FORGEAX_ENGINE_RHI_DEBUG === '1') {
-      const cli = resolve(repositoryRoot, 'packages/rhi-debug/dist/cli.mjs');
+      const devkitCli = resolve(repositoryRoot, 'packages/devkit/dist/cli.mjs');
       const captures = [];
-      for (let attempt = 0; attempt < 6 && captures.length < 1; attempt += 1) {
-        const capture = await page.evaluate(async () => {
-          const debug = window.__forgeax;
-          if (debug === undefined) return { error: 'capture API unavailable' };
-          return debug.captureFrame(1);
-        });
-        if (typeof capture?.tapePath !== 'string' || typeof capture?.reportPath !== 'string')
-          throw new Error(`rhi-debug: capture did not return tape/report paths: ${JSON.stringify(capture)}`);
-        await Promise.all([access(capture.tapePath), access(capture.reportPath)]);
-        const summary = JSON.parse((await execFileAsync(process.execPath, [cli, 'summary', capture.tapePath], { maxBuffer: 2_000_000 })).stdout);
-        const drawIndex = summary.draws.findLastIndex((draw) => draw.colorAttachmentHandleId !== undefined);
-        if (drawIndex < 0) continue;
-        const inspection = JSON.parse((await execFileAsync(process.execPath, [cli, 'inspect-offline', capture.tapePath, String(drawIndex), '--fields=rt'], { maxBuffer: 2_000_000 })).stdout);
-        if (typeof inspection.rt !== 'string') throw new Error(`rhi-debug: color draw has no render-target PNG: ${JSON.stringify(inspection)}`);
-        await access(inspection.rt);
-        captures.push({ mode: 'structural', tapePath: capture.tapePath, drawIndex, renderTarget: inspection.rt });
+      const captureFailures = [];
+      const captureCandidates = [
+        { label: 'primary', page },
+        { label: 'late-join', page: latePage },
+        { label: 'secondary', page: secondPage },
+      ];
+      for (const candidate of captureCandidates) {
+        for (let attempt = 0; attempt < 2 && captures.length < 1; attempt += 1) {
+          let capture;
+          try {
+            capture = await candidate.page.evaluate(async () => {
+              const debug = window.__forgeax;
+              if (debug === undefined) return { error: 'capture API unavailable' };
+              const result = await debug.captureFrame();
+              if (!result?.ok) return { error: result?.error ?? 'capture failed' };
+              const runId = `snake-${Date.now()}-${crypto.randomUUID().replaceAll('-', '')}`;
+              const response = await fetch(`${location.origin}/__forgeax-debug/tape?runId=${runId}`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/x-forgeax-rhitape' },
+                body: result.value.bytes,
+              });
+              const artifact = await response.json();
+              if (!response.ok) return { error: artifact };
+              return { ...artifact, runId };
+            });
+          } catch (error) {
+            capture = { error: String(error) };
+          }
+          if (typeof capture?.path !== 'string') {
+            let rendererRecovery;
+            if (capture?.error?.detail?.cause?.includes('no device has been acquired')) {
+              try {
+                rendererRecovery = await candidate.page.evaluate(async () => {
+                  const probe = globalThis.__forgeaxSnake;
+                  if (probe === undefined) return { outcome: { kind: 'probe-unavailable' } };
+                  const before = probe.rendererInspection();
+                  const outcome = await probe.recoverRenderer();
+                  return { before, outcome, after: probe.rendererInspection() };
+                });
+              } catch (error) {
+                rendererRecovery = { error: String(error) };
+              }
+            }
+            captureFailures.push({
+              page: candidate.label,
+              attempt: attempt + 1,
+              error: capture?.error ?? capture ?? { error: 'capture returned no result' },
+              ...(rendererRecovery === undefined ? {} : { rendererRecovery }),
+            });
+            if (attempt < 1) {
+              await candidate.page.waitForTimeout(250 * (attempt + 1));
+              continue;
+            }
+            break;
+          }
+          const tapePath = capture.path;
+          await access(tapePath);
+          const summary = JSON.parse((await execFileAsync(
+            process.execPath,
+            [devkitCli, 'run', 'rhi.summary', '--artifact', tapePath, '--digest', capture.digest, '--json'],
+            { maxBuffer: 2_000_000 },
+          )).stdout);
+          const model = summary.value?.model;
+          const totalWorks = Array.isArray(model?.works) ? model.works.length : 0;
+          if (!summary.ok || totalWorks === 0) {
+            throw new Error(`rhi-debug: summary did not expose captured work: ${JSON.stringify(summary)}`);
+          }
+          captures.push({
+            mode: 'structural',
+            page: candidate.label,
+            tapePath,
+            digest: capture.digest,
+            totalDraws: totalWorks,
+            totalPasses: Array.isArray(model?.passes) ? model.passes.length : 0,
+          });
+        }
+        if (captures.length > 0) break;
       }
-      if (captures.length !== 1) throw new Error('rhi-debug: did not collect a color-draw capture');
+      if (captures.length !== 1)
+        throw new Error(`rhi-debug: did not collect a color-draw capture: ${JSON.stringify(captureFailures)}`);
       console.log(JSON.stringify({ rhiDebugCapture: captures }));
     }
     await captureCanvasEvidence(latePage, 'b');
@@ -455,6 +860,248 @@ async function main() {
       const value = JSON.parse(document.querySelector('[data-testid="snake-state"]')?.textContent ?? '{}');
       return value.snakes.some((snake) => snake.playerNetworkId === playerNetworkId);
     }, cIdentity, { timeout: 10_000 });
+    const recoveryBefore = await recordRecoverySample(page, 'before-recover');
+    recoveryPackets.length = 0;
+    captureRecoveryPackets = true;
+    if (chaosProxy !== undefined && !chaosProxy.disconnectSession(recoveryBefore.snapshot.sessionId))
+      throw new Error('M17 proxy could not disconnect the browser primary session');
+    const recoveryRequest = await page.evaluate(() => {
+      const probe = globalThis.__forgeaxSnake;
+      if (probe === undefined) return { outcome: { kind: 'missing-probe' }, snapshot: null };
+      const outcome = probe.recover();
+      return { outcome, snapshot: probe.snapshot() };
+    });
+    if (!['started', 'already-recovering'].includes(recoveryRequest.outcome.kind) || recoveryRequest.snapshot === null)
+      throw new Error(`recovery: public recover() did not start: ${JSON.stringify(recoveryRequest)}`);
+    const recovering = await recordRecoverySample(page, 'recovering');
+    if (recovering.snapshot.state.kind !== 'recovering') {
+      const stateNode = await page.locator('[data-testid="snake-state"]').evaluate((node) => ({
+        text: node.textContent,
+        datasets: { ...node.dataset },
+      }));
+      throw new Error(`recovery: expected recovering state, got ${recovering.snapshot.state.kind}: ${JSON.stringify({ recoveryRequest, recovering, stateNode })}`);
+    }
+    const preBaselineBeforeSendCount = Number(
+      await page.locator('[data-testid="snake-state"]').getAttribute('data-direction-command-send-count') ?? 0,
+    );
+    await page.keyboard.press('ArrowUp');
+    const preBaselineAfterSendCount = Number(
+      await page.locator('[data-testid="snake-state"]').getAttribute('data-direction-command-send-count') ?? 0,
+    );
+    const preBaselineSnapshot = await readRecoverySnapshot(page);
+    if (preBaselineSnapshot === null) throw new Error('recovery: public snapshot disappeared before baseline');
+    const preBaselineAttempt = {
+      state: preBaselineSnapshot.state.kind,
+      beforeSendCount: preBaselineBeforeSendCount,
+      afterSendCount: preBaselineAfterSendCount,
+      accepted: preBaselineAfterSendCount > preBaselineBeforeSendCount,
+    };
+    if (preBaselineAttempt.accepted || preBaselineSnapshot.state.kind === 'active')
+      throw new Error(`recovery: pre-baseline command was accepted: ${JSON.stringify(preBaselineAttempt)}`);
+    await page.evaluate(() => {
+      const history = [];
+      let previousKey = '';
+      globalThis.__m16ResyncCommandAttempt = undefined;
+      const capture = () => {
+        const snapshot = globalThis.__forgeaxSnake?.snapshot();
+        if (snapshot === undefined) return;
+        const state = snapshot.state;
+        const key = `${state.kind}:${snapshot.epoch}:${snapshot.sequence}:${state.kind === 'recovering' ? state.attempt : ''}`;
+        if (key === previousKey || history.length >= 256) return;
+        previousKey = key;
+        const stateSnapshot = state.kind === 'recovering'
+          ? { kind: state.kind, sessionId: state.sessionId, epoch: state.epoch, attempt: state.attempt }
+          : state.kind === 'resyncing'
+            ? { kind: state.kind, sessionId: state.sessionId, epoch: state.epoch }
+            : state.kind === 'active'
+              ? { kind: state.kind, sessionId: state.sessionId, epoch: state.epoch, sequence: state.sequence }
+              : { kind: state.kind, sessionId: state.sessionId };
+        history.push({
+          sessionId: snapshot.sessionId,
+          state: stateSnapshot,
+          pendingPackets: snapshot.pendingPackets,
+          maxPendingPackets: snapshot.maxPendingPackets,
+          acknowledgedSequence: snapshot.acknowledgedSequence,
+          reconnectAttempts: snapshot.reconnectAttempts,
+          epoch: snapshot.epoch,
+          sequence: snapshot.sequence,
+          ownedResources: { ...snapshot.ownedResources },
+        });
+        if (state.kind === 'resyncing' && globalThis.__m16ResyncCommandAttempt === undefined) {
+          const beforeSendCount = globalThis.__forgeaxSnake.directionCommandSendCount();
+          window.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'ArrowRight',
+            code: 'ArrowRight',
+            bubbles: true,
+          }));
+          const afterSendCount = globalThis.__forgeaxSnake.directionCommandSendCount();
+          globalThis.__m16ResyncCommandAttempt = {
+            state: state.kind,
+            epoch: snapshot.epoch,
+            beforeSendCount,
+            afterSendCount,
+          };
+        }
+      };
+      capture();
+      globalThis.__m16RecoveryHistory = history;
+      globalThis.__m16RecoveryObserver = window.setInterval(capture, 1);
+      globalThis.__forgeaxSnake?.advanceRecovery();
+    });
+    try {
+      await page.waitForFunction(
+        () => (globalThis.__m16RecoveryHistory ?? []).some((sample) => sample.state.kind === 'resyncing'),
+        undefined,
+        { timeout: 15_000 },
+      );
+    } catch (error) {
+      const snapshot = await readRecoverySnapshot(page);
+      const stateNode = await page.locator('[data-testid="snake-state"]').evaluate((node) => ({
+        text: node.textContent,
+        datasets: { ...node.dataset },
+      }));
+      throw new Error(`recovery: resyncing state was not observed: ${JSON.stringify({ snapshot, stateNode, failure: snapshot?.lastError === undefined ? undefined : { code: snapshot.lastError.code, hint: snapshot.lastError.hint, detail: snapshot.lastError.detail }, authority: authority.observations().slice(-12) })}`, { cause: error });
+    }
+    const resyncingSnapshot = await page.evaluate(() => (globalThis.__m16RecoveryHistory ?? []).find((sample) => sample.state.kind === 'resyncing') ?? null);
+    if (resyncingSnapshot === null) throw new Error('recovery: resyncing observer sample disappeared');
+    await page.waitForFunction(
+      () => globalThis.__m16ResyncCommandAttempt !== undefined,
+      undefined,
+      { timeout: 15_000 },
+    );
+    const resyncCommandAttempt = await page.evaluate(() => globalThis.__m16ResyncCommandAttempt ?? null);
+    const resyncing = await recordRecoverySample(page, 'resyncing', resyncingSnapshot);
+    const resyncEpoch = resyncing.snapshot.state.kind === 'resyncing' ? resyncing.snapshot.state.epoch : -1;
+    if (resyncCommandAttempt === null || resyncCommandAttempt.state !== 'resyncing' ||
+      resyncCommandAttempt.afterSendCount !== resyncCommandAttempt.beforeSendCount)
+      throw new Error(`recovery: resyncing command was accepted: ${JSON.stringify(resyncCommandAttempt)}`);
+    try {
+      await page.waitForFunction(
+        () => (globalThis.__m16RecoveryHistory ?? []).some((sample) => sample.state.kind === 'active'),
+        undefined,
+        { timeout: 15_000 },
+      );
+    } catch (error) {
+      const snapshot = await readRecoverySnapshot(page);
+      const history = await page.evaluate(() => globalThis.__m16RecoveryHistory ?? []);
+      const stateNode = await page.locator('[data-testid="snake-state"]').evaluate((node) => ({
+        text: node.textContent,
+        datasets: { ...node.dataset },
+      }));
+      throw new Error(`recovery: active state was not observed: ${JSON.stringify({ snapshot, history, stateNode, authority: authority.observations().slice(-12) })}`, { cause: error });
+    }
+    const firstActiveSnapshot = await page.evaluate(() => (globalThis.__m16RecoveryHistory ?? []).find((sample) => sample.state.kind === 'active') ?? null);
+    await page.evaluate(() => {
+      if (globalThis.__m16RecoveryObserver !== undefined) window.clearInterval(globalThis.__m16RecoveryObserver);
+      delete globalThis.__m16RecoveryObserver;
+    });
+    if (firstActiveSnapshot === null) throw new Error('recovery: active observer sample disappeared');
+    const firstActive = await recordRecoverySample(page, 'active-after-baseline', firstActiveSnapshot);
+    if (firstActive.snapshot.state.kind !== 'active')
+      throw new Error(`recovery: expected active after baseline, got ${firstActive.snapshot.state.kind}`);
+    await new Promise((resolve) => setImmediate(resolve));
+    const baselinePacket = recoveryPackets.find((packet) =>
+      packet.kind === 'baseline' &&
+      packet.epoch === firstActive.snapshot.epoch,
+    );
+    if (baselinePacket === undefined)
+      throw new Error(`recovery: sequence-one baseline frame was not observed: ${JSON.stringify({ recoveryPackets, firstActive: firstActive.snapshot })}`);
+    const postRecoveryCanvasAllowMismatch = sabotage === 'visual-hide-body';
+    try {
+      await page.waitForFunction((allowMismatch) => {
+        const node = document.querySelector('[data-testid="snake-state"]');
+        const text = node?.textContent ?? '';
+        if (!text.startsWith('{')) return false;
+        const state = JSON.parse(text);
+        const rendered = Number(node?.getAttribute('data-render-entity-count') ?? -1);
+        const expected = state.snakes.reduce((total, snake) => total + snake.bodyLength, 0);
+        // A dead snake is intentionally absent from the authoritative projection
+        // until its bounded respawn delay elapses. Wait for the real projection
+        // and render bridge to converge before taking the recovery oracle sample.
+        return state.tick > 0 && state.snakes.length >= 2 && (allowMismatch || rendered === expected);
+      }, postRecoveryCanvasAllowMismatch, { timeout: 10_000 });
+    } catch (error) {
+      const state = await readState(page).catch(() => null);
+      const rendered = await page.locator('[data-testid="snake-state"]').getAttribute('data-render-entity-count').catch(() => null);
+      throw new Error(`recovery: authoritative scene did not repopulate after baseline: ${JSON.stringify({ state, rendered })}`, { cause: error });
+    }
+    const postRecoveryCanvas = await captureCanvasEvidence(page, 'post-recovery');
+    const postBaselineState = postRecoveryCanvas.state;
+    if (postBaselineState.snakes.length < 2)
+      throw new Error(`recovery: expected at least two live snakes after baseline: ${JSON.stringify(postBaselineState)}`);
+    const identityTokens = postBaselineState.snakes.map((snake) => `${snake.playerNetworkId}:${snake.networkEntityId}`);
+    const playerTokens = postBaselineState.snakes.map((snake) => snake.playerNetworkId);
+    const expectedRenderEntityCount = postBaselineState.snakes.reduce((total, snake) => total + snake.bodyLength, 0);
+    const renderedEntityCount = postRecoveryCanvas.renderEntityCount;
+    const convergence = {
+      sessionId: firstActive.snapshot.sessionId,
+      tick: postBaselineState.tick,
+      identityCount: identityTokens.length,
+      uniqueIdentityCount: new Set(identityTokens).size,
+      playerCount: playerTokens.length,
+      uniquePlayerCount: new Set(playerTokens).size,
+      renderedEntities: renderedEntityCount,
+      expectedEntities: expectedRenderEntityCount,
+    };
+    const authorityDerivedConvergence = convergence.uniqueIdentityCount === convergence.identityCount &&
+      convergence.uniquePlayerCount === convergence.playerCount && convergence.renderedEntities === convergence.expectedEntities;
+    if (!authorityDerivedConvergence && sabotage !== 'visual-hide-body')
+      throw new Error(`recovery: authority-derived convergence failed: ${JSON.stringify(convergence)}`);
+    const interactionSnake = byPlayer(postBaselineState, page0Player) ?? postBaselineState.snakes[0];
+    if (interactionSnake === undefined) throw new Error('recovery: no live snake remained for continued interaction');
+    const interactionDirection = onlineStep(interactionSnake, {
+      x: interactionSnake.x + movement[interactionSnake.direction].x,
+      y: interactionSnake.y + movement[interactionSnake.direction].y,
+    });
+    const interactionBeforeSendCount = Number(
+      await page.locator('[data-testid="snake-state"]').getAttribute('data-direction-command-send-count') ?? 0,
+    );
+    const interactionBeforeTick = postBaselineState.tick;
+    await page.keyboard.press(keys[interactionDirection]);
+    await page.waitForFunction(
+      (previous) => Number(document.querySelector('[data-testid="snake-state"]')?.getAttribute('data-direction-command-send-count') ?? 0) > previous,
+      interactionBeforeSendCount,
+      { timeout: 5_000 },
+    );
+    await page.waitForFunction(
+      ({ tick, playerNetworkId }) => {
+        const value = JSON.parse(document.querySelector('[data-testid="snake-state"]')?.textContent ?? '{}');
+        return value.tick > tick && value.session?.lastDirectionCommandPlayerNetworkId === playerNetworkId;
+      },
+      { tick: interactionBeforeTick, playerNetworkId: page0Player },
+      { timeout: 5_000 },
+    );
+    const interactionAfterState = await readState(page);
+    const interactionAfterSendCount = Number(
+      await page.locator('[data-testid="snake-state"]').getAttribute('data-direction-command-send-count') ?? 0,
+    );
+    const actualInteraction = interactionAfterState.tick > interactionBeforeTick &&
+      interactionAfterSendCount > interactionBeforeSendCount;
+    if (!actualInteraction) throw new Error('recovery: continued interaction did not advance after resync');
+    const continuedBrowserOperation = sabotage === 'freeze-after-recover' ? false : actualInteraction;
+    await mkdir(outputDirectory, { recursive: true });
+    const screenshotPath = resolve(outputDirectory, `${RECONNECT_TARGET_ID}.png`);
+    const screenshotBytes = await page.screenshot({ path: screenshotPath, fullPage: false });
+    screenshot = inspectScreenshot(screenshotBytes, screenshotPath);
+    recoveryLifecycle.push({
+      label: 'pre-baseline-rejected',
+      snapshot: preBaselineSnapshot,
+      state: { tick: postBaselineState.tick, identities: identityTokens, bodyLength: expectedRenderEntityCount, renderEntityCount: renderedEntityCount },
+    });
+    phases.push('recovery');
+    console.log(JSON.stringify({
+      phase: 'recovery',
+      before: recoveryBefore.snapshot,
+      recovering: recovering.snapshot,
+      resyncing: { ...resyncing.snapshot, epoch: resyncEpoch, rejectedSendCount: resyncCommandAttempt.afterSendCount },
+      active: firstActive.snapshot,
+      convergence,
+      interaction: { beforeTick: interactionBeforeTick, afterTick: interactionAfterState.tick, beforeSendCount: interactionBeforeSendCount, afterSendCount: interactionAfterSendCount },
+    }));
+    const authorityBeforeClose = await waitForAuthority(
+      (observation) => Array.isArray(observation.peerIds) && observation.peerIds.length >= 3,
+      'three peers before C disconnect',
+    );
     const disconnectBefore = await readState(contexts[0].pages()[0]);
     const cBeforeClose = await readState(latePage);
     const cRemoved = new Set(
@@ -465,27 +1112,220 @@ async function main() {
     const disconnected = lateContext;
     contexts.splice(contexts.indexOf(lateContext), 1);
     await disconnected.close();
-    await contexts[0].pages()[0].waitForFunction(({ tick, playerNetworkId }) => {
-      const value = JSON.parse(document.querySelector('[data-testid="snake-state"]')?.textContent ?? '{}');
-      return value.tick > tick && !value.snakes.some((snake) => snake.playerNetworkId === playerNetworkId);
-    }, { tick: disconnectBefore.tick, playerNetworkId: cIdentity }, { timeout: 10_000 });
-    await contexts[0].pages()[0].waitForFunction(({ tick, removed }) => {
-      const value = JSON.parse(document.querySelector('[data-testid="snake-state"]')?.textContent ?? '{}');
-      const current = new Set(value.snakes.map((snake) => `${snake.playerNetworkId}:${snake.networkEntityId}`));
-      return value.tick > tick && [...removed].some((identity) => !current.has(identity));
-    }, { tick: disconnectBefore.tick, removed: [...cRemoved] }, { timeout: 10_000 });
+    let authorityAfterClose;
+    try {
+      authorityAfterClose = await waitForAuthority(
+        (observation) => observation.peerIds.length < authorityBeforeClose.peerIds.length,
+        'peer removal after C disconnect',
+      );
+      await contexts[0].pages()[0].waitForFunction(({ tick, playerNetworkId }) => {
+        const value = JSON.parse(document.querySelector('[data-testid="snake-state"]')?.textContent ?? '{}');
+        return value.tick > tick && !value.snakes.some((snake) => snake.playerNetworkId === playerNetworkId);
+      }, { tick: disconnectBefore.tick, playerNetworkId: cIdentity }, { timeout: 10_000 });
+      if (cRemoved.size > 0) {
+        await contexts[0].pages()[0].waitForFunction(({ tick, removed }) => {
+          const value = JSON.parse(document.querySelector('[data-testid="snake-state"]')?.textContent ?? '{}');
+          const current = new Set(value.snakes.map((snake) => `${snake.playerNetworkId}:${snake.networkEntityId}`));
+          return value.tick > tick && [...removed].some((identity) => !current.has(identity));
+        }, { tick: disconnectBefore.tick, removed: [...cRemoved] }, { timeout: 10_000 });
+      }
+    } catch (error) {
+      const diagnostics = await contexts[0].pages()[0].locator('[data-testid="snake-state"]').evaluate((node) => ({
+        state: node.textContent,
+        datasets: { ...node.dataset },
+      }));
+      throw new Error(`disconnect: authority did not remove C: ${JSON.stringify({ cIdentity, cRemoved: [...cRemoved], diagnostics, authority: authority.observations().slice(-20) })}`, { cause: error });
+    }
     const cAfterClose = await readState(contexts[0].pages()[0]);
     const removedNow = [...cRemoved].filter((identity) => !identitySet(cAfterClose).has(identity));
-    assertSemantic('c-disconnect-specific-removal', removedNow.some((identity) => identity.startsWith(`${cIdentity}:`)),
-      `C identity set was not removed exactly: removed=${JSON.stringify(removedNow)}`);
-    console.log(JSON.stringify({ assertion: 'C disconnect removal', before: [...cRemoved], removed: removedNow, afterTick: cAfterClose.tick }));
+    const cWasAbsentBeforeClose = !cBeforeClose.snakes.some((snake) => snake.playerNetworkId === cIdentity);
+    const cEntityRemoval = cRemoved.size === 0 ? cWasAbsentBeforeClose : removedNow.some((identity) => identity.startsWith(`${cIdentity}:`));
+    const cPlayerRemoved = !cAfterClose.snakes.some((snake) => snake.playerNetworkId === cIdentity);
+    const peerRemoval = authorityAfterClose.peerIds.length < authorityBeforeClose.peerIds.length;
+    assertSemantic('c-disconnect-specific-removal', peerRemoval && cPlayerRemoved && cEntityRemoval,
+      `C disconnect did not remove its peer/player state: ${JSON.stringify({ cIdentity, cRemoved: [...cRemoved], removedNow, cWasAbsentBeforeClose, peerRemoval })}`);
+    console.log(JSON.stringify({
+      assertion: 'C disconnect removal',
+      before: [...cRemoved],
+      removed: removedNow,
+      cWasAbsentBeforeClose,
+      authorityPeerIds: { before: authorityBeforeClose.peerIds, after: authorityAfterClose.peerIds },
+      afterTick: cAfterClose.tick,
+    }));
     phases.push('disconnect');
     assertNamedPhases(phases);
     assertSemantic('normal-stable-control', phases.length === REQUIRED_PHASES.length,
       `normal run did not complete all semantic phases: ${phases.join(',')}`);
     if (errors.length) throw new Error(`browser errors: ${errors.join('; ')}`);
-    if (canvasEvidence.length !== 2)
-      throw new Error('canvas-rendered did not capture both independent clients');
+    if (canvasEvidence.length !== 3)
+      throw new Error('canvas-rendered did not capture both independent clients and the post-recovery frame');
+    const cleanup = [];
+    for (const context of contexts) {
+      const cleanupPage = context.pages()[0];
+      if (cleanupPage === undefined) continue;
+      cleanup.push(await cleanupPage.evaluate(() => {
+        const probe = globalThis.__forgeaxSnake;
+        if (probe === undefined) return { before: null, after: null };
+        const before = probe.snapshot();
+        probe.dispose();
+        return { before, after: probe.snapshot() };
+      }));
+    }
+    const allRetired = cleanup.length > 0 && cleanup.every((entry) => entry.after?.state.kind === 'retired');
+    const allZeroOwnedResources = cleanup.length > 0 && cleanup.every((entry) =>
+      entry.after !== null && Object.values(entry.after.ownedResources).every((value) => value === 0));
+    if (chaosProxy !== undefined) {
+      const chaos = chaosProxy.snapshot();
+      const wireCounts = new Map();
+      for (const packet of recoveryPackets) {
+        const key = `${packet.epoch}:${packet.sequence}`;
+        wireCounts.set(key, (wireCounts.get(key) ?? 0) + 1);
+      }
+      const duplicateWireIdentity = [...wireCounts.values()].some((count) => count > 1);
+      const freshEpochIndex = recoveryPackets.findIndex((packet) =>
+        packet.epoch === firstActive.snapshot.epoch && packet.kind === 'baseline' && packet.sequence === 1,
+      );
+      const currentEpochDeltaIndex = recoveryPackets.findIndex((packet) =>
+        packet.epoch === firstActive.snapshot.epoch && packet.kind === 'delta',
+      );
+      const staleReplayEvent = chaos.events.find((event) => event.kind === 'out-of-order-stale-replay');
+      const baselineOrder = freshEpochIndex >= 0 && currentEpochDeltaIndex > freshEpochIndex &&
+        staleReplayEvent?.current?.kind === 'baseline' &&
+        staleReplayEvent?.current?.sequence === 1 &&
+        staleReplayEvent?.stale?.epoch < staleReplayEvent?.current?.epoch;
+      const disconnectRecovery = chaos.controls.disconnect.delivered > 0 &&
+        firstActive.snapshot.epoch > recoveryBefore.snapshot.epoch &&
+        recoveryLifecycle.some((sample) => sample.snapshot.state.kind === 'recovering') &&
+        recoveryLifecycle.some((sample) => sample.snapshot.state.kind === 'resyncing');
+      const duplicateExactlyOnce = chaos.controls.duplicate.copies > 0 && duplicateWireIdentity &&
+        convergence.uniqueIdentityCount === convergence.identityCount &&
+        convergence.uniquePlayerCount === convergence.playerCount;
+      const staleOutOfOrder = chaos.controls['out-of-order'].staleReplayed > 0 && baselineOrder;
+      const delayedDelivery = chaos.controls['delayed-delivery'].delayedFrames > 0 &&
+        chaos.controls['delayed-delivery'].maxDelayMs >= chaos.delayMs;
+      const lateJoinBaseline = chaos.controls['late-join'].observed > 0 &&
+        cBaseline.snakes.length > 0 && cDelta.tick > cBaseline.tick;
+      assertSemantic('m17-disconnect-recovery', disconnectRecovery,
+        `disconnect=${JSON.stringify(chaos.controls.disconnect)} lifecycle=${JSON.stringify(recoveryLifecycle)}`);
+      assertSemantic('m17-duplicate-exactly-once', duplicateExactlyOnce,
+        `duplicate=${JSON.stringify(chaos.controls.duplicate)} wireCounts=${JSON.stringify([...wireCounts])}`);
+      assertSemantic('m17-out-of-order-baseline', staleOutOfOrder,
+        `outOfOrder=${JSON.stringify(chaos.controls['out-of-order'])} recoveryPackets=${JSON.stringify(recoveryPackets)}`);
+      assertSemantic('m17-delayed-delivery', delayedDelivery,
+        `delayed=${JSON.stringify(chaos.controls['delayed-delivery'])}`);
+      assertSemantic('m17-late-join-baseline', lateJoinBaseline,
+        `lateJoin=${JSON.stringify(chaos.controls['late-join'])} baseline=${JSON.stringify(cBaseline)} delta=${JSON.stringify(cDelta)}`);
+      await chaosProxy.close();
+      chaosEvidence = {
+        controls: chaos.controls,
+        recoveryPackets,
+        baseline: {
+          epoch: firstActive.snapshot.epoch,
+          packet: baselinePacket,
+          beforeDelta: currentEpochDeltaIndex > freshEpochIndex,
+          staleReplayAfterFreshBaseline: staleReplayEvent?.current?.epoch === firstActive.snapshot.epoch,
+        },
+        convergence,
+        interaction: {
+          accepted: actualInteraction,
+          beforeTick: interactionBeforeTick,
+          afterTick: interactionAfterState.tick,
+          beforeSendCount: interactionBeforeSendCount,
+          afterSendCount: interactionAfterSendCount,
+        },
+        clientCleanup: { allRetired, allZeroOwnedResources },
+        cleanup: chaosProxy.snapshot(),
+      };
+    }
+    reconnectTrace = {
+      schemaVersion: 1,
+      targetId: RECONNECT_TARGET_ID,
+      invocationId,
+      url: page.url(),
+      phases: [...phases],
+      errors: [...errors],
+      canvasEvidence,
+      recovery: {
+        before: recoveryBefore,
+        outcome: recoveryRequest.outcome,
+        lifecycle: recoveryLifecycle,
+        preBaselineAttempt,
+        baseline: {
+          previousEpoch: recoveryBefore.snapshot.epoch,
+          resyncEpoch,
+          freshEpoch: firstActive.snapshot.epoch,
+          firstActive: {
+            sessionId: firstActive.snapshot.sessionId,
+            epoch: firstActive.snapshot.epoch,
+            sequence: firstActive.snapshot.sequence,
+          },
+          packet: baselinePacket,
+        },
+        convergence,
+        interaction: {
+          direction: interactionDirection,
+          beforeTick: interactionBeforeTick,
+          afterTick: interactionAfterState.tick,
+          beforeSendCount: interactionBeforeSendCount,
+          afterSendCount: interactionAfterSendCount,
+          accepted: actualInteraction,
+        },
+      },
+      accounting: {
+        maxPendingPackets: firstActive.snapshot.maxPendingPackets,
+        maxObservedPendingPackets: Math.max(
+          ...[recoveryBefore, ...recoveryLifecycle].map((sample) => sample.snapshot.pendingPackets),
+        ),
+        samples: [recoveryBefore, ...recoveryLifecycle].map((sample) => ({
+          label: sample.label,
+          pendingPackets: sample.snapshot.pendingPackets,
+          ownedResources: sample.snapshot.ownedResources,
+        })),
+      },
+      cleanup: {
+        clients: cleanup,
+        allRetired,
+        allZeroOwnedResources,
+      },
+      visual: {
+        targetId: RECONNECT_TARGET_ID,
+        screenshot,
+        checks: {
+          authorityDerivedConvergence,
+          continuedBrowserOperation,
+        },
+      },
+      ...(chaosEvidence === undefined ? {} : { chaos: chaosEvidence }),
+    };
+    const traceValidation = validateReconnectTrace(reconnectTrace);
+    reconnectTrace.traceValidation = traceValidation;
+    if (!traceValidation.ok)
+      throw new Error(`recovery: structured trace validation failed: ${JSON.stringify(traceValidation.failures)}`);
+    const published = await publishReconnectEvidence({
+      trace: reconnectTrace,
+      screenshot,
+      invocationId,
+      url: page.url(),
+      outputDirectory,
+    });
+    console.log(JSON.stringify({
+      m16ReconnectEvidence: {
+        targetId: RECONNECT_TARGET_ID,
+        tracePath: published.tracePath,
+        reportPath: published.reportPath,
+        screenshot: published.report.screenshot,
+        visualAssessment: published.report.visualAssessment,
+        visualValidation: published.validation,
+      },
+    }));
+    if (sabotage === 'visual-hide-body' || sabotage === 'freeze-after-recover') {
+      if (published.validation.ok) throw new Error(`recovery: ${sabotage} did not falsify its visual expectation`);
+      return 1;
+    }
+    if (process.env.FORGEAX_VISUAL_ASSESSMENT_PATH !== undefined && !published.validation.ok)
+      throw new Error(`recovery: supplied visual assessment failed: ${JSON.stringify(published.validation.failures)}`);
+    if (chaosEvidence !== undefined)
+      console.log(JSON.stringify({ m17ChaosEvidence: chaosEvidence }));
     return 0;
   } catch (error) {
     console.error(error);
@@ -493,10 +1333,14 @@ async function main() {
   } finally {
     clearInterval(keepAlive);
     for (const context of contexts) await context.close().catch(() => {});
+    await lateBrowser?.close().catch(() => {});
     await browser?.close().catch(() => {});
     await stopProcess(vite?.child);
+    await chaosProxy?.close().catch(() => {});
     await authority?.kill().catch(() => {});
   }
 }
 
-process.exitCode = await main();
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  process.exitCode = await main();
+}

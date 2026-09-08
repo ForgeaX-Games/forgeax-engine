@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -60,15 +61,13 @@ const { buildAnimatedMaterialWorld, hslToRgb, stepAnimatedMaterials } = await im
 const manifest = readFileSync(resolve(root, 'dist', 'shaders', 'manifest.json'), 'utf8');
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: `data:application/json,${encodeURIComponent(manifest)}` });
+  renderer = await createSmokeRenderer(createRenderer, mockCanvas, {}, { shaderManifestUrl: `data:application/json,${encodeURIComponent(manifest)}` });
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
-renderer.onError((error) => errors.push(error));
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
+subscribeSmokeErrors(renderer, (error) => errors.push(error));
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const scene = buildAnimatedMaterialWorld(world, WIDTH / HEIGHT);
 const captures = [];
@@ -96,7 +95,7 @@ for (let frame = 0; frame < FRAME_COUNT; frame += 1) {
   const elapsed = process.env.FALSIFY === 'freeze-material' ? 0 : frame * FIXED_DT;
   stepAnimatedMaterials(world, scene, elapsed);
   world.update().unwrap();
-  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const draw = drawSmokeFrame(renderer, world);
   if (!draw.ok) errors.push(draw.error);
   if (frame === 0) await capture('early');
   if (frame === FRAME_COUNT - 1) await capture('late');
@@ -120,12 +119,12 @@ const lateHue = process.env.FALSIFY === 'freeze-material' ? 0 : (FRAME_COUNT - 1
 const earlyColor = hslToRgb(0);
 const lateColor = hslToRgb(lateHue);
 const colorStateDelta = (Math.abs(earlyColor[0] - lateColor[0]) + Math.abs(earlyColor[1] - lateColor[1]) + Math.abs(earlyColor[2] - lateColor[2])) / 3;
-console.log(`[bevy-animated-material] backend=${renderer.backend}`);
+console.log(`[bevy-animated-material] backend=${rendererBackend(renderer)}`);
 console.log(`[smoke] frames observed=${FRAME_COUNT}`);
 console.log(`[smoke] pixelDelta=${pixelDelta.toFixed(5)} colorStateDelta=${colorStateDelta.toFixed(5)} lateMaxLuma=${lateLuma.toFixed(4)}`);
 for (const capture of captures) console.log(`[smoke] wrote PNG=${capture.pngPath}`);
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`backend=${renderer.backend} (expected webgpu)`);
+if (rendererBackend(renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(renderer)} (expected webgpu)`);
 if (FRAME_COUNT < MIN_FRAMES) failures.push(`frames=${FRAME_COUNT} < ${MIN_FRAMES}`);
 if (lateLuma <= 0.15) failures.push(`lateMaxLuma=${lateLuma.toFixed(4)} <= 0.15`);
 if (pixelDelta <= 0.0005) failures.push(`pixelDelta=${pixelDelta.toFixed(5)} <= 0.0005 (material animation is not visible)`);

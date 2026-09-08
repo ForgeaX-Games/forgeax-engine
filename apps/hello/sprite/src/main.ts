@@ -1,3 +1,4 @@
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { Update } from '@forgeax/engine-ecs';
 // apps/hello/sprite -- 2D sprite + Layer + transparent-sort double-scene
 // demo (feat-20260520-2d-sprite-layer-mvp / M-4 / w29; AC-12).
@@ -21,7 +22,7 @@ import { Update } from '@forgeax/engine-ecs';
 //     auto input-attach + Time resource on a one-screen takeoff.
 //   - Renderer.input.snapshot(world) (feat-20260519 V-2) -- first-class
 //     frozen-snapshot facade for keyboard / mouse-wheel switching.
-//   - loadByGuid<TextureAsset> + AssetRegistry.configurePackIndex
+//   - loadByGuid<TextureAsset> + configureRuntimeAssetCatalog
 //     (feat-20260517-vite-plugin-image-build-time-cook) -- the
 //     wood-container.jpg imports at build time, runtime side never
 //     touches an image decoder.
@@ -86,26 +87,21 @@ import { Update } from '@forgeax/engine-ecs';
 import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import type { World } from '@forgeax/engine-ecs';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_NINESLICE_QUAD, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { orthographic } from '@forgeax/engine-render';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import {
-  setTransparentSortConfig,
-  TRANSPARENT_SORT_MODE_LAYER_Y,
-  TRANSPARENT_SORT_MODE_LAYER_Z,
-} from '@forgeax/engine-render/internal';
-import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
+  TransparentSort,
+  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
+} from '@forgeax/engine-render/authoring';
 import { Layer } from '@forgeax/engine-render';
 
-import type {
-  Handle,
-  MaterialAsset,
-  TextureAsset,
-} from '@forgeax/engine-types';
+import { type Handle, type MaterialAsset, type TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 // D-5 SSOT: the wood-container disk-schema GUID is the same identifier
@@ -116,7 +112,6 @@ import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 // locally under ./assets/ so the demo loads with or without
 // --recurse-submodules).
 const WOOD_TEXTURE_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d45c';
-const PACK_INDEX_URL = '/pack-index.json';
 
 // 3 colorTints disambiguate the 3 sprites in either scene. The values
 // are mid-saturation so the wood-container texture remains visible
@@ -186,29 +181,24 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     reportAppError(appRes.error);
     return;
   }
   const app: App = appRes.value;
-  console.warn(`[sprite] backend=${app.renderer.backend}`);
+  console.warn(`[sprite] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
-  const ready = await app.renderer.ready;
-  if (!ready.ok) {
-    console.error('[sprite] renderer.ready failed:', ready.error.code, ready.error.hint);
-    return;
-  }
 
-  const assets = app.renderer.assets;
-  if (assets === null) {
+  const assets = app.assets;
+  if (assets === undefined) {
     console.error(
       '[sprite] AssetRegistry is null (renderer construction did not complete successfully)',
     );
     return;
   }
-  assets.configurePackIndex(PACK_INDEX_URL);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
   const world = app.world;
 
   // Step 2: resolve the wood-container texture through the production
@@ -316,14 +306,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // toggles the active scene on '1' / '2' edges or mouse-wheel notches.
   // The system runs after the engine-input frame-start scan so the
   // edges are fresh; charter P4 consistent abstraction -- same
-  // `renderer.input.snapshot(world)` facade learn-render 1.7 consumes.
+  // Read the frame-start snapshot owned by the Input package.
   world.addSystem(Update, {
     name: 'hello-sprite-scene-switcher',
     after: ['input-frame-start-scan'],
     queries: [],
     fn: () => {
-      const snap = app.renderer.input.snapshot(world);
-      if (snap === undefined) return;
+      const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       // up-edge ('1' / '2') is one-frame-deep so a sustained key press
       // does not flicker. mouse-wheel notch is sign-discrete (D-5):
       // positive = scroll down = scene-A (layer-z), negative = scroll
@@ -369,8 +358,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     }
     activeEntities = [];
 
-    const newMode = target === 'A' ? TRANSPARENT_SORT_MODE_LAYER_Z : TRANSPARENT_SORT_MODE_LAYER_Y;
-    const cfgRes = setTransparentSortConfig(world, { mode: newMode, yzAlpha: 1.0 });
+    const newMode = target === 'A' ? TransparentSort.layerZ : TransparentSort.layerY;
+    const cfgRes = TransparentSort.configure(world, { mode: newMode, yzAlpha: 1.0 });
     if (!cfgRes.ok) {
       // charter P3 structured failure: read .code / .expected / .hint
       // properties; never parse .message. Should be unreachable -- the
@@ -404,7 +393,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     currentScene = target;
     console.warn(
       `[sprite] scene=${currentScene} mode=${
-        newMode === TRANSPARENT_SORT_MODE_LAYER_Z ? 'layer-z' : 'layer-y'
+        newMode === TransparentSort.layerZ ? 'layer-z' : 'layer-y'
       }`,
     );
   }

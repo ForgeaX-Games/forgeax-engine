@@ -1,19 +1,15 @@
-// create-app-plugin.test.ts -- createApp + plugin runner integration (M2 / w14).
+// create-app-plugin.test.ts -- createApp + Cordis integration.
 //
 // Covers:
-//   - AC-03: the canvas-form default plugin set is exactly 5 (transform / time
-//     / animation / state / input) and registers the expected world systems.
+//   - The canvas-form default plugin set registers the expected world systems.
 //   - AC-02: physics + audio plugins register the expected world system set
 //     (physics tick systems + 'PhysicsWorld' resource; audio-tick).
-//   - AC-04: a duplicate plugin name surfaces as Result.err('duplicate-plugin')
-//     through createApp (assemble form).
-//   - AC-05: a failing plugin build surfaces as
-//     Result.err('plugin-build-failed') with detail.cause through createApp.
-//   - AC-06: physicsPlugin's async build completes BEFORE createApp resolves
+//   - A failing plugin activation surfaces as an AppError with its cause.
+//   - physicsPlugin's async apply completes BEFORE createApp resolves
 //     (no post-resolve timing gap -- app.physics is populated immediately).
 //
 // Environment: the assemble form is driven with a renderer stub (no WebGPU),
-// exercising the real createApp -> runPlugins path. The rapier 3D WASM backend
+// exercising the real createApp -> Context.plugin path. The rapier 3D WASM backend
 // loads in dawn-node, so the physics path runs for real; if it ever becomes
 // unavailable the physics-dependent cases skip with a reason (per plan-strategy
 // section 5.4 no-skip-by-default).
@@ -21,20 +17,20 @@
 // charter awareness:
 //   P2 structured > prose: assertions read world.inspect().systems (a
 //       machine-readable enumeration), not pixels.
-//   P3 explicit failure: duplicate / build-failed paths assert the structured
-//       PluginError code + detail.
+//   P3 explicit failure: activation failures assert structured AppError detail.
 
 import { animationPlugin } from '@forgeax/engine-animation';
 import {
   AUDIO_ENGINE_RESOURCE_KEY,
   AUDIO_TICK_SYSTEM_NAME,
+  audioBackendPlugin,
   audioPlugin,
+  createAudioIntentBackend,
 } from '@forgeax/engine-audio';
-import { WebAudioEngine } from '@forgeax/engine-audio-webaudio';
-import { err, type Result, World } from '@forgeax/engine-ecs';
-import { INPUT_BACKEND_KEY } from '@forgeax/engine-input';
+import { createWorldContext, World } from '@forgeax/engine-ecs';
+import { inputBackendPlugin } from '@forgeax/engine-input';
 import { physicsPlugin } from '@forgeax/engine-physics';
-import { type Plugin, PluginError, runPlugins } from '@forgeax/engine-plugin';
+import type { Plugin } from '@forgeax/engine-plugin';
 import type { Renderer } from '@forgeax/engine-render';
 import { scenePlugin } from '@forgeax/engine-scene';
 import { statePlugin } from '@forgeax/engine-state';
@@ -53,6 +49,7 @@ function makeRendererStub(): Renderer {
     draw: (): { ok: true; value: undefined } => ({ ok: true, value: undefined }),
     onError: (): (() => void) => () => {},
     onLost: (): (() => void) => () => {},
+    assets: {},
     dispose: (): void => {},
   } as unknown as Renderer;
 }
@@ -83,13 +80,22 @@ describe('createApp plugin runner -- default set (AC-03)', () => {
     // needed). INPUT_BACKEND_KEY is pre-inserted so inputPlugin registers its
     // scan system (mirrors createApp's app-layer input attach).
     const world = new World();
-    world.insertResource(INPUT_BACKEND_KEY, {} as never);
-    const defaultSet: Plugin[] = [scenePlugin(), animationPlugin(), statePlugin(), inputPlugin()];
-    const result = await runPlugins(world, defaultSet, []);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-
-    expect([...result.value.keys()]).toEqual(['scene', 'animation', 'state', 'input']);
+    const defaultSet: Plugin[] = [
+      inputBackendPlugin({ sample: () => ({}) } as never),
+      scenePlugin(),
+      animationPlugin(),
+      statePlugin(),
+      inputPlugin(),
+    ];
+    const ctx = await createWorldContext(world, defaultSet);
+    expect([...ctx.registry.values()].map((runtime) => runtime.name)).toEqual([
+      'world',
+      'input-backend',
+      'scene',
+      'animation',
+      'state',
+      'input',
+    ]);
 
     // World systems registered by the default set.
     const names = systemNames(world);
@@ -97,12 +103,19 @@ describe('createApp plugin runner -- default set (AC-03)', () => {
     expect(names).toContain('advanceAnimationPlayer');
     expect(names).toContain('transitionStates');
     expect(names).toContain('input-frame-start-scan');
+
+    await ctx.fiber.dispose();
+    const disposedNames = systemNames(world);
+    expect(disposedNames).not.toContain('propagateTransforms');
+    expect(disposedNames).not.toContain('advanceAnimationPlayer');
+    expect(disposedNames).not.toContain('transitionStates');
+    expect(disposedNames).not.toContain('input-frame-start-scan');
   });
 
-  it('inputPlugin is a no-op when no INPUT_BACKEND_KEY resource is present', async () => {
+  it('inputPlugin remains pending while its backend service is unavailable', async () => {
     const world = new World();
-    const result = await runPlugins(world, [inputPlugin()], []);
-    expect(result.ok).toBe(true);
+    const ctx = await createWorldContext(world, [inputPlugin()]);
+    expect(ctx.input).toBeUndefined();
     expect(systemNames(world)).not.toContain('input-frame-start-scan');
   });
 });
@@ -110,19 +123,21 @@ describe('createApp plugin runner -- default set (AC-03)', () => {
 describe('createApp plugin runner -- physics + audio system set (AC-02)', () => {
   it('audioPlugin registers the audio-tick system when the backend resource is present', async () => {
     const world = new World();
-    world.insertResource(AUDIO_ENGINE_RESOURCE_KEY, new WebAudioEngine());
-    const result = await runPlugins(world, [], [audioPlugin()]);
-    expect(result.ok).toBe(true);
+    const ctx = await createWorldContext(world, [
+      audioBackendPlugin(createAudioIntentBackend({ emit: () => undefined })),
+      audioPlugin(),
+    ]);
     expect(systemNames(world)).toContain(AUDIO_TICK_SYSTEM_NAME);
-    expect(world.simulationParticipants().map((entry) => entry.id)).toEqual(['forgeax.audio.ecs']);
+    await ctx.fiber.dispose();
+    expect(systemNames(world)).not.toContain(AUDIO_TICK_SYSTEM_NAME);
+    expect(world.hasResource(AUDIO_ENGINE_RESOURCE_KEY)).toBe(false);
   });
 
   it('physicsPlugin inserts PhysicsWorld + registers physics systems on success', {
     skip: !rapierAvailable,
   }, async () => {
     const world = new World();
-    const result = await runPlugins(world, [], [physicsPlugin('rapier-3d')]);
-    expect(result.ok).toBe(true);
+    const ctx = await createWorldContext(world, [physicsPlugin('rapier-3d')]);
     expect(world.hasResource('PhysicsWorld')).toBe(true);
     // AC-02: physics registers its three-phase tick systems. Assert the
     // expected system names are present (plan-strategy section 5.2
@@ -131,40 +146,38 @@ describe('createApp plugin runner -- physics + audio system set (AC-02)', () => 
     expect(names).toContain('physicsSyncBackend');
     expect(names).toContain('physicsStepSimulation');
     expect(names).toContain('physicsWriteback');
-    expect(world.simulationParticipants().map((entry) => entry.id)).toEqual([
-      'forgeax.physics.rapier-3d',
-    ]);
+    await ctx.fiber.dispose();
+    expect(world.hasResource('PhysicsWorld')).toBe(false);
+    expect(systemNames(world)).not.toContain('physicsSyncBackend');
+    expect(systemNames(world)).not.toContain('physicsStepSimulation');
+    expect(systemNames(world)).not.toContain('physicsWriteback');
   });
 });
 
-describe('createApp plugin runner -- duplicate (AC-04)', () => {
-  it('createApp(assemble) returns duplicate-plugin when two user plugins share a name', async () => {
+describe('createApp Cordis registry identity', () => {
+  it('permits separate fibers to share a diagnostic name', async () => {
     const result = await createApp({
       renderer: makeRendererStub(),
       world: new World(),
       plugins: [audioPlugin(), audioPlugin()],
     });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error.code).toBe('duplicate-plugin');
-    if (result.error.code !== 'duplicate-plugin') return;
-    expect(result.error.detail.name).toBe('audio');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(
+      [...result.value.pluginContext.registry.values()].filter(
+        (runtime) => runtime.name === 'audio',
+      ),
+    ).toHaveLength(2);
+    await result.value.dispose();
   });
 });
 
 describe('createApp plugin runner -- build failure (AC-05)', () => {
-  it('createApp(assemble) surfaces plugin-build-failed with detail.cause', async () => {
+  it('createApp(assemble) surfaces plugin-apply-failed with detail.cause', async () => {
     const failing: Plugin = {
       name: 'boom',
-      build(): Result<void, PluginError> {
-        return err(
-          new PluginError({
-            code: 'plugin-build-failed',
-            expected: 'every plugin.build(world) call must return Result.ok',
-            hint: 'fix boom',
-            detail: { pluginName: 'boom', cause: 'simulated WASM failure' },
-          }),
-        );
+      apply() {
+        throw new Error('simulated WASM failure');
       },
     };
     const result = await createApp({
@@ -174,10 +187,10 @@ describe('createApp plugin runner -- build failure (AC-05)', () => {
     });
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error.code).toBe('plugin-build-failed');
-    if (result.error.code !== 'plugin-build-failed') return;
-    expect(result.error.detail.pluginName).toBe('boom');
-    expect(result.error.detail.cause).toBe('simulated WASM failure');
+    expect(result.error.code).toBe('app-plugin-activation-failed');
+    if (result.error.code !== 'app-plugin-activation-failed') return;
+    expect(result.error.detail.cause).toBeInstanceOf(Error);
+    expect((result.error.detail.cause as Error).message).toBe('simulated WASM failure');
   });
 });
 
@@ -192,12 +205,13 @@ describe('createApp plugin runner -- physics async timing (AC-06)', () => {
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    // Because runPlugins awaits physicsPlugin's async build before createApp
+    // Because Context.plugin awaits physicsPlugin's async apply before createApp
     // resolves, the 'PhysicsWorld' resource is already present -- app.physics
     // reads it back synchronously with no post-resolve fire-and-forget gap.
     expect(result.value.physics).toBeDefined();
     // Verify the resource is present in the World (not just on the App handle,
     // confirming the physicsPlugin build fully populated it before resolve).
     expect(result.value.world.hasResource('PhysicsWorld')).toBe(true);
+    await result.value.dispose();
   });
 });

@@ -14,10 +14,10 @@ import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
 import { mat4 } from '@forgeax/engine-math';
-import { GpuResourceStore } from '@forgeax/engine-render/internal';
 import { ok } from '@forgeax/engine-rhi';
 import type { EquirectAsset, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { GpuResidencyCache } from '../../../../render/src/device/gpu-residency';
 
 const mockCaps = {
   backendKind: 'webgpu' as const,
@@ -41,7 +41,7 @@ const mockCaps = {
   maxColorAttachments: 8,
 };
 
-// feat-20260601-gpu-resource-store-extraction M1: mesh GPU residency + updateMesh
+// feat-20260601-device/gpu-residency-extraction M1: mesh GPU residency + updateMesh
 // moved to the store, and register no longer auto-uploads (push severed). The
 // pull-model test premise: register the POD, then explicitly
 // `store.ensureResident(handle, pod)` to upload, then assert + updateMesh.
@@ -63,8 +63,11 @@ function makeSmallMesh(): MeshAsset {
         indexCount: indices.length,
         vertexCount: vertices.length,
         topology: 'triangle-list',
+        materialSlot: 0,
       },
     ],
+
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 
@@ -83,8 +86,11 @@ function makeLargerMesh(): MeshAsset {
         indexCount: indices.length,
         vertexCount: vertices.length,
         topology: 'triangle-list',
+        materialSlot: 0,
       },
     ],
+
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 
@@ -97,7 +103,7 @@ describe('w12 - updateMesh dawn-tier (AC-08)', () => {
       if (adapter === null) return;
       const device = await adapter.requestDevice();
 
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
       const world = new World();
       store.configureGpuDevice(
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
@@ -144,7 +150,7 @@ describe('w12 - updateMesh dawn-tier (AC-08)', () => {
       if (adapter === null) return;
       const device = await adapter.requestDevice();
 
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
       const world = new World();
       store.configureGpuDevice(
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
@@ -200,7 +206,7 @@ describe('w12 - updateMesh dawn-tier (AC-08)', () => {
       if (adapter === null) return;
       const device = await adapter.requestDevice();
 
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
       const world = new World();
       store.configureGpuDevice(
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim

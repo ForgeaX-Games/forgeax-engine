@@ -34,7 +34,8 @@ export const SWIPE_VELOCITY_THRESHOLD = 0.5;
 export const SWIPE_WINDOW_MS = 100;
 
 /** Swipe direction taken from the dominant displacement axis (D-10). */
-export type SwipeDirection = 'left' | 'right' | 'up' | 'down';
+const SWIPE_DIRECTIONS = ['left', 'right', 'up', 'down'] as const;
+export type SwipeDirection = (typeof SWIPE_DIRECTIONS)[number];
 
 /**
  * Continuous gesture values read each frame via `snap.gesture` (D-4).
@@ -210,9 +211,9 @@ function normalizeAngle(a: number): number {
 }
 
 function dominantDirection(dx: number, dy: number): SwipeDirection {
-  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? 'right' : 'left';
+  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? SWIPE_DIRECTIONS[1] : SWIPE_DIRECTIONS[0];
   // Screen space: +y points down.
-  return dy >= 0 ? 'down' : 'up';
+  return dy >= 0 ? SWIPE_DIRECTIONS[3] : SWIPE_DIRECTIONS[2];
 }
 
 /**

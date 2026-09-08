@@ -16,6 +16,9 @@ describe('AssetEvidence structured recovery hints', () => {
     for (const code of codes) {
       expect(ASSET_EVIDENCE_ERROR_HINTS[code]).toBeTruthy();
       expect(ASSET_EVIDENCE_ERROR_HINTS[code]).not.toContain('message');
+      expect(ASSET_EVIDENCE_ERROR_HINTS[code]).toMatch(
+        /inspect|repair|retry|refresh|capability|rerun|source|rebuild|verify|catalog|package/,
+      );
     }
   });
 

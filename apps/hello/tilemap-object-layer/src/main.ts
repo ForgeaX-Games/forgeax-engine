@@ -21,31 +21,25 @@
 //       must Y-sort through the same TransparentEntry queue (AC-13 anchor).
 //
 // Atlas synthesis: charter P5 — no forgeax-engine-assets PNG dependency.
-// The two atlas TextureAsset handles registered here are unmanaged
-// placeholders (the current handle factory is `toShared(N)`; the M3 directed
-// gate verifies the extract system + per-entity
-// sort key + multi-atlas 3-hop route through derivedCount + onError
-// signals rather than RGB pixel correctness against committed PNGs).
+// The two atlas identities registered here are unmanaged placeholders; the
+// M3 directed gate verifies the extract system + per-entity sort key +
+// multi-atlas route through derivedCount + onError rather than RGB pixel
+// correctness against committed PNGs.
 //
 // Anchors: plan-tasks m3-t10; plan-strategy section D-5 + section D-10
 // (directed fixture mount); requirements AC-10 / AC-11 / AC-12 / AC-13 /
 // AC-14; plan-decisions L-1 (sub-scene (e) sprite interleave).
 
 import { World } from '@forgeax/engine-ecs';
-import {
-  toShared,
-  type Handle,
-  type MaterialAsset,
-  type TilesetAsset,
-} from '@forgeax/engine-types';
+import { type MaterialAsset, type TextureAsset, type TilesetAsset } from '@forgeax/engine-types';
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { encodeTileBits } from '@forgeax/engine-graphics-extras';
 import { ChildOf, Transform } from '@forgeax/engine-scene';
 
 import { CAMERA_PROJECTION_ORTHOGRAPHIC } from '@forgeax/engine-render';
-import { createRenderer } from '@forgeax/engine-runtime';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
 import {
-  encodeSortScope,
+  TilemapSort,
   SPRITE_PREMULTIPLIED_ALPHA_BLEND,
   TileLayer,
   Tilemap,
@@ -96,12 +90,11 @@ function buildAnchorTiles(): Uint32Array {
 }
 
 function makeTilesetAsset(
-  atlasA: Handle<'TextureAsset', 'shared'>,
-  atlasB: Handle<'TextureAsset', 'shared'>,
+  atlasA: string,
+  atlasB: string,
 ): TilesetAsset {
   return {
     kind: 'tileset',
-    guid: 'hello-tilemap-object-layer/tileset',
     atlases: [atlasA, atlasB],
     tileWidth: 16,
     tileHeight: 16,
@@ -137,26 +130,38 @@ function makeTilesetAsset(
 async function main(): Promise<void> {
   const canvas = document.getElementById('app') as HTMLCanvasElement | null;
   if (canvas === null) return;
-  const renderer = await createRenderer(canvas, {});
-  const ready = await renderer.ready;
-  if (!ready.ok) {
-    // eslint-disable-next-line no-console
-    console.error('[hello-tilemap-object-layer] renderer.ready failed:', ready.error.code);
-    return;
-  }
+  const constructed = await constructRuntimeRendererHost(canvas, {});
+  if (!constructed.ok) throw constructed.error;
+  const renderer = constructed.value.renderer;
+  const assets = constructed.value.assets;
   const world = new World();
-  const attachment = renderer.attachWorld(world);
+  const attachment = renderer.attach(world);
   if (!attachment.ok) throw attachment.error;
 
   // charter P5: in-process atlas synthesis — placeholder handles (matches
   // hello-tilemap M0; the dawn smoke verifies extract-system invariants,
   // not RGB fidelity against committed PNGs).
-  const atlasA = toShared<'TextureAsset'>(201);
-  const atlasB = toShared<'TextureAsset'>(202);
-  const tilesetHandle = world.allocSharedRef<'TilesetAsset', TilesetAsset>(
-    'TilesetAsset',
-    makeTilesetAsset(atlasA, atlasB),
-  );
+  const atlasA = 'hello-tilemap-object-layer/atlas-a';
+  const atlasB = 'hello-tilemap-object-layer/atlas-b';
+  const atlasAPayload: TextureAsset = {
+    kind: 'texture',
+    width: 64,
+    height: 64,
+    format: 'rgba8unorm-srgb',
+    data: new Uint8Array(64 * 64 * 4).fill(255),
+    colorSpace: 'srgb',
+    mipmap: false,
+    mipLevelCount: 1,
+  };
+  const atlasBPayload: TextureAsset = { ...atlasAPayload, data: new Uint8Array(64 * 64 * 4).fill(128) };
+  const tileset = makeTilesetAsset(atlasA, atlasB);
+  const catalogResults = [
+    assets.catalog(atlasA, atlasAPayload),
+    assets.catalog(atlasB, atlasBPayload),
+    assets.catalog('hello-tilemap-object-layer/tileset', tileset),
+  ];
+  if (catalogResults.some((result) => !result.ok)) return;
+  const atlasAHandle = world.internSharedRef('TextureAsset', atlasAPayload);
 
   const tilemap = world
     .spawn(
@@ -167,7 +172,7 @@ async function main(): Promise<void> {
           rows: ROWS,
           tileSize: [1, 1],
           chunkSize: CHUNK_SIZE,
-          tileset: tilesetHandle,
+          tileset: 'hello-tilemap-object-layer/tileset',
         },
       },
       { component: Transform, data: {} },
@@ -182,7 +187,7 @@ async function main(): Promise<void> {
           tiles: buildAnchorTiles(),
           layerOrder: 0,
           dirty: 1,
-          sortScope: encodeSortScope('per-cell'),
+          sortScope: TilemapSort.perCell,
         },
       },
       { component: ChildOf, data: { parent: tilemap } },
@@ -207,7 +212,7 @@ async function main(): Promise<void> {
         // feat-20260625 M3 / w11 (D-4): UBO-aligned field names 1:1 with
         // sprite.material.json paramSchema.
         colorTint: [1, 1, 1, 1],
-        baseColorTexture: atlasA,
+        baseColorTexture: atlasAHandle,
         region: [0, 0, 1, 1],
         pivotAndSize: [0.5, 0.5, 1, 1],
       },
@@ -242,7 +247,12 @@ async function main(): Promise<void> {
 
   const loop = (): void => {
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const drawn = renderer.draw({
+      leases: [attachment.value],
+      camera: { lease: attachment.value },
+      environment: { lease: attachment.value },
+    });
+    if (!drawn.ok) throw drawn.error;
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);

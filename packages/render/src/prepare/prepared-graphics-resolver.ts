@@ -7,13 +7,20 @@ import {
   RenderFeatureStageFailedError,
 } from '../errors/render';
 import type {
+  PreparedGraphicsResourceLease,
+  RenderFeatureResolvedGpuBuffer,
+} from '../features/prepared-gpu-work';
+import type {
   RenderFeatureBindingsDescriptor,
   RenderFeaturePreparedRef,
 } from '../features/prepared-graphics';
 import type {
   PreparedGraphicsItem,
+  PreparedGraphicsKind,
   PreparedGraphicsNormalizedDescriptor,
 } from '../features/prepared-graphics-store';
+
+type PreparedBufferKind = Exclude<PreparedGraphicsKind, 'pipeline' | 'bindings'>;
 
 type PreparedGraphicsMismatch =
   | {
@@ -47,9 +54,11 @@ export type PreparedGraphicsResolvedResource =
       readonly dynamicOffsets?: readonly number[];
     }
   | {
-      readonly kind: 'vertex-data' | 'index-data';
+      readonly kind: PreparedBufferKind;
       readonly reference: RenderFeaturePreparedRef;
       readonly handle: Buffer;
+      readonly size: number;
+      readonly physicalUsage: number;
     };
 
 export interface PreparedGraphicsResolverInput {
@@ -77,7 +86,7 @@ export interface PreparedGraphicsResolverInput {
   >;
   readonly resolveGpuBuffer?: (
     reference: import('../features/prepared-gpu-work').RenderFeatureGpuBufferRef,
-  ) => Buffer | undefined;
+  ) => RenderFeatureResolvedGpuBuffer | undefined;
   readonly featureOrder?: number;
 }
 
@@ -90,9 +99,7 @@ export interface PreparedGraphicsResolver {
   release(): Result<void, RenderError>;
 }
 
-export interface PreparedGraphicsResourceLease {
-  release(): Result<void, RenderError>;
-}
+export type { PreparedGraphicsResourceLease } from '../features/prepared-gpu-work';
 
 export interface PreparedGraphicsResolvedSnapshot {
   readonly generation: number;
@@ -102,7 +109,7 @@ export interface PreparedGraphicsResolvedSnapshot {
   ) => PreparedGraphicsResolvedResource | undefined;
   readonly resolveGpuBuffer?: (
     reference: import('../features/prepared-gpu-work').RenderFeatureGpuBufferRef,
-  ) => Buffer | undefined;
+  ) => RenderFeatureResolvedGpuBuffer | undefined;
 }
 
 function preparationFailure(
@@ -162,7 +169,7 @@ function stateMismatch(
   });
 }
 
-function bufferUsage(kind: 'vertex-data' | 'index-data'): number {
+function bufferUsage(kind: PreparedBufferKind): number {
   const copyDst = 8;
   return kind === 'vertex-data' ? 32 | copyDst : 16 | copyDst;
 }
@@ -170,7 +177,7 @@ function bufferUsage(kind: 'vertex-data' | 'index-data'): number {
 function uploadBuffer(
   input: PreparedGraphicsResolverInput,
   item: PreparedGraphicsItem,
-  kind: 'vertex-data' | 'index-data',
+  kind: PreparedBufferKind,
 ): Result<Buffer, RenderError> {
   const bytes = item.uploadBytes;
   if (bytes === undefined || bytes.length === 0) {
@@ -205,10 +212,8 @@ function descriptorFor(
 ): Extract<PreparedGraphicsNormalizedDescriptor, { readonly kind: 'bindings' }> | undefined;
 function descriptorFor(
   item: PreparedGraphicsItem,
-  kind: 'vertex-data' | 'index-data',
-):
-  | Extract<PreparedGraphicsNormalizedDescriptor, { readonly kind: 'vertex-data' | 'index-data' }>
-  | undefined;
+  kind: PreparedBufferKind,
+): Extract<PreparedGraphicsNormalizedDescriptor, { readonly kind: PreparedBufferKind }> | undefined;
 function descriptorFor(
   item: PreparedGraphicsItem,
   kind: PreparedGraphicsNormalizedDescriptor['kind'],
@@ -371,7 +376,7 @@ export function createPreparedGraphicsResolver(
 
   const resolveBuffer = (
     item: PreparedGraphicsItem,
-    reference: RenderFeaturePreparedRef<'vertex-data' | 'index-data'>,
+    reference: RenderFeaturePreparedRef<PreparedBufferKind>,
   ): Result<PreparedGraphicsResolvedResource, RenderError> => {
     const descriptor = descriptorFor(item, reference.kind);
     if (descriptor === undefined) {
@@ -395,7 +400,9 @@ export function createPreparedGraphicsResolver(
       const resource: PreparedGraphicsResolvedResource = {
         kind: reference.kind,
         reference,
-        handle,
+        handle: handle.buffer,
+        size: handle.size,
+        physicalUsage: handle.physicalUsage,
       };
       resolved.set(reference, resource);
       return ok(resource);
@@ -406,6 +413,8 @@ export function createPreparedGraphicsResolver(
       kind: reference.kind,
       reference,
       handle: buffer.value,
+      size: Math.max(4, ((item.uploadBytes?.length ?? 0) + 3) & ~3),
+      physicalUsage: bufferUsage(reference.kind),
     };
     leases.push({
       release: (() => {

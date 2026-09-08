@@ -57,6 +57,7 @@ test('merges complete entries, rejects duplicate identities, and is idempotent',
     { beta: ['receipt.json', 'integrity.json'] },
     { gamma: ['receipt.json', 'integrity.json'] },
   ]);
+  writeFileSync(join(fixtureRoot.snapshots, '0', 'ci-empty'), '');
   try {
     const first = run(fixtureRoot);
     assert.equal(first.exitCode, 0, first.stdout || first.stderr);
@@ -67,6 +68,7 @@ test('merges complete entries, rejects duplicate identities, and is idempotent',
       nextRunWouldHit: true,
     });
     assert.equal(existsSync(join(fixtureRoot.output, 'entries', 'alpha', 'receipt.json')), true);
+    assert.equal(existsSync(join(fixtureRoot.output, 'ci-empty')), false);
     const second = run(fixtureRoot);
     assert.equal(second.exitCode, 0, second.stdout || second.stderr);
     assert.equal(second.stdout, first.stdout);

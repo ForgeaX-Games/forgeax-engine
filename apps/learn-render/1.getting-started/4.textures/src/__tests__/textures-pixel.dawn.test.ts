@@ -46,7 +46,7 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { createRenderer } from '@forgeax/engine-runtime';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
@@ -153,23 +153,22 @@ describe('learn-render section 1.4 textures pixel-readback (AC-08f / AC-08g / AC
       removeEventListener() {},
     } as unknown as HTMLCanvasElement;
 
-    let renderer: Awaited<ReturnType<typeof createRenderer>>;
+    let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
     try {
-      renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+      host = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
     } finally {
       globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
     }
-    expect(renderer.backend).toBe('webgpu');
-
-    const assets = renderer.assets;
-    if (assets === null) throw new Error('AssetRegistry null on dawn path');
+    if (!host.ok) throw host.error;
+    const { renderer, assets } = host.value;
+    expect(renderer.inspect().capabilities.backendKind).toBe('webgpu');
 
     // 1. Decode container.jpg -> mint a TextureAsset column via
     //    world.allocSharedRef (M8 D-17; the registry holds no handle map).
     //    Skips the pack-index fetch path -- the dawn harness has no vite
     //    middleware behind it, so we mint the column directly.
     const world = new World();
-    const worldAttachment1 = renderer.attachWorld(world);
+    const worldAttachment1 = renderer.attach(world);
     if (!worldAttachment1.ok) throw worldAttachment1.error;
     const decodeRes = await decodeImageFromFile(CONTAINER_SRC_PATH);
     expect(decodeRes.ok, `decodeImageFromFile failed: ${decodeRes.ok ? '' : decodeRes.error.code}`)
@@ -188,6 +187,7 @@ describe('learn-render section 1.4 textures pixel-readback (AC-08f / AC-08g / AC
       colorSpace: woodDecoded.colorSpace,
       mipmap: woodDecoded.mipmap,
     };
+    assets.catalog<TextureAsset>(woodMeta.guid, woodTexAsset);
     const woodHandle = world.allocSharedRef('TextureAsset', woodTexAsset);
 
     // 2. Build material referencing the wood handle.
@@ -235,27 +235,12 @@ describe('learn-render section 1.4 textures pixel-readback (AC-08f / AC-08g / AC
       },
     );
 
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
-    if (!ready.ok) return;
-    // Ready resolved -> AssetRegistry.gpuDevice has been wired by
-    // createRenderer (configureGpuDevice call site). Run uploadTexture
-    // now so the wood-container bytes land on the GPU instead of
-    // short-circuiting to deferred-upload + 1x1 white fallback. The
-    // smoke harness (scripts/smoke-dawn.mjs) skips this call because
-    // it asserts only `distance(pixel, clear_color) > eps` (white
-    // fallback satisfies that loose gate); this dawn test exercises
-    // the actual sRGB encode + UV-sampled wood pixels and so must
-    // run the upload to produce textured fragments.
-    // feat-20260601-gpu-resource-store-extraction M1: texture GPU upload moved
-    // to renderer.store; the POD (woodTexAsset) carries the format, the decoded
-    // image carries the pixel bytes (D-2 caller passes POD).
-    const uploadRes = await renderer.store.uploadTexture(woodHandle, woodTexAsset, woodDecoded);
-    expect(uploadRes.ok, `uploadTexture failed: ${uploadRes.ok ? '' : uploadRes.error.code}`)
-      .toBe(true);
-    if (!uploadRes.ok) return;
     world.update().unwrap();
-    const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const drawn = renderer.draw({
+      leases: [worldAttachment1.value],
+      camera: { lease: worldAttachment1.value },
+      environment: { lease: worldAttachment1.value },
+    });
     expect(drawn.ok).toBe(true);
 
     const device = sharedDevice;

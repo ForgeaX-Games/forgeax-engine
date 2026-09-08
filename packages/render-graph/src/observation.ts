@@ -1,4 +1,4 @@
-import type { Texture } from '@forgeax/engine-rhi';
+import type { Texture, TextureFormat } from '@forgeax/engine-rhi';
 import { err, ok, RenderGraphError, type Result } from './errors.js';
 
 export { RenderGraphError } from './errors.js';
@@ -13,7 +13,7 @@ export interface ObservationSize {
 /** Generic producer-owned metadata for one current-frame texture. */
 export interface CurrentFrameObservationDescriptor {
   readonly texture: Texture;
-  readonly format: string;
+  readonly format: TextureFormat;
   readonly size: ObservationSize;
   readonly usage: number;
   readonly frameId: number;

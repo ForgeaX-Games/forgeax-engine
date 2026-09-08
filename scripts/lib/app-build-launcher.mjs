@@ -34,7 +34,6 @@ export function resolveViteCli(repoRoot) {
 export function createViteBuildInvocation({
   app,
   viteCliPath,
-  sharedInputManifest,
   appFactsDir,
   baseEnv = process.env,
 }) {
@@ -47,7 +46,6 @@ export function createViteBuildInvocation({
       shell: false,
       env: {
         ...baseEnv,
-        FORGEAX_SHARED_APP_INPUTS_MANIFEST: sharedInputManifest,
         ...(appFactsDir === undefined ? {} : { FORGEAX_BUILD_METRICS_DIR: appFactsDir }),
       },
     },

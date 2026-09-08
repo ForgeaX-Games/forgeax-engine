@@ -1,12 +1,12 @@
 // Shared scene and subset animation for Bevy `sprite_sheet`.
 
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
-import { Time, type World } from '@forgeax/engine-ecs';
+import { type World } from '@forgeax/engine-ecs';
 import { Camera, MeshFilter, MeshRenderer, orthographic } from '@forgeax/engine-render';
 import {
   SpriteAnimation,
   SpriteRegionOverride,
-  SPRITE_PLAYBACK_MODE_LOOP,
+  SpritePlayback,
   SPRITE_PREMULTIPLIED_ALPHA_BLEND,
 } from '@forgeax/engine-render/authoring';
 import { spriteAnimationTickSystem } from '@forgeax/engine-runtime';
@@ -88,7 +88,7 @@ export function buildSpriteSheetWorld(world: World, texture: number): void {
     { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [5, 5, 1] } },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
     { component: MeshRenderer, data: { materials: [material] } },
-    { component: SpriteAnimation, data: { frameCount: ANIMATION_FRAME_COUNT, frameDuration: FRAME_DURATION, currentFrame: 0, accumDt: 0, regions, playbackMode: SPRITE_PLAYBACK_MODE_LOOP } },
+    { component: SpriteAnimation, data: { frameCount: ANIMATION_FRAME_COUNT, frameDuration: FRAME_DURATION, currentFrame: 0, accumDt: 0, regions, playbackMode: SpritePlayback.loop } },
     { component: SpriteRegionOverride, data: { region: new Float32Array(regions.slice(0, 4)) } },
   );
   world.spawn(
@@ -97,8 +97,7 @@ export function buildSpriteSheetWorld(world: World, texture: number): void {
   );
 }
 
-export function tickSpriteSheet(world: World, dt: number): void {
-  world.getResource(Time).delta = dt;
+export function tickSpriteSheet(world: World): void {
   const result = spriteAnimationTickSystem(world);
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.hint}`);
 }

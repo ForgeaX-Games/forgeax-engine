@@ -4,7 +4,7 @@ import {
   defineSharedKernel,
   SHARED_KERNEL_EXECUTOR_RESOURCE_KEY,
   type SharedKernelExecutor,
-} from '../execution';
+} from '../execution/shared-kernel';
 import { Update } from '../schedule-token';
 import { World } from '../world';
 
@@ -38,7 +38,9 @@ describe('World execution health', () => {
         }),
       )
       .unwrap();
-    expect(() => world.update()).toThrow();
+    const failed = world.update();
+    expect(failed.ok).toBe(false);
+    if (!failed.ok) expect(failed.error.code).toBe('system-failed');
     expect(world.execution.health).toBe('poisoned');
     expect(world.execution.fault?.partialWrite).toBe(true);
     expect(world.execution.fault?.retryable).toBe(false);

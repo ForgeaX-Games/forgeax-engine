@@ -1,18 +1,19 @@
 #!/usr/bin/env node
-// hello-topology headless smoke (feat-20260604-mesh-topology-debug-draw / M6 / w17).
+// hello-topology focused Dawn smoke for first-class Points/Lines authoring.
 //
-// Proves AC-11: a vertex-only MeshAsset authored with topology='line-list'
-// renders as DISCRETE line segments through the non-indexed draw path, NOT a
-// filled triangle face.
+// Proves the first-class Points/Lines retained/prepared/recorded path through
+// the same Standard renderer owner.
 //
-// Strategy (single-pass line-pixel readback + falsifiable inversion):
+// Strategy (first-class inspection plus single-pass line-pixel readback):
 //   1. Inject globalThis.navigator.gpu via the `webgpu` npm package
 //      (dawn-node native binding ^0.4.0), same bootstrap as hello-fxaa/cube.
 //   2. Mock canvas + offscreen render target (bgra8unorm).
-//   3. createRenderer + register the demo's vertex-only wireframe-box mesh
-//      (12 edges, 24 vertices, NO index buffer, topology='line-list') + an
-//      unlit bright-cyan material. The 12 thin edges cover a small fraction
-//      of the frame.
+//   3. createRenderer + register first-class Points and Lines entries backed by
+//      a vertex-only wireframe-box mesh (12 edges, 24 vertices, NO index
+//      buffer, topology='line-list') and an unlit bright-cyan material.
+//      Points/Lines deliberately expand source primitives into indexed
+//      triangles for physical-pixel width, so the readback measures the real
+//      expanded raster rather than raw line-list coverage.
 //   4. Render ~300 frames as a TIGHT SYNCHRONOUS loop (one warm-up frame + a
 //      single event-loop yield to let the first shader-module compile land,
 //      then no per-frame yield -- RD: the scene is static, repeated draws are
@@ -22,25 +23,14 @@
 //      compile -- a tight loop no longer falls back to triangle-list. Read
 //      back the final frame.
 //   5. Count foreground pixels (any pixel materially brighter than the black
-//      clear color). Assert:
-//        (a) foreground > 0                   -- lines actually rendered
-//        (b) foreground < FILLED_FACE_CEILING -- it is a sparse wireframe,
-//            NOT a filled triangle face. A silent revert to triangle-list
-//            (topology dropped to the eager triangle-list PSO) renders a
-//            filled face that overshoots the ceiling -> red. This two-sided
-//            band is the discriminating power: a passing run proves the
-//            line-list PSO is actually in effect.
+//      clear color). Assert that the expanded Lines/Points carrier renders
+//      non-zero pixels and that its typed inspection remains resident. The
+//      separate browser probe owns the compositor PNG and falsifier matrix.
 //
 // Falsify hooks (plan-strategy §5.4 falsification check; NOT run in CI):
-//   - FALSIFY=topology-triangle-list : register a SOLID filled cube (36
-//     vertices, 12 triangles, topology='triangle-list', indexed so the
-//     strip/empty gates pass). This is the geometry the engine would draw if
-//     it silently dropped the line-list topology and fell back to the eager
-//     triangle-list PSO. The filled silhouette floods ~36% of the frame, far
-//     past FILLED_FACE_CEILING -> assertion (b) fails -> smoke RED. Proves
-//     the line-list path is load-bearing (the wireframe edges as a degenerate
-//     triangle-list would NOT fill, so the falsify uses the real filled cube
-//     to model the failure mode the demo guards against).
+//   - FALSIFY=topology-triangle-list : replace the Lines source with a solid
+//     cube. Points/Lines admission must refuse the mismatched topology and the
+//     inspection gate reports the refusal instead of drawing stale geometry.
 //   - FALSIFY=degenerate : collapse every wireframe vertex to the origin. The
 //     line segments have zero length -> ~0 foreground pixels -> assertion (a)
 //     fails -> smoke RED. Proves the readback is measuring real geometry.
@@ -49,8 +39,22 @@
 //
 // Output literals (preserved for grep tooling):
 //   - `[hello-topology] backend=webgpu`
-//   - `[smoke] lineReadback={"foreground":<N>,"ceiling":<N>,"totalPixels":<N>,"frames":<N>}`
+//   - `[smoke] lineReadback={"foreground":<N>,"totalPixels":<N>,"frames":<N>}`
 //   - `[smoke] PASS` / `[smoke] FAIL`
+
+// Focused M4 evidence matrix. The legacy line-list smoke below remains the
+// regression carrier; the focused browser probe owns compositor PNG evidence.
+// These names are also the stable falsifier vocabulary for the paired probes.
+const FOCUSED_EVIDENCE_CASES = [
+  'points-square-circle',
+  'lines-1-4-16px',
+  'indexed-nonindexed',
+  'depth-alpha-sort',
+  'resize-dpr',
+  'frustum-edge',
+  'lane-provenance',
+];
+const FOCUSED_FALSIFIERS = ['point-square', 'line-width', 'depth-sort', 'lane'];
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -65,12 +69,6 @@ const CLEAR_RGBA = [0, 0, 0, 1];
 const TOTAL_PIXELS = WIDTH * HEIGHT;
 const FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
 
-// A bright-cyan unit-cube wireframe (12 thin edges) viewed obliquely covers a
-// small fraction of the frame. A SOLID filled cube (the falsify geometry) at
-// the same camera fills ~36% of the frame. 8% of the frame cleanly separates
-// the two: line segments land well under it, a filled silhouette blows past
-// it.
-const FILLED_FACE_CEILING = Math.floor(TOTAL_PIXELS * 0.08); // 38400 px
 // A pixel counts as foreground when any color channel is clearly above the
 // black clear color (guards against AA fringe noise being counted).
 const FOREGROUND_CHANNEL_MIN = 24;
@@ -166,11 +164,9 @@ const mockCanvas = {
 // --- 3. Engine imports + renderer bootstrap ---------------------------------
 
 const { World } = await import('@forgeax/engine-ecs');
-const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  createRenderer,
-} = enginePkg;
-const { Camera, MeshFilter, MeshRenderer, perspective } = await import('@forgeax/engine-render');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
+const { buildMeshAttributeMapForUvSets } = await import('@forgeax/engine-geometry');
+const { Camera, Lines, Materials, MeshFilter, MeshRenderer, PointShapeValue, Points, perspective } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
@@ -188,7 +184,10 @@ try {
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  var hostAssets = constructed.value.assets;
 } catch (err) {
   console.error(
     `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
@@ -198,20 +197,11 @@ try {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
 
-console.log(`[hello-topology] backend=${renderer.backend}`);
+console.log(`[hello-topology] backend=${renderer.inspect().capabilities.backendKind}`);
 
-const assets = renderer.assets;
+const assets = hostAssets;
 if (!assets) {
   console.error('[smoke] FAIL - AssetRegistry is null');
-  process.exit(1);
-}
-if (!renderer.ready) {
-  console.error('[smoke] FAIL - renderer.ready is null');
-  process.exit(1);
-}
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
   process.exit(1);
 }
 
@@ -307,13 +297,15 @@ const topology = useTriangleFalsify ? 'triangle-list' : 'line-list';
 const meshPayload = {
   kind: 'mesh',
   vertices,
-  attributes: { position },
+  attributes: { ...buildMeshAttributeMapForUvSets(1), position },
   submeshes: [{
     indexOffset: 0,
     indexCount: useTriangleFalsify ? vertexCount : 0,
     vertexCount,
     topology,
+    materialSlot: 0,
   }],
+  materialSlots: [{ slotName: 'Default' }],
 };
 if (useTriangleFalsify) {
   // triangle-list of the 36 solid-cube vertices: 12 triangles (36 / 3).
@@ -323,25 +315,39 @@ if (useTriangleFalsify) {
   for (let i = 0; i < vertexCount; i++) meshPayload.indices[i] = i;
 }
 
+const pointPacked = packVertices([
+  [-0.4, 0.45, 0],
+  [0, 0.65, 0],
+  [0.4, 0.45, 0],
+], false);
+const pointMeshPayload = {
+  kind: 'mesh',
+  vertices: pointPacked.vertices,
+  attributes: { ...buildMeshAttributeMapForUvSets(1), position: pointPacked.position },
+  submeshes: [{
+    indexOffset: 0,
+    indexCount: 0,
+    vertexCount: pointPacked.vertexCount,
+    topology: 'point-list',
+    materialSlot: 0,
+  }],
+  materialSlots: [{ slotName: 'Points' }],
+};
+
 // w64: mint mesh + material as user-tier shared refs (register/get deleted M8).
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const meshHandle = world.allocSharedRef('MeshAsset', meshPayload);
+const pointMeshHandle = world.allocSharedRef('MeshAsset', pointMeshPayload);
 
-const materialHandle = world.allocSharedRef('MaterialAsset', {
-  kind: 'material',
-  passes: [
-    {
-      name: 'Forward',
-      program: { module: 'forgeax::default-unlit' },
-      renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
-    },
-  ],
-  values: {
-    baseColor: [0.1, 0.9, 1.0],
-  },
-});
+const materialHandle = world.allocSharedRef(
+  'MaterialAsset',
+  Materials.unlit([0.1, 0.9, 1, 1], {
+    castShadow: false,
+    ...(FALSIFY === 'depth-sort' ? { renderState: { depthWriteEnabled: false } } : {}),
+  }),
+);
 
 const device = sharedDevice;
 if (!device) {
@@ -356,6 +362,19 @@ function spawnScene(world) {
     { component: Transform, data: { quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
     { component: MeshFilter, data: { assetHandle: meshHandle } },
     { component: MeshRenderer, data: { materials: [materialHandle] } },
+    { component: Lines, data: { widthPx: FALSIFY === 'line-width' ? 1 : 4 } },
+  ).unwrap();
+  world.spawn(
+    { component: Transform, data: { pos: [0, 0, -2], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
+    { component: MeshFilter, data: { assetHandle: pointMeshHandle } },
+    { component: MeshRenderer, data: { materials: [materialHandle] } },
+    {
+      component: Points,
+      data: {
+        sizePx: 16,
+        shape: FALSIFY === 'point-square' ? PointShapeValue.square : PointShapeValue.circle,
+      },
+    },
   );
   world.spawn(
     { component: Transform, data: { pos: [1.6, 1.4, 3.2], quat: [-0.1804578, 0.22576895, 0.04260031, 0.9563726]} },
@@ -409,7 +428,9 @@ async function doReadPixels() {
 // --- 6. Error tracker + render loop -----------------------------------------
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint });
+});
 
 spawnScene(world);
 
@@ -436,7 +457,11 @@ spawnScene(world);
 // (one compile); a per-frame yield would mean the engine fix did not work.
 {
   world.update().unwrap();
-  const warmRes = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const warmRes = renderer.draw({
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  });
   if (!warmRes.ok) {
     console.error(`[smoke] FAIL - warmup draw failed: ${warmRes.error.code}`);
     process.exit(1);
@@ -445,7 +470,11 @@ spawnScene(world);
 await delay(0); // single event-loop turn: let the first unlit module compile land.
 for (let f = 1; f < FRAMES; f++) {
   world.update().unwrap();
-  const drawRes = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }); // tight, synchronous: no yield in steady state.
+  const drawRes = renderer.draw({
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  }); // tight, synchronous: no yield in steady state.
   if (!drawRes.ok) {
     console.error(`[smoke] FAIL - draw failed at frame ${f}: ${drawRes.error.code}`);
     process.exit(1);
@@ -453,6 +482,9 @@ for (let f = 1; f < FRAMES; f++) {
 }
 await device.queue.onSubmittedWorkDone();
 const pixels = await doReadPixels();
+const pointsLinesInspection = renderer.inspect().renderScene.pointsLines ?? [];
+const pointInspection = pointsLinesInspection.find((entry) => entry.component === 'Points');
+const lineInspection = pointsLinesInspection.find((entry) => entry.component === 'Lines');
 
 // --- 7. Verdict --------------------------------------------------------------
 
@@ -470,21 +502,37 @@ for (let i = 0; i < pixels.length; i += 4) {
 console.log(
   `[smoke] lineReadback=${JSON.stringify({
     foreground,
-    ceiling: FILLED_FACE_CEILING,
     totalPixels: TOTAL_PIXELS,
     frames: FRAMES,
     falsify: FALSIFY || '<none>',
+    lane: renderer.inspect().capabilities.backendKind,
+    pointsLines: pointsLinesInspection,
   })}`,
 );
 
 const failures = [];
 
-if (renderer.backend !== 'webgpu') {
-  failures.push(`(0) backend=${renderer.backend} (expected webgpu)`);
+if (renderer.inspect().capabilities.backendKind !== 'webgpu') {
+  failures.push(`(0) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
 }
 if (errors.length > 0) {
   const codes = errors.map((e) => e.code).join(', ');
   failures.push(`(0) Renderer.onError fired ${errors.length} times: [${codes}]`);
+}
+if (pointsLinesInspection.length !== 2) {
+  failures.push(`(c) first-class inspection count=${pointsLinesInspection.length} (expected 2)`);
+}
+if (pointInspection?.style?.kind !== 'points' || pointInspection.style.sizePx !== 16) {
+  failures.push('(c) authored point size/style was not observed through Points/Lines inspection');
+}
+if (lineInspection?.style?.kind !== 'lines' || lineInspection.style.widthPx !== (FALSIFY === 'line-width' ? 1 : 4)) {
+  failures.push('(c) authored line width was not observed through Points/Lines inspection');
+}
+if (FALSIFY === 'point-square' && pointInspection?.style?.shape !== 'square') {
+  failures.push('(falsifier) point-square did not execute against the authored component');
+}
+if (FALSIFY === 'lane' && renderer.inspect().capabilities.backendKind === 'webgpu') {
+  failures.push('(falsifier) lane requested wgpu-webgl2 but observed webgpu');
 }
 // (a) lines actually rendered.
 if (foreground === 0) {
@@ -493,16 +541,6 @@ if (foreground === 0) {
       '(degenerate geometry, or the topology path dropped the draw)',
   );
 }
-// (b) sparse wireframe, not a filled face.
-if (foreground >= FILLED_FACE_CEILING) {
-  failures.push(
-    `(b) foreground ${foreground} >= ceiling ${FILLED_FACE_CEILING} -- the mesh ` +
-      'rendered as a FILLED face, not discrete line segments. topology may have ' +
-      "reverted to 'triangle-list' (charter P3: check MeshAsset.topology threading " +
-      'into the per-topology PSO).',
-  );
-}
-
 if (failures.length > 0) {
   console.error(`[smoke] FAIL - ${failures.length} criteria failed:`);
   for (const f of failures) console.error(`  ${f}`);
@@ -514,7 +552,7 @@ if (failures.length > 0) {
 
 console.log(
   `[smoke] PASS - criteria GREEN: backend=webgpu, RhiError count=${errors.length}, ` +
-    `foreground=${foreground} in band (0, ${FILLED_FACE_CEILING}) over ${FRAMES} frames`,
+    `foreground=${foreground} expanded Points/Lines pixels over ${FRAMES} frames`,
 );
 
 device.destroy?.();

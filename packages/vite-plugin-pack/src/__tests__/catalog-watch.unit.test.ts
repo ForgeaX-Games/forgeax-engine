@@ -1,7 +1,6 @@
+import { calculateCatalogDelta } from '@forgeax/engine-pack/build';
 import type { PackIndexEntry } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-
-import { calculateCatalogDelta } from '../catalog-watch.js';
 
 const entry = (guid: string, packageUrl = `/assets/${guid}.bin`): PackIndexEntry => ({
   guid,

@@ -25,6 +25,12 @@ function registerClip(world: World, duration: number) {
   return world.allocSharedRef('AnimationClip', clip);
 }
 
+const lookupClip = (_guid: string): AnimationClip => ({
+  kind: 'animation-clip',
+  duration: 10,
+  channels: [],
+});
+
 function readWeights(world: World, e: EntityHandle): Float32Array {
   return (world.get(e, AnimationPlayer).unwrap() as unknown as { weights: Float32Array }).weights;
 }
@@ -32,12 +38,12 @@ function readWeights(world: World, e: EntityHandle): Float32Array {
 describe('evaluateAnimationGraph — Add non-normalizing (M3 / w18)', () => {
   it('Add(base@1, additive@0.3) totals 1.3 (additive is NOT normalized)', () => {
     const world = new World();
-    const base = registerClip(world, 10);
-    const additive = registerClip(world, 10);
+    registerClip(world, 10);
+    registerClip(world, 10);
 
     const built = defineAnimationGraph((b) => {
-      const baseNode = b.clip(base); // static weight 1
-      const additiveNode = b.clip(additive, 0.3); // static weight 0.3
+      const baseNode = b.clip('test/animation-clip-base'); // static weight 1
+      const additiveNode = b.clip('test/animation-clip-additive', 0.3); // static weight 0.3
       return b.add(baseNode, [additiveNode]);
     });
     expect(built.ok).toBe(true);
@@ -48,7 +54,7 @@ describe('evaluateAnimationGraph — Add non-normalizing (M3 / w18)', () => {
       .spawn({ component: AnimationPlayer, data: { graph: graphH } })
       .unwrap() as EntityHandle;
 
-    evaluateAnimationGraph(world, 0);
+    evaluateAnimationGraph(world, 0, lookupClip);
 
     const weights = readWeights(world, e);
     expect(weights.length).toBe(2);

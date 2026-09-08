@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // Dawn smoke for Bevy `sprite_sheet`: only source-sheet frames 1 through 6 animate.
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -30,20 +31,16 @@ const { propagateTransforms } = await import('@forgeax/engine-scene');
 const { unwrapHandle } = await import('@forgeax/engine-types');
 const { animationRegions, buildSpriteSheetWorld, makeSpriteSheetPixels, SHEET_HEIGHT, SHEET_WIDTH, tickSpriteSheet, ANIMATION_FRAME_COUNT, FIRST_ANIMATION_FRAME, LAST_ANIMATION_FRAME } = await import(resolve(here, '..', 'src', 'sprite-sheet.ts'));
 const manifestPath = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
-const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}` });
+const renderer = await createSmokeRenderer(createRenderer, canvas, {}, { shaderManifestUrl: `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}` });
 gpu.requestAdapter = originalRequestAdapter;
 const errors = [];
-renderer.onError((error) => errors.push(error));
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
+subscribeSmokeErrors(renderer, (error) => errors.push(error));
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const pixels = makeSpriteSheetPixels();
 const texture = { kind: 'texture', width: SHEET_WIDTH, height: SHEET_HEIGHT, format: 'rgba8unorm-srgb', data: pixels, colorSpace: 'srgb', mipmap: false };
 const textureHandle = world.allocSharedRef('TextureAsset', texture);
-const upload = await renderer.store.uploadTexture(textureHandle, texture, { bytes: pixels, width: SHEET_WIDTH, height: SHEET_HEIGHT, mime: 'image/png', colorSpace: 'srgb', mipmap: false });
-if (!upload.ok) throw new Error(`${upload.error.code}: ${upload.error.hint}`);
 buildSpriteSheetWorld(world, unwrapHandle(textureHandle));
 const query = world.query({ with: [SpriteAnimation] }).unwrap();
 const animationEntities = [];
@@ -75,15 +72,15 @@ let previous = -1;
 let earlyFrame;
 let lateFrame;
 for (let i = 0; i < frames; i += 1) {
-  tickSpriteSheet(world, dt);
+  world.update(dt).unwrap();
+  tickSpriteSheet(world);
   const current = world.get(animationEntity, SpriteAnimation);
   if (!current.ok) throw new Error('animated sprite disappeared');
   seen.add(current.value.currentFrame);
   if (current.value.currentFrame !== previous) changes += 1;
   previous = current.value.currentFrame;
   propagateTransforms(world);
-  world.update().unwrap();
-  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const draw = drawSmokeFrame(renderer, world);
   if (!draw.ok) throw new Error(`${draw.error.code}: ${draw.error.hint}`);
   if (i === 5) earlyFrame = await capture();
   if (i === frames - 1) lateFrame = await capture();
@@ -107,7 +104,7 @@ for (let i = 0; i < lateFrame.length; i += 4) {
   if (max - min > 35 && max > 40) coloredPixels += 1;
 }
 console.log(`[smoke] frames=${frames} logicalFrameSet=${[...seen].sort((a, b) => a - b).join(',')} changes=${changes} coloredPixels=${coloredPixels} motionMeanDelta=${motionDelta.toFixed(5)} leadInPixels=${leadInPixels} errors=${errors.length}`);
-if (renderer.backend !== 'webgpu' || frames < 100 || seen.size < 3 || [...seen].some((frame) => frame < 0 || frame >= ANIMATION_FRAME_COUNT) || changes < 10 || coloredPixels < 500 || motionDelta <= 0.0005 || leadInPixels > 5 || errors.length > 0) {
+if (rendererBackend(renderer) !== 'webgpu' || frames < 100 || seen.size < 3 || [...seen].some((frame) => frame < 0 || frame >= ANIMATION_FRAME_COUNT) || changes < 10 || coloredPixels < 500 || motionDelta <= 0.0005 || leadInPixels > 5 || errors.length > 0) {
   console.error('[smoke] FAIL - sprite-sheet subset/animation/visibility/error criterion failed');
   process.exit(1);
 }

@@ -82,6 +82,24 @@ export type ShelfPackOutcome =
   | { readonly ok: true; readonly value: ShelfPackResult }
   | { readonly ok: false; readonly error: ShelfPackError };
 
+function sizeExceeded(
+  image: AtlasImageInput,
+  maxAtlasSize: number,
+): { readonly ok: false; readonly error: ShelfPackError } {
+  return {
+    ok: false,
+    error: {
+      code: 'atlas-size-exceeded',
+      detail: {
+        name: image.name,
+        width: image.width,
+        height: image.height,
+        maxAtlasSize,
+      },
+    },
+  };
+}
+
 function nextPow2(n: number): number {
   if (n <= 1) return 1;
   let p = 1;
@@ -104,18 +122,7 @@ export function shelfPack(
 
   for (const img of images) {
     if (img.width > maxAtlasSize || img.height > maxAtlasSize) {
-      return {
-        ok: false,
-        error: {
-          code: 'atlas-size-exceeded',
-          detail: {
-            name: img.name,
-            width: img.width,
-            height: img.height,
-            maxAtlasSize,
-          },
-        },
-      };
+      return sizeExceeded(img, maxAtlasSize);
     }
   }
 
@@ -148,18 +155,7 @@ export function shelfPack(
       currentShelfHeight = img.height;
     }
     if (cursorY + img.height > maxAtlasSize) {
-      return {
-        ok: false,
-        error: {
-          code: 'atlas-size-exceeded',
-          detail: {
-            name: img.name,
-            width: img.width,
-            height: img.height,
-            maxAtlasSize,
-          },
-        },
-      };
+      return sizeExceeded(img, maxAtlasSize);
     }
     regions.push({ name: img.name, x: cursorX, y: cursorY, w: img.width, h: img.height });
     cursorX += img.width;

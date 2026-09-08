@@ -1,8 +1,9 @@
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
 import { HANDLE_QUAD, type AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { createDevImportTransport } from '@forgeax/engine-runtime';
+
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset, MaterialValue, TextureAsset } from '@forgeax/engine-types';
@@ -26,7 +27,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appResult = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appResult.ok) {
     console.error('[bevy-parallax-mapping] createApp failed:', appResult.error);
@@ -34,10 +35,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   const app = appResult.value;
-  const renderer = app.renderer;
-
-  renderer.assets.configurePackIndex('/pack-index.json');
-  const textureHandles = await loadTextures(app.world, renderer.assets);
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[bevy-parallax-mapping] asset owner unavailable');
+    return;
+  }
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
+  const textureHandles = await loadTextures(app.world, assets);
   if (textureHandles === null) return;
 
   const materials = [0, 1, 2].map((algoMode) => {
@@ -88,7 +92,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   );
 
   app.onError((error) => console.error('[bevy-parallax-mapping] app error:', error.code, error.hint));
-  console.info(`[bevy-parallax-mapping] backend=${renderer.backend}`);
+  console.info('[bevy-parallax-mapping] Standard pipeline active');
   const started = app.start();
   if (!started.ok) console.error('[bevy-parallax-mapping] app.start failed:', started.error);
 }

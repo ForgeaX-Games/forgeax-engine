@@ -38,6 +38,10 @@ describe('Engine Worker thick bootstrap channel', () => {
       bootstrapUrl: 'https://example.test/bootstrap.js',
       bootstrapData: { gameId: 'sample' },
       bootstrapPort: channel.port2,
+      assetCatalog: {
+        url: '/__pack/scopes/sample/7/catalog.json',
+        expectedScope: { scopeId: 'sample', generation: 7 },
+      },
       timeoutMs: 100,
       tier: 'engine-worker',
       workerFactory: () => worker as unknown as Worker,
@@ -49,6 +53,10 @@ describe('Engine Worker thick bootstrap channel', () => {
       kind: 'init',
       bootstrapData: { gameId: 'sample' },
       bootstrapPort: channel.port2,
+      assetCatalog: {
+        url: '/__pack/scopes/sample/7/catalog.json',
+        expectedScope: { scopeId: 'sample', generation: 7 },
+      },
     });
     expect(worker.posts[0]?.transfer).toEqual([offscreen, channel.port2]);
     started.ok && started.value.dispose();

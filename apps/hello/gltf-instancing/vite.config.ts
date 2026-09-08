@@ -3,11 +3,13 @@ import { fileURLToPath } from 'node:url';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
+import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { defineConfig } from 'vite';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
+const runtimeBinding = createStandaloneRuntimeAssetBinding('hello-gltf-instancing');
 
 // hello-gltf-instancing vite config (feat-20260518 M5).
 //
@@ -18,7 +20,7 @@ const monorepoRoot = resolve(here, '..', '..', '..');
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
-    pluginPack({ roots: [resolve(here, 'assets')], importers: [imageImporter, gltfImporter], refresh: reloadAssetHost() }),
+    pluginPack({ runtimeBinding, roots: [resolve(here, 'assets')], importers: [imageImporter, gltfImporter], refresh: reloadAssetHost() }),
   ],
   server: {
     fs: {

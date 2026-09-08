@@ -22,12 +22,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
   const app = appResult.value;
 
-  const ready = await app.renderer.ready;
-  if (!ready.ok) {
-    console.error('[bevy-lighting] renderer.ready failed:', ready.error);
-    return;
-  }
-  console.warn(`[bevy-lighting] backend=${app.renderer.backend}`);
+  console.warn(`[bevy-lighting] state=${app.renderer.inspect().state}`);
 
   buildLightingWorld(app.world);
 

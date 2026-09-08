@@ -1,0 +1,14 @@
+{
+  "id": "template-brotato-3d",
+  "name": "Brotato 3D",
+  "schemaVersion": "1.0.0",
+  "entry": "main.ts",
+  "physics": "3d",
+  "plugins": [
+    {
+      "id": "gameplay",
+      "name": "./main.ts",
+      "realm": "engine"
+    }
+  ]
+}

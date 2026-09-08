@@ -59,6 +59,7 @@ export type ImportErrorCode =
   | 'source-read-failed'
   | 'import-produced-no-assets'
   | 'guid-mismatch'
+  | 'mesh-material-slot-topology-change'
   | 'import-internal-error'
   | 'source-validation-failed';
 
@@ -141,6 +142,12 @@ export type ImportErrorDetail =
       readonly sourceKey?: string;
       readonly declaredSourceKeys: readonly string[];
       readonly reason?: string;
+    }
+  | {
+      readonly meshGuid: string;
+      readonly meshSourceKey?: string;
+      readonly previousIndices: readonly number[];
+      readonly nextIndices: readonly number[];
     };
 
 /**
@@ -192,6 +199,8 @@ export const IMPORT_ERROR_HINTS: Readonly<Record<ImportErrorCode, string>> = {
     'the importer produced no assets, or omitted a GUID that meta.subAssets[] declared; the produced GUID set must be a superset of the declared set (GUID import-stable iron law); err.detail.missingGuids lists the declared GUIDs not produced',
   'guid-mismatch':
     'the importer produced a GUID that meta.subAssets[] never declared (violates the GUID import-stable iron law: GUIDs come from the external meta, never minted by the importer); err.detail.unexpectedGuids lists the offending GUIDs',
+  'mesh-material-slot-topology-change':
+    'the importer could not match previous and current Mesh material slots without ambiguity; name source materials uniquely or repair their stable sourceKey values before reimport',
   'import-internal-error':
     'the importer failed at runtime; branch on err.detail: a conversion THROW carries err.detail.reason (the loaded importer threw while converting the source — an importer bug, not a meta / source problem), while a build-time module-LOAD failure carries err.detail.loadError (the host importer module / native addon could not be imported)',
   'source-validation-failed':
@@ -289,7 +298,7 @@ export interface ImportContext {
   >;
   decodeImage(
     bytes: Uint8Array,
-    mimeType: 'image/png' | 'image/jpeg',
+    mimeType: 'image/png' | 'image/jpeg' | 'image/x-tga',
     importSettings: Readonly<Record<string, unknown>>,
   ): Promise<
     | {
@@ -322,10 +331,56 @@ export interface ImportContext {
  * prefer returning a partial / empty result so the runner can attribute the
  * failure precisely.
  */
+export interface ImportProductFinalizeArtifact {
+  readonly path: string;
+  readonly mimeType: string;
+  readonly bytes: Uint8Array;
+}
+
+export interface ImportProductFinalizeOptions {
+  readonly artifactUrl: (artifact: ImportProductFinalizeArtifact) => string;
+}
+
+export type ImportProductFinalizeResult =
+  | {
+      readonly ok: true;
+      readonly value: {
+        readonly asset: unknown;
+        readonly artifacts: readonly { readonly path: string; readonly mimeType: string }[];
+      };
+    }
+  | {
+      readonly ok: false;
+      readonly error: {
+        readonly code: string;
+        readonly expected: string;
+        readonly hint: string;
+        readonly detail: unknown;
+      };
+    };
+
+/** Optional producer capability exposed to the generic import runner. */
+export interface ImporterCapabilities {
+  readonly decodeImage?: ImportContext['decodeImage'];
+  /** Producer-owned Catalog visibility for declarations before materialization. */
+  readonly catalog?: {
+    readonly publish?: (input: {
+      readonly importSettings: Readonly<Record<string, unknown>>;
+      readonly subAssets: readonly ImportSubAsset[];
+    }) => boolean;
+  };
+}
+
 export interface Importer {
   readonly key: string;
   // biome-ignore lint/suspicious/noExplicitAny: pending downstream importer migration keeps old consumers source-compatible
   import(ctx: ImportContext): Promise<any> | any;
+  readonly capabilities?: ImporterCapabilities;
+  /** Optional owner projection for transport artifacts produced by this importer. */
+  finalize?: (
+    product: ImportProduct<unknown>,
+    options: ImportProductFinalizeOptions,
+  ) => ImportProductFinalizeResult;
 }
 /**
  * Interface slot for the M4 lazy-import transport (OOS-2). A runtime

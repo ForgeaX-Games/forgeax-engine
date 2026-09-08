@@ -1,10 +1,11 @@
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { Update } from '@forgeax/engine-ecs';
 // hello-fbx-skin -- feat-20260615-fbx-importer-via-sdk M5 t51 R2 fixup #2.
 //
 // End-to-end declare-import-load via fbxImporter through the build-time
 // vite-plugin-pack pipeline:
-//   (1) configurePackIndex('/pack-index.json')      — declared in vite.config.ts
-//   (2) createDevImportTransport()                  — dev-server POST /__import/:guid
+//   (1) configureRuntimeAssetCatalog(assets, runtimeBinding) — scoped dev or static build catalog
+//   (2) createRuntimeAssetImportTransport(runtimeBinding)             — dev-server POST /__import/:guid
 //                                                     dispatches to fbxImporter
 //   (3) loadByGuid<SceneAsset>(sceneGuid)           — runtime resolves the GUID
 //   (4) instantiate x 3 + AnimationPlayer N-way SoA slots  — per-instance pose-distinct
@@ -22,6 +23,7 @@ import { Update } from '@forgeax/engine-ecs';
 
 import { createApp } from '@forgeax/engine-app';
 import { ENTITY_NULL_RAW, type EntityHandle, World } from '@forgeax/engine-ecs';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   AnimationPlayer,
@@ -34,13 +36,12 @@ import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, DirectionalLight } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { SceneInstance } from '@forgeax/engine-render';
 
-import type { AnimationClip, Handle, SceneAsset } from '@forgeax/engine-types';
+import { type AnimationClip, type Handle, type SceneAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
-const PACK_INDEX_URL = '/pack-index.json';
 const SCENE_GUID = '019ecd87-179b-7eb3-a37d-391f05c61e52';
 
 const CLIPS = [
@@ -70,7 +71,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[fbx-skin] createApp failed:', appRes.error);
@@ -78,15 +79,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
   const app = appRes.value;
   const world: World = app.world;
-  const renderer = app.renderer;
-  console.warn(`[fbx-skin] backend=${renderer.backend}`);
+  console.warn('[fbx-skin] Standard pipeline active');
 
-  const assets = renderer.assets;
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[hello-fbx-skin] asset owner unavailable');
+    return;
+  }
   if (assets === null) {
     console.error('[fbx-skin] AssetRegistry is null');
     return;
   }
-  assets.configurePackIndex(PACK_INDEX_URL);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   // Load scene + 3 animation clips up front so per-frame swap is just a Handle.
   const sceneGuidRes = AssetGuid.parse(SCENE_GUID);
@@ -234,7 +238,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     after: ['input-frame-start-scan'],
     queries: [],
     fn: () => {
-      const snap = app.renderer.input.snapshot(world);
+      const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (snap === undefined) return;
 
       for (let i = 0; i < clipHandles.length; i++) {

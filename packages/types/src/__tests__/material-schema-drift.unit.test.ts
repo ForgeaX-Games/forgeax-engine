@@ -30,5 +30,9 @@ describe('material schema vocabulary', () => {
       default: 'srgb',
     });
     expect(schema.$defs?.valueOrNull).toBeDefined();
+    expect(schema.$defs?.value).toMatchObject({
+      anyOf: expect.arrayContaining([{ $ref: '#/$defs/textureGuid' }]),
+    });
+    expect(schema.$defs?.textureGuid).toMatchObject({ type: 'string', minLength: 1 });
   });
 });

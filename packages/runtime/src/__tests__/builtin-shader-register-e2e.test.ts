@@ -17,10 +17,10 @@
 // this test and packages/shader/src/*.material.json surfaces immediately
 // (charter F2: structural, falsifiable).
 
-import { appendInjection } from '@forgeax/engine-render/internal';
 import type { ParamSchemaEntry } from '@forgeax/engine-types';
 import { derive } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { appendInjection } from '../../../render/src/pbr-pipeline';
 
 // ─── post-w18 default-standard-pbr sidecar ──────────────────────────────────
 const STANDARD_PBR_SIDECAR: readonly ParamSchemaEntry[] = [

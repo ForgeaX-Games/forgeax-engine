@@ -22,7 +22,7 @@
 // fires the RhiError on the engine error channel and falls back to the default
 // view for that frame.
 
-import type { Result, RhiError, Texture, TextureView } from '@forgeax/engine-rhi';
+import type { Result, RhiDevice, RhiError, Texture, TextureView } from '@forgeax/engine-rhi';
 import { ok } from '@forgeax/engine-rhi';
 import type { Handle } from '@forgeax/engine-types';
 import { handleSlot } from '@forgeax/engine-types';
@@ -77,6 +77,42 @@ export interface DynamicTextureDevice {
         readonly depthOrArrayLayers: number;
       },
     ): Result<void, RhiError>;
+  };
+}
+
+/** Adapt the opaque RHI device to the store's intentionally small upload seam. */
+export function adaptDynamicTextureDevice(device: RhiDevice): DynamicTextureDevice {
+  return {
+    createTexture: (descriptor) =>
+      device.createTexture({
+        ...descriptor,
+        mipLevelCount: undefined,
+        sampleCount: undefined,
+        dimension: undefined,
+        viewFormats: undefined,
+        textureBindingViewDimension: undefined,
+      }),
+    createTextureView: (texture) =>
+      device.createTextureView(texture, {
+        label: undefined,
+        format: undefined,
+        dimension: undefined,
+        usage: undefined,
+        aspect: undefined,
+        baseMipLevel: undefined,
+        mipLevelCount: undefined,
+        baseArrayLayer: undefined,
+        arrayLayerCount: undefined,
+      }),
+    destroyTexture: (texture) => device.destroyTexture(texture),
+    queue: {
+      copyExternalImageToTexture: (source, destination, copySize) =>
+        device.queue.copyExternalImageToTexture(
+          { source: source.source, origin: [0, 0], flipY: source.flipY ?? false },
+          { texture: destination.texture, origin: [0, 0, 0] },
+          copySize,
+        ),
+    },
   };
 }
 

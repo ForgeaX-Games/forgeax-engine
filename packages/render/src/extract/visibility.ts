@@ -1,5 +1,4 @@
-import type { EntityHandle, Table, World } from '@forgeax/engine-ecs';
-import { Entity } from '@forgeax/engine-ecs';
+import { Entity, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import {
   projectHierarchy,
   type SceneHierarchyDiagnostic,
@@ -38,21 +37,6 @@ interface ResolutionState {
   readonly source: VisibilitySource;
 }
 
-interface InternalWorldSurface {
-  /** @internal */
-  _getGraph(): { tables: ReadonlyArray<Table | undefined> };
-}
-
-function readColumn(
-  table: Table,
-  componentId: number,
-  fieldName: string,
-): ArrayLike<number> | undefined {
-  return table.storage.get(componentId)?.fields.get(fieldName)?.view as
-    | ArrayLike<number>
-    | undefined;
-}
-
 /**
  * Resolve author intent against the scene-owned valid parent projection.
  * Diagnostics are preserved for callers to repair hierarchy input before retry.
@@ -61,18 +45,16 @@ export function resolveVisibility(
   world: World,
   hierarchy: SceneHierarchySnapshot = projectHierarchy(world),
 ): VisibilitySnapshot {
-  const graph = (world as unknown as InternalWorldSurface)._getGraph();
+  const query = world.query({ read: [Entity], optional: [Visibility] });
   let intentCount = 0;
   let hasAnyHiddenIntent = false;
-  for (const table of graph.tables) {
-    if (table === undefined) continue;
-    const states = readColumn(table, Visibility.id, 'state');
-    if (states === undefined) continue;
-    intentCount += table.size;
-    for (let row = 0; row < table.size; row++) {
-      if (states[row] === VisibilityStateValue.hidden) {
+  if (query.ok) {
+    for (const row of query.value) {
+      const visibility = row.get(Visibility);
+      if (visibility === undefined) continue;
+      intentCount += 1;
+      if (visibility.state === VisibilityStateValue.hidden) {
         hasAnyHiddenIntent = true;
-        break;
       }
     }
   }
@@ -82,15 +64,12 @@ export function resolveVisibility(
   const ensureResolver = (): void => {
     if (resolveEntity !== undefined) return;
     const intentByEntity = new Map<EntityHandle, VisibilityState>();
-    for (const table of graph.tables) {
-      if (table === undefined) continue;
-      const entities = readColumn(table, Entity.id, 'self');
-      const states = readColumn(table, Visibility.id, 'state');
-      if (entities === undefined || states === undefined) continue;
-      for (let row = 0; row < table.size; row++) {
-        const intent = visibilityStateFromU32(states[row] ?? 0);
+    if (query.ok) {
+      for (const row of query.value) {
+        const raw = row.get(Visibility);
+        const intent = raw === undefined ? undefined : visibilityStateFromU32(raw.state);
         if (intent !== undefined) {
-          intentByEntity.set((entities[row] ?? 0) as EntityHandle, intent);
+          intentByEntity.set(row.entity, intent);
         }
       }
     }

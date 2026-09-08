@@ -20,11 +20,17 @@ const EXPECTED_IN_POLICY_ORDER = [
   'image/mimeType is image/jpeg or image/png',
   'skin.joints.length <= MAX_JOINTS (256)',
   'animation sampler interpolation is LINEAR or STEP',
-  'no animation channel targets morph weights (path !== "weights")',
+  'animation channel target path is one of translation, rotation, scale, or weights',
   'every joint node has a non-empty name and belongs to an acyclic hierarchy',
   'image bytes extractable from bufferView / data-URI / external URI without corruption',
   'mesh primitive declares JOINTS_0 and WEIGHTS_0 symmetrically (both present or both absent)',
   'every animation channel resolves to one uniquely named scene node and stable target ID',
+  'a required or compressed-only EXT_meshopt_compression bufferView has a ready decoder capability',
+  'the EXT_meshopt_compression declaration and decoder output are structurally valid',
+  'morph target and default-weight arrays are dense, bounded, and match the base vertex count',
+  'COLOR_0 dense accessor uses VEC3/VEC4 FLOAT or normalized UBYTE/USHORT',
+  'COLOR_0 accessor is non-empty, finite, in range, and fully addressable',
+  'a non-empty merged mesh with consistent morph and COLOR_0 cardinality',
 ] as const;
 
 const HINTS_IN_POLICY_ORDER = [
@@ -39,11 +45,17 @@ const HINTS_IN_POLICY_ORDER = [
   'convert to JPG/PNG via external tool; only image/jpeg and image/png are supported',
   'reduce joint count below MAX_JOINTS (256) or see OOS-skin-max-joints',
   'see OOS-skin-cubicspline; convert CUBICSPLINE to LINEAR/STEP in DCC tool',
-  'see OOS-skin-morph-anim; remove morph targets from animation channels in DCC tool',
+  'animation target path must be translation, rotation, scale, or weights',
   'ensure every joint node has a non-empty name and the node hierarchy is acyclic',
   'verify the bufferView byte range / data: URI base64 / external URI sibling file is intact next to the .gltf source; rerun: forgeax-engine-remote-gltf import <path>',
   'glTF spec requires JOINTS_0 and WEIGHTS_0 to appear together for each skinned primitive; add the missing attribute or remove the present one in the DCC tool',
   'name every node in the animated hierarchy and ensure each animated full path is unique',
+  'provide the build-only EXT_meshopt_compression decoder or author a valid core fallback bufferView',
+  'the meshopt decoder accepts the declared compressed range and produces the declared byte count',
+  're-export dense morph targets with at most eight targets/attributes and matching vertex/default-weight lengths',
+  're-export COLOR_0 with a supported type/component/normalized combination; morph and sparse COLOR_0 remain deferred',
+  'repair the COLOR_0 accessor count, reference, range, or buffer bounds, then re-import the glTF source',
+  'repair the source primitive and re-import; inspect detail.reason and its typed facts',
 ] as const;
 
 const policyErrors: readonly GltfError[] = [
@@ -94,14 +106,44 @@ const policyErrors: readonly GltfError[] = [
     channelIndex: 0,
     nodeIndex: 0,
   }),
+  gltfErr('gltf-meshopt-decoder-required', {
+    bufferView: 0,
+    actual: 'required',
+    hasCoreFallback: false,
+  }),
+  gltfErr('gltf-meshopt-decode-failed', {
+    bufferView: 1,
+    actual: 'decoded byte count mismatch',
+    mode: 'ATTRIBUTES',
+    filter: 'NONE',
+  }),
+  gltfErr('gltf-morph-invalid', {
+    meshIndex: 0,
+    primitiveIndex: 0,
+    reason: 'target-count-exceeded',
+    targetCount: 9,
+    attributeCount: 1,
+    vertexCount: 3,
+  }),
+  gltfErr('gltf-color-accessor-unsupported', {
+    semantic: 'COLOR_0',
+    accessorIndex: 0,
+    reason: 'component',
+  }),
+  gltfErr('gltf-color-accessor-malformed', {
+    semantic: 'COLOR_0',
+    accessorIndex: 0,
+    reason: 'bounds',
+  }),
+  gltfErr('gltf-mesh-bridge-invalid', { reason: 'empty-input', primitiveCount: 0 }),
 ];
 
 describe('glTF error policy owner', () => {
-  it('projects one exact sixteen-code policy surface with stable own-key order', () => {
+  it('projects one exact twenty-two-code policy surface with stable own-key order', () => {
     const codes = policyErrors.map(({ code }) => code);
 
-    expect(codes).toHaveLength(16);
-    expect(new Set(codes).size).toBe(16);
+    expect(codes).toHaveLength(22);
+    expect(new Set(codes).size).toBe(22);
     expect(Object.keys(GLTF_ERROR_HINTS)).toEqual(codes);
     expect(Object.getOwnPropertyNames(GLTF_ERROR_HINTS)).toEqual(codes);
     expect(Object.values(GLTF_ERROR_HINTS)).toEqual(HINTS_IN_POLICY_ORDER);

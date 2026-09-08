@@ -83,7 +83,10 @@ async function composeSpriteWithPir(perInstanceRegion: boolean): Promise<string>
   const commonSrc = readWgsl('common.wgsl');
   const r = await compileShader(spriteSrc, {
     id: `sprite-pir-${perInstanceRegion}`,
-    imports: { 'forgeax_view::common': commonSrc },
+    imports: {
+      'forgeax_view::common': commonSrc,
+      'forgeax_view::fog': readWgsl('fog.wgsl'),
+    },
     defines: {
       STORAGE_BUFFER_AVAILABLE: true,
       PER_INSTANCE_REGION: perInstanceRegion,

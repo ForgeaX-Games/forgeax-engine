@@ -9,7 +9,7 @@ import { decompressZstd } from '@forgeax/engine-codec';
 import { reimportReuseMeta } from '@forgeax/engine-image';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { scan } from '@forgeax/engine-pack/scanner';
-import { loadGameProjectSync } from '@forgeax/engine-project';
+import { loadGameProjectSync, resolveDefaultScene } from '@forgeax/engine-project';
 
 const here = resolve(fileURLToPath(new URL('.', import.meta.url)));
 const root = resolve(here, '..', '..', '..', '..');
@@ -23,6 +23,82 @@ function expectOk(result, label) {
 const project = loadGameProjectSync((path) => readFileSync(resolve(root, 'templates/game-default', path), 'utf8'));
 if (!project.ok || project.value.id !== 'template-default') fail(`project manifest rejected: ${project.ok ? project.value.id : project.error.code}`);
 console.log('[m2-content] project manifest: PASS');
+
+const manifestBaseline = readFileSync(resolve(root, 'templates/game-default/forge.json'), 'utf8');
+const manifestData = JSON.parse(manifestBaseline);
+const baselineSceneGuid = manifestData.defaultScene;
+const repairedSceneGuid = '15acc839-d847-527c-8284-bfb36d7c50de';
+const wrongKindGuid = '7b4d43d4-5b19-5903-8966-f89671d21565';
+const manifestState = { raw: manifestBaseline, trustedSelection: null };
+const resolveManifestScene = () =>
+  resolveDefaultScene({
+    read: async () => manifestState.raw,
+    resolveGuid: async (guid) => {
+      if (guid === baselineSceneGuid || guid === repairedSceneGuid) {
+        return { ok: true, value: { kind: 'scene', guid } };
+      }
+      if (guid === wrongKindGuid) {
+        return { ok: true, value: { kind: 'texture', guid } };
+      }
+      return { ok: false, error: new Error(`asset not found: ${guid}`) };
+    },
+  });
+
+const baselineResolution = await resolveManifestScene();
+if (!baselineResolution.ok || baselineResolution.value.guid !== baselineSceneGuid) {
+  fail(`project defaultScene baseline rejected: ${baselineResolution.ok ? baselineResolution.value.guid : baselineResolution.error.code}`);
+}
+manifestState.trustedSelection = baselineResolution.value;
+
+manifestState.raw = JSON.stringify({ ...manifestData, defaultScene: 'not-a-guid' });
+const malformedResolution = await resolveManifestScene();
+if (
+  malformedResolution.ok ||
+  malformedResolution.error.code !== 'forge-guid-malformed' ||
+  malformedResolution.error.detail.field !== 'defaultScene' ||
+  malformedResolution.error.detail.rawInput !== 'not-a-guid' ||
+  manifestState.trustedSelection.guid !== baselineSceneGuid
+) {
+  fail(`project defaultScene malformed recovery rejected: ${malformedResolution.ok ? 'unexpected success' : malformedResolution.error.code}`);
+}
+
+manifestState.raw = JSON.stringify({ ...manifestData, defaultScene: wrongKindGuid });
+const wrongKindResolution = await resolveManifestScene();
+if (
+  wrongKindResolution.ok ||
+  wrongKindResolution.error.code !== 'forge-scene-unresolved' ||
+  wrongKindResolution.error.detail.guid !== wrongKindGuid ||
+  manifestState.trustedSelection.guid !== baselineSceneGuid
+) {
+  fail(`project defaultScene wrong-kind recovery rejected: ${wrongKindResolution.ok ? 'unexpected success' : wrongKindResolution.error.code}`);
+}
+
+manifestState.raw = JSON.stringify({ ...manifestData, defaultScene: repairedSceneGuid });
+const repairedResolution = await resolveManifestScene();
+if (
+  !repairedResolution.ok ||
+  repairedResolution.value.kind !== 'scene' ||
+  repairedResolution.value.guid !== repairedSceneGuid ||
+  repairedResolution.value.guid === manifestState.trustedSelection.guid
+) {
+  fail(`project defaultScene repair rejected: ${repairedResolution.ok ? repairedResolution.value.guid : repairedResolution.error.code}`);
+}
+manifestState.trustedSelection = repairedResolution.value;
+
+const resetManifestState = async () => {
+  manifestState.raw = manifestBaseline;
+  manifestState.trustedSelection = baselineResolution.value;
+  const resolution = await resolveManifestScene();
+  if (!resolution.ok || resolution.value.guid !== baselineSceneGuid || resolution.value.kind !== 'scene') {
+    fail(`project defaultScene cleanup left stale state: ${resolution.ok ? resolution.value.guid : resolution.error.code}`);
+  }
+  return resolution;
+};
+await resetManifestState();
+const cleanedResolution = await resetManifestState();
+console.log(`[m28-project] PASS malformed=${malformedResolution.error.code} wrongKind=${wrongKindResolution.error.code} repaired=${repairedResolution.value.guid} cleanup=${cleanedResolution.value.guid}`);
+
+if (process.argv.includes('--m28-recovery')) process.exit(0);
 
 const roots = [
   resolve(root, 'apps/hello/custom-importer/assets'),

@@ -34,7 +34,7 @@
 //   - charter P3 (machine-readable schema: 3 closed fields)
 //   - charter P4 (consistent abstraction: instance == entity carrying
 //     SceneInstance — same `world.query({ read: [SceneInstance] })` /
-//     `world.get(root, SceneInstance)` path as any other component)
+//     `world.get(root, SceneInstance)` path as another component)
 
 import { defineComponent, type EntityHandle } from '@forgeax/engine-ecs';
 import type { LocalEntityId, MountOverride } from '@forgeax/engine-types';
@@ -128,6 +128,9 @@ export interface SceneInstanceState {
    */
   readonly rootEntities: EntityHandle[];
 
+  /** Synthetic roots of recursively mounted SceneAssets owned by this instance. */
+  readonly mountRoots: EntityHandle[];
+
   /**
    * Total slot count `entities.length + sum(mounts[].memberCount)` —
    * captured at instantiate-time so cycle / count consistency checks
@@ -175,7 +178,7 @@ export interface SceneInstanceState {
  *   const inst = world.get(root, SceneInstance).value;
  *   // inst.source === handle, inst.mapping is Uint32Array(totalSlots)
  *   // inst.state holds entityToLocalId / detachedLocalIds / overrides /
- *   // rootEntities / totalSlots / mountTimeOverrides.
+ *   // rootEntities / mountRoots / totalSlots / mountTimeOverrides.
  */
 export const SceneInstance = defineComponent(
   'SceneInstance',

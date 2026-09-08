@@ -1,23 +1,12 @@
-#!/usr/bin/env node
-// required-ci-checks.mjs — emits direct required checks when ci.yml is path-filtered.
+// required-ci-checks.mjs — pure required-context roster and admission projection.
 //
-// ci.yml intentionally ignores docs/skill/rules-only pull requests. GitHub rulesets
-// require named checks to be reported for every PR, so this workflow asks GitHub
-// whether ci.yml created a pull_request run for the head SHA. A run with a complete
-// required roster remains the owner; skipped, empty, partial, failed, and unavailable
-// evidence fails closed. A missing run is fallback-eligible only when the caller carries
-// independent path-filter proof; absence alone is never proof. We do not evaluate
-// paths.json here: GitHub's actual workflow scheduling decision is the SSOT.
+// CI runs for every pull request, so no workflow emits synthetic fallback checks.
+// This module remains the shared vocabulary for local evidence/admission tools.
 
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import process from 'node:process';
 
-const CI_WORKFLOW = 'ci.yml';
-
-// This manifest is the repository projection of the active Protect ruleset.
-// Keep the external ruleset derived from this file; do not hand-maintain a
-// second list in the fallback reporter or workflow comments.
+// The manifest is the single required-context roster used by CI and evidence
+// admission tooling.
 const requiredCheckManifest = JSON.parse(
   readFileSync(new URL('./required-ci-checks.json', import.meta.url), 'utf8'),
 );
@@ -31,7 +20,7 @@ if (
   throw new Error('required-ci-checks.json must be a non-empty array of unique check names');
 }
 
-export const REQUIRED_CHECK_NAMES = requiredCheckManifest;
+export const REQUIRED_CHECK_NAMES = Object.freeze([...requiredCheckManifest]);
 
 export const REQUIRED_CONTEXT_ADMISSION_STATUSES = Object.freeze([
   'path-filtered',
@@ -43,6 +32,26 @@ export const REQUIRED_CONTEXT_ADMISSION_STATUSES = Object.freeze([
   'partial-roster',
   'genuine-failure',
 ]);
+
+/**
+ * Project observed job names against the authoritative manifest without mutating the input.
+ * The result is intentionally a vocabulary-neutral roster fact for pure consumers.
+ * @param {Array<object>|null|undefined} jobs
+ * @returns {{observed:string[],missing:string[],duplicate:string[],extra:string[]}}
+ */
+export function projectRequiredContextRoster(jobs) {
+  const rows = Array.isArray(jobs) ? jobs : [];
+  const names = rows.map((job) => jobName(job)).filter((name) => typeof name === 'string');
+  const required = new Set(REQUIRED_CHECK_NAMES);
+  const counts = new Map();
+  for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
+  return {
+    observed: REQUIRED_CHECK_NAMES.filter((name) => counts.has(name)),
+    missing: REQUIRED_CHECK_NAMES.filter((name) => !counts.has(name)),
+    duplicate: REQUIRED_CHECK_NAMES.filter((name) => (counts.get(name) ?? 0) > 1),
+    extra: [...new Set(names.filter((name) => !required.has(name)))],
+  };
+}
 
 const TERMINAL_RUN_STATUS = 'completed';
 const NON_TERMINAL_RUN_STATUSES = new Set([
@@ -320,10 +329,17 @@ export function classifyRequiredContextAdmission(input = {}) {
   );
   const observedNames = new Set(names.filter((name) => name !== null));
   const missingContexts = REQUIRED_CHECK_NAMES.filter((name) => !observedNames.has(name));
+  const extraContexts = [
+    ...new Set(names.filter((name) => name !== null && !requiredNames.has(name))),
+  ];
   const requiredJobs = jobs.filter((job) => {
     const name = jobName(job);
     return name !== null && requiredNames.has(name);
   });
+  // ci.yml also exposes producer/orchestration jobs such as core-build and
+  // app-shard-* that are intentionally not branch-protection contexts. The
+  // manifest is the required-context authority; only missing, duplicate, or
+  // malformed required evidence makes the roster partial.
   if (missingContexts.length > 0 || duplicateContexts.length > 0 || malformedJobs.length > 0) {
     const reasonCodes = [];
     if (missingContexts.length > 0) reasonCodes.push('partial-roster');
@@ -336,6 +352,7 @@ export function classifyRequiredContextAdmission(input = {}) {
       missingContexts,
       duplicateContexts: [...new Set(duplicateContexts)],
       malformedJobs,
+      extraContexts,
     });
   }
 
@@ -386,196 +403,4 @@ export function classifyRequiredContextAdmission(input = {}) {
     complete: true,
     observedContexts: REQUIRED_CHECK_NAMES,
   });
-}
-
-/**
- * @param {Array<{event:string, createdAt?:string}>} runs
- * @returns {{event:string, createdAt?:string}|null}
- */
-export function pickLatestPullRequestRun(runs) {
-  const pullRequestRuns = (Array.isArray(runs) ? runs : []).filter(
-    (run) => runEvent(run) === 'pull_request',
-  );
-  if (pullRequestRuns.length === 0) return null;
-  return pullRequestRuns.reduce((latest, run) => {
-    const latestCreatedAt = latest.createdAt ?? latest.created_at ?? '';
-    const runCreatedAt = run.createdAt ?? run.created_at ?? '';
-    return runCreatedAt > latestCreatedAt ? run : latest;
-  });
-}
-
-function fetchRuns(repo, sha) {
-  const output = execFileSync(
-    'gh',
-    [
-      'api',
-      '--method',
-      'GET',
-      `repos/${repo}/actions/workflows/${CI_WORKFLOW}/runs?head_sha=${sha}&event=pull_request&per_page=100`,
-    ],
-    { encoding: 'utf8' },
-  );
-  return JSON.parse(output).workflow_runs ?? [];
-}
-
-function fetchJobs(repo, run) {
-  const runId = run?.id ?? run?.run_id ?? run?.database_id;
-  if (runId === undefined || runId === null) {
-    throw new Error('ci.yml run is missing its immutable run id');
-  }
-  const attempt = run.run_attempt ?? run.runAttempt ?? 1;
-  const output = execFileSync(
-    'gh',
-    [
-      'api',
-      '--method',
-      'GET',
-      `repos/${repo}/actions/runs/${runId}/attempts/${attempt}/jobs?per_page=100`,
-    ],
-    { encoding: 'utf8' },
-  );
-  const parsed = JSON.parse(output);
-  if (!Array.isArray(parsed.jobs)) throw new Error('ci.yml jobs response is not an array');
-  return parsed.jobs;
-}
-
-function createPassedCheck(repo, sha, name) {
-  execFileSync(
-    'gh',
-    [
-      'api',
-      '--method',
-      'POST',
-      `repos/${repo}/check-runs`,
-      '-f',
-      `name=${name}`,
-      '-f',
-      `head_sha=${sha}`,
-      '-f',
-      'status=completed',
-      '-f',
-      'conclusion=success',
-      '-f',
-      'output[title]=CI path filter skipped',
-      '-f',
-      'output[summary]=ci.yml did not run because this pull request changed no CI-scoped paths.',
-    ],
-    { stdio: 'inherit' },
-  );
-}
-
-const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-
-function inspectRun(repo, run) {
-  let jobs = null;
-  let apiError = null;
-  const runConclusion = normalizedString(run.conclusion ?? run.run_conclusion);
-  if (normalizedString(run.status ?? run.runStatus ?? run.run_status) === TERMINAL_RUN_STATUS) {
-    if (runConclusion === SUCCESS_CONCLUSION) {
-      try {
-        jobs = fetchJobs(repo, run);
-      } catch (error) {
-        apiError = error;
-      }
-    }
-  }
-  return classifyRequiredContextAdmission({ run, jobs, apiError });
-}
-
-async function main() {
-  const repo = process.env.GITHUB_REPOSITORY;
-  const sha = process.env.PR_HEAD_SHA;
-  if (!repo || !sha) {
-    console.error(
-      'required-ci-checks: missing GITHUB_REPOSITORY or PR_HEAD_SHA — cannot determine whether ci.yml ran.',
-    );
-    process.exit(2);
-  }
-
-  const appearanceTimeoutMilliseconds = Number(process.env.CI_RUN_APPEAR_MS ?? 120_000);
-  const pollMilliseconds = Number(process.env.CI_RUN_POLL_MS ?? 15_000);
-  const appearanceDeadline = Date.now() + appearanceTimeoutMilliseconds;
-
-  while (Date.now() < appearanceDeadline) {
-    let run;
-    try {
-      run = pickLatestPullRequestRun(fetchRuns(repo, sha));
-    } catch (error) {
-      const decision = classifyRequiredContextAdmission({ apiError: error });
-      console.error(
-        `required-ci-checks: ${decision.status} (${decision.reasonCodes.join(', ')}) — ${error.message ?? error}`,
-      );
-      process.exit(2);
-    }
-
-    if (run !== null) {
-      const decision = inspectRun(repo, run);
-      if (decision.status === 'normal-ci-run') {
-        console.log(
-          `required-ci-checks: ci.yml ran for ${sha}; required-context status=${decision.status}.`,
-        );
-        return;
-      }
-      console.error(
-        `required-ci-checks: ${decision.status} (${decision.reasonCodes.join(', ')}); no fallback checks emitted.`,
-      );
-      process.exit(2);
-    }
-
-    console.log(
-      `required-ci-checks: waiting for ci.yml to appear for ${sha} (${appearanceTimeoutMilliseconds / 1000}s grace)…`,
-    );
-    await sleep(pollMilliseconds);
-  }
-
-  let run;
-  try {
-    run = pickLatestPullRequestRun(fetchRuns(repo, sha));
-  } catch (error) {
-    const decision = classifyRequiredContextAdmission({ apiError: error });
-    console.error(
-      `required-ci-checks: ${decision.status} (${decision.reasonCodes.join(', ')}) — ${error.message ?? error}`,
-    );
-    process.exit(2);
-  }
-
-  if (run !== null) {
-    const decision = inspectRun(repo, run);
-    if (decision.status === 'normal-ci-run') {
-      console.log(
-        `required-ci-checks: ci.yml ran for ${sha}; required-context status=${decision.status}.`,
-      );
-      return;
-    }
-    console.error(
-      `required-ci-checks: ${decision.status} (${decision.reasonCodes.join(', ')}); no fallback checks emitted.`,
-    );
-    process.exit(2);
-  }
-
-  const pathFiltered = process.env.CI_PATH_FILTERED === 'true';
-  const decision = classifyRequiredContextAdmission({ run, pathFiltered });
-  if (!decision.fallbackEligible) {
-    console.error(
-      `required-ci-checks: ${decision.status} (${decision.reasonCodes.join(', ')}); no fallback checks emitted.`,
-    );
-    process.exit(2);
-  }
-
-  for (const name of REQUIRED_CHECK_NAMES) {
-    try {
-      createPassedCheck(repo, sha, name);
-    } catch (error) {
-      console.error(`required-ci-checks: failed to create ${name} — ${error.message ?? error}`);
-      process.exit(2);
-    }
-  }
-
-  console.log(
-    `required-ci-checks: ci.yml was path-filtered; emitted ${REQUIRED_CHECK_NAMES.length} passes.`,
-  );
-}
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main();
 }

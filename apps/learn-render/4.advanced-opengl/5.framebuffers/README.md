@@ -3,30 +3,28 @@
 > [!NOTE]
 > **LO original chapter**: [LearnOpenGL 4.5 Framebuffers](https://learnopengl.com/Advanced-OpenGL/Framebuffers)
 >
-> **Engine surface**: custom `RenderPipeline` with offscreen render-to-texture + `addFullscreenPass` with 6 swappable post-process effects (passthrough / inversion / grayscale / sharpen / blur / edge-detection) driven by keyboard digits 1--6.
+> **Engine surface**: the Standard renderer plus one declarative `createFullscreenRenderFeature` and 6 ECS-selected effects.
 
 ## Hit-rate index (AI user fast-locate)
 
 | Engine capability | grep anchor | Where |
 |:--|:--|:--|
-| `addColorTarget` offscreen RT | `offscreenColor` | `src/index.ts` (makeEffectPipeline) |
-| `addScenePass` with custom RT routing | `_routeFromOpts` | `src/index.ts` (makeEffectPipeline) |
-| `addFullscreenPass` with reads from offscreen RT | `addFullscreenPass` | `src/index.ts` (makeEffectPipeline, one call per pipeline) |
-| `renderer.postProcess.register` WGSL binding | `postProcess.register` | `src/index.ts` (section 3, 6 inline calls) |
-| `renderer.registerPipeline` + `installPipeline` hot-swap | `registerPipeline` | `src/index.ts` (section 3, 6 inline calls + installPipelineByKey export) |
-| `graph.compile` validation + error path | `graph.compile` | `src/index.ts` (makeEffectPipeline closure) |
+| Standard scene-color route | `createApp` + `Standard` | `src/index.ts` (bootstrap) |
+| declarative fullscreen effect | `createFullscreenRenderFeature` | `src/index.ts` (framebufferEffect) |
+| ECS-selected effect payload | `PostProcessParams` | `src/index.ts` (installPipelineByKey) |
+| feature-stage recovery probe | `RenderFeature.plan` | `src/index.ts` (recoveryFeature) |
 
 ## What this example shows
 
 LO 4.5 demonstrates framebuffer objects (FBO): render the scene into an offscreen colour attachment, then re-sample that attachment through a fullscreen quad shader to apply post-process effects. The tutorial walks through a single effect (inversion), introduces a kernel-based blur, and finishes with a kernel-based edge-detection pass.
 
-In forgeax, this example expresses the same pattern as a declarative render-graph pipeline with six hot-swappable effects:
+In forgeax, this example expresses the same visual pattern through the Standard renderer. The scene graph and presentation targets stay renderer-owned; the app contributes one declarative fullscreen feature and changes its ECS payload:
 
-1. **Offscreen render-to-texture**: each pipeline declares `addColorTarget('offscreenColor', bgra8unorm-srgb, swapchain-size)` + `addColorTarget('offscreenDepth', depth24plus-stencil8)`. The `addScenePass` routes scene geometry into these offscreen targets (bypassing the engine's default swap-chain colour path via `_routeFromOpts: true`).
+1. **Standard scene pass**: the engine renders the two cubes and floor into its owned scene-color target.
 
-2. **Fullscreen post-process pass**: `addFullscreenPass(graph, 'post', { shader: 'learn-render-5::<effect>', color: 'swapchain', reads: ['offscreenColor'] })` re-samples the offscreen colour texture through a fullscreen quad. The `color: 'swapchain'` key is a reserved sentinel: `graph.compile` accepts it without an `addColorTarget` declaration, and the dispatcher resolves it to the current swap-chain view.
+2. **Fullscreen post-process feature**: `createFullscreenRenderFeature` lets the Standard pipeline sample the scene-color target and write the presentation target.
 
-3. **Six swappable effects**: each effect is a pair of `renderer.postProcess.register(...)` + `renderer.registerPipeline(...)` calls. The pipelines share the same offscreen-RT topology but differ only in the `addFullscreenPass` shader id. `installPipeline(handle)` hot-swaps the active pipeline at runtime without recreating the renderer.
+3. **Six swappable effects**: `installPipelineByKey` writes the selected mode into `PostProcessParams`; graph ownership and lifecycle remain in the Standard renderer.
 
 4. **Effect roster** (key 1--6):
 
@@ -77,24 +75,23 @@ Press digits **1--6** to switch between the six post-process effects. The curren
 
 ```mermaid
 flowchart LR
-  SCENE["Scene geometry<br/>(2 cubes + floor quad)"] --> MAIN["addScenePass<br/>(main)"]
-  MAIN --> OFFSCREEN_C["offscreenColor<br/>(bgra8unorm-srgb)"]
-  MAIN --> OFFSCREEN_D["offscreenDepth<br/>(depth24plus-stencil8)"]
-  OFFSCREEN_C --> POST["addFullscreenPass<br/>(post, reads: offscreenColor)"]
-  POST --> SWAP["swap-chain<br/>(output to display)"]
+  SCENE["Scene geometry<br/>(2 cubes + floor quad)"] --> MAIN["Standard scene pass"]
+  MAIN --> COLOR["engine-owned scene color"]
+  COLOR --> POST["Fullscreen RenderFeature<br/>(selected PostProcessParams mode)"]
+  POST --> SWAP["Standard presentation target"]
 ```
 
-The pipeline topology is fixed; only the `addFullscreenPass` shader identity changes when the user presses a digit key. `installPipeline(handle)` swaps the active `RenderPipeline` at runtime, which causes the renderer to build a new per-frame graph on the next draw -- same offscreen-RT topology, different fullscreen shader.
+The Standard topology is fixed; only the fullscreen mode payload changes. The renderer owns graph reuse and presentation-target lifetime.
 
 ## forgeax-vs-LearnOpenGL mapping
 
 | LO concept | LO C++ / OpenGL | forgeax equivalent |
 |:--|:--|:--|
-| Framebuffer object (FBO) | `glGenFramebuffers` + `glBindFramebuffer` + `glFramebufferTexture2D` | `addColorTarget` (declarative render-graph) |
-| Colour attachment | `glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, ...)` with `GL_RGB` internal format | `addColorTarget('offscreenColor', { format: 'bgra8unorm-srgb', ... })` |
-| Depth attachment | `glFramebufferRenderbuffer(GL_DEPTH_STENCIL_ATTACHMENT, ...)` | `addColorTarget('offscreenDepth', { format: 'depth24plus-stencil8', ... })` |
-| Render-to-FBO then re-sample | First pass: bind FBO + draw; second pass: unbind FBO + bind texture + fullscreen quad | `addScenePass` (route to offscreen) + `addFullscreenPass` (re-sample offscreen into swap-chain) |
-| Fullscreen quad | Hand-crafted 6-vertex quad (NDC [-1,1]) | Engine-builtin fullscreen draw (handled by `addFullscreenPass` internally) |
+| Framebuffer object (FBO) | `glGenFramebuffers` + `glBindFramebuffer` + `glFramebufferTexture2D` | Standard renderer-owned scene-color/depth targets |
+| Colour attachment | `glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, ...)` with `GL_RGB` internal format | Standard scene-color logical target |
+| Depth attachment | `glFramebufferRenderbuffer(GL_DEPTH_STENCIL_ATTACHMENT, ...)` | Standard depth logical target |
+| Render-to-FBO then re-sample | First pass: bind FBO + draw; second pass: unbind FBO + bind texture + fullscreen quad | Standard scene pass + declarative fullscreen feature |
+| Fullscreen quad | Hand-crafted 6-vertex quad (NDC [-1,1]) | Engine-builtin fullscreen draw |
 | Kernel convolution | `float offset = 1.0 / 300.0; vec2 offsets[9] = ...; float kernel[9] = ...` in fragment shader | Identical WGSL kernel literal in each `*.wgsl` file; `texelSize` via `1.0 / vec2(textureDimensions(screenTexture, 0))` |
 | Post-process shaders | Inline GLSL fragments in `framebuffers.cpp` | Six separate `*.wgsl` files, one `@fragment fs_main` per file |
 | Keyboard input | GLFW `processInput(GLFWwindow*)` checking `glfwGetKey` per key | `window.addEventListener('keydown', ...)` in dev mode, `installPipelineByKey(export)` for smoke harness |
@@ -105,13 +102,13 @@ The pipeline topology is fixed; only the `addFullscreenPass` shader identity cha
 
 | Dimension | LO original (C++ / GLSL / GLFW) | forgeax here (TS / WGSL / WebGPU) |
 |:--|:--|:--|
-| FBO allocation | Manual: `glGenFramebuffers` + `glBindFramebuffer` + `glFramebufferTexture2D` + `glFramebufferRenderbuffer` + `glCheckFramebufferStatus` | Declarative: `graph.addColorTarget(name, desc)` in `buildGraph`; `graph.compile(...)` does device allocation + validation |
-| Re-sampling pass | Manual: unbind FBO, bind attachment texture, draw fullscreen quad | Declarative: `addFullscreenPass(graph, 'post', { shader: id, reads: ['offscreenColor'] })` -- graph inserts barriers and dispatches draw internally |
-| Effect switching | One FBO + one quad shader per demo; separate app state handles which effect is active | Six `RenderPipeline` implementations, hot-swapped via `installPipeline(handle)`; per-frame graph rebuilds with the new shader id |
+| FBO allocation | Manual: `glGenFramebuffers` + `glBindFramebuffer` + attachment validation | Standard renderer owns scene-color/depth allocation and validation |
+| Re-sampling pass | Manual: unbind FBO, bind attachment texture, draw fullscreen quad | `createFullscreenRenderFeature`; Standard derives the typed access |
+| Effect switching | One FBO + one quad shader per demo; separate app state handles which effect is active | One fullscreen feature; `PostProcessParams` changes the mode without a second pipeline registry |
 | Floor texture tiling | `GL_REPEAT` wrap mode + quad UV range making metal.png tile across the floor | **Known difference**: `default-unlit` material has no tiling/offset values (research F-A3). The 5x5 floor quad stretches a single metal.png tile across the entire floor instead of repeating it 5x5 times. The post-process effect demonstration is preserved; the visual floor texture density is coarser. |
 | Colour space | OpenGL with sRGB framebuffer on LDR formats | Offscreen colour target uses `bgra8unorm-srgb` (hardware sRGB encode on store, sRGB decode on sample via `TextureSampleType::Float`). The inversion smoke check (AC-03 pixel-diff epsilon <= 0.05) covers the sRGB encode/decode round-trip. |
 | Post-process shader organisation | All effect shaders in one `framebuffers.cpp` file as inline GLSL strings | Six separate `*.wgsl` files, each with one `@fragment fs_main` entry point. Each has a companion `*.wgsl.meta.json` sidecar (`kind: 'post-process'`) for `vite-plugin-shader` to recognise and compile at build time. |
-| Shader compilation | Runtime `glCompileShader` + `glLinkProgram` | Build-time naga_oil compose via `vite-plugin-shader`; runtime `postProcess.register` only registers the pre-compiled WGSL string |
+| Shader compilation | Runtime `glCompileShader` + `glLinkProgram` | Build-time naga_oil compose via `vite-plugin-shader`; runtime feature registration consumes the pre-compiled WGSL string |
 | GPU backend | OpenGL 3.3+ | WebGPU (auto-selected: Dawn-native for smoke, browser WebGPU for dev) |
 
 > [!IMPORTANT]
@@ -136,44 +133,41 @@ The smoke harness:
 
 Total frames: 300 minimum (`SMOKE_MIN_FRAMES`). Zero RHI errors required (bus monitored at exit).
 
-## Same-process topology recovery
+## Same-process feature-plan recovery
 
 The public `window.__learnRenderFramebuffers` seam also exercises a failed
-pipeline install and recovery without rebuilding the Renderer, App, or page:
+`RenderFeature.plan` and recovery without rebuilding the Renderer, App, or page:
 
 ```ts
 const framebuffers = window.__learnRenderFramebuffers;
 framebuffers?.pause();
 framebuffers?.installCyclePipeline();
-// getState().cycleDiagnostic.detail.cycle contains both pass names.
+// getState().cycleDiagnostic identifies the failed feature plan.
 framebuffers?.installRepairedPipeline();
 framebuffers?.resume();
 framebuffers?.dispose();
 framebuffers?.dispose(); // idempotent
 ```
 
-The cyclic pipeline is deliberately declared as `cycle-pass-a` reading the
-resource written by `cycle-pass-b`, and vice versa. `RenderGraph.compile()`
-returns its existing structured `cyclic-dependency` error; the frame is
-rejected before swap-chain acquisition, so the last healthy canvas image is
-unchanged and no frame-end submission is observed. The repaired pipeline has
-the declared order `repaired-stage-a -> repaired-stage-b -> main -> post`,
-renders through the same Renderer, and then switches back to the inversion
-effect to prove later healthy pipeline installation still works.
+The cycle and invalid-format buttons deliberately put the recovery feature into
+a failing `plan` state. The Standard host reports the closed
+`render-feature-stage-failed` contract, isolates that feature, and keeps the
+last-known-good scene/post path intact. The repaired mode returns an empty
+feature plan, then the same Renderer renders again and switches back to the
+inversion effect to prove later healthy selection still works.
 
 The browser journey uses a visible canvas screenshot for the no-contamination
-oracle. A raw `renderer.readPixels()` after a rejected browser frame can observe
-an expired current WebGPU texture even though the last presented canvas image is
-healthy; `subscribeFrameEnd()` is the submission oracle. The complete
+oracle and the feature status for the failure/recovery oracle. The complete
 `smoke:gauntlet` output includes the Dawn pixel path, the same-page Chrome
-cycle/recovery path, and the Browser-live pause/fault/reinstall/resize/cleanup
-path. Browser artifacts are written under `FORGEAX_M24_ARTIFACT_DIR` when set.
+feature-plan recovery path, and the Browser-live pause/fault/reinstall/resize/
+cleanup path. Browser artifacts are written under `FORGEAX_M24_ARTIFACT_DIR`
+when set.
 
 ## Key files
 
 | File | Lines | Role |
 |:--|--:|:--|
-| `src/index.ts` | ~661 | Three-section bootstrap -- scene spawn (2 cubes + floor), 6 post-process shader registrations + 6 pipeline registrations, `installPipelineByKey` named export, keydown handler with HUD overlay |
+| `src/index.ts` | ~550 | Three-section bootstrap -- scene spawn (2 cubes + floor), one fullscreen feature with 6 modes, `installPipelineByKey` named export, feature-plan recovery seam, keydown HUD |
 | `src/shaders/passthrough.wgsl` | ~15 | Identity fragment shader: `textureSample(screenTexture, screenSampler, in.uv)` passthrough |
 | `src/shaders/inversion.wgsl` | ~15 | Colour inversion: `1.0 - textureSample(...).rgb` |
 | `src/shaders/grayscale.wgsl` | ~15 | Rec.709 luma: `dot(sample.rgb, vec3(0.2126, 0.7152, 0.0722))` |
@@ -188,6 +182,6 @@ path. Browser artifacts are written under `FORGEAX_M24_ARTIFACT_DIR` when set.
 - Directory name: `apps/learn-render/4.advanced-opengl/5.framebuffers/` mirrors LO chapter ordering
 - Package name: `@forgeax/app-learn-render-4-advanced-opengl-5-framebuffers` is grep-able by chapter prefix
 - Three-section source markers (`// 1. engine usage` / `// 2. example glue` / `// 3. bootstrap`) serve as grep anchors
-- Six `postProcess.register` / `registerPipeline` calls are inlined with literal id strings so AI users grep either id and land on the exact registration line
+- The six effect ids and the `PostProcessParams` write are inlined so AI users can grep an effect key and land on the exact selection line
 - `installPipelineByKey` named export is documented in this README for smoke harness and programmatic reuse
 - All custom shader callsites point to `skills/forgeax-engine-render-pipeline/SKILL.md` for the full worked-example reference

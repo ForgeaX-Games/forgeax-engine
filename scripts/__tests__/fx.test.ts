@@ -39,7 +39,7 @@ describe('package.json wiring', () => {
     const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
     expect(pkg.scripts.fx).toBe('bun scripts/fx.ts');
     expect(pkg.scripts['test:fx']).toBe(
-      'vitest run --config scripts/vitest.fx.config.ts scripts/__tests__/fx.test.ts scripts/__tests__/worktree.test.ts',
+      'vitest run --config scripts/vitest.fx.config.ts scripts/__tests__/fx.test.ts scripts/__tests__/worktree.test.ts scripts/__tests__/link-template-agents.test.ts',
     );
     expect(pkg.scripts.typecheck).toContain('tsc -p scripts/tsconfig.json');
   });

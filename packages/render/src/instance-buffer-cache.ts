@@ -63,7 +63,7 @@ export interface InstanceBufferCacheErrorSink {
  * runtime did not flip surfaces as the structured 'destroy-after-destroy'
  * RhiError from the shim. That error is *not* re-thrown -- this helper
  * is a sweep that tolerates per-handle failures so the dispose chain can
- * make progress (mirrors `GpuResourceStore.destroyAll`'s policy;
+ * make progress (mirrors `GpuResidencyCache.destroyAll`'s policy;
  * plan-strategy D-3 / D-8).
  *
  * feat-20260619 M4 (D-6): the optional `errorRegistry` parameter unifies

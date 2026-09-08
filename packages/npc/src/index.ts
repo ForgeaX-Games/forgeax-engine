@@ -2,13 +2,11 @@ import {
   type Component,
   defineComponent,
   type EntityHandle,
-  ok,
-  type Result,
   Time,
   Update,
   type World,
 } from '@forgeax/engine-ecs';
-import type { Plugin, PluginError } from '@forgeax/engine-plugin';
+import type { Plugin } from '@forgeax/engine-plugin';
 
 export const NPC_COGNITIVE_LOD_SPOTLIGHT = 0;
 export const NPC_COGNITIVE_LOD_AMBIENT = 1;
@@ -18,6 +16,8 @@ export type NpcCognitiveLod =
   | typeof NPC_COGNITIVE_LOD_SPOTLIGHT
   | typeof NPC_COGNITIVE_LOD_AMBIENT
   | typeof NPC_COGNITIVE_LOD_OFFSTAGE;
+
+type NpcClientLodName = 'spotlight' | 'ambient' | 'offstage';
 
 /** Authored binding between an ECS entity and an NPC soul. */
 type NpcBrainSchema = {
@@ -54,7 +54,7 @@ export interface NpcClientAdapter {
 
 export interface NpcClientPort<Affordance, Snapshot> {
   declareAffordances(npcId: string, affordances: Affordance[]): void;
-  setLod(npcId: string, level: 'spotlight' | 'ambient' | 'offstage', snapshot?: Snapshot): void;
+  setLod(npcId: string, level: NpcClientLodName, snapshot?: Snapshot): void;
   tick(dt: number, sampler: (npcId: string) => Snapshot | undefined): void;
 }
 
@@ -91,7 +91,7 @@ export function createNpcClientAdapter<Affordance, Snapshot>(
   };
 }
 
-function lodName(lod: NpcCognitiveLod): 'spotlight' | 'ambient' | 'offstage' {
+function lodName(lod: NpcCognitiveLod): NpcClientLodName {
   if (lod === NPC_COGNITIVE_LOD_AMBIENT) return 'ambient';
   if (lod === NPC_COGNITIVE_LOD_OFFSTAGE) return 'offstage';
   return 'spotlight';
@@ -105,34 +105,44 @@ export interface NpcPluginOptions {
 export function npcPlugin(options: NpcPluginOptions): Plugin {
   return {
     name: 'npc',
-    build(world): Result<void, PluginError> {
+    inject: ['world'],
+    apply(ctx) {
+      const world = ctx.world;
       let previous = '';
-      world.addSystem(Update, {
-        name: options.systemName ?? 'npc-brain-sync',
-        queries: [{ with: [NpcBrain] }],
-        fn: (_world, queryResults) => {
-          const bindings: NpcBrainBinding[] = [];
-          for (const row of queryResults[0]) {
-            const entity = row.entity;
-            const value = world.get(entity, NpcBrain);
-            if (!value.ok) continue;
-            bindings.push({
-              entity,
-              soulId: value.value.soulId,
-              affordanceRef: value.value.affordanceRef,
-              enabled: value.value.enabled,
-              lod: value.value.lod as NpcCognitiveLod,
-            });
-          }
-          const signature = JSON.stringify(bindings);
-          if (signature !== previous) {
-            previous = signature;
-            void options.adapter.sync(bindings, world);
-          }
-          void options.adapter.tick(world.getResource(Time).delta, world);
-        },
-      });
-      return ok(undefined);
+      const systemName = options.systemName ?? 'npc-brain-sync';
+      ctx.effect(() => {
+        world
+          .addSystem(Update, {
+            name: systemName,
+            queries: [{ with: [NpcBrain] }],
+            fn: (_world, queryResults) => {
+              const bindings: NpcBrainBinding[] = [];
+              for (const row of queryResults[0]) {
+                const entity = row.entity;
+                const value = world.get(entity, NpcBrain);
+                if (!value.ok) continue;
+                bindings.push({
+                  entity,
+                  soulId: value.value.soulId,
+                  affordanceRef: value.value.affordanceRef,
+                  enabled: value.value.enabled,
+                  lod: value.value.lod as NpcCognitiveLod,
+                });
+              }
+              const signature = JSON.stringify(bindings);
+              if (signature !== previous) {
+                previous = signature;
+                void options.adapter.sync(bindings, world);
+              }
+              void options.adapter.tick(world.getResource(Time).delta, world);
+            },
+          })
+          .unwrap();
+        return async () => {
+          world.removeSystem(Update, systemName);
+          await options.adapter.dispose?.();
+        };
+      }, 'npc/brain-sync');
     },
   };
 }

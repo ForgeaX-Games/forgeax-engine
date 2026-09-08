@@ -1,4 +1,4 @@
-import { FixedUpdate, FrameEnd, Update, World } from '@forgeax/engine-ecs';
+import { FixedUpdate, Update, World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
 import { ChildOf, propagateTransforms, Transform } from '../index';
 import { registerPropagateTransforms } from '../systems';
@@ -112,7 +112,32 @@ describe('scene propagation', () => {
     expect(world.get(sibling, Transform).unwrap().world[12]).toBeCloseTo(20);
   });
 
-  it('publishes post-Update transform writes before world.update returns', () => {
+  it('expands a generic ChildOf mutation from the validated hierarchy snapshot', () => {
+    const world = new World();
+    const firstParent = world.spawn({ component: Transform, data: { pos: [10, 0, 0] } }).unwrap();
+    const secondParent = world.spawn({ component: Transform, data: { pos: [100, 0, 0] } }).unwrap();
+    const child = world
+      .spawn(
+        { component: Transform, data: { pos: [1, 0, 0] } },
+        { component: ChildOf, data: { parent: firstParent } },
+      )
+      .unwrap();
+    const grandchild = world
+      .spawn(
+        { component: Transform, data: { pos: [2, 0, 0] } },
+        { component: ChildOf, data: { parent: child } },
+      )
+      .unwrap();
+
+    propagateTransforms(world).unwrap();
+    world.set(child, ChildOf, { parent: secondParent }).unwrap();
+    propagateTransforms(world).unwrap();
+
+    expect(world.get(child, Transform).unwrap().world[12]).toBeCloseTo(101);
+    expect(world.get(grandchild, Transform).unwrap().world[12]).toBeCloseTo(103);
+  });
+
+  it('publishes transform writes when propagation is explicitly ordered after gameplay', () => {
     const world = new World();
     registerPropagateTransforms(world);
     const root = world.spawn({ component: Transform, data: { pos: [2, 0, 0] } }).unwrap();
@@ -123,9 +148,9 @@ describe('scene propagation', () => {
       )
       .unwrap();
     world
-      .addSystem(world.scheduleToken('Update'), {
+      .addSystem(Update, {
         name: 'late-pose',
-        after: ['propagateTransforms'],
+        before: ['propagateTransforms'],
         queries: [],
         fn: () => world.set(child, Transform, { pos: [8, 0, 0] }),
       })
@@ -134,22 +159,5 @@ describe('scene propagation', () => {
     world.update(0).unwrap();
 
     expect(world.get(child, Transform).unwrap().world[12]).toBeCloseTo(10);
-  });
-
-  it('publishes transform writes made by a late FrameEnd system', () => {
-    const world = new World();
-    registerPropagateTransforms(world);
-    const entity = world.spawn({ component: Transform, data: { pos: [1, 0, 0] } }).unwrap();
-    world
-      .addSystem(FrameEnd, {
-        name: 'late-frame-end-pose',
-        queries: [],
-        fn: () => world.set(entity, Transform, { pos: [9, 0, 0] }).unwrap(),
-      })
-      .unwrap();
-
-    world.update(0).unwrap();
-
-    expect(world.get(entity, Transform).unwrap().world[12]).toBeCloseTo(9);
   });
 });

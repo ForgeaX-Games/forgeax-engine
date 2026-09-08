@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { defineComponent } from '../component';
+import { componentId, defineComponent } from '../component';
 import { World } from '../world';
+
+import { worldInternal } from '../world-internal';
 
 const Marker = defineComponent('ChangeDetectionMarker', { value: 'f32' });
 
@@ -9,16 +11,22 @@ describe('mutation epoch evidence', () => {
     const Other = defineComponent('MutationEpochOther', { value: 'f32' });
     const world = new World();
     const entity = world.spawn({ component: Marker, data: { value: 1 } }).unwrap();
-    expect(world._getMutationEpoch()).toBe(1);
-    expect(world._getComponentChange(entity, Marker.id)).toEqual({ added: 1, changed: 1 });
+    expect(world[worldInternal].getMutationEpoch()).toBe(1);
+    expect(world[worldInternal].getComponentChange(entity, componentId(Marker))).toEqual({
+      added: 1,
+      changed: 1,
+    });
 
     expect(world.set(entity, Other, { value: 2 }).ok).toBe(false);
     world.removeResource('missing');
-    expect(world._getMutationEpoch()).toBe(1);
+    expect(world[worldInternal].getMutationEpoch()).toBe(1);
 
     world.set(entity, Marker, { value: 2 }).unwrap();
-    expect(world._getMutationEpoch()).toBe(2);
-    expect(world._getComponentChange(entity, Marker.id)).toEqual({ added: 1, changed: 2 });
+    expect(world[worldInternal].getMutationEpoch()).toBe(2);
+    expect(world[worldInternal].getComponentChange(entity, componentId(Marker))).toEqual({
+      added: 1,
+      changed: 2,
+    });
   });
 
   it('keeps resource evidence on its ResourceStore entry', () => {

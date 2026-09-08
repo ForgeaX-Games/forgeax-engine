@@ -1,15 +1,12 @@
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
-import {
-  extractFrames,
-  Instances,
-  MeshFilter,
-  MeshRenderer,
-  Visibility,
-  VisibilityStateValue,
-} from '@forgeax/engine-render/internal';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
+import { Instances } from '../components/instances';
+import { MeshFilter } from '../components/mesh-filter';
+import { MeshRenderer } from '../components/mesh-renderer';
+import { Visibility, VisibilityStateValue } from '../components/visibility';
+import { extractFrames } from '../render-system-extract';
 
 const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 

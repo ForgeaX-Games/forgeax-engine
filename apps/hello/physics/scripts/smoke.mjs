@@ -15,13 +15,13 @@
 //      -- physicsSyncBackend, physicsStepSimulation, physicsWriteback --
 //      are registered and running, AC-04).
 //
-// Note: physicsPlugin.build awaits the Rapier WASM import -- runPlugins in
+// Note: physicsPlugin.apply awaits the Rapier WASM import -- Cordis activation in
 // createApp resolves after the WASM module is loaded, so PhysicsWorld is
 // populated before the first app frame. If the WASM fails to load within
 // the timeout, the smoke FAILs (non-vacuous PASS).
 
 import { setTimeout as delay } from 'node:timers/promises';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
@@ -131,13 +131,21 @@ const mockCanvas = {
 
 const enginePkg = await import('@forgeax/engine-app');
 const { createApp } = enginePkg;
+const { FixedTime, FixedUpdate, Time, Update } = await import('@forgeax/engine-ecs');
 
 const runtimePkg = await import('@forgeax/engine-runtime');
 const { Camera, DirectionalLight } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 
 const physicsPkg = await import('@forgeax/engine-physics');
-const { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue, physicsPlugin } = physicsPkg;
+const {
+  Collider,
+  ColliderShapeValue,
+  CollidingEntities,
+  RigidBody,
+  RigidBodyTypeValue,
+  physicsPlugin,
+} = physicsPkg;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
@@ -145,6 +153,7 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 const appResult = await createApp(mockCanvas, {
   plugins: [physicsPlugin('rapier-3d')],
+  time: { fixedDeltaSeconds: 1 / 60, maxStepsPerUpdate: 4, maxDeltaSeconds: 0.1 },
 }, { shaderManifestUrl: MANIFEST_URL }).catch((err) => {
   originalConsoleError(`[smoke] FAIL - createApp threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
@@ -156,7 +165,7 @@ if (!appResult.ok) {
   process.exit(1);
 }
 const app = appResult.value;
-console.log(`[hello-physics] backend=${app.renderer.backend}`);
+console.log(`[hello-physics] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
 // Spawn the physics scene.
 app.world.spawn(
@@ -166,6 +175,7 @@ app.world.spawn(
     component: Collider,
     data: { shape: ColliderShapeValue.cuboid, halfExtents: [0.5, 0.5, 0.5], restitution: 0.3 },
   },
+  { component: CollidingEntities, data: { entities: [] } },
 );
 
 const sphereSpawn = app.world.spawn(
@@ -175,6 +185,7 @@ const sphereSpawn = app.world.spawn(
     component: Collider,
     data: { shape: ColliderShapeValue.sphere, radius: 0.5, restitution: 0.7, friction: 0.5 },
   },
+  { component: CollidingEntities, data: { entities: [] } },
 );
 if (!sphereSpawn.ok) {
   originalConsoleError(`[smoke] FAIL - sphere spawn failed: ${sphereSpawn.error.code} - ${sphereSpawn.error.hint}`);
@@ -194,9 +205,36 @@ app.world.spawn({
 const onErrorEvents = [];
 app.onError((err) => onErrorEvents.push({ code: err.code, hint: err.hint }));
 
-const ready = await app.renderer.ready;
-if (!ready.ok) {
-  originalConsoleError(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
+
+const observations = [];
+const observerInstall = app.world.addSystem(Update, {
+  name: 'm25-physics-frame-observer',
+  queries: [],
+  after: [FixedUpdate],
+  fn: (world) => {
+    const time = world.getResource(Time);
+    const fixed = world.getResource(FixedTime);
+    const transform = world.get(sphereEntity, Transform);
+    const physics = world.hasResource('PhysicsWorld') ? world.getResource('PhysicsWorld') : undefined;
+    const collisions = world.get(sphereEntity, CollidingEntities);
+    observations.push({
+      timeDelta: time.delta,
+      elapsed: time.elapsed,
+      fixedDelta: fixed.delta,
+      maxStepsPerUpdate: fixed.maxStepsPerUpdate,
+      fixedTick: fixed.tick,
+      overstep: fixed.overstep,
+      droppedSeconds: fixed.droppedSeconds,
+      droppedUpdates: fixed.droppedUpdates,
+      pos: transform.ok ? Array.from(transform.value.pos) : null,
+      bodyCount: physics?.getBodyCount() ?? null,
+      hasBody: physics?.hasBody(sphereEntity) ?? false,
+      collidingEntities: collisions.ok ? Array.from(collisions.value.entities) : [],
+    });
+  },
+});
+if (!observerInstall.ok) {
+  originalConsoleError(`[smoke] FAIL - M25 observer install failed: ${observerInstall.error.code}`);
   process.exit(1);
 }
 
@@ -219,15 +257,33 @@ if (!initialTransform.ok) {
 const initialPosY = initialTransform.value.pos[1];
 console.log(`[smoke] sphere initial pos y=${initialPosY}`);
 
-// Run frames. The WASM loads asynchronously; early frames have no physics,
-// but once PhysicsWorld appears the tick systems activate.
+// The first frame establishes the host-clock origin and the second is the
+// healthy same-body baseline. The M25 phases then drive one oversized host
+// gap and one healthy frame through the same App/World without reconstruction.
 let totalFrames = 0;
-for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
+const phaseFailures = [];
+const frameDeltaMs = 1_000 / 60;
+function driveFrame(deltaMs) {
   const due = rafQueue.shift();
-  if (!due) break;
-  fakeNow += 16.67;
+  if (!due) {
+    phaseFailures.push(`frame queue empty before frame ${totalFrames + 1}`);
+    return undefined;
+  }
+  fakeNow += deltaMs;
   due.cb(fakeNow);
   totalFrames++;
+  return observations[observations.length - 1];
+}
+
+driveFrame(frameDeltaMs);
+const baseline = driveFrame(frameDeltaMs);
+const physicsWorld = app.world.hasResource('PhysicsWorld') ? app.world.getResource('PhysicsWorld') : undefined;
+if (physicsWorld !== undefined) physicsWorld.teleport(sphereEntity, [0, 5, 0]);
+const oversizedDelta = driveFrame(5_000);
+const healthyRecovery = driveFrame(frameDeltaMs);
+
+while (totalFrames < SMOKE_MIN_FRAMES) {
+  if (driveFrame(frameDeltaMs) === undefined) break;
 }
 
 // Restore real performance.now and wait for any pending WASM to settle.
@@ -246,12 +302,10 @@ const finalPosY = finalTransform.value.pos[1];
 console.log(`[smoke] sphere final pos y=${finalPosY}`);
 
 const stopResult = app.stop();
-if (!stopResult.ok) {
-  originalConsoleError(`[smoke] FAIL - app.stop() returned err: ${stopResult.error.code}`);
-  process.exit(1);
-}
+const repeatedStop = app.stop();
 
 const failures = [];
+failures.push(...phaseFailures.map((failure) => `(phase) ${failure}`));
 if (onErrorEvents.length > 0) {
   failures.push(`(a) app.onError fired ${onErrorEvents.length} times: ${JSON.stringify(onErrorEvents)}`);
 }
@@ -274,6 +328,115 @@ if (!hasPhysicsWorld) {
   failures.push(`(e) sphere pos y did not decrease: ${initialPosY} -> ${finalPosY} (delta=${(finalPosY - initialPosY).toFixed(4)})`);
 }
 
+const closeTo = (actual, expected, tolerance = 1e-9) =>
+  typeof actual === 'number' && Math.abs(actual - expected) <= tolerance;
+const validObservation = (observation) => observation !== undefined && observation.pos !== null;
+const baselinePass =
+  validObservation(baseline) &&
+  baseline.timeDelta > 0 &&
+  baseline.fixedTick > 0 &&
+  baseline.fixedDelta === 1 / 60 &&
+  baseline.bodyCount === 2 &&
+  baseline.hasBody &&
+  baseline.pos[1] < initialPosY;
+const oversizedSteps =
+  validObservation(baseline) && validObservation(oversizedDelta)
+    ? oversizedDelta.fixedTick - baseline.fixedTick
+    : -1;
+const oversizedPass =
+  validObservation(oversizedDelta) &&
+  closeTo(oversizedDelta.timeDelta, 0.1, 1e-12) &&
+  oversizedSteps === oversizedDelta.maxStepsPerUpdate &&
+  oversizedSteps === 4 &&
+  oversizedDelta.fixedDelta === 1 / 60 &&
+  oversizedDelta.droppedUpdates > (baseline?.droppedUpdates ?? Number.POSITIVE_INFINITY) &&
+  oversizedDelta.droppedSeconds > (baseline?.droppedSeconds ?? Number.POSITIVE_INFINITY) &&
+  oversizedDelta.bodyCount === baseline?.bodyCount &&
+  oversizedDelta.hasBody &&
+  oversizedDelta.pos[1] > 4.5 &&
+  oversizedDelta.pos[1] < 5;
+const healthyRecoveryPass =
+  validObservation(oversizedDelta) &&
+  validObservation(healthyRecovery) &&
+  closeTo(healthyRecovery.timeDelta, 1 / 60, 1e-12) &&
+  healthyRecovery.fixedTick === oversizedDelta.fixedTick + 1 &&
+  healthyRecovery.droppedUpdates === oversizedDelta.droppedUpdates &&
+  healthyRecovery.droppedSeconds === oversizedDelta.droppedSeconds &&
+  healthyRecovery.bodyCount === oversizedDelta.bodyCount &&
+  healthyRecovery.hasBody &&
+  healthyRecovery.pos[1] < oversizedDelta.pos[1] &&
+  healthyRecovery.pos[1] > oversizedDelta.pos[1] - 0.1;
+const maxCollidingEntities = observations.reduce(
+  (max, observation) => Math.max(max, observation.collidingEntities.length),
+  0,
+);
+const finalObservation = observations[observations.length - 1];
+const collisionWritebackPass =
+  maxCollidingEntities > 0 &&
+  validObservation(finalObservation) &&
+  finalObservation.bodyCount === baseline?.bodyCount &&
+  finalObservation.hasBody &&
+  finalObservation.pos.every(Number.isFinite);
+const cleanupPass =
+  stopResult.ok && !repeatedStop.ok && repeatedStop.error.code === 'app-not-started';
+
+if (!baselinePass) failures.push(`[m25] baseline failed: ${JSON.stringify(baseline)}`);
+if (!oversizedPass) {
+  failures.push(
+    `[m25] oversized delta failed: ${JSON.stringify({ observation: oversizedDelta, fixedSteps: oversizedSteps })}`,
+  );
+}
+if (!healthyRecoveryPass) {
+  failures.push(`[m25] healthy recovery failed: ${JSON.stringify(healthyRecovery)}`);
+}
+if (!collisionWritebackPass) {
+  failures.push(
+    `[m25] collision/writeback failed: maxCollidingEntities=${maxCollidingEntities}, final=${JSON.stringify(finalObservation)}`,
+  );
+}
+if (!cleanupPass) {
+  failures.push(
+    `[m25] cleanup failed: firstStop=${JSON.stringify(stopResult)}, repeatedStop=${JSON.stringify(repeatedStop)}`,
+  );
+}
+
+console.log(`[m25] baseline: ${baselinePass ? 'PASS' : 'FAIL'} - fixedTick=${baseline?.fixedTick ?? 'n/a'}, bodyCount=${baseline?.bodyCount ?? 'n/a'}`);
+console.log(`[m25] oversized delta: ${oversizedPass ? 'PASS' : 'FAIL'} - Time.delta=${oversizedDelta?.timeDelta ?? 'n/a'}, fixedSteps=${oversizedSteps}, droppedUpdates=${oversizedDelta?.droppedUpdates ?? 'n/a'}, droppedSeconds=${oversizedDelta?.droppedSeconds ?? 'n/a'}, posY=${oversizedDelta?.pos?.[1] ?? 'n/a'}`);
+console.log(`[m25] healthy recovery: ${healthyRecoveryPass ? 'PASS' : 'FAIL'} - fixedTick=${healthyRecovery?.fixedTick ?? 'n/a'}, droppedUpdates=${healthyRecovery?.droppedUpdates ?? 'n/a'}, posY=${healthyRecovery?.pos?.[1] ?? 'n/a'}`);
+console.log(`[m25] collision/writeback: ${collisionWritebackPass ? 'PASS' : 'FAIL'} - maxCollidingEntities=${maxCollidingEntities}`);
+console.log(`[m25] cleanup: ${cleanupPass ? 'PASS' : 'FAIL'} - repeatedStop=${repeatedStop.ok ? 'ok' : repeatedStop.error.code}`);
+
+const artifactDir = process.env.FORGEAX_GAUNTLET_ARTIFACT_DIR;
+if (artifactDir !== undefined) {
+  mkdirSync(artifactDir, { recursive: true });
+  writeFileSync(
+    resolve(artifactDir, 'm25-physics-evidence.json'),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        scenario: 'hello-physics-large-delta-recovery',
+        policy: { fixedDeltaSeconds: 1 / 60, maxStepsPerUpdate: 4, maxDeltaSeconds: 0.1 },
+        frames: { total: totalFrames, requested: SMOKE_MIN_FRAMES },
+        phases: {
+          baseline: baseline ?? null,
+          oversizedDelta: oversizedDelta ?? null,
+          healthyRecovery: healthyRecovery ?? null,
+          final: finalObservation ?? null,
+        },
+        collision: { maxCollidingEntities },
+        cleanup: {
+          firstStopOk: stopResult.ok,
+          repeatedStopCode: repeatedStop.ok ? null : repeatedStop.error.code,
+        },
+        oracle: { passed: failures.length === 0, failures },
+      },
+      null,
+      2,
+    )}\n`,
+    'utf8',
+  );
+}
+
 if (failures.length > 0) {
   originalConsoleError(`[smoke] FAIL - ${failures.length} criteria failed:`);
   for (const f of failures) originalConsoleError(`  ${f}`);
@@ -283,6 +446,7 @@ if (failures.length > 0) {
 }
 
 console.log(`[smoke] PASS - frames=${totalFrames}, PhysicsWorld=${hasPhysicsWorld}, pos y: ${initialPosY} -> ${finalPosY}, app.onError=0`);
+console.log('[m25] PASS - physics large-delta recovery');
 
 if (sharedDevice) sharedDevice.destroy?.();
 delete globalThis.navigator.gpu;

@@ -30,7 +30,7 @@
 // across TS upgrades (R-1 / plan-strategy §2.7 P3).
 
 import { describe, expectTypeOf, it } from 'vitest';
-import { defineComponent, type ShapeOf } from '../component';
+import { defineComponent, type SchemaOf, type ShapeOf } from '../component';
 import { type ComponentData, World } from '../world';
 
 // Shared schema fixture — mirrors the runtime Camera token (9 f32) without
@@ -47,7 +47,7 @@ const CameraLike = defineComponent('CameraLike', {
   top: { type: 'f32' },
 });
 
-type CameraLikeSchema = (typeof CameraLike)['schema'];
+type CameraLikeSchema = SchemaOf<typeof CameraLike>;
 
 describe('ComponentData<S>.data — Partial<ShapeOf<S>> (AC-01, t6.a)', () => {
   it('ComponentData<S>["data"] equals Partial<ShapeOf<S>>', () => {

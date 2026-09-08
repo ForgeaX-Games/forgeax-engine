@@ -242,7 +242,7 @@ const detailTextureHandle = world.allocSharedRef('TextureAsset', detailTexture);
 // never registered and an empty MeshRenderer, so the render system reported
 // `asset-not-registered` every frame and never drew. The mesh carries a real
 // second UV set; the material references the demo's custom multi-UV shader by
-// path (the shader itself is registered after renderer.ready below).
+// path (the shader itself is registered after host initialization below).
 const DEMO_MATERIAL_SHADER_PATH = 'hello-multi-uv::multi-uv-demo';
 const meshAsset = {
   kind: 'mesh',
@@ -261,8 +261,10 @@ const meshAsset = {
       indexCount: indices.length,
       vertexCount,
       topology: 'triangle-list',
+      materialSlot: 0,
     },
   ],
+  materialSlots: [{ slotName: 'Default' }],
   aabb: new Float32Array([-HALF_W, -HALF_H, -0.01, HALF_W, HALF_H, 0.01]),
 };
 const materialAsset = {
@@ -389,52 +391,31 @@ try {
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const lease = worldAttachment1.value;
+const inspection = renderer.inspect();
 
-console.log(`[hello-multi-uv] backend=${renderer.backend}`);
+console.log(`[hello-multi-uv] backend=${inspection.capabilities.backendKind}`);
 
 const errors = [];
 renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code}`);
-  process.exit(1);
-}
 
-// Register the demo's custom material shader (AC-10 visual carrier). It
-// samples the real texture with uv0 and uv1 so the per-quad checkerboard becomes
-// observable; the built-in
-// PBR is NOT used here (it stays single-UV byte-identical, AC-11/AC-12). The
-// materialAsset minted above references this shader by path; registering the
-// path here resolves the material's pass to a real pipeline.
-if (!renderer.shader.findMaterialArtifact(DEMO_MATERIAL_SHADER_PATH).ok) {
-  renderer.shader.installMaterialArtifact(DEMO_MATERIAL_SHADER_PATH, {
-    source: demoComposedWgsl,
-    paramSchema: [
-      { name: 'baseColor', type: 'color' },
-      { name: 'baseColorUvTransform', type: 'vec4' },
-      { name: 'baseColorTexture', type: 'texture2d' },
-      { name: 'detailTexture', type: 'texture2d' },
-    ],
-    bindingLayout: [],
-  });
-}
-
-// Warm-up phase: the custom demo shader's GPU module is compiled lazily and
-// asynchronously (first draw returns 'rhi-not-available' with the retry-on-next-
-// frame contract; the module lands in moduleCache on the resolved microtask).
-// A fully synchronous draw loop never yields to that microtask, so the PSO would
-// stay null for all 300 frames and the plane would never draw. Pump draw + an
-// event-loop yield until the first frame succeeds (module ready), then run the
-// measured frames. Built-in PBR demos skip this because their module is seeded
-// at boot via renderer.ready; a custom forward shader registered post-ready is
-// not prewarmed.
+// The Standard host resolves the material shader from the build manifest before
+// the first receipt. Warm-up only yields to the host lifecycle; it never installs
+// a late shader or pipeline registry entry.
 const yieldTick = () => new Promise((r) => setTimeout(r, 0));
+const drawFrame = () => renderer.draw({
+  leases: [lease],
+  camera: { lease },
+  environment: { lease },
+});
+let lastReceipt;
 for (let warm = 0; warm < 16; warm++) {
   world.update().unwrap();
-  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const frame = drawFrame();
+  if (frame.ok) lastReceipt = frame.value;
   await yieldTick();
 }
 
@@ -443,9 +424,20 @@ const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = drawFrame();
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  else lastReceipt = r.value;
   framesObserved++;
+}
+
+if (lastReceipt === undefined) {
+  console.error('[smoke] FAIL - no successful FrameReceipt was produced');
+  process.exit(1);
+}
+const observed = await renderer.observe(lastReceipt, { include: ['draws'] });
+if (!observed.ok) {
+  console.error(`[smoke] FAIL - receipt observation failed: ${observed.error.code}`);
+  process.exit(1);
 }
 
 const device = sharedDevice;
@@ -518,8 +510,8 @@ const dist = (a, b) =>
   Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2);
 
 const failures = [];
-if (renderer.backend !== 'webgpu')
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (inspection.capabilities.backendKind !== 'webgpu')
+  failures.push(`(a) backend=${inspection.capabilities.backendKind} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES)
   failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 

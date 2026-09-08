@@ -3,6 +3,7 @@ import { createThreeAdapter, threeToneMappingId } from './adapters/three-adapter
 import { captureIblGpuCase, serializeIblGpuCaseResult } from './adapters/ibl-adapter';
 import { projectObservation, type AttachmentEvidence } from './capture/attachment-readback';
 import { probeReadback } from './capture/readback-probe';
+import { readbackRgba16float } from './capture/rhi-readback';
 import { TONE_CASES_BY_ID, TONE_REQUIRED_CASES } from './report/tone-required';
 import { inspectToneRamp } from './report/tone-report';
 import type { CaptureConfig, CaptureEnvelope } from './capture/named-capture';
@@ -13,6 +14,7 @@ import {
   PARITY_REQUIRED_CASES,
   PARITY_REQUIRED_PIPELINE_IDS,
 } from './coverage/required-cases';
+import { mergeInjectedVisualEvidenceStatuses } from './coverage/public-status';
 import { M1_CASE_INPUTS, M1_DEFERRED_MATRIX, M1_REQUIRED_CASES, type M1ColorInput } from './report/m1-required';
 import positiveMinimal from '../cases/m0/positive-minimal.json' with { type: 'json' };
 import selfCompare from '../cases/m0/self-compare.json' with { type: 'json' };
@@ -29,10 +31,14 @@ import {
   captureTransparencyThreeBrowser,
 } from './adapters/transparency-post-adapter';
 import { World } from '@forgeax/engine-ecs';
-import { createRenderer } from '@forgeax/engine-runtime';
+import type { RhiDevice } from '@forgeax/engine-rhi';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
+import type { RendererLegacyHostAdapter } from '@forgeax/engine-render/internal/construct-renderer';
 import { Transform } from '@forgeax/engine-scene';
 import {
   Camera,
+  DEFAULT_STANDARD_PROFILE,
   DirectionalLight,
   Materials,
   MeshFilter,
@@ -41,11 +47,18 @@ import {
   Skylight,
   SpotLight,
   perspective,
-  tonemapToU32,
-  type FrameObservationReadback,
+  TONEMAP_ACES_FILMIC,
+  TONEMAP_AGX,
+  TONEMAP_CINEON,
+  TONEMAP_LINEAR,
+  TONEMAP_NEUTRAL,
+  TONEMAP_NONE,
+  TONEMAP_REINHARD,
+  TONEMAP_REINHARD_EXTENDED,
+  type Tonemap,
   type Renderer,
+  type RenderWorldLease,
 } from '@forgeax/engine-render';
-import { err, ok } from '@forgeax/engine-types';
 import { createPlaneGeometry } from '@forgeax/engine-geometry';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { PMREMGenerator, WebGPURenderer } from 'three/webgpu';
@@ -69,6 +82,12 @@ import {
   UnsignedByteType,
   WebGLRenderer,
 } from 'three';
+import {
+  SPOT_SHADOW_SCENES,
+  type SpotShadowFalsifierId,
+  type SpotShadowReceiverVariant,
+  type SpotShadowScene,
+} from './spot-shadow-scene';
 
 const m1FalsificationCases = falsificationManifest.cases.map(
   (entry) => ({
@@ -100,6 +119,19 @@ interface M2AlphaFixture extends SceneCase {
 interface DirectProducerMetadata {
   readonly copySrc: boolean;
   readonly lifetime: 'active' | 'retired';
+}
+
+function tonemapToU32(mode: Tonemap): number {
+  switch (mode) {
+    case 'none': return TONEMAP_NONE;
+    case 'reinhard-extended': return TONEMAP_REINHARD_EXTENDED;
+    case 'reinhard': return TONEMAP_REINHARD;
+    case 'linear': return TONEMAP_LINEAR;
+    case 'cineon': return TONEMAP_CINEON;
+    case 'aces-filmic': return TONEMAP_ACES_FILMIC;
+    case 'agx': return TONEMAP_AGX;
+    case 'neutral': return TONEMAP_NEUTRAL;
+  }
 }
 
 const M2_ALPHA_REQUIRED_CASE_IDS = [
@@ -134,6 +166,7 @@ const iblVisualSceneCase = {
   budget: { analyticMax: 0.05, roiMax: 0.05, byteMax: 128 * 128 * 4 },
 } as const satisfies SceneCase;
 const directProducerMetadata = new Map<string, DirectProducerMetadata>();
+const SPOT_SHADOW_CAPTURE_FRAMES = 300;
 const cases = [
   positiveMinimal,
   selfCompare,
@@ -180,10 +213,30 @@ async function waitForAnimationFrameOrTimeout(): Promise<void> {
   });
 }
 
+async function drawSubmittedFrames(
+  renderer: Renderer,
+  world: World,
+  lease: RenderWorldLease,
+  target: number,
+  label: string,
+): Promise<void> {
+  for (let frame = 0; frame < target; frame += 1) {
+    world.update().unwrap();
+    const drawResult = renderer.draw({
+      leases: [lease],
+      camera: { lease },
+      environment: { lease },
+    });
+    if (!drawResult.ok) throw new Error(`${label} failed: ${drawResult.error.code}`);
+    const completed = await drawResult.value.completed;
+    if (!completed.ok) throw new Error(`${label} completion failed: ${completed.error.code}`);
+  }
+}
+
 async function settleWebglRenderer(renderer: Renderer): Promise<void> {
   await waitForAnimationFrameOrTimeout();
   await waitForAnimationFrameOrTimeout();
-  renderer.dispose();
+  await renderer.dispose();
 }
 
 const directReadbackConfig = (sceneCase: SceneCase): CaptureConfig => ({
@@ -259,65 +312,6 @@ function mutateFalsification(capture: CaptureEnvelope, caseId: string): CaptureE
   return { ...capture, captures: { ...capture.captures, final } };
 }
 
-async function readbackRgba16float(
-  renderer: Renderer,
-  lease: Parameters<FrameObservationReadback>[0],
-): ReturnType<FrameObservationReadback> {
-  const sourceResult = lease.beginReadback();
-  if (!sourceResult.ok) return err(new Error(sourceResult.error.hint));
-  const width = lease.descriptor.size.width;
-  const height = lease.descriptor.size.height;
-  const rowBytes = width * 8;
-  const alignedRowBytes = Math.ceil(rowBytes / 256) * 256;
-  const bufferResult = renderer.device.createBuffer({
-    size: alignedRowBytes * height,
-    usage: 0x08 | 0x01,
-  });
-  if (!bufferResult.ok) return err(new Error(bufferResult.error.code));
-  const buffer = bufferResult.value;
-  const encoderResult = renderer.device.createCommandEncoder({});
-  if (!encoderResult.ok) {
-    renderer.device.destroyBuffer(buffer);
-    return err(new Error(encoderResult.error.code));
-  }
-  try {
-    encoderResult.value.copyTextureToBuffer(
-      { texture: sourceResult.value.texture } as never,
-      { buffer, offset: 0, bytesPerRow: alignedRowBytes, rowsPerImage: height } as never,
-      { width, height, depthOrArrayLayers: 1 },
-    );
-  } catch (cause) {
-    renderer.device.destroyBuffer(buffer);
-    return err(new Error(`copyTextureToBuffer failed: ${String(cause)}`));
-  }
-  const finishResult = encoderResult.value.finish();
-  if (!finishResult.ok) {
-    renderer.device.destroyBuffer(buffer);
-    return err(new Error(finishResult.error.code));
-  }
-  renderer.device.queue.submit([finishResult.value]);
-  await renderer.device.queue.onSubmittedWorkDone();
-  const mapResult = await buffer.mapAsync(0x01);
-  if (!mapResult.ok) {
-    renderer.device.destroyBuffer(buffer);
-    return err(new Error(mapResult.error.code));
-  }
-  const rangeResult = mapResult.value.getMappedRange();
-  if (!rangeResult.ok) {
-    mapResult.value.unmap();
-    renderer.device.destroyBuffer(buffer);
-    return err(new Error(rangeResult.error.code));
-  }
-  const fullBytes = new Uint8Array(rangeResult.value);
-  const bytes = new Uint8Array(rowBytes * height);
-  for (let row = 0; row < height; row += 1) {
-    bytes.set(fullBytes.subarray(row * alignedRowBytes, row * alignedRowBytes + rowBytes), row * rowBytes);
-  }
-  mapResult.value.unmap();
-  renderer.device.destroyBuffer(buffer);
-  return ok(bytes);
-}
-
 async function hashRawBytes(bytes: Uint8Array): Promise<string> {
   if (globalThis.crypto?.subtle !== undefined) {
     const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes as Uint8Array<ArrayBuffer>);
@@ -332,18 +326,26 @@ async function hashRawBytes(bytes: Uint8Array): Promise<string> {
 }
 
 async function captureDirectEvidence(
-  renderer: Renderer,
+  legacyHost: RendererLegacyHostAdapter,
+  device: RhiDevice,
   sceneCase: SceneCase,
   pixels: Uint8Array,
+  renderErrors: readonly string[],
 ): Promise<{ readonly evidence: AttachmentEvidence; readonly metadata: DirectProducerMetadata }> {
-  const observationResult = await renderer.observeCurrentFrame({
+  const observationResult = await legacyHost.observeCurrentFrame({
     semantic: 'linear-hdr',
-    readback: (lease) => readbackRgba16float(renderer, lease),
+    readback: (lease) => readbackRgba16float(device, lease),
   });
   if (!observationResult.ok) {
-    throw new Error(`ForgeaX linear HDR observation failed: ${observationResult.error.code}`);
+    throw new Error(
+      `ForgeaX linear HDR observation failed: ${observationResult.error.code} reason=${observationResult.error.detail.reason} recovery=${observationResult.error.detail.recovery} hint=${observationResult.error.hint} health=${JSON.stringify(legacyHost.health())} renderErrors=${renderErrors.join(' | ') || 'none'}`,
+    );
   }
   const linear = observationResult.value;
+  if (linear.metadata.pipelineId !== 'forgeax::standard') {
+    throw new Error(`ForgeaX producer identity mismatch: ${linear.metadata.pipelineId}`);
+  }
+  const pipelineId = sceneCase.pipeline?.identity === 'hdrp' ? 'forgeax::hdrp' : 'forgeax::urp';
   const finalBytes = new Uint8Array(pixels);
   return {
     evidence: {
@@ -354,7 +356,7 @@ async function captureDirectEvidence(
         size: linear.metadata.size,
         rawHash: await hashRawBytes(linear.bytes),
         frameId: linear.metadata.frameId,
-        pipelineId: linear.metadata.pipelineId,
+        pipelineId,
         backendId: linear.metadata.backendId,
       }),
       finalDisplay: projectObservation('finalDisplay', {
@@ -364,7 +366,7 @@ async function captureDirectEvidence(
         size: { width: sceneCase.scene.width, height: sceneCase.scene.height },
         rawHash: await hashRawBytes(finalBytes),
         frameId: linear.metadata.frameId,
-        pipelineId: linear.metadata.pipelineId,
+        pipelineId,
         backendId: linear.metadata.backendId,
       }),
     },
@@ -375,11 +377,16 @@ async function captureDirectEvidence(
   };
 }
 
-export async function captureForgeax(sceneCase: SceneCase, rendererKind: 'webgpu' | 'webgl' = 'webgpu') {
+async function createForgeaxCaptureContext(
+  rendererKind: 'webgpu' | 'webgl',
+  initialSceneCase: SceneCase,
+) {
   const canvas = rendererKind === 'webgl'
     ? document.createElement('canvas')
     : document.querySelector<HTMLCanvasElement>('#forgeax');
   if (canvas === null) throw new Error('missing ForgeaX canvas');
+  canvas.width = initialSceneCase.scene.width;
+  canvas.height = initialSceneCase.scene.height;
   const useWebkitCompositorReadback = rendererKind === 'webgl'
     && typeof (globalThis as unknown as { __forgeaxWebkitCanvasReadback?: unknown }).__forgeaxWebkitCanvasReadback === 'function';
   if (rendererKind === 'webgl') {
@@ -388,32 +395,94 @@ export async function captureForgeax(sceneCase: SceneCase, rendererKind: 'webgpu
       : 'position:fixed;left:-10000px;top:-10000px';
     document.body.append(canvas);
   }
+  const constructed = await constructRuntimeRendererHost(canvas, {}, forgeaxBundlerAdapter() as never);
+  if (!constructed.ok) {
+    const detail = 'detail' in constructed.error ? constructed.error.detail : undefined;
+    throw new Error(`Forgeax renderer unavailable: ${JSON.stringify({
+      code: constructed.error.code,
+      message: constructed.error.message,
+      hint: constructed.error.hint,
+      ...(detail === undefined ? {} : { detail }),
+      ...(detail !== undefined && 'compilerMessages' in detail
+        ? { compilerMessages: detail.compilerMessages }
+        : {}),
+    })}`);
+  }
+  const { renderer, debugDrawHost } = constructed.value;
+  const legacyHost = debugDrawHost as unknown as RendererLegacyHostAdapter;
+  return { canvas, renderer, legacyHost, debugDrawHost, rendererKind, useWebkitCompositorReadback };
+}
+
+async function disposeForgeaxCaptureContext(
+  context: Awaited<ReturnType<typeof createForgeaxCaptureContext>>,
+): Promise<void> {
+  const { canvas, renderer, rendererKind } = context;
+  if (rendererKind === 'webgl') {
+    await settleWebglRenderer(renderer);
+    canvas.remove();
+    return;
+  }
+  await renderer.dispose();
+}
+
+async function captureForgeaxInContext(
+  context: Awaited<ReturnType<typeof createForgeaxCaptureContext>>,
+  sceneCase: SceneCase,
+  spotShadowFalsifier?: SpotShadowFalsifierId,
+  spotShadowReceiver: SpotShadowReceiverVariant = 'base',
+  spotShadowCaptureFrames = SPOT_SHADOW_CAPTURE_FRAMES,
+) {
+  const { canvas, renderer, legacyHost, debugDrawHost, rendererKind, useWebkitCompositorReadback } = context;
   canvas.width = sceneCase.scene.width;
   canvas.height = sceneCase.scene.height;
-  const renderer = await createRenderer(canvas, {}, forgeaxBundlerAdapter() as never);
   const renderErrors: string[] = [];
-  const removeRenderErrorListener = renderer.onError((error) => {
-    renderErrors.push(`${error.code}: ${error.expected} (${error.hint})`);
+  const removeRenderErrorListener = renderer.subscribe((event) => {
+    if (event.kind !== 'error') return;
+    renderErrors.push(`${event.error.code}: ${event.error.expected} (${event.error.hint})`);
   });
+  let attachedLease: RenderWorldLease | undefined;
   try {
-    const ready = await renderer.ready;
-    if (!ready.ok) throw new Error(`ForgeaX renderer unavailable: ${ready.error.code}`);
     const world = new World();
-    const worldAttachment1 = renderer.attachWorld(world);
+    const worldAttachment1 = renderer.attach(world);
     if (!worldAttachment1.ok) throw worldAttachment1.error;
+    attachedLease = worldAttachment1.value;
     const input = m1CaptureInputs[sceneCase.caseId];
     const m1Case = sceneCase.caseId.startsWith('default-') || sceneCase.caseId.startsWith('falsify-');
     const m2Case = m2AlphaCasesById.get(sceneCase.caseId);
     const toneCase = TONE_CASES_BY_ID.get(sceneCase.caseId);
     const directCase = m4DirectLightCasesById.get(sceneCase.caseId);
+    if (directCase !== undefined) {
+      const expectedLighting = directCase.pipeline?.identity === 'hdrp' ? 'clustered' : 'direct';
+      const profileResult = renderer.setProfile({ ...DEFAULT_STANDARD_PROFILE, lighting: expectedLighting });
+      if (!profileResult.ok) throw new Error(`ForgeaX ${sceneCase.caseId} profile failed: ${profileResult.error.code}`);
+      if (renderer.inspect().profile.lighting !== expectedLighting) {
+        throw new Error(`ForgeaX ${sceneCase.caseId} selected ${renderer.inspect().profile.lighting} instead of ${expectedLighting}`);
+      }
+    }
     const iblCase = sceneCase.caseId === constantEnvironment.caseId;
+    const spotScene = directCase?.caseId === SPOT_SHADOW_SCENES.urp.caseId
+      ? SPOT_SHADOW_SCENES.urp
+      : directCase?.caseId === SPOT_SHADOW_SCENES.hdrp.caseId
+        ? SPOT_SHADOW_SCENES.hdrp
+        : undefined;
     if (m1Case || m2Case !== undefined || toneCase !== undefined || directCase !== undefined || iblCase) {
       world.spawn(
-        { component: Transform, data: { pos: [0, 0, 3], quat: [0, 0, 0, 1] } },
+        {
+          component: Transform,
+          data: {
+            pos: spotScene?.camera.position ?? [0, 0, 3],
+            quat: spotScene?.camera.rotation ?? [0, 0, 0, 1],
+          },
+        },
         {
           component: Camera,
           data: {
-            ...perspective({ fov: Math.PI / 4, aspect: 1 }),
+            ...perspective({
+              fov: ((spotScene?.camera.fovDeg ?? 45) * Math.PI) / 180,
+              aspect: (spotScene?.scene.width ?? sceneCase.scene.width) / (spotScene?.scene.height ?? sceneCase.scene.height),
+              near: 0.1,
+              far: 100,
+            }),
             clearColor: sceneCase.scene.background,
             ...(toneCase === undefined && !iblCase
               ? {}
@@ -423,10 +492,12 @@ export async function captureForgeax(sceneCase: SceneCase, rendererKind: 'webgpu
           },
         },
       ).unwrap();
-      if (input !== undefined) await spawnM1Primitive(world, renderer, input);
-      if (m2Case !== undefined) await spawnM2AlphaPrimitive(world, renderer, m2Case);
-      if (toneCase !== undefined) await spawnTonePrimitive(world, renderer, toneCase.tone.color);
-      if (directCase !== undefined) await spawnDirectLightPrimitive(world, directCase);
+      if (input !== undefined) await spawnM1Primitive(world, input);
+      if (m2Case !== undefined) await spawnM2AlphaPrimitive(world, m2Case);
+      if (toneCase !== undefined) await spawnTonePrimitive(world, toneCase.tone.color);
+      if (directCase !== undefined) {
+        await spawnDirectLightPrimitive(world, directCase, spotShadowFalsifier, spotShadowReceiver);
+      }
       if (iblCase) spawnIblPrimitive(world);
       if (m2Case !== undefined) {
         world.spawn({
@@ -435,15 +506,32 @@ export async function captureForgeax(sceneCase: SceneCase, rendererKind: 'webgpu
         });
       }
     }
+    const lease = worldAttachment1.value;
+    const drawFrame = () => renderer.draw({
+      leases: [lease],
+      camera: { lease },
+      environment: { lease },
+    });
     world.update().unwrap();
-    const drawResult = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const drawResult = drawFrame();
     if (!drawResult.ok) throw new Error(`ForgeaX draw failed: ${drawResult.error.code}`);
+    if (directCase !== undefined && rendererKind === 'webgpu') {
+      const completed = await drawResult.value.completed;
+      if (!completed.ok) throw new Error(`ForgeaX ${sceneCase.caseId} completion failed: ${completed.error.code}`);
+      await drawSubmittedFrames(
+        renderer,
+        world,
+        lease,
+        Math.max(0, spotShadowCaptureFrames - 1),
+        `ForgeaX ${sceneCase.caseId} warmup`,
+      );
+    }
     if (rendererKind === 'webgl') {
       // The WebGL2 fallback has no browser GPU-queue completion event under
       // headed Xvfb; compositor frames are its completion boundary.
       await waitForAnimationFrameOrTimeout();
       world.update().unwrap();
-      const warmedDraw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      const warmedDraw = drawFrame();
       if (!warmedDraw.ok) throw new Error(`ForgeaX warmed draw failed: ${warmedDraw.error.code}`);
       await waitForAnimationFrameOrTimeout();
     }
@@ -457,7 +545,7 @@ export async function captureForgeax(sceneCase: SceneCase, rendererKind: 'webgpu
     const pixels = await readCanvasPixels(canvas, useWebkitCompositorReadback);
     if (m2Case !== undefined) assertM2AlphaReadback(m2Case, pixels);
     if (directCase !== undefined && rendererKind === 'webgpu') {
-      const capture = await captureDirectEvidence(renderer, sceneCase, pixels);
+      const capture = await captureDirectEvidence(legacyHost, debugDrawHost.device, sceneCase, pixels, renderErrors);
       directProducerMetadata.set(sceneCase.caseId, capture.metadata);
       return { linear: [], final: Array.from(pixels), config: directReadbackConfig(sceneCase), observations: capture.evidence };
     }
@@ -477,15 +565,88 @@ export async function captureForgeax(sceneCase: SceneCase, rendererKind: 'webgpu
           },
     };
   } finally {
+    attachedLease?.dispose();
     removeRenderErrorListener();
-    if (rendererKind === 'webgl') {
-      await settleWebglRenderer(renderer);
-      canvas.remove();
-    }
   }
 }
 
-async function spawnDirectLightPrimitive(world: World, sceneCase: SceneCase): Promise<void> {
+export async function captureForgeax(
+  sceneCase: SceneCase,
+  rendererKind: 'webgpu' | 'webgl' = 'webgpu',
+  spotShadowFalsifier?: SpotShadowFalsifierId,
+  spotShadowReceiver: SpotShadowReceiverVariant = 'base',
+  spotShadowCaptureFrames = SPOT_SHADOW_CAPTURE_FRAMES,
+) {
+  const context = await createForgeaxCaptureContext(rendererKind, sceneCase);
+  try {
+    return await captureForgeaxInContext(
+      context,
+      sceneCase,
+      spotShadowFalsifier,
+      spotShadowReceiver,
+      spotShadowCaptureFrames,
+    );
+  } finally {
+    await disposeForgeaxCaptureContext(context);
+  }
+}
+
+export async function createForgeaxCaptureSession(initialSceneCase: SceneCase) {
+  let context: Awaited<ReturnType<typeof createForgeaxCaptureContext>> | undefined =
+    await createForgeaxCaptureContext('webgpu', initialSceneCase);
+  let disposed = false;
+  return {
+    async capture(
+      sceneCase: SceneCase,
+      spotShadowFalsifier?: SpotShadowFalsifierId,
+      spotShadowReceiver: SpotShadowReceiverVariant = 'base',
+      spotShadowCaptureFrames = SPOT_SHADOW_CAPTURE_FRAMES,
+    ) {
+      if (disposed) throw new Error('ForgeaX capture session is disposed');
+      // SharedRef handles are scoped to the World that owns them. A fresh
+      // renderer keeps each parity capture in one handle domain and makes
+      // the evidence session independent of prior capture state.
+      const current = context ?? await createForgeaxCaptureContext('webgpu', sceneCase);
+      context = undefined;
+      try {
+        return await captureForgeaxInContext(
+          current,
+          sceneCase,
+          spotShadowFalsifier,
+          spotShadowReceiver,
+          spotShadowCaptureFrames,
+        );
+      } finally {
+        await disposeForgeaxCaptureContext(current);
+      }
+    },
+    async dispose(): Promise<void> {
+      if (disposed) return;
+      disposed = true;
+      if (context !== undefined) {
+        const current = context;
+        context = undefined;
+        await disposeForgeaxCaptureContext(current);
+      }
+    },
+  };
+}
+
+async function spawnDirectLightPrimitive(
+  world: World,
+  sceneCase: SceneCase,
+  spotShadowFalsifier?: SpotShadowFalsifierId,
+  spotShadowReceiver: SpotShadowReceiverVariant = 'base',
+): Promise<void> {
+    const spotShadowScene = sceneCase.caseId === SPOT_SHADOW_SCENES.urp.caseId
+    ? SPOT_SHADOW_SCENES.urp
+    : sceneCase.caseId === SPOT_SHADOW_SCENES.hdrp.caseId
+      ? SPOT_SHADOW_SCENES.hdrp
+      : undefined;
+  if (spotShadowScene !== undefined) {
+    await spawnBrowserSpotShadowPrimitive(world, spotShadowScene, spotShadowFalsifier, spotShadowReceiver);
+    return;
+  }
   const light = sceneCase.light;
   if (light === undefined) throw new Error(`direct-light case ${sceneCase.caseId} is missing light metadata`);
   const plane = createPlaneGeometry(2.8, 2.8);
@@ -538,6 +699,93 @@ async function spawnDirectLightPrimitive(world: World, sceneCase: SceneCase): Pr
   ).unwrap();
 }
 
+async function spawnBrowserSpotShadowPrimitive(
+  world: World,
+  scene: SpotShadowScene,
+  falsifier?: SpotShadowFalsifierId,
+  receiver: SpotShadowReceiverVariant = 'base',
+): Promise<void> {
+  const floor = createPlaneGeometry(scene.floor.size[0], scene.floor.size[1]);
+  if (!floor.ok) throw new Error(`Spot-shadow floor creation failed: ${floor.error.code}`);
+  const floorMesh = world.allocSharedRef('MeshAsset', floor.value);
+  const floorMaterial = world.allocSharedRef('MaterialAsset', Materials.standard({
+    baseColor: [0.55, 0.55, 0.6, 1],
+    metallic: 0,
+    roughness: 0.9,
+    ...(receiver === 'clearcoat' ? { clearcoat: 1, clearcoatRoughness: 0.2 } : {}),
+  }));
+  world.spawn(
+    { component: Transform, data: { pos: scene.floor.position, quat: scene.floor.rotation } },
+    { component: MeshFilter, data: { assetHandle: floorMesh } },
+    { component: MeshRenderer, data: { materials: [floorMaterial] } },
+  ).unwrap();
+
+  if (falsifier !== 'no-caster') {
+    const occluderMaterial = world.allocSharedRef('MaterialAsset', Materials.standard({
+      baseColor: [0.85, 0.5, 0.25, 1],
+      metallic: 0,
+      roughness: 0.6,
+    }));
+    const occluderPosition = falsifier === 'reverse-occlusion'
+      ? [
+        scene.occluder.position[0],
+        scene.floor.position[1] - scene.occluder.size[1],
+        scene.occluder.position[2],
+      ] as const
+      : scene.occluder.position;
+    world.spawn(
+      { component: Transform, data: { pos: occluderPosition } },
+      { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+      { component: MeshRenderer, data: { materials: [occluderMaterial] } },
+    ).unwrap();
+  }
+
+  world.spawn(
+    { component: Transform, data: { pos: scene.light.position } },
+    {
+      component: SpotLight,
+      data: {
+        direction: scene.light.direction,
+        color: scene.light.color,
+        intensity: scene.light.intensity,
+        range: scene.light.range,
+        innerConeDeg: scene.light.innerConeDeg,
+        outerConeDeg: scene.light.outerConeDeg,
+        castShadow: falsifier === 'no-shadow-allocation' ? false : scene.light.castShadow,
+      },
+    },
+  ).unwrap();
+
+  // Keep the receiver in the existing light-casters context while leaving
+  // the spot as the only shadow-producing light; this prevents the ROI from
+  // depending on a directional shadow as a false positive.
+  world.spawn({
+    component: DirectionalLight,
+    data: { direction: [-0.2, -1, -0.3], color: [1, 1, 1], intensity: 0.5, castShadow: false },
+  }).unwrap();
+  const pointLightPositions = [
+    [0.7, 0.2, 2],
+    [2.3, -3.3, -4],
+    [-4, 2, -12],
+    [0, 0, -3],
+  ] as const;
+  const pointLightColors = [
+    [1, 1, 1],
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+  ] as const;
+  for (let index = 0; index < pointLightPositions.length; index += 1) {
+    const position = pointLightPositions[index];
+    const color = pointLightColors[index];
+    if (position === undefined || color === undefined) continue;
+    world.spawn(
+      { component: Transform, data: { pos: position } },
+      { component: PointLight, data: { color, intensity: 100, range: 50 } },
+    ).unwrap();
+  }
+}
+
 function spawnIblPrimitive(world: World): void {
   const plane = createPlaneGeometry(2.8, 2.8);
   if (!plane.ok) throw new Error(`IBL plane creation failed: ${plane.error.code}`);
@@ -570,7 +818,7 @@ function materialColor(input: M1ColorInput): readonly [number, number, number, n
   return input.kind === 'factor-texture' ? (input.factor ?? [1, 1, 1, 1]) : input.color;
 }
 
-async function spawnM1Primitive(world: World, renderer: Awaited<ReturnType<typeof createRenderer>>, input: M1ColorInput): Promise<void> {
+async function spawnM1Primitive(world: World, input: M1ColorInput): Promise<void> {
   const plane = createPlaneGeometry(2.8, 2.8);
   if (!plane.ok) throw new Error(`M1 plane creation failed: ${plane.error.code}`);
   const meshHandle = world.allocSharedRef('MeshAsset', plane.value);
@@ -586,17 +834,6 @@ async function spawnM1Primitive(world: World, renderer: Awaited<ReturnType<typeo
       }
     : undefined;
   const textureHandle = texture === undefined ? undefined : world.allocSharedRef('TextureAsset', texture);
-  if (texture !== undefined && textureHandle !== undefined) {
-    const upload = await renderer.store.uploadTexture(textureHandle, texture, {
-      bytes: texture.data,
-      width: 1,
-      height: 1,
-      mime: 'image/png',
-      colorSpace: 'srgb',
-      mipmap: false,
-    });
-    if (!upload.ok) throw new Error(`M1 texture upload failed: ${upload.error.code}`);
-  }
   const colorSpace = input.kind === 'linear-input' || input.kind === 'factor-texture' ? 'linear' : 'srgb';
   const material = Materials.unlit(materialColor(input), {
     colorSpace,
@@ -614,7 +851,6 @@ async function spawnM1Primitive(world: World, renderer: Awaited<ReturnType<typeo
 
 async function spawnM2AlphaPrimitive(
   world: World,
-  renderer: Awaited<ReturnType<typeof createRenderer>>,
   fixture: M2AlphaFixture,
 ): Promise<void> {
   const plane = createPlaneGeometry(2.8, 2.8);
@@ -632,17 +868,6 @@ async function spawnM2AlphaPrimitive(
         mipmap: false,
       };
   const textureHandle = texture === undefined ? undefined : world.allocSharedRef('TextureAsset', texture);
-  if (texture !== undefined && textureHandle !== undefined) {
-    const upload = await renderer.store.uploadTexture(textureHandle, texture, {
-      bytes: texture.data,
-      width: 1,
-      height: 1,
-      mime: 'image/png',
-      colorSpace: 'srgb',
-      mipmap: false,
-    });
-    if (!upload.ok) throw new Error(`M2 texture upload failed: ${upload.error.code}`);
-  }
   const renderState = fixture.alpha.mode === 'BLEND'
     ? {
         cullMode: 'none' as const,
@@ -683,10 +908,9 @@ async function spawnM2AlphaPrimitive(
 
 async function spawnTonePrimitive(
   world: World,
-  renderer: Awaited<ReturnType<typeof createRenderer>>,
   color: readonly [number, number, number],
 ): Promise<void> {
-  await spawnM1Primitive(world, renderer, { kind: 'linear-input', color: [color[0], color[1], color[2], 1] });
+  await spawnM1Primitive(world, { kind: 'linear-input', color: [color[0], color[1], color[2], 1] });
 }
 
 type WebkitCanvasReadback = (request: {
@@ -898,16 +1122,24 @@ export async function captureThree(sceneCase: SceneCase, rendererKind: 'webgpu' 
   return { linear: bytes, final: bytes, config: blackConfig(sceneCase) };
 }
 
-const forgeaxAdapter = createForgeaxAdapter(captureForgeax);
+const forgeaxAdapter = createForgeaxAdapter(
+  (sceneCase) => captureForgeax(sceneCase, 'webgpu', undefined, 'base', 60),
+);
 const threeAdapter = createThreeAdapter(captureThree, 'webgpu');
 
 declare global {
   interface Window {
-    __colorLightingParity?: (invocationId?: string) => Promise<unknown>;
+    __colorLightingParity?: (
+      invocationId?: string,
+      injectedVisualEvidenceInputs?: readonly Record<string, unknown>[],
+    ) => Promise<unknown>;
   }
 }
 
-window.__colorLightingParity = async (invocationId = 'color-lighting-parity-browser') => {
+window.__colorLightingParity = async (
+  invocationId = 'color-lighting-parity-browser',
+  injectedVisualEvidenceInputs: readonly Record<string, unknown>[] = [],
+) => {
   const result = await runParityMatrix(cases, forgeaxAdapter, threeAdapter, {
     expectedErrors,
     overrideProvenance: {
@@ -950,7 +1182,12 @@ window.__colorLightingParity = async (invocationId = 'color-lighting-parity-brow
     auxiliaryErrors.push(`transparency-post: ${error instanceof Error ? error.message : String(error)}`);
   }
   const visualEvidenceErrors: string[] = [];
-  const visualEvidenceInputs: Array<Record<string, unknown>> = [];
+  const visualEvidenceInputs: Array<Record<string, unknown>> = [...injectedVisualEvidenceInputs];
+  const injectedVisualEvidenceCaseIds = new Set(
+    injectedVisualEvidenceInputs
+      .map((input) => input.caseId)
+      .filter((caseId): caseId is string => typeof caseId === 'string'),
+  );
   const visualSceneCases = new Map<string, SceneCase>([
     ...cases.map((entry) => [entry.caseId, entry] as const),
     ...m6TransparencyCases.map((entry) => [entry.caseId, entry] as const),
@@ -977,6 +1214,7 @@ window.__colorLightingParity = async (invocationId = 'color-lighting-parity-brow
     });
   };
   for (const caseId of PARITY_REQUIRED_CASE_IDS) {
+    if (injectedVisualEvidenceCaseIds.has(caseId)) continue;
     if (caseId === constantEnvironment.caseId) continue;
     const entry = result.cases.find((candidate) => candidate.caseId === caseId)
       ?? transparencyResult?.cases.find((candidate) => candidate.caseId === caseId);
@@ -1006,7 +1244,7 @@ window.__colorLightingParity = async (invocationId = 'color-lighting-parity-brow
   } catch (error) {
     visualEvidenceErrors.push(`ibl-constant-environment: ${error instanceof Error ? error.message : String(error)}`);
   }
-  const auxiliaryCaseStatuses = {
+  const auxiliaryCaseStatuses: Record<string, 'pass' | 'failed'> = {
     [constantEnvironment.caseId]: iblPass ? 'pass' : 'failed',
     ...Object.fromEntries(
       transparencyResult?.cases.map((entry) => [entry.caseId, entry.passed ? 'pass' : 'failed']) ?? [],
@@ -1040,15 +1278,26 @@ window.__colorLightingParity = async (invocationId = 'color-lighting-parity-brow
       ? {}
       : { reason: `missing ${missingPipelineIds.join(', ')} producer evidence; Dawn owns the downstream capture` }),
   };
-  const caseStatuses = Object.fromEntries(
+  const baseCaseStatuses: Record<string, 'pass' | 'failed'> = Object.fromEntries(
     [
       ...result.cases.map((entry) => [entry.caseId, entry.passed ? 'pass' : 'failed']),
       ...Object.entries(auxiliaryCaseStatuses),
     ],
   );
-  const caseBackendStatuses = Object.fromEntries(
-    Object.entries(caseStatuses).map(([caseId, status]) => [caseId, { 'browser-webgpu': status }]),
+  const baseCaseBackendStatuses: Record<string, Readonly<Record<string, 'pass' | 'failed'>>> = Object.fromEntries(
+    Object.entries(baseCaseStatuses).map(([caseId, status]) => [caseId, { 'browser-webgpu': status }]),
   );
+  const injectedStatusProjection = mergeInjectedVisualEvidenceStatuses(
+    baseCaseStatuses,
+    baseCaseBackendStatuses,
+    injectedVisualEvidenceInputs.flatMap((input) => (
+      typeof input.caseId === 'string'
+        ? [{ caseId: input.caseId, status: input.status, verdict: input.verdict }]
+        : []
+    )),
+  );
+  const caseStatuses = injectedStatusProjection.caseStatuses;
+  const caseBackendStatuses = injectedStatusProjection.caseBackendStatuses;
   const missingCaseIds = PARITY_REQUIRED_CASES
     .map((entry) => entry.caseId)
     .filter((caseId) => caseStatuses[caseId] !== 'pass');
@@ -1129,6 +1378,7 @@ window.__colorLightingParity = async (invocationId = 'color-lighting-parity-brow
       ...PARITY_REQUIRED_CASE_IDS,
     ],
     deferredMatrix: M1_DEFERRED_MATRIX,
+    ...result,
     caseStatuses,
     caseBackendStatuses,
     auxiliaryEvidence: {
@@ -1144,7 +1394,6 @@ window.__colorLightingParity = async (invocationId = 'color-lighting-parity-brow
     alphaCoverage,
     toneRamp,
     directLightEvidence,
-    ...result,
     browserStageOk,
     browserStageStatus,
     status,
@@ -1154,11 +1403,17 @@ window.__colorLightingParity = async (invocationId = 'color-lighting-parity-brow
 
 declare global {
   interface Window {
-    __colorLightingWebkitParity?: (invocationId?: string) => Promise<unknown>;
+    __colorLightingWebkitParity?: (
+      invocationId?: string,
+      requestedCaseId?: string,
+    ) => Promise<unknown>;
   }
 }
 
-window.__colorLightingWebkitParity = async (invocationId = 'color-lighting-parity-webkit') => {
+window.__colorLightingWebkitParity = async (
+  invocationId = 'color-lighting-parity-webkit',
+  requestedCaseId?: string,
+) => {
   if (typeof navigator !== 'undefined' && 'gpu' in navigator && navigator.gpu) {
     throw new Error('WebKit fallback runner requires navigator.gpu to be absent');
   }
@@ -1170,24 +1425,43 @@ window.__colorLightingWebkitParity = async (invocationId = 'color-lighting-parit
     'direct-directional-urp',
   ]);
   const sentinelCases = cases.filter((sceneCase) => sentinelIds.has(sceneCase.caseId));
-  const fallback = await runParityMatrix(
-    sentinelCases,
-    createForgeaxAdapter((sceneCase) => captureForgeax(sceneCase, 'webgl'), 'webgl'),
-    createThreeAdapter((sceneCase) => captureThree(sceneCase, 'webgl'), 'webgl'),
-    { allowThreeWebglFallback: true },
-  );
-  const transparency = await runParityMatrix(
-    [transparentLdrCase] as unknown as readonly SceneCase[],
-    createForgeaxAdapter((sceneCase) => captureTransparencyForgeaxBrowser(sceneCase, 'webgl'), 'webgl'),
-    createThreeAdapter((sceneCase) => captureTransparencyThreeBrowser(sceneCase, 'webgl'), 'webgl'),
-    { allowThreeWebglFallback: true },
-  );
-  const allCases = [...fallback.cases, ...transparency.cases];
+  const requestedSentinels = requestedCaseId === undefined
+    ? sentinelCases
+    : sentinelCases.filter((sceneCase) => sceneCase.caseId === requestedCaseId);
+  const includeTransparency = requestedCaseId === undefined || requestedCaseId === transparentLdrCase.caseId;
+  if (requestedSentinels.length === 0 && !includeTransparency) {
+    throw new Error(`unknown WebKit fallback sentinel case: ${requestedCaseId}`);
+  }
+  const firstSentinel = requestedSentinels[0];
+  const fallback = firstSentinel === undefined
+    ? null
+    : await (async () => {
+        const context = await createForgeaxCaptureContext('webgl', firstSentinel);
+        try {
+          return await runParityMatrix(
+            requestedSentinels,
+            createForgeaxAdapter((sceneCase) => captureForgeaxInContext(context, sceneCase), 'webgl'),
+            createThreeAdapter((sceneCase) => captureThree(sceneCase, 'webgl'), 'webgl'),
+            { allowThreeWebglFallback: true },
+          );
+        } finally {
+          await disposeForgeaxCaptureContext(context);
+        }
+      })();
+  const transparency = includeTransparency
+    ? await runParityMatrix(
+        [transparentLdrCase] as unknown as readonly SceneCase[],
+        createForgeaxAdapter((sceneCase) => captureTransparencyForgeaxBrowser(sceneCase, 'webgl'), 'webgl'),
+        createThreeAdapter((sceneCase) => captureTransparencyThreeBrowser(sceneCase, 'webgl'), 'webgl'),
+        { allowThreeWebglFallback: true },
+      )
+    : null;
+  const allCases = [...(fallback?.cases ?? []), ...(transparency?.cases ?? [])];
   return {
     invocationId,
     backendId: 'webkit-webgl2',
     executionStatus: 'complete',
-    status: fallback.ok && transparency.ok ? 'pass' : 'failed',
+    status: (fallback?.ok ?? true) && (transparency?.ok ?? true) ? 'pass' : 'failed',
     caseStatuses: Object.fromEntries(allCases.map((entry) => [entry.caseId, entry.passed ? 'pass' : 'failed'])),
     caseBackendStatuses: Object.fromEntries(
       allCases.map((entry) => [entry.caseId, { 'webkit-webgl2': entry.passed ? 'pass' : 'failed' }]),

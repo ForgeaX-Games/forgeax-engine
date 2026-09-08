@@ -26,7 +26,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[bevy-gamepad-input] app.start failed:', started.error.code, started.error.hint);
     return;
   }
-  console.warn(`[bevy-gamepad-input] backend=${app.renderer.backend}`);
+  console.warn(`[bevy-gamepad-input] state=${app.renderer.inspect().state}`);
   Object.assign(globalThis, { __bevyGamepadInputReady: true, __bevyGamepadInputState: state });
 }
 

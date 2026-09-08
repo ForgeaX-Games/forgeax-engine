@@ -10,16 +10,25 @@ import { describe, expect, it, vi } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
 import { buildSceneChildContext } from '../registry/instantiate';
 
-defineComponent('T709CtxMeshFilter', { assetHandle: 'shared<MeshAsset>' });
+const T709CtxMeshFilter = defineComponent('T709CtxMeshFilter', {
+  assetHandle: 'shared<MeshAsset>',
+});
 
 function makeRegistry(): AssetRegistry {
-  return new AssetRegistry({
-    getMaterialShaderManifest: vi.fn().mockReturnValue(undefined),
-    findMaterialArtifact: vi.fn().mockReturnValue({ ok: false, error: new Error('mock') }),
-    getPipeline: vi.fn().mockReturnValue(undefined),
-    installMaterialArtifact: vi.fn(),
-    inspect: vi.fn().mockReturnValue({ materialShaders: [] }),
-  } as unknown as import('@forgeax/engine-shader').ShaderRegistry);
+  return new AssetRegistry(
+    {
+      getMaterialShaderManifest: vi.fn().mockReturnValue(undefined),
+      findMaterialArtifact: vi.fn().mockReturnValue({ ok: false, error: new Error('mock') }),
+      getPipeline: vi.fn().mockReturnValue(undefined),
+      installMaterialArtifact: vi.fn(),
+      inspect: vi.fn().mockReturnValue({ materialShaders: [] }),
+    } as unknown as import('@forgeax/engine-shader').ShaderRegistry,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    new Map([[T709CtxMeshFilter.name, T709CtxMeshFilter]]),
+  );
 }
 
 const SUB_GUID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';

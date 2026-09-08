@@ -185,6 +185,97 @@ function stubImporter(key: string): Importer {
         }
       });
 
+      it.each([
+        'throw',
+        'reject',
+      ] as const)('(f2) contains %s source-reader failures and retries the same runner inputs', async (failureMode) => {
+        const badSource = 'model.gltf';
+        const healthySource = 'healthy-sibling.gltf';
+        const secretReason = 'secret source bytes and GUID must stay private';
+        const failure = Object.assign(new Error(secretReason), { code: 'EAGAIN' });
+        let mode: 'failing' | 'healthy' = 'failing';
+        const reads: string[] = [];
+        let importerCalls = 0;
+
+        const importer: Importer = {
+          key: 'gltf',
+          import: async (ctx) => {
+            importerCalls += 1;
+            const source = await ctx.readSource();
+            if (!source.ok) throw new Error('unexpected importer source refusal');
+            const guid = ctx.subAssets[0]?.guid ?? GUID_A;
+            return {
+              ok: true,
+              value: {
+                assets: [
+                  {
+                    guid,
+                    kind: 'mesh',
+                    payload: MESH_POD,
+                    refs: [],
+                    artifacts: {},
+                  },
+                ],
+                sourceDependencies: [],
+              },
+            };
+          },
+        };
+        const registry = new ImporterRegistry();
+        registry.register(importer);
+        const fs = {
+          readSource: (sourcePath: string) => {
+            reads.push(sourcePath);
+            if (sourcePath === badSource && mode === 'failing') {
+              return failureMode === 'throw'
+                ? (() => {
+                    throw failure;
+                  })()
+                : Promise.reject(failure);
+            }
+            return Promise.resolve({ ok: true as const, value: new Uint8Array([1, 2, 3]) });
+          },
+        };
+        const badMeta = meta('gltf', [GUID_A]);
+        const healthyMeta = { ...meta('gltf', [GUID_B]), source: healthySource };
+
+        const first = await runImport(badMeta, registry, fs);
+        expect(first.ok).toBe(false);
+        expect(importerCalls).toBe(0);
+        expect(reads).toEqual([badSource]);
+        if (!first.ok) {
+          expect(first.error).toBeInstanceOf(ImportError);
+          expect(first.error.code).toBe('source-read-failed');
+          expect(first.error.expected).toBe(`readable source file at meta.source "${badSource}"`);
+          expect(first.error.hint).toBe(IMPORT_ERROR_HINTS['source-read-failed']);
+          expect(first.error.detail).toEqual({ source: badSource, reason: 'transient' });
+          expect(JSON.stringify(first.error)).not.toContain(secretReason);
+          expect(JSON.stringify(first.error)).not.toContain(GUID_A);
+        }
+
+        const healthySibling = await runImport(healthyMeta, registry, fs);
+        expect(healthySibling.ok).toBe(true);
+        expect(importerCalls).toBe(1);
+        if (healthySibling.ok && !('skipped' in healthySibling.value)) {
+          expect(healthySibling.value.product.sourceDependencies).toEqual([healthySource]);
+          expect(healthySibling.value.pack.assets[0]?.guid).toBe(GUID_B);
+        }
+
+        mode = 'healthy';
+        const second = await runImport(badMeta, registry, fs);
+        const third = await runImport(badMeta, registry, fs);
+        expect(second.ok).toBe(true);
+        expect(third.ok).toBe(true);
+        expect(importerCalls).toBe(3);
+        expect(reads.filter((path) => path === badSource)).toHaveLength(5);
+        expect(reads.filter((path) => path === healthySource)).toHaveLength(2);
+        if (second.ok && !('skipped' in second.value) && third.ok && !('skipped' in third.value)) {
+          expect(second.value.product.sourceDependencies).toEqual([badSource]);
+          expect(second.value.pack).toEqual(third.value.pack);
+          expect(second.value.cookProducts).toEqual(third.value.cookProducts);
+        }
+      });
+
       it('(g) import-internal-error: the importer throws', async () => {
         const reg = registryWith('gltf', () => {
           throw new Error('boom inside importer');

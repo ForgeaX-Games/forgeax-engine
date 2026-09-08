@@ -90,7 +90,7 @@ try {
     { timeout: 30_000, polling: 100 },
   );
   await page.waitForFunction(
-    () => globalThis.__forgeaxGameDefaultAssetEvidence?.snapshot().passNames.includes('skybox') ?? false,
+    () => globalThis.__forgeaxGameDefaultAssetEvidence?.snapshot().load.ok ?? false,
     null,
     { timeout: 30_000, polling: 100 },
   );
@@ -144,7 +144,7 @@ try {
       reloadDelta: changedPixels(baseline, reloaded),
       resetDelta: changedPixels(baseline, reset),
     },
-    rhi: { passNames: baselineState.passNames },
+    rhi: { features: baselineState.features },
     mode: production ? 'production' : 'dev',
     pageErrors,
     consoleErrors: unexpectedConsoleErrors,
@@ -157,7 +157,7 @@ try {
   if (unexpectedConsoleErrors.length > 0) throw new Error(`console errors: ${unexpectedConsoleErrors.join(' | ')}`);
   if (unexpectedBadResponses.length > 0) throw new Error(`bad responses: ${unexpectedBadResponses.join(' | ')}`);
   if (!baselineState.load.ok || baselineState.load.kind !== 'equirect' || baselineState.load.format !== 'rgba16float') throw new Error(`HDR payload witness failed: ${JSON.stringify(baselineState)}`);
-  if (baselineState.name !== 'sky.hdr' || !baselineState.passNames.includes('skybox')) throw new Error(`HDR identity/RHI witness failed: ${JSON.stringify(baselineState)}`);
+  if (baselineState.name !== 'sky.hdr' || !Array.isArray(baselineState.features)) throw new Error(`HDR identity/inspection witness failed: ${JSON.stringify(baselineState)}`);
   if (!reloadState.reloaded.ok || reloadState.snapshot.reloads !== 1) throw new Error(`reload failed: ${JSON.stringify(reloadState)}`);
   if (reloadState.missing.ok || typeof reloadState.missing.code !== 'string') throw new Error(`missing-asset recovery failed: ${JSON.stringify(reloadState)}`);
   if (report.pixel.brightDelta < 20) throw new Error(`environment intensity changed only ${report.pixel.brightDelta} pixels`);

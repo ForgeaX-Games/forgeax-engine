@@ -7,7 +7,8 @@ import {
   MeshFilter,
   MeshRenderer,
   perspective,
-  tonemapToU32,
+  TONEMAP_REINHARD,
+  type Renderer,
 } from '@forgeax/engine-render';
 import { createRenderer } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
@@ -62,7 +63,7 @@ export function makeTransparencyWorld(sceneCase: SceneCase): World {
       data: {
         ...perspective({ fov: Math.PI / 4, aspect: sceneCase.scene.width / sceneCase.scene.height }),
         clearColor: sceneCase.scene.background,
-        ...(sceneCase.colorDomain === 'linearHdr' ? { tonemap: tonemapToU32('reinhard') } : {}),
+        ...(sceneCase.colorDomain === 'linearHdr' ? { tonemap: TONEMAP_REINHARD } : {}),
       },
     },
   ).unwrap();
@@ -114,7 +115,7 @@ async function waitForAnimationFrameOrTimeout(): Promise<void> {
   });
 }
 
-async function settleWebglRenderer(renderer: Awaited<ReturnType<typeof createRenderer>>): Promise<void> {
+async function settleWebglRenderer(renderer: Renderer): Promise<void> {
   await waitForAnimationFrameOrTimeout();
   await waitForAnimationFrameOrTimeout();
   renderer.dispose();
@@ -128,35 +129,39 @@ export async function captureTransparencyForgeaxBrowser(
   const canvas = document.createElement('canvas');
   canvas.width = sceneCase.scene.width;
   canvas.height = sceneCase.scene.height;
-  const renderer = await createRenderer(canvas, {}, forgeaxBundlerAdapter() as never);
+  const created = await createRenderer(canvas, {}, forgeaxBundlerAdapter() as never);
+  if (!created.ok) throw created.error;
+  const renderer = created.value;
   try {
-    const ready = await renderer.ready;
-    if (!ready.ok) throw new Error(`transparent renderer unavailable: ${ready.error.code}`);
     const renderErrors: string[] = [];
-    const removeRenderErrorListener = renderer.onError((error) => {
+    const removeRenderErrorListener = renderer.subscribe((event) => {
+      if (event.kind !== 'error') return;
+      const error = event.error;
       renderErrors.push(`${error.code}: ${error.hint}`);
     });
-    if (sceneCase.pipeline?.identity === 'hdrp') {
-      const installed = renderer.installPipeline({
-        kind: 'render-pipeline',
-        pipelineId: 'forgeax::hdrp',
-        config: { clusterGrid: { x: 16, y: 9, z: 24 } },
-      });
-      if (!installed.ok) throw new Error(`transparent HDRP install failed: ${installed.error.code}`);
-    }
     const world = makeTransparencyWorld(sceneCase);
-    const worldAttachment1 = renderer.attachWorld(world);
+    const worldAttachment1 = renderer.attach(world);
     if (!worldAttachment1.ok) throw worldAttachment1.error;
+    const lease = worldAttachment1.value;
+    const drawFrame = (): ReturnType<typeof renderer.draw> => renderer.draw({
+      leases: [lease],
+      camera: { lease },
+      environment: { lease },
+    });
     world.update().unwrap();
-    const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const drawn = drawFrame();
     if (!drawn.ok) throw new Error(`transparent ForgeaX draw failed: ${drawn.error.code}`);
+    const observed = await renderer.observe(drawn.value, { include: ['draws'] });
+    if (!observed.ok) throw new Error(`transparent ForgeaX observation failed: ${observed.error.code}`);
     if (rendererKind === 'webgl') await waitForAnimationFrameOrTimeout();
-    else await renderer.device.queue.onSubmittedWorkDone();
+    else await renderer.observe(drawn.value, { include: ['timings'] });
     world.update().unwrap();
-    const warmed = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const warmed = drawFrame();
     if (!warmed.ok) throw new Error(`transparent ForgeaX warmed draw failed: ${warmed.error.code}`);
+    const warmedObservation = await renderer.observe(warmed.value, { include: ['draws'] });
+    if (!warmedObservation.ok) throw new Error(`transparent ForgeaX warmed observation failed: ${warmedObservation.error.code}`);
     if (rendererKind === 'webgl') await waitForAnimationFrameOrTimeout();
-    else await renderer.device.queue.onSubmittedWorkDone();
+    else await renderer.observe(warmed.value, { include: ['timings'] });
     removeRenderErrorListener();
     if (renderErrors.length > 0) throw new Error(`transparent ForgeaX render errors: ${renderErrors.join(' | ')}`);
     const pixels = await readCanvasPixels(canvas);

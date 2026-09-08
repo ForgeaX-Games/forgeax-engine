@@ -18,7 +18,7 @@
 import type { CodecResult } from './errors.js';
 import { codecError } from './errors.js';
 import type { Ktx2Parsed } from './ktx2.js';
-import type { BasisModuleFactory, BasisTranscoderModule } from './wasm/basis-types.js';
+import type { BasisFile, BasisModuleFactory, BasisTranscoderModule } from './wasm/basis-types.js';
 
 /** How the transcoder WASM module is loaded. Overridable in tests. */
 type TranscoderImporter = () => Promise<BasisTranscoderModule>;
@@ -99,6 +99,54 @@ export interface TranscodedTexture {
   readonly height: number;
   /** Mip levels, base (level 0 / largest) first. */
   readonly mips: readonly TranscodedMip[];
+}
+
+export interface BasisSourceMeta {
+  readonly colorSpace: 'srgb' | 'linear';
+}
+
+export interface BasisSourceInspection {
+  readonly colorSpace: BasisSourceMeta['colorSpace'];
+  readonly profile: 'etc1s' | 'uastc-ldr';
+  readonly width: number;
+  readonly height: number;
+  readonly levelCount: number;
+  readonly imageCount: number;
+}
+
+/** Result of transcoding a raw Basis file into one engine texture format. */
+export interface TranscodedBasisTexture {
+  readonly format: GPUTextureFormat;
+  readonly width: number;
+  readonly height: number;
+  readonly mips: readonly TranscodedMip[];
+}
+
+/** Inspect a raw Basis source without inferring color from the binary payload. */
+export function inspectBasisSource(
+  file: BasisFile,
+  meta: Partial<BasisSourceMeta>,
+  profile: BasisSourceInspection['profile'],
+): CodecResult<BasisSourceInspection> {
+  if (meta.colorSpace !== 'srgb' && meta.colorSpace !== 'linear') {
+    return codecError('ktx2-parse-failed', {
+      reason: 'raw Basis source requires Meta.colorSpace=srgb|linear',
+    });
+  }
+  if (file.getNumImages() <= 0 || file.getNumLevels(0) <= 0) {
+    return codecError('ktx2-parse-failed', { reason: 'invalid raw Basis source shape' });
+  }
+  return {
+    ok: true,
+    value: {
+      colorSpace: meta.colorSpace,
+      profile,
+      width: file.getImageWidth(0, 0),
+      height: file.getImageHeight(0, 0),
+      levelCount: file.getNumLevels(0),
+      imageCount: file.getNumImages(),
+    },
+  };
 }
 
 /**
@@ -201,6 +249,63 @@ export async function transcodeKtx2(
         format: targetFormat,
         width: file.getWidth(),
         height: file.getHeight(),
+        mips,
+      },
+    };
+  } finally {
+    file.close();
+  }
+}
+
+/** Transcode a raw `.basis` file; source color remains a Meta author fact. */
+export async function transcodeBasis(
+  bytes: Uint8Array,
+  targetFormat: GPUTextureFormat,
+): Promise<CodecResult<TranscodedBasisTexture>> {
+  let mod: BasisTranscoderModule;
+  try {
+    mod = await initBasisTranscoder();
+  } catch {
+    return codecError('codec-init-failed', { stage: 'dynamic-import-basis-transcoder' });
+  }
+  const targetEnum = basisTargetFor(mod, targetFormat);
+  if (targetEnum === null || mod.BasisFile === undefined) {
+    return codecError('transcode-failed', {
+      sourceFormat: 'raw-basis',
+      targetFormat,
+    });
+  }
+  const file = new mod.BasisFile(bytes);
+  try {
+    if (file.getNumImages() <= 0 || file.getNumLevels(0) <= 0) {
+      return codecError('transcode-failed', { sourceFormat: 'invalid-basis-file', targetFormat });
+    }
+    if (file.startTranscoding() === 0) {
+      return codecError('transcode-failed', {
+        sourceFormat: 'start-transcoding-failed',
+        targetFormat,
+      });
+    }
+    const mips: TranscodedMip[] = [];
+    for (let level = 0; level < file.getNumLevels(0); level++) {
+      const width = file.getImageWidth(0, level);
+      const height = file.getImageHeight(0, level);
+      const size = file.getImageTranscodedSizeInBytes(0, level, targetEnum);
+      const data = new Uint8Array(size);
+      if (file.transcodeImage(data, 0, level, targetEnum, 0) === 0) {
+        return codecError('transcode-failed', {
+          sourceFormat: `raw-basis-level-${level}`,
+          targetFormat,
+        });
+      }
+      mips.push({ level, width, height, data });
+    }
+    return {
+      ok: true,
+      value: {
+        format: targetFormat,
+        width: mips[0]?.width ?? 0,
+        height: mips[0]?.height ?? 0,
         mips,
       },
     };

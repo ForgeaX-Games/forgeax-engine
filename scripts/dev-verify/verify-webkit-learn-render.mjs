@@ -11,10 +11,6 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { webkit } from 'playwright';
-import {
-  joinWebkitSubsetCapture,
-  validateWebkitSubsetRecord,
-} from './membership-timing/webkit-subset.mjs';
 import { detectWasmCrash } from './retry-until-pass.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -24,23 +20,14 @@ const MATRIX = JSON.parse(readFileSync(MATRIX_PATH, 'utf8'));
 const args = process.argv.slice(2);
 const tier = argumentValue('--tier') ?? 'core';
 const demoArg = argumentValue('--demo');
-const scenario = argumentValue('--scenario');
-const scenarioFrames = Number(argumentValue('--frames') ?? 300);
-const falsify = argumentValue('--falsify');
-const membershipProfileBudget = argumentValue('--membership-profile-budget');
 const timeoutMs = Number(process.env.TIMEOUT_MS ?? 30_000);
 const demoTimeoutMs = Number(process.env.DEMO_TIMEOUT_MS ?? 120_000);
 const MAX_CAPTURED_LOGS = 2_048;
-const DEFERRED_MEMBERSHIP_VIEWPORT = { width: 512, height: 512 };
-const WEBKIT_ARTIFACT_ROOT = 'deferred-membership-timing/webkit-webgl2';
 const DECISIVE_LOG_PATTERN =
   /asset-not-imported|asset-not-registered|loadByGuid failed|HTTP 404|image-dimension-out-of-bounds|maxTextureDimension2D|Validation Error|EngineEnvironmentError|webgpu-runtime-error|rhi-not-available|createApp failed|WebAssembly\.Module doesn't parse|(?:Hdrp)?CapsInsufficientError|caps insufficient/i;
 const artifactRoot = resolve(
   argumentValue('--artifacts') ?? join('/tmp', `forgeax-webkit-learn-render-${Date.now()}`),
 );
-const membershipManifestArgument = argumentValue('--membership-manifest');
-const membershipManifestPath =
-  membershipManifestArgument === undefined ? null : resolve(membershipManifestArgument);
 const execution = {
   command: ['node', relative(ROOT, fileURLToPath(import.meta.url)), ...args],
   commit: git('rev-parse', 'HEAD'),
@@ -49,109 +36,9 @@ const execution = {
   demoTimeoutMs,
 };
 
-export function projectWebkitSubsetIdentity(identity, sourceHead) {
-  return {
-    sourceHead,
-    carrier: {
-      selector: identity?.carrier?.selector ?? 'heavy',
-      backendKind: 'wgpu-webgl2',
-      adapter: 'webkit-webgl2',
-    },
-    workload: {
-      scenario: 'deferred-membership',
-      frames: 300,
-      lights: 128,
-    },
-    profile: {
-      webkitEventLimit: 65536,
-      nestedFrameLimit: 90,
-      settleMs: 25,
-    },
-    artifactHashes: {
-      algorithm: 'sha256',
-      required: ['record', 'profile', 'membership', 'pixel'],
-    },
-  };
-}
-
-function membershipManifest() {
-  if (membershipManifestPath !== null && existsSync(membershipManifestPath))
-    return JSON.parse(readFileSync(membershipManifestPath, 'utf8'));
-  process.stderr.write(
-    '[webkit-learn-render] no external membership manifest supplied; using the tracked two-record driver subset\n',
-  );
-  return {
-    schemaVersion: 1,
-    generation: 4,
-    artifactKind: 'declared-subset',
-    evidenceKind: 'real',
-    sourceHead: execution.commit,
-    corpusId: 'deferred-membership-webkit-driver-only',
-    identity: projectWebkitSubsetIdentity(undefined, execution.commit),
-    subsetOf: 'deferred-membership-timing-generation-4',
-    subsetKind: 'webkit-deferred-membership-control-refusal',
-    attempts: [
-      {
-        attemptId: 'webkit-cpu-control',
-        route: 'webkit-cpu-control',
-        lights: 128,
-        expectedStatus: 'accepted-control',
-        expectedProducer: 'cpu',
-        expectedReason: null,
-      },
-      {
-        attemptId: 'webkit-gpu-refused',
-        route: 'webkit-gpu-refused',
-        lights: 128,
-        expectedStatus: 'refused',
-        expectedProducer: 'cpu',
-        expectedReason: 'timestamp-query-unsupported',
-      },
-    ],
-    references: [],
-    exact: {
-      topLevel: 2,
-      nested: 0,
-      acceptedGpu: 0,
-      acceptedControl: 1,
-      refused: 1,
-      acceptedGpuByLights: { 32: 0, 64: 0, 128: 0, 256: 0 },
-      referencesByKind: { 'cpu-membership': 0, 'timing-omitted-pixel': 0 },
-    },
-  };
-}
-
-function driverManifest() {
-  const full = membershipManifest();
-  const attempts = full.attempts.filter(
-    (item) => item.attemptId === 'webkit-cpu-control' || item.attemptId === 'webkit-gpu-refused',
-  );
-  return {
-    ...full,
-    artifactKind: 'declared-subset',
-    evidenceKind: 'real',
-    sourceHead: execution.commit,
-    corpusId: `${full.corpusId}-webkit-driver`,
-    identity: projectWebkitSubsetIdentity(full.identity, execution.commit),
-    subsetOf: 'deferred-membership-timing-generation-4',
-    subsetKind: 'webkit-deferred-membership-control-refusal',
-    attempts,
-    references: [],
-    exact: {
-      topLevel: 2,
-      nested: 0,
-      acceptedGpu: 0,
-      acceptedControl: 1,
-      refused: 1,
-      acceptedGpuByLights: { 32: 0, 64: 0, 128: 0, 256: 0 },
-      referencesByKind: { 'cpu-membership': 0, 'timing-omitted-pixel': 0 },
-    },
-  };
-}
-
 if (args.includes('--help')) {
   process.stdout.write(
-    `Usage: node scripts/dev-verify/verify-webkit-learn-render.mjs [--tier=core|full] [--demo=<relative-demo>] [--scenario=deferred-membership --frames=300] [--membership-profile-budget=falsifier] [--artifacts=<dir>]\n`,
+    `Usage: node scripts/dev-verify/verify-webkit-learn-render.mjs [--tier=core|full] [--demo=<relative-demo>] [--artifacts=<dir>]\n`,
   );
   process.exit(0);
 }
@@ -612,224 +499,7 @@ async function verifyDemo(demo) {
   return result;
 }
 
-async function verifyDeferredMembershipAttempt(demo, mode, outputDir) {
-  mkdirSync(outputDir, { recursive: true });
-  const started = await startVite(demo);
-  let browser;
-  const result = {
-    mode,
-    frames: 0,
-    evidence: null,
-    timing: null,
-    error: null,
-    pixelHash: null,
-    pixelBytes: 0,
-    passed: false,
-  };
-  try {
-    const url = await started.url;
-    browser = await webkit.launch({ headless: process.env.FORGEAX_BROWSER_HEADLESS !== '0' });
-    const page = await browser.newPage({ viewport: DEFERRED_MEMBERSHIP_VIEWPORT });
-    await page.addInitScript(() => {
-      globalThis.__forgeaxDeferredFrameCount = 0;
-      const original = globalThis.requestAnimationFrame.bind(globalThis);
-      globalThis.requestAnimationFrame = (callback) =>
-        original((time) => {
-          globalThis.__forgeaxDeferredFrameCount += 1;
-          callback(time);
-        });
-    });
-    const logs = [];
-    page.on('console', (message) => logs.push(`${message.type()}: ${message.text()}`));
-    page.on('pageerror', (error) => logs.push(`pageerror: ${error.message}`));
-    const query = new URLSearchParams({
-      lights: '128',
-      membershipTiming: mode,
-      membershipProfile: '1',
-    });
-    if (falsify !== undefined) query.set('falsify', falsify);
-    if (membershipProfileBudget !== undefined)
-      query.set('membershipProfileBudget', membershipProfileBudget);
-    await page.goto(`${url}?${query}`, {
-      waitUntil: 'domcontentloaded',
-      timeout: 30_000,
-    });
-    await page.waitForFunction(() => document.querySelector('canvas')?.width > 0, undefined, {
-      timeout: timeoutMs,
-    });
-    await page.waitForFunction(
-      (minimum) => globalThis.__forgeaxDeferredFrameCount >= minimum,
-      scenarioFrames,
-      { timeout: Math.max(demoTimeoutMs, scenarioFrames * 100) },
-    );
-    await page.waitForFunction(
-      () => globalThis.__forgeaxDeferredProfileReady?.() === true,
-      undefined,
-      { timeout: Math.max(demoTimeoutMs, scenarioFrames * 100) },
-    );
-    const capture = await page.evaluate(async () => {
-      const hook = globalThis.__captureDeferred;
-      if (typeof hook !== 'function') return { error: 'deferred capture hook missing' };
-      try {
-        const pixels = await hook();
-        return {
-          pixels: Array.from(pixels),
-          timing: globalThis.__forgeaxDeferredMembershipTiming ?? null,
-          evidence: globalThis.__forgeaxDeferredMembershipEvidence ?? null,
-          profile: globalThis.__forgeaxDeferredMembershipProfile ?? null,
-        };
-      } catch (error) {
-        return {
-          error: error instanceof Error ? error.message : String(error),
-          timing: globalThis.__forgeaxDeferredMembershipTiming ?? null,
-          evidence: globalThis.__forgeaxDeferredMembershipEvidence ?? null,
-          profile: globalThis.__forgeaxDeferredMembershipProfile ?? null,
-        };
-      }
-    });
-    result.frames = await page.evaluate(() => globalThis.__forgeaxDeferredFrameCount);
-    result.evidence = capture.evidence ?? null;
-    result.timing = capture.timing ?? null;
-    result.profile = capture.profile ?? null;
-    result.error = capture.error ?? null;
-    const screenshotPath = join(outputDir, 'screenshot.png');
-    const visualOracle = await screenshotOracle(page, screenshotPath, undefined);
-    result.visualEvidence = validateVisualEvidence({
-      expectation: 'deferred-shading-output-intact',
-      observed: visualOracle.passed
-        ? `WebKit screenshot contains ${visualOracle.nonBlackSamples} non-black samples with luma range ${visualOracle.lumaRange}`
-        : 'WebKit screenshot is blank or visually uniform',
-      verdict: visualOracle.passed ? 'pass' : 'fail',
-      confidence: visualOracle.sampled > 0 ? 1 : 0,
-      pixelStats: visualOracle,
-      acceptedGpu: 0,
-    });
-    const pixels = capture.pixels === undefined ? Buffer.alloc(0) : Buffer.from(capture.pixels);
-    writeFileSync(join(outputDir, 'frame.rgba'), pixels);
-    writeFileSync(join(outputDir, 'frame.sha256'), `${sha256(pixels)}\n`);
-    writeJson(
-      join(outputDir, 'profile.json'),
-      capture.profile ?? {
-        completeness: { status: 'not-requested', droppedEventCount: 0 },
-        sourceHead: execution.commit,
-      },
-    );
-    writeJson(join(outputDir, 'page-result.json'), {
-      scenario: 'deferred-membership',
-      mode,
-      frames: result.frames,
-      evidence: result.evidence,
-      timing: result.timing,
-      error: result.error,
-      visualEvidence: result.visualEvidence,
-      pixelHash: sha256(pixels),
-      pixelBytes: pixels.byteLength,
-      logs,
-    });
-    const { writeMembershipEvidence } = await import(
-      '../../apps/learn-render/5.advanced-lighting/8.deferred-shading/scripts/membership-evidence.mjs'
-    );
-    const manifest = driverManifest();
-    const attemptId = mode === 'cpu-control' ? 'webkit-cpu-control' : 'webkit-gpu-refused';
-    const terminal = writeMembershipEvidence({
-      outputDir,
-      artifactRoot: resolve(outputDir, '..'),
-      manifest,
-      recordKind: 'attempt',
-      attemptId,
-      mode,
-      sourceHead: execution.commit,
-      command: execution.command,
-      evidence: result.evidence,
-      timing: result.timing,
-      profile: capture.profile,
-      pixels,
-      membership: result.timing?.membership ?? null,
-      lights: 128,
-      clusterGrid: result.evidence?.clusterGrid,
-      frames: result.frames,
-      dimensions: DEFERRED_MEMBERSHIP_VIEWPORT,
-      environment: result.evidence?.environment,
-      evidenceKind: 'real',
-    });
-    const recordValidation = validateWebkitSubsetRecord(
-      terminal.record,
-      manifest,
-      resolve(outputDir, '..'),
-    );
-    if (!recordValidation.valid)
-      throw new Error(
-        `membership terminal record failed schema validation: ${JSON.stringify(recordValidation.errors)}`,
-      );
-    result.record = terminal.record;
-    result.recordValidation = recordValidation;
-    result.pixelHash = sha256(pixels);
-    result.pixelBytes = pixels.byteLength;
-    const status = terminal.record.status;
-    result.passed =
-      result.frames >= scenarioFrames &&
-      result.evidence?.backendKind === 'wgpu-webgl2' &&
-      result.pixelBytes > 0 &&
-      (mode === 'cpu-control' ? status === 'accepted-control' : status === 'refused');
-    result.passed = result.passed && result.visualEvidence.valid;
-  } catch (error) {
-    result.error = error instanceof Error ? error.message : String(error);
-  } finally {
-    await browser?.close().catch(() => {});
-    await stop(started.child);
-  }
-  return result;
-}
-
-async function verifyDeferredMembershipScenario() {
-  if (!Number.isInteger(scenarioFrames) || scenarioFrames < 300) {
-    throw new Error('--frames must be an integer >= 300 for deferred-membership');
-  }
-  const demo = demoArg ?? '5.advanced-lighting/8.deferred-shading';
-  const root = join(artifactRoot, WEBKIT_ARTIFACT_ROOT);
-  const control = await verifyDeferredMembershipAttempt(demo, 'cpu-control', join(root, 'control'));
-  const unsupported = await verifyDeferredMembershipAttempt(demo, 'gpu', join(root, 'unsupported'));
-  const rawComparison = {
-    pixelHashEqual: control.pixelHash !== undefined && control.pixelHash === unsupported.pixelHash,
-    pixelBytesEqual: control.pixelBytes > 0 && control.pixelBytes === unsupported.pixelBytes,
-  };
-  writeJson(join(root, 'summary.json'), {
-    schemaVersion: 1,
-    scenario: 'deferred-membership',
-    frames: scenarioFrames,
-    sourceHead: execution.commit,
-    control,
-    unsupported,
-    rawComparison,
-  });
-  const realManifest = driverManifest();
-  const joined = joinWebkitSubsetCapture({
-    manifest: realManifest,
-    records: [control.record, unsupported.record].filter((record) => record !== undefined),
-    artifactRoot: root,
-    rawComparison,
-  });
-  writeJson(join(root, 'real-capture-manifest.json'), realManifest);
-  writeJson(join(root, 'real-capture-report.json'), {
-    schemaVersion: 1,
-    gate: 'real-capture-join',
-    ...joined,
-  });
-  if (!joined.valid) process.exitCode = 1;
-  if (
-    !control.passed ||
-    !unsupported.passed ||
-    !rawComparison.pixelHashEqual ||
-    !rawComparison.pixelBytesEqual
-  )
-    process.exitCode = 1;
-}
-
 async function main() {
-  if (scenario === 'deferred-membership') {
-    await verifyDeferredMembershipScenario();
-    return;
-  }
   const demos = demoArg
     ? [demoArg]
     : tier === 'core'

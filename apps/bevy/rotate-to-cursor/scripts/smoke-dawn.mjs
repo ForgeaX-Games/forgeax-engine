@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,20 +53,16 @@ const { unwrapHandle } = await import('@forgeax/engine-types');
 const here = dirname(fileURLToPath(import.meta.url));
 const { buildRotateToCursorWorld, makeShipPixels, readShipRotation, stepRotateToCursor, TEXTURE_SIZE } = await import(resolve(here, '..', 'src', 'rotate-to-cursor.ts'));
 const manifestPath = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
-const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}` });
+const renderer = await createSmokeRenderer(createRenderer, canvas, {}, { shaderManifestUrl: `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}` });
 gpu.requestAdapter = originalRequestAdapter;
 const errors = [];
-renderer.onError((error) => errors.push(error));
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
+subscribeSmokeErrors(renderer, (error) => errors.push(error));
 const pixels = makeShipPixels();
 const texture = { kind: 'texture', width: TEXTURE_SIZE, height: TEXTURE_SIZE, format: 'rgba8unorm-srgb', data: pixels, colorSpace: 'srgb', mipmap: false };
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const textureHandle = world.allocSharedRef('TextureAsset', texture);
-const upload = await renderer.store.uploadTexture(textureHandle, texture, { bytes: pixels, width: TEXTURE_SIZE, height: TEXTURE_SIZE, mime: 'image/png', colorSpace: 'srgb', mipmap: false });
-if (!upload.ok) throw new Error(`${upload.error.code}: ${upload.error.hint}`);
 const scene = buildRotateToCursorWorld(world, unwrapHandle(textureHandle));
 
 async function capture() {
@@ -93,7 +90,7 @@ for (let i = 0; i < frames; i += 1) {
   if (!stepRotateToCursor(world, scene, screenX, height * 0.5, width, height)) throw new Error(`[smoke] cursor ray missed at frame ${i}`);
   propagateTransforms(world);
   world.update().unwrap();
-  const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const drawn = drawSmokeFrame(renderer, world);
   if (!drawn.ok) throw new Error(`${drawn.error.code}: ${drawn.error.hint}`);
   if (i === Math.max(1, Math.floor(frames * 0.05))) { early = await capture(); earlyRotation = readShipRotation(world, scene); }
   if (i === frames - 1) { late = await capture(); lateRotation = readShipRotation(world, scene); }
@@ -116,7 +113,7 @@ writeFileSync(resolve(outDir, 'rotate-to-cursor-right.png'), writeReferencePng(l
 const imageMeanDelta = imageDelta / (early.length * 255);
 console.log(`[smoke] frames=${frames} brightPixels=${brightPixels} imageMeanDelta=${imageMeanDelta.toFixed(5)} rotationDelta=${rotationDelta.toFixed(5)} errors=${errors.length}`);
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`backend=${renderer.backend}`);
+if (rendererBackend(renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(renderer)}`);
 if (frames < 100) failures.push(`frames=${frames}`);
 if (brightPixels < 100) failures.push(`brightPixels=${brightPixels}`);
 if (imageMeanDelta <= 0.0005) failures.push(`imageMeanDelta=${imageMeanDelta.toFixed(5)}`);

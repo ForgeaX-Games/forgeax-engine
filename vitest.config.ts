@@ -81,9 +81,8 @@ export default defineConfig({
       },
       // -- ecs-perf: named performance project (D-1) --
       //
-      // Sole owner of W5 (query-trs-flat-column-ratio.perf.test.ts) and
-      // W6 (query-light-extract-flat-column-ratio.perf.test.ts). The
-      // project name deliberately sits outside the @forgeax/* wildcard
+      // Sole owner of the tracked ECS performance workloads. The project name
+      // deliberately sits outside the @forgeax/* wildcard
       // so wildcard scripts (test, test:unit, test:type) never select it.
       // No passWithNoTests — an empty population must fail loudly rather
       // than pass silently, so the validator can catch a missing include.
@@ -135,7 +134,10 @@ export default defineConfig({
             provider: playwright({
               launchOptions: {
                 channel: 'chrome-beta',
-                args: ['--disable-features=WebGPU', '--disable-gpu-driver-bug-workarounds'],
+                args: [
+                  '--disable-features=WebGPU,MacAppCodeSignClone',
+                  '--disable-gpu-driver-bug-workarounds',
+                ],
               },
             }),
             instances: [{ browser: 'chromium' }],

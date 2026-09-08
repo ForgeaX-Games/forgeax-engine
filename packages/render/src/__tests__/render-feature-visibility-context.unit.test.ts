@@ -15,8 +15,7 @@ describe('render feature visibility context', () => {
         context.reportHiddenEntity?.({ world, entity: 7 as never });
         return ok({ count: context.worlds.length });
       },
-      prepare: () => ok(undefined),
-      contribute: () => ok(undefined),
+      plan: () => ok({ resources: [], passes: [] }),
     };
     const host = createRenderFeatureHost([feature]).unwrap();
     const snapshots = [{ world, snapshot: {} as never }];

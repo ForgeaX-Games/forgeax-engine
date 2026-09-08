@@ -33,6 +33,12 @@ function registerClip(world: World, duration: number) {
   return world.allocSharedRef('AnimationClip', clip);
 }
 
+const lookupClip = (_guid: string): AnimationClip => ({
+  kind: 'animation-clip',
+  duration: 10,
+  channels: [],
+});
+
 function readWeights(world: World, e: EntityHandle): Float32Array {
   return (world.get(e, AnimationPlayer).unwrap() as unknown as { weights: Float32Array }).weights;
 }
@@ -40,18 +46,18 @@ function readWeights(world: World, e: EntityHandle): Float32Array {
 describe('evaluateAnimationGraph — nested DAG post-order (M3 / w19)', () => {
   it('propagates a nested subgraph effective weight down through post-order eval', () => {
     const world = new World();
-    const survey = registerClip(world, 10);
-    const walk = registerClip(world, 10);
-    const run = registerClip(world, 10);
-    const overlay = registerClip(world, 10);
+    registerClip(world, 10);
+    registerClip(world, 10);
+    registerClip(world, 10);
+    registerClip(world, 10);
 
     const built = defineAnimationGraph((b) => {
-      const surveyNode = b.clip(survey); // node 0
-      const walkNode = b.clip(walk); // node 1
-      const runNode = b.clip(run); // node 2
+      const surveyNode = b.clip('test/animation-clip-survey'); // node 0
+      const walkNode = b.clip('test/animation-clip-walk'); // node 1
+      const runNode = b.clip('test/animation-clip-run'); // node 2
       const loco = b.blend([walkNode, runNode]); // node 3
       const base = b.blend([surveyNode, loco]); // node 4
-      const overlayNode = b.clip(overlay, 0.5); // node 5
+      const overlayNode = b.clip('test/animation-clip-overlay', 0.5); // node 5
       return b.add(base, [overlayNode]); // node 6 (root)
     });
     expect(built.ok).toBe(true);
@@ -62,7 +68,7 @@ describe('evaluateAnimationGraph — nested DAG post-order (M3 / w19)', () => {
       .spawn({ component: AnimationPlayer, data: { graph: graphH } })
       .unwrap() as EntityHandle;
 
-    evaluateAnimationGraph(world, 0);
+    evaluateAnimationGraph(world, 0, lookupClip);
 
     const weights = readWeights(world, e);
     expect(weights.length).toBe(4); // Survey, Walk, Run, Overlay

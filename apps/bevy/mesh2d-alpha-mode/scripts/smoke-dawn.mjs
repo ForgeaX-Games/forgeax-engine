@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,21 +54,17 @@ const { unwrapHandle } = await import('@forgeax/engine-types');
 const { buildMesh2dAlphaModeWorld, makeAlphaModePixels, TEXTURE_SIZE } = await import(resolve(here, '..', 'src', 'mesh2d-alpha-mode.ts'));
 const manifestPath = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const manifestUrl = `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}`;
-const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: manifestUrl });
+const renderer = await createSmokeRenderer(createRenderer, canvas, {}, { shaderManifestUrl: manifestUrl });
 gpu.requestAdapter = originalRequestAdapter;
 const errors = [];
-renderer.onError((error) => errors.push(error));
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
+subscribeSmokeErrors(renderer, (error) => errors.push(error));
 
 const pixels = makeAlphaModePixels();
 const texture = { kind: 'texture', width: TEXTURE_SIZE, height: TEXTURE_SIZE, format: 'rgba8unorm-srgb', data: pixels, colorSpace: 'srgb', mipmap: false };
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const textureHandle = world.allocSharedRef('TextureAsset', texture);
-const upload = await renderer.store.uploadTexture(textureHandle, texture, { bytes: pixels, width: TEXTURE_SIZE, height: TEXTURE_SIZE, mime: 'image/png', colorSpace: 'srgb', mipmap: false });
-if (!upload.ok) throw new Error(`${upload.error.code}: ${upload.error.hint}`);
 buildMesh2dAlphaModeWorld(world, unwrapHandle(textureHandle));
 
 async function capture() {
@@ -87,7 +84,7 @@ async function capture() {
 
 for (let i = 0; i < frames; i++) {
   world.update().unwrap();
-  const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const result = drawSmokeFrame(renderer, world);
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.hint}`);
 }
 const frame = await capture();
@@ -112,7 +109,7 @@ mkdirSync(outDir, { recursive: true });
 writeFileSync(resolve(outDir, 'mesh2d-alpha-mode.png'), writeReferencePng(frame, width, height));
 console.log(`[smoke] frames=${frames} bright=${(bright / 255).toFixed(4)} coloredPixels=${coloredPixels} opaqueRegion=${opaqueRegion} alphaRegion=${alphaRegion} errors=${errors.length}`);
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`backend=${renderer.backend}`);
+if (rendererBackend(renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(renderer)}`);
 if (frames < 100) failures.push(`frames=${frames}`);
 if (bright / 255 <= 0.15) failures.push(`bright=${(bright / 255).toFixed(4)}`);
 if (coloredPixels < 500) failures.push(`coloredPixels=${coloredPixels}`);

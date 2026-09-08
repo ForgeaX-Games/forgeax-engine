@@ -25,6 +25,7 @@ import {
   PhysicsError,
   RigidBody,
   RigidBodyTypeValue,
+  registerPhysicsComponents,
 } from '@forgeax/engine-physics';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
@@ -35,6 +36,13 @@ import {
 import { loadRapier2D } from '../src/wasm-loader';
 
 type Vec2Tuple = [number, number];
+
+function prepareWorld(): World {
+  const world = new World();
+  world.components.register(Transform).unwrap();
+  registerPhysicsComponents(world);
+  return world;
+}
 
 describe('moveAndSlide 2D (AC-12)', () => {
   async function loadOrNull() {
@@ -115,7 +123,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
     it('AC-12a flat walk: actualDelta tracks desiredDelta and grounded=true', async () => {
       const RAPIER = await loadOrNull();
       if (!RAPIER) return;
-      const world = new World();
+      const world = prepareWorld();
       const pw = createRapier2DPhysicsWorld(RAPIER);
       world.insertResource('PhysicsWorld', pw);
       registerPhysicsSystems2D(world);
@@ -137,7 +145,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
     it('AC-12b walking into a wall is blocked (x barely advances)', async () => {
       const RAPIER = await loadOrNull();
       if (!RAPIER) return;
-      const world = new World();
+      const world = prepareWorld();
       const pw = createRapier2DPhysicsWorld(RAPIER);
       world.insertResource('PhysicsWorld', pw);
       registerPhysicsSystems2D(world);
@@ -163,7 +171,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
     it('AC-12c sliding along a wall: blocked x but free perpendicular motion', async () => {
       const RAPIER = await loadOrNull();
       if (!RAPIER) return;
-      const world = new World();
+      const world = prepareWorld();
       const pw = createRapier2DPhysicsWorld(RAPIER);
       world.insertResource('PhysicsWorld', pw);
       registerPhysicsSystems2D(world);
@@ -190,7 +198,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
     it('AC-12d gentle slope (< maxSlopeClimbDeg=45): y rises, not blocked', async () => {
       const RAPIER = await loadOrNull();
       if (!RAPIER) return;
-      const world = new World();
+      const world = prepareWorld();
       const pw = createRapier2DPhysicsWorld(RAPIER);
       world.insertResource('PhysicsWorld', pw);
       registerPhysicsSystems2D(world);
@@ -215,7 +223,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
     it('AC-12e steep slope (> maxSlopeClimbDeg=45): horizontal travel is blocked', async () => {
       const RAPIER = await loadOrNull();
       if (!RAPIER) return;
-      const world = new World();
+      const world = prepareWorld();
       const pw = createRapier2DPhysicsWorld(RAPIER);
       world.insertResource('PhysicsWorld', pw);
       registerPhysicsSystems2D(world);
@@ -242,7 +250,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
     it('AC-12f low step (0.2 < autoStepMaxHeight=0.3): character climbs it', async () => {
       const RAPIER = await loadOrNull();
       if (!RAPIER) return;
-      const world = new World();
+      const world = prepareWorld();
       const pw = createRapier2DPhysicsWorld(RAPIER);
       world.insertResource('PhysicsWorld', pw);
       registerPhysicsSystems2D(world);
@@ -272,7 +280,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
     it('AC-12g high step (0.5 > autoStepMaxHeight=0.3): character is blocked', async () => {
       const RAPIER = await loadOrNull();
       if (!RAPIER) return;
-      const world = new World();
+      const world = prepareWorld();
       const pw = createRapier2DPhysicsWorld(RAPIER);
       world.insertResource('PhysicsWorld', pw);
       registerPhysicsSystems2D(world);
@@ -295,7 +303,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
     it('AC-12h snap-to-ground keeps the character on a descending slope (pure horizontal move pulls y down)', async () => {
       const RAPIER = await loadOrNull();
       if (!RAPIER) return;
-      const world = new World();
+      const world = prepareWorld();
       const pw = createRapier2DPhysicsWorld(RAPIER);
       world.insertResource('PhysicsWorld', pw);
       registerPhysicsSystems2D(world);
@@ -321,7 +329,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
     it('AC-12i grounded flips false when the character walks off a ledge into open air', async () => {
       const RAPIER = await loadOrNull();
       if (!RAPIER) return;
-      const world = new World();
+      const world = prepareWorld();
       const pw = createRapier2DPhysicsWorld(RAPIER);
       world.insertResource('PhysicsWorld', pw);
       registerPhysicsSystems2D(world);
@@ -351,7 +359,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
     it('AC-12j moveAndSlide on a non-kinematic body throws controller-requires-kinematic', async () => {
       const RAPIER = await loadOrNull();
       if (!RAPIER) return;
-      const world = new World();
+      const world = prepareWorld();
       const pw = createRapier2DPhysicsWorld(RAPIER);
       world.insertResource('PhysicsWorld', pw);
       registerPhysicsSystems2D(world);
@@ -373,7 +381,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
     it('AC-12k moveAndSlide on an unregistered entity throws body-not-found', async () => {
       const RAPIER = await loadOrNull();
       if (!RAPIER) return;
-      const world = new World();
+      const world = prepareWorld();
       const pw = createRapier2DPhysicsWorld(RAPIER);
       world.insertResource('PhysicsWorld', pw);
       registerPhysicsSystems2D(world);
@@ -392,7 +400,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
     it('AC-12l a non-character kinematic body still mirrors via syncBackend (no regression)', async () => {
       const RAPIER = await loadOrNull();
       if (!RAPIER) return;
-      const world = new World();
+      const world = prepareWorld();
       const pw = createRapier2DPhysicsWorld(RAPIER);
       world.insertResource('PhysicsWorld', pw);
       registerPhysicsSystems2D(world);
@@ -420,10 +428,10 @@ describe('moveAndSlide 2D (AC-12)', () => {
       expect(t.y).toBeCloseTo(2, 1);
     });
 
-    it('AC-12m despawning a character clears its cached KCC', async () => {
+    it('AC-12m despawning a character clears its cached KCC on the next tick', async () => {
       const RAPIER = await loadOrNull();
       if (!RAPIER) return;
-      const world = new World();
+      const world = prepareWorld();
       const pw = createRapier2DPhysicsWorld(RAPIER);
       world.insertResource('PhysicsWorld', pw);
       registerPhysicsSystems2D(world);
@@ -436,7 +444,9 @@ describe('moveAndSlide 2D (AC-12)', () => {
 
       expect(pw.kccCache.size).toBe(1);
       world.despawn(char as never);
-      // Collider.onRemove fans out to removeEntity -> removeKccController.
+      // Physics owns cleanup through the next query membership diff; structural
+      // despawn does not execute a user callback inside the commit.
+      world.update(1 / 60).unwrap();
       expect(pw.kccCache.size).toBe(0);
       expect(pw.getBodyCount()).toBe(1); // only the static ground remains
     });
@@ -446,7 +456,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
     it('AC-12n character does not collide with its own collider', async () => {
       const RAPIER = await loadOrNull();
       if (!RAPIER) return;
-      const world = new World();
+      const world = prepareWorld();
       const pw = createRapier2DPhysicsWorld(RAPIER);
       world.insertResource('PhysicsWorld', pw);
       registerPhysicsSystems2D(world);
@@ -468,7 +478,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
     it('returns false before the body is built, true after', async () => {
       const RAPIER = await loadOrNull();
       if (!RAPIER) return;
-      const world = new World();
+      const world = prepareWorld();
       const pw = createRapier2DPhysicsWorld(RAPIER);
       world.insertResource('PhysicsWorld', pw);
       registerPhysicsSystems2D(world);

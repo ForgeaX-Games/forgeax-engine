@@ -45,6 +45,7 @@
   "dependencies": {
     "@forgeax/engine-app": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-input": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
@@ -54,6 +55,7 @@
     "@forgeax/engine-scene": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/apps-shared": "workspace:*",
     "@forgeax/engine-gltf": "workspace:*",
     "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",

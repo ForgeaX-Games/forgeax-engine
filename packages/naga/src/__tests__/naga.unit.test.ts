@@ -114,6 +114,134 @@ vi.mock('@forgeax/engine-wgpu-wasm', () => ({
 }
 
 {
+  // M3 characterization: the raw Naga reader must consume only the generic
+  // shader-reflection/2 wire. Material meaning is selected by shader-compiler.
+  describe('shader-reflection/2 generic bound-global wire', () => {
+    const uniform = {
+      group: 1,
+      binding: 0,
+      addressSpace: 'uniform',
+      resourceKind: 'buffer',
+      visibility: 3,
+      name: 'surfaceParameters',
+      members: [
+        {
+          name: 'roughness',
+          type: 'f32',
+          offset: 0,
+          size: 4,
+          alignment: 4,
+        },
+      ],
+      span: 16,
+    };
+    const texture = {
+      group: 1,
+      binding: 3,
+      addressSpace: 'handle',
+      resourceKind: 'texture',
+      visibility: 2,
+      name: 'albedoTexture',
+    };
+    const generic = {
+      schemaVersion: 'shader-reflection/2',
+      boundGlobals: [uniform, texture],
+      uvSetCount: 0,
+    };
+
+    it('keeps complete coordinates, member span, visibility, kind, and diagnostic name', async () => {
+      const { parseReflectionWire } = await import('../index.js');
+      expect(parseReflectionWire(JSON.stringify(generic))).toEqual(generic);
+    });
+
+    it('does not use the global name as identity when a shader renames it', async () => {
+      const { parseReflectionWire } = await import('../index.js');
+      const renamed = {
+        ...generic,
+        boundGlobals: [{ ...uniform, name: 'renamedSurfaceBlock' }, texture],
+      };
+      expect(parseReflectionWire(JSON.stringify(renamed)).boundGlobals[0]).toMatchObject({
+        group: 1,
+        binding: 0,
+        addressSpace: 'uniform',
+        resourceKind: 'buffer',
+      });
+    });
+
+    it('retains unrelated groups, collisions, and binding gaps as raw facts', async () => {
+      const { parseReflectionWire } = await import('../index.js');
+      const withFacts = {
+        ...generic,
+        boundGlobals: [
+          { ...uniform, group: 0, binding: 0, name: 'engineView' },
+          { ...uniform, group: 1, binding: 0, name: 'collision' },
+          { ...texture, binding: 7 },
+        ],
+      };
+      expect(parseReflectionWire(JSON.stringify(withFacts)).boundGlobals).toHaveLength(3);
+      expect(parseReflectionWire(JSON.stringify(withFacts)).boundGlobals[2]).toMatchObject({
+        group: 1,
+        binding: 7,
+      });
+    });
+
+    it('accepts explicit empty and static-only reflection without a material fallback', async () => {
+      const { parseReflectionWire } = await import('../index.js');
+      expect(
+        parseReflectionWire(
+          JSON.stringify({ schemaVersion: 'shader-reflection/2', boundGlobals: [], uvSetCount: 0 }),
+        ),
+      ).toMatchObject({ boundGlobals: [] });
+      expect(
+        parseReflectionWire(
+          JSON.stringify({
+            schemaVersion: 'shader-reflection/2',
+            boundGlobals: [texture],
+            uvSetCount: 0,
+          }),
+        ).boundGlobals,
+      ).toHaveLength(1);
+    });
+
+    it.each([
+      ['old array wire', []],
+      ['missing schema version', { boundGlobals: [uniform], uvSetCount: 0 }],
+      ['missing group', { ...generic, boundGlobals: [{ ...uniform, group: undefined }] }],
+      ['missing binding', { ...generic, boundGlobals: [{ ...uniform, binding: undefined }] }],
+      [
+        'missing address space',
+        { ...generic, boundGlobals: [{ ...uniform, addressSpace: undefined }] },
+      ],
+      [
+        'missing resource kind',
+        { ...generic, boundGlobals: [{ ...uniform, resourceKind: undefined }] },
+      ],
+      [
+        'missing uniform members',
+        { ...generic, boundGlobals: [{ ...uniform, members: undefined }] },
+      ],
+      ['missing uniform span', { ...generic, boundGlobals: [{ ...uniform, span: undefined }] }],
+      [
+        'duplicate group and binding',
+        { ...generic, boundGlobals: [uniform, { ...uniform, name: 'duplicate' }] },
+      ],
+      [
+        'legacy material fallback',
+        {
+          schemaVersion: 'shader-reflection/2',
+          boundGlobals: [],
+          uvSetCount: 0,
+          material: { members: [] },
+        },
+      ],
+    ])('%s fails closed', async (_label, value) => {
+      const { parseReflectionWire } = await import('../index.js');
+      expect(() => parseReflectionWire(JSON.stringify(value))).toThrow();
+    });
+  });
+}
+
+{
   // ─── from emit_reflection.test.ts ───
 
   describe('emit_reflection.test.ts', () => {

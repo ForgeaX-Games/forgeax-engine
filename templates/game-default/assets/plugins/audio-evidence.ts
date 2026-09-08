@@ -1,5 +1,6 @@
 import type { AudioBackend } from '@forgeax/engine-audio';
 import type { World } from '@forgeax/engine-ecs';
+import type { Context } from '@forgeax/engine-plugin';
 import type { GameplayAudio } from './gameplay-audio';
 
 export const GAME_DEFAULT_AUDIO_EVIDENCE_KEY = '__forgeaxGameDefaultAudioEvidence';
@@ -14,9 +15,9 @@ export type GameDefaultAudioEvidence = {
 };
 
 export function installAudioEvidence(args: {
+  readonly context: Context;
   readonly world: World;
   readonly gameplayAudio: GameplayAudio | undefined;
-  readonly registerCleanup?: (cleanup: () => void) => void;
 }): void {
   if (args.gameplayAudio === undefined || typeof location === 'undefined') return;
   if (!new URLSearchParams(location.search).has('audio-evidence')) return;
@@ -30,7 +31,10 @@ export function installAudioEvidence(args: {
   };
   const host = globalThis as unknown as Record<string, unknown>;
   host[GAME_DEFAULT_AUDIO_EVIDENCE_KEY] = evidence;
-  args.registerCleanup?.(() => {
-    if (host[GAME_DEFAULT_AUDIO_EVIDENCE_KEY] === evidence) delete host[GAME_DEFAULT_AUDIO_EVIDENCE_KEY];
-  });
+  args.context.effect(
+    () => () => {
+      if (host[GAME_DEFAULT_AUDIO_EVIDENCE_KEY] === evidence) delete host[GAME_DEFAULT_AUDIO_EVIDENCE_KEY];
+    },
+    'game-default/audio-evidence',
+  );
 }

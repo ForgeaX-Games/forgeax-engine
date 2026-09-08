@@ -20,7 +20,8 @@
 //    (entityLocalId, componentName, fieldName, arrayIndex) triple the bare
 //    edge no longer carries.
 
-import { resolveComponent } from '@forgeax/engine-ecs';
+import type { Component } from '@forgeax/engine-ecs';
+import { componentSchema } from '@forgeax/engine-ecs/internal';
 import type { MountOverride } from '@forgeax/engine-types';
 
 /**
@@ -59,7 +60,7 @@ interface SceneEntityLike {
  * Walk every `SceneEntityLike` in `entities` and extract all GUID strings
  * bound to schema fields with `handle<...>` or `array<handle<...>>` fieldType.
  *
- * Unknown component names (where `resolveComponent` returns `undefined`) are
+ * Unknown component names (absent from the supplied World-local catalog) are
  * silently skipped — the ecs layer's `additionalProperties` check will catch
  * unknowns at spawn time if appropriate.
  *
@@ -71,6 +72,7 @@ interface SceneEntityLike {
  * `envelope.refs` edges are unavailable or carry no per-entity detail.
  */
 export function extractSceneEntityHandleGuids(
+  components: ReadonlyMap<string, Component>,
   entities: ReadonlyArray<SceneEntityLike>,
 ): SceneHandleFieldEntry[] {
   const entries: SceneHandleFieldEntry[] = [];
@@ -85,12 +87,12 @@ export function extractSceneEntityHandleGuids(
       const rawFields = rawComponents[compName];
       if (!rawFields) continue;
 
-      const comp = resolveComponent(compName);
+      const comp = components.get(compName);
       if (!comp) continue;
 
       for (const fieldName of Object.keys(rawFields)) {
         forEachHandleGuid(
-          comp.schema[fieldName],
+          componentSchema(comp)[fieldName],
           rawFields[fieldName],
           (guidString, arrayIndex) => {
             entries.push({
@@ -141,13 +143,14 @@ export interface MountOverrideHandleFieldEntry {
  * The `{comp, field?, value}` discriminant is normalized to `(fieldName, value)`
  * pairs: the patch form (`field` present) yields one pair; the component-add form
  * (`field` absent, `value` is a per-field map) yields one pair per value key.
- * Field type is judged from `resolveComponent(comp).schema[field]`, the same
+ * Field type is judged from the supplied catalog token schema, the same
  * schema SSOT the entity walk uses. Unknown components / non-shared fields /
  * non-string (already-resolved number) values are skipped (D-8 number pass-through).
  *
  * @internal Shared identification core; resolution lives in `resolveMountsRec`.
  */
 export function extractMountOverrideHandleGuids(
+  components: ReadonlyMap<string, Component>,
   overrides: ReadonlyArray<MountOverride>,
 ): MountOverrideHandleFieldEntry[] {
   const entries: MountOverrideHandleFieldEntry[] = [];
@@ -156,11 +159,11 @@ export function extractMountOverrideHandleGuids(
     const ov = overrides[overrideIndex];
     if (ov === undefined) continue;
 
-    const comp = resolveComponent(ov.comp);
+    const comp = components.get(ov.comp);
     if (!comp) continue;
 
     for (const [fieldName, value] of normalizeOverrideFields(ov)) {
-      forEachHandleGuid(comp.schema[fieldName], value, (guidString, arrayIndex) => {
+      forEachHandleGuid(componentSchema(comp)[fieldName], value, (guidString, arrayIndex) => {
         entries.push({
           overrideIndex,
           componentName: ov.comp,

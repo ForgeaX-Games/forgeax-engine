@@ -9,7 +9,8 @@ import {
 import { err, ok, type Result } from '@forgeax/engine-types';
 import WebSocket, { WebSocketServer } from 'ws';
 import { BoundedEventQueue, DEFAULT_MAX_QUEUED_EVENTS } from './event-queue';
-import { createWebSocketClientEndpoint } from './websocket-client-core';
+import type { WebSocketConstructor } from './websocket-client-core';
+import { createWebSocketConnectorAdapter } from './websocket-connector';
 
 export interface ListenWebSocketEndpointOptions {
   readonly port: number;
@@ -22,27 +23,56 @@ export interface ConnectWebSocketClientEndpointOptions {
   readonly maxQueuedEvents?: number | undefined;
 }
 
+/**
+ * Creates the Node WebSocket adapter for the public NetEndpointConnector.
+ * Each connect call accepts an AbortSignal and creates one replacement-capable
+ * NetEndpoint. Transport lifecycle and EndpointError results stay here;
+ * authoritative resync and replication policy stay with NetSession.
+ */
+export function createWebSocketConnector(
+  url: string,
+  options: ConnectWebSocketClientEndpointOptions = {},
+): import('@forgeax/engine-net').NetEndpointConnector {
+  return createWebSocketConnectorAdapter(
+    {
+      WebSocket: WebSocket as unknown as WebSocketConstructor,
+      toBytes,
+    },
+    url,
+    options,
+  );
+}
+
+/**
+ * Connects one Node WebSocket with the default one-shot AbortSignal.
+ * Use createWebSocketConnector when the caller must cancel or replace an
+ * endpoint through an explicit signal.
+ */
 export function connectWebSocketClientEndpoint(
   url: string,
   options: ConnectWebSocketClientEndpointOptions = {},
 ): Promise<Result<NetEndpoint, EndpointError>> {
-  return createWebSocketClientEndpoint(
-    WebSocket as unknown as import('./websocket-client-core').WebSocketConstructor,
-    {
-      url,
-      maxQueuedEvents: options.maxQueuedEvents,
-      toBytes: toBytes,
-    },
-  );
+  return createWebSocketConnector(url, options).connect(new AbortController().signal);
 }
 
+/**
+ * Starts a Node WebSocket listener that exposes NetEndpoint peer events and
+ * binary messages without owning NetSession or replication policy.
+ */
 export function listenWebSocketEndpoint(
   options: ListenWebSocketEndpointOptions,
 ): Promise<Result<NetEndpoint, EndpointError>> {
   return new Promise((resolve) => {
     const host = options.host ?? '127.0.0.1';
     const address = `ws://${host}:${options.port}`;
-    const queue = new BoundedEventQueue(options.maxQueuedEvents ?? DEFAULT_MAX_QUEUED_EVENTS);
+    let queue: BoundedEventQueue;
+    try {
+      queue = new BoundedEventQueue(options.maxQueuedEvents ?? DEFAULT_MAX_QUEUED_EVENTS);
+    } catch (cause) {
+      resolve(connectionFailed(address, cause));
+      return;
+    }
+
     const terminalEvents: EndpointEvent[] = [];
     const peers = new Map<PeerId, WebSocket>();
     const disconnectedPeers = new Set<PeerId>();

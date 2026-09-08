@@ -15,15 +15,15 @@
 //     white texture; BGL JSON unchanged across sprite vs sprite-lit)
 //   - requirements AC-07
 
-import type { PipelineSpec } from '@forgeax/engine-render/internal';
+import { describe, expect, it } from 'vitest';
+import { mergeSkylightIntoMaterialBgl } from '../../../render/src/ibl/skylight-bind-group';
 import {
   appendInjection,
-  buildBindGroupLayoutDescriptor,
   buildPbrMaterialUserRegionEntries,
   buildPbrViewBglEntries,
-  mergeSkylightIntoMaterialBgl,
-} from '@forgeax/engine-render/internal';
-import { describe, expect, it } from 'vitest';
+} from '../../../render/src/pbr-pipeline';
+import type { PipelineSpec } from '../../../render/src/pipeline-spec';
+import { buildBindGroupLayoutDescriptor } from '../../../render/src/pipeline-spec';
 
 function makeSpec(shaderId: string): PipelineSpec {
   return {
@@ -47,7 +47,7 @@ function makeSpec(shaderId: string): PipelineSpec {
 
 describe('sprite-lit BGL byte-identical to sprite (AC-07, w4/w5 close)', () => {
   describe('pbr-view BGL (light buffers; binding 1+2)', () => {
-    it('sprite-lit vs sprite share the same 9-entry pbr-view BGL under storage-buffer caps', () => {
+    it('sprite-lit vs sprite share the same 10-entry pbr-view BGL under storage-buffer caps', () => {
       const spriteSpec = makeSpec('forgeax::sprite');
       const spriteLitSpec = makeSpec('forgeax::sprite-lit');
       const sprite = buildBindGroupLayoutDescriptor(spriteSpec, {
@@ -59,10 +59,10 @@ describe('sprite-lit BGL byte-identical to sprite (AC-07, w4/w5 close)', () => {
         caps: { storageBuffer: true },
       });
       expect(JSON.stringify(spriteLit)).toBe(JSON.stringify(sprite));
-      expect(spriteLit.entries.length).toBe(9); // feat-20260625 spot shadow added binding 8 → view BGL grew 8→9
+      expect(spriteLit.entries.length).toBe(10); // binding 10 is the shared Points/Lines view UBO
     });
 
-    it('sprite-lit vs sprite share the same 9-entry pbr-view BGL under uniform fallback caps (AC-10)', () => {
+    it('sprite-lit vs sprite share the same 10-entry pbr-view BGL under uniform fallback caps (AC-10)', () => {
       const spriteSpec = makeSpec('forgeax::sprite');
       const spriteLitSpec = makeSpec('forgeax::sprite-lit');
       const sprite = buildBindGroupLayoutDescriptor(spriteSpec, {
@@ -118,19 +118,19 @@ describe('sprite-lit BGL byte-identical to sprite (AC-07, w4/w5 close)', () => {
   });
 
   describe('material BGL congruence (pbr-material-merged / unlit-material)', () => {
-    it('pbr-material-user-region entries are 9 (PBR layout reused by sprite & sprite-lit)', () => {
+    it('pbr-material-user-region entries are 13 (PBR layout reused by sprite & sprite-lit)', () => {
       // sprite + sprite-lit use the default standard-PBR user-region
       // schema (5 user fields produce 7 BGL entries after std140 merge).
       // Both share the same userRegion shape and therefore the same BGL.
       const base = buildPbrMaterialUserRegionEntries();
-      expect(base.length).toBe(9);
+      expect(base.length).toBe(13);
     });
 
-    it('pbr-material-merged stays 20 entries (sprite/sprite-lit do not change material BGL shape)', () => {
+    it('pbr-material-merged stays 24 entries (sprite/sprite-lit do not change material BGL shape)', () => {
       const merged = buildBindGroupLayoutDescriptor(makeSpec('forgeax::sprite-lit'), {
         kind: 'pbr-material-merged',
       });
-      expect(merged.entries.length).toBe(20);
+      expect(merged.entries.length).toBe(24);
       // mergeSkylightIntoMaterialBgl + lightmap injection must stay
       // append-only against the 7-entry PBR base.
       const base = buildPbrMaterialUserRegionEntries();

@@ -10,7 +10,7 @@
 // one of each along X. The CAPSULE sits at the center (x=0) so the smoke's
 // NDC-center pixel check lands on this round's new primitive.
 
-import type { Result, World } from '@forgeax/engine-ecs';
+import type { World } from '@forgeax/engine-ecs';
 import {
   createBoxGeometry,
   createCapsuleGeometry,
@@ -25,7 +25,7 @@ import { perspective } from '@forgeax/engine-render';
 import { Materials } from '@forgeax/engine-render';
 import { PointLight } from '@forgeax/engine-render';
 import type { AssetError, MaterialAsset } from '@forgeax/engine-runtime';
-import type { MeshAsset } from '@forgeax/engine-types';
+import type { MeshAsset, Result } from '@forgeax/engine-types';
 import { quat } from '@forgeax/engine-math';
 
 // A row of 7 primitives. The capsule is index 3 (center) so it renders at x=0.

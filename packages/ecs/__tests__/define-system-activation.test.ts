@@ -2,16 +2,17 @@ import { Update } from '../src/schedule-token';
 // feat-20260618-ecs-module-mechanism M1 / w1 (AC-01):
 // defineSystem(desc) returns a token; world.addSystem(Update, token) activates it with
 // zero modification; after update() the system fn is invoked exactly once. The
-// token is consumed directly -- NOT round-tripped through
-// getRegisteredSystems().get(name) (that is the AC-02 aux path).
+// token is consumed directly; there is no global system registry lookup.
 //
 // Constraints (plan-strategy D-6 / requirements OOS-8): addSystem signature is
 // unchanged and accepts the token raw; no addSystem(name: string) by-name
 // overload exists.
 
 import { describe, expect, it } from 'vitest';
-import { defineComponent, getRegisteredComponents } from '../src/component';
-import { defineSystem, defineSystemSet, getRegisteredSystems } from '../src/index';
+import { defineComponent } from '../src/component';
+import { componentSchema } from '../src/component';
+import { componentDefinition } from '../src/component-schema';
+import { defineSystem } from '../src/index';
 import { World } from '../src/world';
 
 describe('define-system-activation.test.ts', () => {
@@ -49,41 +50,13 @@ describe('define-system-activation.test.ts', () => {
     expect(Object.isFrozen(token)).toBe(true);
   });
 
-  // ── w24 (AC-11): same-name silent overwrite ──
+  it('defineComponent duplicate names keep independent token schemas', () => {
+    const C1 = defineComponent('W24Comp', { x: 'f32' });
+    const C2 = defineComponent('W24Comp', { y: 'f32' });
 
-  describe('AC-11: same-name silent overwrite (no throw)', () => {
-    it('defineSystem second call overwrites in SYSTEM_REGISTRY without throw', () => {
-      const set = defineSystemSet({ name: 'w24-set' });
-      const A = defineSystem({
-        name: 'w24-dup',
-        queries: [],
-        fn: () => {},
-      });
-      const B = defineSystem({
-        name: 'w24-dup',
-        queries: [],
-        fn: () => {},
-      });
-      const world = new World();
-      world.addSystems(Update, set, [B]);
-
-      // No throw reached here -- defineSystem silently overwrites (OOS-3).
-      // Registries are global singletons; the static import already resolved.
-      const got = getRegisteredSystems().get('w24-dup');
-      expect(got).toBe(B);
-      expect(world.inspect().systems.find((system) => system.name === 'w24-dup')?.sets).toEqual([
-        'w24-set',
-      ]);
-      expect(got).not.toBe(A);
-    });
-
-    it('defineComponent second call still silently overwrites (unchanged)', () => {
-      const C1 = defineComponent('W24Comp', { x: 'f32' });
-      const C2 = defineComponent('W24Comp', { y: 'f32' });
-
-      const got = getRegisteredComponents().get('W24Comp');
-      expect(got).toBe(C2);
-      expect(got).not.toBe(C1);
-    });
+    expect(C2).not.toBe(C1);
+    expect(componentSchema(C1)).toEqual({ x: 'f32' });
+    expect(componentSchema(C2)).toEqual({ y: 'f32' });
+    expect(Object.keys(componentDefinition(C2).fields)).toEqual(['y']);
   });
 });

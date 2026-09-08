@@ -1,47 +1,43 @@
-// apps/parity/urp-vs-hdrp -- URP vs HDRP pixel-parity fixture
+// Standard direct vs clustered pixel-parity fixture
 // (feat-20260608-cluster-lighting / M7 / w26).
 //
 // Renders the SAME scene (≤4 PointLight) twice on a single page:
-//   - left canvas (id="urp") via the engine default URP pipeline.
-//   - right canvas (id="hdrp") via the HDRP pipeline (installPipeline).
+//   - left canvas (id="direct") via the Standard direct-lighting lane.
+//   - right canvas (id="clustered") via the Standard clustered-lighting lane.
 //
 // Both canvases use the SAME 8 dimensions (camera, geometry, material,
 // light positions / intensities / ranges, clear color, viewport) so the
-// only differing variable is the pipeline. AC-22 enforces ε ≤ 0.001
-// pixel diff -- proves URP and HDRP shade the ≤4-light subset
-// pixel-equivalent (cluster-forward must collapse to per-pixel forward
-// for low light counts; the bench is a regression guard against
-// future divergence in the shading math).
+// only differing variable is the Standard lighting lane. AC-22 enforces
+// ε ≤ 0.001 pixel diff and guards against divergence in shared shading math.
 //
-// __captureLeft / __captureRight are wired separately (left -> URP
-// canvas readback, right -> HDRP canvas readback). The dual-capture
+// __captureLeft / __captureRight are wired separately (left -> direct
+// canvas readback, right -> clustered canvas readback). The dual-capture
 // pattern matches apps/parity/forgeax/src/main.ts so
 // scripts/bench/pixel-parity.mjs can drive this fixture with the same
 // captureBothFromSinglePage() shape.
 //
 // Charter mapping:
-//   - P5 consistent abstraction: URP and HDRP are two installations of
-//     the same RenderPipeline interface (registerPipeline +
-//     installPipeline); the pixel-equivalent ≤4 light subset proves the
-//     abstraction collapses correctly when the cluster-forward inner
-//     loop is bound by the same number of lights as the URP forward
-//     loop.
-//   - F1 progressive disclosure: the two `bootstrap` calls below are
-//     byte-for-byte identical except for the installPipeline call --
-//     AI users grep `installPipeline(` to see exactly which surface
-//     swaps the pipeline.
+//   - P5 consistent abstraction: both canvases use the same Standard
+//     pipeline and differ only in its closed lighting-lane profile.
+//   - F1 progressive disclosure: the two bootstrap calls make the
+//     direct/clustered choice at the Standard profile boundary.
 
 import { World } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
-import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { type Renderer } from '@forgeax/engine-render';
-import { perspective } from '@forgeax/engine-render';
+import {
+  Camera,
+  DEFAULT_STANDARD_PROFILE,
+  Materials,
+  MeshFilter,
+  MeshRenderer,
+  PointLight,
+  perspective,
+  type RenderWorldLease,
+  type Renderer,
+} from '@forgeax/engine-render';
 import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
-import { Materials } from '@forgeax/engine-render';
-import { HDRP_PIPELINE_ID, URP_PIPELINE_ID } from '@forgeax/engine-render/internal';
-import { PointLight } from '@forgeax/engine-render';
 
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
@@ -51,9 +47,9 @@ const BASE_R = 0.6;
 const BASE_G = 0.6;
 const BASE_B = 0.65;
 
-// Four matched PointLight specs -- shared by URP and HDRP scenes. Range
+// Four matched PointLight specs -- shared by Standard lanes. Range
 // is generous (8m) so the cluster-forward AABB intersection picks each
-// light into the same cluster as the URP forward loop walks.
+// light into the same cluster as the Standard direct loop walks.
 const LIGHT_SPECS = [
   { x: 0.8, y: 0.8, z: 0.6, r: 1, g: 0.85, b: 0.7, intensity: 4 },
   { x: -0.8, y: 0.7, z: 0.5, r: 0.7, g: 0.85, b: 1, intensity: 4 },
@@ -61,85 +57,82 @@ const LIGHT_SPECS = [
   { x: -0.4, y: -0.6, z: 0.4, r: 1, g: 0.9, b: 0.85, intensity: 3 },
 ] as const;
 
-const urpCanvasMaybe = document.querySelector<HTMLCanvasElement>('#urp');
-const hdrpCanvasMaybe = document.querySelector<HTMLCanvasElement>('#hdrp');
-if (!urpCanvasMaybe || !hdrpCanvasMaybe) {
-  throw new Error('parity-urp-vs-hdrp: missing <canvas id="urp"> / <canvas id="hdrp">');
+const directCanvasMaybe = document.querySelector<HTMLCanvasElement>('#direct');
+const clusteredCanvasMaybe = document.querySelector<HTMLCanvasElement>('#clustered');
+if (!directCanvasMaybe || !clusteredCanvasMaybe) {
+  throw new Error('parity-standard-lanes: missing direct/clustered canvas');
 }
-const urpCanvas: HTMLCanvasElement = urpCanvasMaybe;
-const hdrpCanvas: HTMLCanvasElement = hdrpCanvasMaybe;
-urpCanvas.width = CANVAS_W;
-urpCanvas.height = CANVAS_H;
-hdrpCanvas.width = CANVAS_W;
-hdrpCanvas.height = CANVAS_H;
+const directCanvas: HTMLCanvasElement = directCanvasMaybe;
+const clusteredCanvas: HTMLCanvasElement = clusteredCanvasMaybe;
+directCanvas.width = CANVAS_W;
+directCanvas.height = CANVAS_H;
+clusteredCanvas.width = CANVAS_W;
+clusteredCanvas.height = CANVAS_H;
 
 bootstrap().catch((err: unknown) => {
   if (err instanceof EngineEnvironmentError) {
-    console.error('[parity-urp-vs-hdrp] no usable backend:', err);
+    console.error('[parity-standard-lanes] no usable backend:', err);
   } else {
-    console.error('[parity-urp-vs-hdrp] bootstrap error:', err);
+    console.error('[parity-standard-lanes] bootstrap error:', err);
   }
 });
 
 async function bootstrap(): Promise<void> {
-  const urpRenderer = await createRenderer(urpCanvas, {}, forgeaxBundlerAdapter());
-  const hdrpRenderer = await createRenderer(hdrpCanvas, {}, forgeaxBundlerAdapter());
+  const directRendererResult = await createRenderer(
+    directCanvas,
+    { standardProfile: { ...DEFAULT_STANDARD_PROFILE, lighting: 'direct' } },
+    forgeaxBundlerAdapter(),
+  );
+  if (!directRendererResult.ok) throw directRendererResult.error;
+  const directRenderer = directRendererResult.value;
+  const clusteredRendererResult = await createRenderer(
+    clusteredCanvas,
+    { standardProfile: { ...DEFAULT_STANDARD_PROFILE, lighting: 'clustered' } },
+    forgeaxBundlerAdapter(),
+  );
+  if (!clusteredRendererResult.ok) throw clusteredRendererResult.error;
+  const clusteredRenderer = clusteredRendererResult.value;
 
-  // Left: keep URP (engine default; URP_PIPELINE_ID is referenced for
-  // grep gate + a sanity assertion via the perFramePassNames after
-  // ready resolves).
-  void URP_PIPELINE_ID;
-
-  // Right: install HDRP via the same surface AI users would (charter P5).
-  const urpReady = await urpRenderer.ready;
-  if (!urpReady.ok) {
-    console.error('[parity-urp-vs-hdrp] URP renderer.ready failed:', urpReady.error);
-    return;
-  }
-  const hdrpReady = await hdrpRenderer.ready;
-  if (!hdrpReady.ok) {
-    console.error('[parity-urp-vs-hdrp] HDRP renderer.ready failed:', hdrpReady.error);
-    return;
-  }
-
-  const installRes = hdrpRenderer.installPipeline({
-    kind: 'render-pipeline',
-    pipelineId: HDRP_PIPELINE_ID,
-    config: { clusterGrid: { x: 16, y: 9, z: 24 } },
-  });
-  if (!installRes.ok) {
-    console.error(
-      '[parity-urp-vs-hdrp] installPipeline failed:',
-      installRes.error.code,
-      installRes.error.hint,
-    );
-    return;
-  }
-
-  const urpWorld = new World();
-  const worldAttachment1 = urpRenderer.attachWorld(urpWorld);
+  const directWorld = new World();
+  const worldAttachment1 = directRenderer.attach(directWorld);
   if (!worldAttachment1.ok) throw worldAttachment1.error;
-  const hdrpWorld = new World();
-  const worldAttachment2 = hdrpRenderer.attachWorld(hdrpWorld);
+  const clusteredWorld = new World();
+  const worldAttachment2 = clusteredRenderer.attach(clusteredWorld);
   if (!worldAttachment2.ok) throw worldAttachment2.error;
-  populateScene(urpRenderer, urpWorld);
-  populateScene(hdrpRenderer, hdrpWorld);
+  populateScene(directRenderer, directWorld);
+  populateScene(clusteredRenderer, clusteredWorld);
 
   // Initial draw so canvases have content before the first capture call.
-  urpWorld.update().unwrap();
-  urpRenderer.draw([urpWorld], { cameraOwner: 0, resourceOwner: 0 });
-  hdrpWorld.update().unwrap();
-  hdrpRenderer.draw([hdrpWorld], { cameraOwner: 0, resourceOwner: 0 });
+  directWorld.update().unwrap();
+  directRenderer.draw({
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  });
+  clusteredWorld.update().unwrap();
+  clusteredRenderer.draw({
+    leases: [worldAttachment2.value],
+    camera: { lease: worldAttachment2.value },
+    environment: { lease: worldAttachment2.value },
+  });
 
-  declareCaptureHooks(urpRenderer, urpWorld, hdrpRenderer, hdrpWorld);
+  declareCaptureHooks(
+    directRenderer,
+    directWorld,
+    directCanvas,
+    worldAttachment1.value,
+    clusteredRenderer,
+    clusteredWorld,
+    clusteredCanvas,
+    worldAttachment2.value,
+  );
 }
 
 function populateScene(_renderer: Renderer, world: World): void {
-  // Standard PBR material -- both pipelines route the same material
-  // through their forward shading path. The ≤4-light forward inner loop
-  // (URP) and the cluster-forward inner loop (HDRP, with the cluster
-  // bins for our 4 spawn positions populated) should produce
-  // pixel-equivalent radiance. Material lives as a user-tier shared ref on
+  // Standard PBR material -- both Standard lanes route the same material
+  // through the shared shading path. The direct loop and clustered bins for
+  // our 4 spawn positions should produce pixel-equivalent radiance. Material
+  // lives as a user-tier shared ref on
   // the World (D-19: no AssetRegistry round-trip for engine-built payloads).
   const matHandle = world.allocSharedRef('MaterialAsset', {
     kind: 'material',
@@ -198,21 +191,35 @@ declare global {
 }
 
 function declareCaptureHooks(
-  urp: Renderer,
-  urpWorld: World,
-  hdrp: Renderer,
-  hdrpWorld: World,
+  direct: Renderer,
+  directWorld: World,
+  directCanvas: HTMLCanvasElement,
+  directLease: RenderWorldLease,
+  clustered: Renderer,
+  clusteredWorld: World,
+  clusteredCanvas: HTMLCanvasElement,
+  clusteredLease: RenderWorldLease,
 ): void {
-  const captureFor = (renderer: Renderer, world: World): (() => Promise<Uint8Array>) => async () => {
+  const captureFor = (
+    renderer: Renderer,
+    world: World,
+    canvas: HTMLCanvasElement,
+    lease: RenderWorldLease,
+  ): (() => Promise<Uint8Array>) => async () => {
     world.update().unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    const r = await renderer.readPixels();
-    if (!r.ok) {
-      throw new Error(
-        `parity-urp-vs-hdrp: readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
-      );
-    }
-    const flat = r.value;
+    const drawn = renderer.draw({
+      leases: [lease],
+      camera: { lease },
+      environment: { lease },
+    });
+    if (!drawn.ok) throw drawn.error;
+    const bitmap = await createImageBitmap(canvas);
+    const captureCanvas = new OffscreenCanvas(CANVAS_W, CANVAS_H);
+    const captureContext = captureCanvas.getContext('2d');
+    if (captureContext === null) throw new Error('parity-standard-lanes: capture context missing');
+    captureContext.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const flat = new Uint8Array(captureContext.getImageData(0, 0, CANVAS_W, CANVAS_H).data);
     const out = new Uint8Array(CANVAS_W * CANVAS_H * 4);
     const rowBytes = CANVAS_W * 4;
     for (let y = 0; y < CANVAS_H; y++) {
@@ -222,6 +229,6 @@ function declareCaptureHooks(
     }
     return out;
   };
-  window.__captureLeft = captureFor(urp, urpWorld);
-  window.__captureRight = captureFor(hdrp, hdrpWorld);
+  window.__captureLeft = captureFor(direct, directWorld, directCanvas, directLease);
+  window.__captureRight = captureFor(clustered, clusteredWorld, clusteredCanvas, clusteredLease);
 }

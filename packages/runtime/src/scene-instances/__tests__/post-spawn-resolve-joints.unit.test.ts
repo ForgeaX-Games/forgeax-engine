@@ -7,16 +7,11 @@
 //   - missing joint inside subtree: structured error 'skin-joint-path-unresolved'.
 
 import { World } from '@forgeax/engine-ecs';
-import { postSpawnResolveJoints } from '@forgeax/engine-render/internal';
-// Use the components barrel so Children (the relationship mirror) is defined
-// before ChildOf (the holder). The barrel sequences these imports
-// deterministically; cherry-picking from individual files would let biome's
-// organizeImports rule reorder them and trip
-// relationship-mirror-component-not-registered.
-import { ChildOf, Children, Name } from '@forgeax/engine-scene';
+import { ChildOf, Name } from '@forgeax/engine-scene';
 import { Skin } from '@forgeax/engine-skinning';
 import type { SkinAsset } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
+import { postSpawnResolveJoints } from '../../../../render/src/scene-instances/post-spawn-resolve-joints';
 
 /**
  * Build a 3-joint linear chain `Root -> Spine -> Hip` rooted at a fresh entity,
@@ -30,31 +25,9 @@ function spawnFoxLikeChain(world: World, skeletonHandle: number) {
   const spine = world.spawn({ component: Name, data: { value: 'Spine' } }).unwrap();
   const hip = world.spawn({ component: Name, data: { value: 'Hip' } }).unwrap();
 
-  // Wire ChildOf + Children mirror manually (in production, instantiateScene
-  // does this via the relationship onAdd hook).
+  // ChildOf is the writable edge; ECS materializes its Children target.
   world.addComponent(spine, { component: ChildOf, data: { parent: root } }).unwrap();
   world.addComponent(hip, { component: ChildOf, data: { parent: spine } }).unwrap();
-  // ChildOf relationship onAdd hook may already maintain Children; if it does
-  // and we re-add via addComponent, the second call would duplicate. To stay
-  // robust, only push Children when get() reports the slot empty.
-  const rootChildren = world.get(root, Children);
-  if (!rootChildren.ok) {
-    world
-      .addComponent(root, {
-        component: Children,
-        data: { entities: new Uint32Array([spine as number]) },
-      })
-      .unwrap();
-  }
-  const spineChildren = world.get(spine, Children);
-  if (!spineChildren.ok) {
-    world
-      .addComponent(spine, {
-        component: Children,
-        data: { entities: new Uint32Array([hip as number]) },
-      })
-      .unwrap();
-  }
 
   // Skin lives on the root; resolver gets `skeleton` field as a number handle.
   world
@@ -188,15 +161,6 @@ describe('postSpawnResolveJoints — error path', () => {
     const bone2 = world.spawn({ component: Name, data: { value: 'Bone' } }).unwrap();
     world.addComponent(bone1, { component: ChildOf, data: { parent: root } }).unwrap();
     world.addComponent(bone2, { component: ChildOf, data: { parent: root } }).unwrap();
-    const rootChildren = world.get(root, Children);
-    if (!rootChildren.ok) {
-      world
-        .addComponent(root, {
-          component: Children,
-          data: { entities: new Uint32Array([bone1 as number, bone2 as number]) },
-        })
-        .unwrap();
-    }
     world
       .addComponent(root, {
         component: Skin,

@@ -30,7 +30,6 @@ export const FONT_GUID = '019eb276-4d96-7f2c-9ecf-5124a020eebb';
 export const SAMPLER_GUID = '019eb276-4d96-7313-b4f0-f5d55536acd2';
 
 /** Pack-index URL served by the vite dev plugin and by the build's dist/. */
-export const PACK_INDEX_URL = '/pack-index.json';
 
 /**
  * Catalog the SamplerAsset that font.pack.json's `samplerGuid` field

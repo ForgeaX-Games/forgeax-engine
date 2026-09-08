@@ -16,9 +16,9 @@
 // project mirror).
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { createRenderer } from '@forgeax/engine-runtime';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { constructRuntimeRendererHost } from '../../renderer-host';
 
 const WIDTH = 64;
 const HEIGHT = 64;
@@ -83,22 +83,19 @@ describe('bug-20260519 AC-03 dawn mirror: mesh + zero manifest -> render-time fa
       removeEventListener() {},
     } as unknown as HTMLCanvasElement;
 
-    let renderer: Awaited<ReturnType<typeof createRenderer>>;
+    let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
     try {
       // Zero-manifest path: explicit `shaderManifestUrl: undefined` opts into
-      // zero-entry mode. Post-fix `await renderer.ready` resolves ok; the
+      // zero-entry mode. Post-fix host construction resolves ok; the
       // asset registration fails at validation time (shader not registered).
-      renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: undefined });
+      host = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: undefined });
     } finally {
       globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
     }
-    expect(renderer.backend).toBe('webgpu');
-
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
-
-    const assets = renderer.assets;
-    if (assets === null) throw new Error('AssetRegistry null on dawn path');
+    expect(host.ok).toBe(true);
+    if (!host.ok) throw host.error;
+    const { renderer, assets } = host.value;
+    expect(renderer.inspect().state).toBe('alive');
     expect(assets).toBeInstanceOf(AssetRegistry);
 
     // Material parameter declarations now belong to MaterialAsset, so catalog

@@ -26,8 +26,8 @@
 //   - requirements AC-01 / AC-02 (post-rewrite)
 
 import { fileURLToPath } from 'node:url';
-import type { MaterialSnapshot } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
+import type { MaterialSnapshot } from '../../../render/src/render-system-extract';
 
 describe('sprite-lit extract branch (D-9 remap, AC-02 + AC-01)', () => {
   describe('sprite-lit routes via materialShaderId (AC-01 D-10 remap)', () => {

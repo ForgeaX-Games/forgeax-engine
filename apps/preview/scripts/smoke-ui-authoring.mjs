@@ -48,7 +48,11 @@ async function waitForServer(origin) {
 try {
   const origin = `http://127.0.0.1:${port}`;
   await waitForServer(`${origin}/`);
-  const browser = await chromium.launch({ headless: true });
+  const chromeChannel = process.env.FORGEAX_CHROME_CHANNEL;
+  const browser = await chromium.launch({
+    headless: true,
+    ...(chromeChannel ? { channel: chromeChannel } : {}),
+  });
   const page = await browser.newPage({ viewport: { width: 320, height: 180 }, deviceScaleFactor: 1 });
   const pageFailures = [];
   page.on('console', (message) => {

@@ -21,6 +21,38 @@
 
 import type { BindGroupLayoutDescriptor } from '@forgeax/engine-types';
 
+export const DERIVED_REFLECTION_SCHEMA = [
+  { name: 'exposure', type: 'f32' },
+  { name: 'albedo', type: 'texture2d' },
+  { name: 'tint', type: 'vec4' },
+] as const;
+
+export const DERIVED_REFLECTION_FACTS = {
+  members: [
+    { name: 'exposure', type: 'f32', offset: 0, size: 4, alignment: 4 },
+    {
+      name: 'albedoCoordinatesTransform',
+      type: 'vec4<f32>',
+      offset: 16,
+      size: 16,
+      alignment: 16,
+    },
+    {
+      name: 'albedoCoordinatesMetadata',
+      type: 'vec4<f32>',
+      offset: 32,
+      size: 16,
+      alignment: 16,
+    },
+    { name: 'tint', type: 'vec4<f32>', offset: 48, size: 16, alignment: 16 },
+  ],
+  resources: [
+    { name: 'albedo_sampler', kind: 'sampler', binding: 1 },
+    { name: 'albedo', kind: 'texture', binding: 2 },
+  ],
+  totalBytes: 64,
+} as const;
+
 export interface ReflectionFixture {
   readonly name: string;
   readonly wgsl: string;

@@ -84,7 +84,7 @@ export type SpawnPlayerResult =
  * Spawn the player parent/child pair.
  *
  * @param world owning World
- * @param assets the engine AssetRegistry (renderer.assets) -- used to
+ * @param assets the App-owned AssetRegistry -- used to
  *   instantiate the humanoid scene hierarchy
  * @param sceneHandle a user-tier SceneAsset handle for humanoid.fbx (minted via
  *   world.allocSharedRef after assets.loadByGuid in main.ts)

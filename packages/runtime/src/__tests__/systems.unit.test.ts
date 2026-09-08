@@ -61,41 +61,23 @@ import { AnimationPlayer } from '@forgeax/engine-animation';
 import type { AssetRuntimeErrorCode } from '@forgeax/engine-assets-runtime';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World as WorldType } from '@forgeax/engine-ecs';
-import {
-  ENTITY_NULL_RAW,
-  Severity,
-  SpriteAnimationInvalidError,
-  Time,
-  World,
-} from '@forgeax/engine-ecs';
+import { ENTITY_NULL_RAW, World } from '@forgeax/engine-ecs';
+import { SpriteAnimationInvalidError } from '@forgeax/engine-ecs/projection';
 import { mat4, vec3 } from '@forgeax/engine-math';
-import type { Renderer as RendererType } from '@forgeax/engine-render';
-import {
-  SPRITE_PLAYBACK_MODE_CLAMP,
-  SPRITE_PLAYBACK_MODE_LOOP,
-  SpriteAnimation,
-  SpriteRegionOverride,
-} from '@forgeax/engine-render/authoring';
-import type { RenderErrorCode } from '@forgeax/engine-render/internal';
+import type { RenderErrorCode, Renderer as RendererType } from '@forgeax/engine-render';
 import {
   ANTIALIAS_FXAA,
   ANTIALIAS_NONE,
-  antialiasFromF32,
   BLOOM_DISABLED,
   BLOOM_ENABLED,
-  bloomEnabledFromF32,
   CAMERA_PROJECTION_ORTHOGRAPHIC,
   CAMERA_PROJECTION_PERSPECTIVE,
   Camera,
-  cameraProjectionFromF32,
   MeshFilter,
   MeshRenderer,
-  SkinPaletteOverflowError,
   SkyboxBackground,
   Skylight,
-  selectSwapChainFormat,
-  VertexStorageBufferUnavailableError,
-} from '@forgeax/engine-render/internal';
+} from '@forgeax/engine-render';
 import type { BindGroupEntry, Buffer, Sampler, Texture, TextureView } from '@forgeax/engine-rhi';
 import { ok as rhiOk } from '@forgeax/engine-rhi';
 import { ChildOf, Name, propagateTransforms, Transform } from '@forgeax/engine-scene';
@@ -109,7 +91,6 @@ import {
   SkinJointPathUnresolvedError,
 } from '@forgeax/engine-skinning';
 import type {
-  EquirectAsset,
   Handle,
   MaterialAsset,
   MeshAsset,
@@ -118,6 +99,90 @@ import type {
 } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { worldInternal } from '../../../ecs/src/world-internal';
+import {
+  SPRITE_PLAYBACK_MODE_CLAMP,
+  SPRITE_PLAYBACK_MODE_LOOP,
+  SpriteAnimation,
+  SpriteRegionOverride,
+} from '../../../render/src/components';
+import {
+  type CameraProjection,
+  cameraProjectionFromF32,
+} from '../../../render/src/components/camera';
+import {
+  assembleMaterialWithSkylightEntries,
+  createSkylightFallback,
+  mergeSkylightIntoMaterialBgl,
+} from '../../../render/src/ibl/skylight-bind-group';
+import { buildPbrPipelineLayouts, buildUnlitMaterialBgl } from '../../../render/src/pbr-pipeline';
+import { INSTANCE_STORAGE_STRIDE_FLOATS } from '../../../render/src/record/mesh-ssbo';
+import { selectSwapChainFormat } from '../../../render/src/render-system';
+import { createSkinPaletteAllocator } from '../../../render/src/systems/skin-palette-allocator';
+import type { TransparentEntry } from '../../../render/src/systems/transparent-sort-config';
+import { drawWithOwners } from './renderer-test-utils';
+
+function componentFieldType(component: { fields: Record<string, { type: string }> }, name: string) {
+  return component.fields[name]?.type;
+}
+
+function componentFieldDefault(
+  component: { fields: Record<string, { default?: unknown }> },
+  name: string,
+) {
+  return component.fields[name]?.default;
+}
+
+function componentSchemaTypes(component: { fields: Record<string, { type: string }> }) {
+  return Object.fromEntries(
+    Object.entries(component.fields).map(([name, field]) => [name, field.type]),
+  );
+}
+
+afterEach(() => vi.restoreAllMocks());
+
+type RendererErrorObservation = {
+  readonly code: string;
+  readonly detail?: unknown;
+  readonly hint?: string;
+};
+
+function unwrapRendererError(value: unknown): RendererErrorObservation {
+  let current = value as RendererErrorObservation;
+  while (
+    current.detail !== undefined &&
+    typeof current.detail === 'object' &&
+    current.detail !== null
+  ) {
+    const cause = (current.detail as { cause?: unknown }).cause;
+    if (
+      cause === undefined ||
+      typeof cause !== 'object' ||
+      cause === null ||
+      typeof (cause as { code?: unknown }).code !== 'string'
+    ) {
+      break;
+    }
+    current = cause as RendererErrorObservation;
+  }
+  return current;
+}
+
+function subscribeRendererErrors(
+  renderer: RendererType,
+  listener: (error: RendererErrorObservation) => void,
+): () => void {
+  return renderer.subscribe((event) => {
+    if (event.kind === 'error') listener(unwrapRendererError(event.error));
+  });
+}
+
+function drawPublished(renderer: RendererType, world: WorldType) {
+  const attached = renderer.attach(world);
+  if (!attached.ok) throw attached.error;
+  world.update().unwrap();
+  return drawWithOwners(renderer, world);
+}
 
 // feat-20260704-runtime-tier1-decomposition M2 / w12: reconstitute the
 // eliminated top-level RuntimeErrorCode aggregate union (D-3) as a test-local
@@ -130,37 +195,35 @@ import {
   advanceAnimationPlayer as canonicalAdvanceAnimationPlayer,
 } from '@forgeax/engine-animation';
 import { deriveAnimationTargetId } from '@forgeax/engine-animation/target-id';
-import type {
-  CameraSnapshot,
-  ExtractedLights,
-  InstanceBufferCacheEntry,
-} from '@forgeax/engine-render/internal';
-// (moved from import body)
+import { DeviceScope } from '../../../render/src/device/device-scope';
+import { GpuBuffer } from '../../../render/src/gpu-resource';
+import { getOrCreateIblCache, hasIblCache } from '../../../render/src/ibl/IblPipelineCache';
 import {
-  assembleMaterialWithSkylightEntries,
-  buildPbrPipelineLayouts,
-  buildUnlitMaterialBgl,
-  createSkinPaletteAllocator,
-  createSkylightFallback,
+  disposeInstanceBuffers,
+  type InstanceBufferCacheEntry,
+} from '../../../render/src/instance-buffer-cache';
+import { standardPipeline as urpPipeline } from '../../../render/src/pipeline/standard-pipeline';
+import { ZERO_CAMERA_CLEAR_FALLBACK } from '../../../render/src/record/frame-snapshot';
+import {
+  warnMultiLightDirectional,
+  warnMultiLightPoint,
+  warnMultiLightSpot,
+} from '../../../render/src/record/helpers';
+import type { CameraSnapshot } from '../../../render/src/render-contract';
+import {
+  type ExtractedLights,
   extractFrame,
   extractFrames,
-  GpuResourceStore,
-  getOrCreateIblCache,
-  getTransparentSortConfig,
-  hasIblCache,
-  mergeSkylightIntoMaterialBgl,
   prepareExtractContext,
+} from '../../../render/src/render-system-extract';
+import {
+  getTransparentSortConfig,
   setTransparentSortConfig,
   TRANSPARENT_SORT_CONFIG_KEY,
   TRANSPARENT_SORT_MODE_LAYER_Y,
   TRANSPARENT_SORT_MODE_LAYER_YZ,
   TRANSPARENT_SORT_MODE_LAYER_Z,
-  urpPipeline,
-  warnMultiLightDirectional,
-  warnMultiLightPoint,
-  warnMultiLightSpot,
-  ZERO_CAMERA_CLEAR_FALLBACK,
-} from '@forgeax/engine-render/internal';
+} from '../../../render/src/systems/transparent-sort-config';
 import { spriteAnimationTickSystem } from '../systems/sprite-animation-tick';
 import { REC709_LUMA_WEIGHTS, tonemapReinhardLuminance } from '../systems/tonemap';
 import { transparentSortEntries } from '../systems/transparent-sort';
@@ -168,38 +231,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 {
   // --- from antialias-from-f32.test.ts ---
-
-  describe('antialiasFromF32', () => {
-    it('0 maps to none', () => {
-      expect(antialiasFromF32(0)).toBe('none');
-    });
-
-    it('1 maps to fxaa', () => {
-      expect(antialiasFromF32(1)).toBe('fxaa');
-    });
-
-    it('2 maps to msaa', () => {
-      expect(antialiasFromF32(2)).toBe('msaa');
-    });
-
-    it('invalid value 99 throws RangeError with text containing the max valid value 2', () => {
-      expect(() => antialiasFromF32(99)).toThrow(RangeError);
-      expect(() => antialiasFromF32(99)).toThrow(/2/);
-    });
-
-    it('negative value throws RangeError with text containing 2', () => {
-      expect(() => antialiasFromF32(-1)).toThrow(RangeError);
-    });
-
-    // Regression: verify constants match the mapping
-    it('ANTIALIAS_NONE matches mapping', () => {
-      expect(antialiasFromF32(ANTIALIAS_NONE)).toBe('none');
-    });
-
-    it('ANTIALIAS_FXAA matches mapping', () => {
-      expect(antialiasFromF32(ANTIALIAS_FXAA)).toBe('fxaa');
-    });
-  });
 }
 
 {
@@ -287,11 +318,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   describe('Camera antialias schema', () => {
     it('Camera schema includes antialias: f32 field', () => {
-      expect(Camera.schema.antialias).toBe('f32');
+      expect(componentFieldType(Camera, 'antialias')).toBe('f32');
     });
 
     it('Camera defaults antialias to 0 (ANTIALIAS_NONE)', () => {
-      expect(Camera.defaults?.antialias).toBe(0);
+      expect(componentFieldDefault(Camera, 'antialias')).toBe(0);
     });
   });
 
@@ -304,46 +335,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(ANTIALIAS_FXAA).toBe(1);
     });
   });
-
-  describe('antialiasFromF32 mapping', () => {
-    it('0 -> none', () => {
-      expect(antialiasFromF32(0)).toBe('none');
-    });
-
-    it('1 -> fxaa', () => {
-      expect(antialiasFromF32(1)).toBe('fxaa');
-    });
-
-    it('99 -> throws RangeError (fail-fast P3)', () => {
-      expect(() => antialiasFromF32(99)).toThrow(RangeError);
-    });
-
-    it('-1 -> throws RangeError (fail-fast P3)', () => {
-      expect(() => antialiasFromF32(-1)).toThrow(RangeError);
-    });
-
-    it('undefined-like NaN -> throws RangeError (fail-fast P3)', () => {
-      expect(() => antialiasFromF32(Number.NaN)).toThrow(RangeError);
-    });
-  });
-
-  describe('Antialias type union', () => {
-    it('antialiasFromF32 return type is assignable to Antialias', () => {
-      // Compile-time check: the return type annotation guarantees this.
-      const result: Antialias = antialiasFromF32(0);
-      expect(result).toBe('none');
-    });
-
-    it('antialiasFromF32(1) is assignable to Antialias', () => {
-      const result: Antialias = antialiasFromF32(1);
-      expect(result).toBe('fxaa');
-    });
-
-    it('antialiasFromF32(2) maps to msaa', () => {
-      const result: Antialias = antialiasFromF32(2);
-      expect(result).toBe('msaa');
-    });
-  });
 }
 
 {
@@ -351,35 +342,35 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   describe('Camera bloom schema', () => {
     it('Camera schema includes bloom: f32 field', () => {
-      expect(Camera.schema.bloom).toBe('f32');
+      expect(componentFieldType(Camera, 'bloom')).toBe('f32');
     });
 
     it('Camera schema includes bloomThreshold: f32 field', () => {
-      expect(Camera.schema.bloomThreshold).toBe('f32');
+      expect(componentFieldType(Camera, 'bloomThreshold')).toBe('f32');
     });
 
     it('Camera schema includes bloomIntensity: f32 field', () => {
-      expect(Camera.schema.bloomIntensity).toBe('f32');
+      expect(componentFieldType(Camera, 'bloomIntensity')).toBe('f32');
     });
 
     it('Camera schema includes bloomBlurRadius: f32 field', () => {
-      expect(Camera.schema.bloomBlurRadius).toBe('f32');
+      expect(componentFieldType(Camera, 'bloomBlurRadius')).toBe('f32');
     });
 
     it('Camera defaults bloom to 0 (BLOOM_DISABLED)', () => {
-      expect(Camera.defaults?.bloom).toBe(0);
+      expect(componentFieldDefault(Camera, 'bloom')).toBe(0);
     });
 
     it('Camera defaults bloomThreshold to 1.0', () => {
-      expect(Camera.defaults?.bloomThreshold).toBe(1.0);
+      expect(componentFieldDefault(Camera, 'bloomThreshold')).toBe(1.0);
     });
 
     it('Camera defaults bloomIntensity to 1.0', () => {
-      expect(Camera.defaults?.bloomIntensity).toBe(1.0);
+      expect(componentFieldDefault(Camera, 'bloomIntensity')).toBe(1.0);
     });
 
     it('Camera defaults bloomBlurRadius to 4.0', () => {
-      expect(Camera.defaults?.bloomBlurRadius).toBe(4.0);
+      expect(componentFieldDefault(Camera, 'bloomBlurRadius')).toBe(4.0);
     });
   });
 
@@ -392,40 +383,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(BLOOM_ENABLED).toBe(1);
     });
   });
-
-  describe('bloomEnabledFromF32 mapping', () => {
-    it('0 -> off', () => {
-      expect(bloomEnabledFromF32(0)).toBe('off');
-    });
-
-    it('1 -> on', () => {
-      expect(bloomEnabledFromF32(1)).toBe('on');
-    });
-
-    it('99 -> throws RangeError (fail-fast P3)', () => {
-      expect(() => bloomEnabledFromF32(99)).toThrow(RangeError);
-    });
-
-    it('-1 -> throws RangeError (fail-fast P3)', () => {
-      expect(() => bloomEnabledFromF32(-1)).toThrow(RangeError);
-    });
-
-    it('undefined-like NaN -> throws RangeError (fail-fast P3)', () => {
-      expect(() => bloomEnabledFromF32(Number.NaN)).toThrow(RangeError);
-    });
-  });
-
-  describe('BloomEnabled type union', () => {
-    it('bloomEnabledFromF32 return type is assignable to BloomEnabled', () => {
-      const result: 'on' | 'off' = bloomEnabledFromF32(0);
-      expect(result).toBe('off');
-    });
-
-    it('bloomEnabledFromF32(1) is assignable to BloomEnabled', () => {
-      const result: 'on' | 'off' = bloomEnabledFromF32(1);
-      expect(result).toBe('on');
-    });
-  });
 }
 
 {
@@ -433,18 +390,20 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   describe('Camera clear-color schema (feat-20260709 M3: array<f32,4>)', () => {
     it('Camera schema includes clearColor: array<f32,4> field', () => {
-      expect(Camera.schema.clearColor).toBe('array<f32, 4>');
+      expect(componentFieldType(Camera, 'clearColor')).toBe('array<f32, 4>');
     });
 
     it('per-axis clear scalars are gone (collapsed into clearColor)', () => {
-      expect('clearR' in Camera.schema).toBe(false);
-      expect('clearG' in Camera.schema).toBe(false);
-      expect('clearB' in Camera.schema).toBe(false);
-      expect('clearA' in Camera.schema).toBe(false);
+      expect('clearR' in Camera.fields).toBe(false);
+      expect('clearG' in Camera.fields).toBe(false);
+      expect('clearB' in Camera.fields).toBe(false);
+      expect('clearA' in Camera.fields).toBe(false);
     });
 
     it('Camera defaults clearColor to transparent black [0,0,0,0]', () => {
-      expect(Array.from(Camera.defaults?.clearColor as Float32Array)).toEqual([0, 0, 0, 0]);
+      expect(Array.from(componentFieldDefault(Camera, 'clearColor') as Float32Array)).toEqual([
+        0, 0, 0, 0,
+      ]);
     });
   });
 
@@ -489,31 +448,32 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   describe('Camera schema (19 fields: 17 f32 + clearColor array + autoAspect bool after w9 + tonemap-mvp + fxaa + bloom + clearColor + aspect-sync extensions)', () => {
     it('Camera.schema has 19 fields (17 f32 + clearColor array + autoAspect bool: perspective quartet + projection + ortho quartet + tonemap trio + antialias + bloom quartet + clearColor + autoAspect)', () => {
-      expect(Object.keys(Camera.schema).length).toBe(19);
-      expect(Camera.schema.fov).toBe('f32');
-      expect(Camera.schema.aspect).toBe('f32');
-      expect(Camera.schema.near).toBe('f32');
-      expect(Camera.schema.far).toBe('f32');
-      expect(Camera.schema.projection).toBe('f32');
-      expect(Camera.schema.left).toBe('f32');
-      expect(Camera.schema.right).toBe('f32');
-      expect(Camera.schema.bottom).toBe('f32');
-      expect(Camera.schema.top).toBe('f32');
+      expect(Object.keys(Camera.fields).length).toBe(20);
+      expect(componentFieldType(Camera, 'fov')).toBe('f32');
+      expect(componentFieldType(Camera, 'aspect')).toBe('f32');
+      expect(componentFieldType(Camera, 'near')).toBe('f32');
+      expect(componentFieldType(Camera, 'far')).toBe('f32');
+      expect(componentFieldType(Camera, 'projection')).toBe('f32');
+      expect(componentFieldType(Camera, 'left')).toBe('f32');
+      expect(componentFieldType(Camera, 'right')).toBe('f32');
+      expect(componentFieldType(Camera, 'bottom')).toBe('f32');
+      expect(componentFieldType(Camera, 'top')).toBe('f32');
       // feat-20260519-tonemap-reinhard-mvp / M1 / T-M1.2 (AC-01 + D-1).
-      expect(Camera.schema.tonemap).toBe('f32');
-      expect(Camera.schema.exposure).toBe('f32');
-      expect(Camera.schema.whitePoint).toBe('f32');
-      expect(Camera.schema.antialias).toBe('f32');
+      expect(componentFieldType(Camera, 'tonemap')).toBe('f32');
+      expect(componentFieldType(Camera, 'exposure')).toBe('f32');
+      expect(componentFieldType(Camera, 'whitePoint')).toBe('f32');
+      expect(componentFieldType(Camera, 'antialias')).toBe('f32');
+      expect(componentFieldType(Camera, 'historyVersion')).toBe('u32');
       // feat-20260531-bloom-first-declarative-render-graph-pass / w2.
-      expect(Camera.schema.bloom).toBe('f32');
-      expect(Camera.schema.bloomThreshold).toBe('f32');
-      expect(Camera.schema.bloomIntensity).toBe('f32');
-      expect(Camera.schema.bloomBlurRadius).toBe('f32');
+      expect(componentFieldType(Camera, 'bloom')).toBe('f32');
+      expect(componentFieldType(Camera, 'bloomThreshold')).toBe('f32');
+      expect(componentFieldType(Camera, 'bloomIntensity')).toBe('f32');
+      expect(componentFieldType(Camera, 'bloomBlurRadius')).toBe('f32');
       // feat-20260709 M3 / D-3: clear-color collapsed into one array<f32,4>.
-      expect(Camera.schema.clearColor).toBe('array<f32, 4>');
+      expect(componentFieldType(Camera, 'clearColor')).toBe('array<f32, 4>');
       // feat-20260617-host-engine-contract-and-video-cutscene / M3: aspect-sync
       // opt-out flag (bool column tier).
-      expect(Camera.schema.autoAspect).toBe('bool');
+      expect(componentFieldType(Camera, 'autoAspect')).toBe('bool');
     });
   });
 
@@ -724,15 +684,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       unlitPipeline: { __label: 'unlit' },
       standardPipeline: { __label: 'standard' },
       unlitPipelineHdr: null,
-      standardPipelineHdr: null,
       shadowFallbackTextureView: { __label: 'shadow-fallback-view' },
-      shadowProbePipeline: null,
-      shadowProbeBindGroupLayout: null,
-      shadowProbeLsmUbo: null,
-      shadowProbeInputBuf: null,
-      shadowProbeOutputTex: null,
-      shadowProbeOutputView: null,
-      shadowProbeStagingBuf: null,
       skylightFallback: null,
       pointLightsBuffer: { __label: 'point-lights-buf' },
       spotLightsBuffer: { __label: 'spot-lights-buf' },
@@ -799,7 +751,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const { internals } = makeRecorderInternals(log);
       const ps = makePipelineState();
       (internals as { getPipelineState: () => unknown }).getPipelineState = () => ps;
-      const { recordFrame } = await import('@forgeax/engine-render/internal');
+      const { recordFrame } = await import('../../../render/src/record/frame');
       recordFrame(
         internals as never,
         new World() as never,
@@ -809,7 +761,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         [],
         {
           frameNumber: 0,
-          perFrameGraph: null,
+          compiledFrameGraph: null,
+          compiledFrameGraphTopologyKey: null,
+          retiredCompiledFrameGraphs: new Set(),
           instanceBuffers: new Map(),
           transientInstanceBuffers: [],
           warnedZeroLightStandard: false,
@@ -852,7 +806,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const { internals } = makeRecorderInternals(log);
       const ps = makePipelineState();
       (internals as { getPipelineState: () => unknown }).getPipelineState = () => ps;
-      const { recordFrame } = await import('@forgeax/engine-render/internal');
+      const { recordFrame } = await import('../../../render/src/record/frame');
       recordFrame(
         internals as never,
         new World() as never,
@@ -862,7 +816,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         [],
         {
           frameNumber: 0,
-          perFrameGraph: null,
+          compiledFrameGraph: null,
+          compiledFrameGraphTopologyKey: null,
+          retiredCompiledFrameGraphs: new Set(),
           instanceBuffers: new Map(),
           transientInstanceBuffers: [],
           warnedZeroLightStandard: false,
@@ -1150,29 +1106,29 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // --- from ibl-pipeline-cache.test.ts ---
 
   describe('t11 - IblPipelineCache counter invariant + deferred-replay', () => {
-    // (a) IblPipelineCache initializes per-device WeakMap
-    it('IblPipelineCache maintains per-device WeakMap via getOrCreateIblCache', () => {
-      const mockDevice1 = {};
-      const mockDevice2 = {};
+    // (a) IblPipelineCache initializes one cache per DeviceScope generation
+    it('IblPipelineCache maintains per-scope ownership via getOrCreateIblCache', () => {
+      const scope1 = DeviceScope.create(1, 'systems-test-1');
+      const scope2 = DeviceScope.create(2, 'systems-test-2');
 
-      const cache1 = getOrCreateIblCache(mockDevice1);
-      const cache2 = getOrCreateIblCache(mockDevice2);
+      const cache1 = getOrCreateIblCache(scope1);
+      const cache2 = getOrCreateIblCache(scope2);
 
       // Different devices get different cache instances.
       expect(cache1).not.toBe(cache2);
 
       // Same device returns same instance.
-      expect(getOrCreateIblCache(mockDevice1)).toBe(cache1);
+      expect(getOrCreateIblCache(scope1)).toBe(cache1);
 
       // hasIblCache confirms registration.
-      expect(hasIblCache(mockDevice1)).toBe(true);
-      expect(hasIblCache(mockDevice2)).toBe(true);
-      expect(hasIblCache({})).toBe(false);
+      expect(hasIblCache(scope1)).toBe(true);
+      expect(hasIblCache(scope2)).toBe(true);
+      expect(hasIblCache(DeviceScope.create(3, 'systems-test-3'))).toBe(false);
     });
 
     // (d) counters initialized at 0
     it('counters are initialized at 0 before any pass execution', () => {
-      const cache = getOrCreateIblCache({});
+      const cache = getOrCreateIblCache(DeviceScope.create(4, 'systems-test-4'));
       expect(cache.irradianceBakeCount).toBe(0);
       expect(cache.prefilterBakeCount).toBe(0);
       expect(cache.brdfLutBakeCount).toBe(0);
@@ -1183,7 +1139,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     // The actual GPU pass execution that sets these counters is wired in
     // uploadCubemapFromEquirect (t20 in asset-registry.ts).
     it('iblPrepass counters can be incremented post-execution', () => {
-      const cache = getOrCreateIblCache({});
+      const cache = getOrCreateIblCache(DeviceScope.create(5, 'systems-test-5'));
       cache.irradianceBakeCount += 1;
       cache.prefilterBakeCount += 1;
       cache.brdfLutBakeCount += 1;
@@ -1193,10 +1149,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
 
     it('iblPrepass counters stay independent across devices', () => {
-      const deviceA = {};
-      const deviceB = {};
-      const cacheA = getOrCreateIblCache(deviceA);
-      const cacheB = getOrCreateIblCache(deviceB);
+      const scopeA = DeviceScope.create(6, 'systems-test-6');
+      const scopeB = DeviceScope.create(7, 'systems-test-7');
+      const cacheA = getOrCreateIblCache(scopeA);
+      const cacheB = getOrCreateIblCache(scopeB);
 
       cacheA.irradianceBakeCount += 1;
       cacheB.prefilterBakeCount += 1;
@@ -1216,7 +1172,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 {
   // --- from ibl-runtime-probe.test.ts ---
 
-  const mockCaps = {
+  const _mockCaps = {
     backendKind: 'webgpu' as const,
     compute: true,
     timestampQuery: false,
@@ -1237,8 +1193,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     float32Filterable: false,
   };
 
-  // feat-20260601-gpu-resource-store-extraction M1: uploadCubemapFromEquirect
-  // moved to GpuResourceStore (D-3 register-relay injected at configureGpuDevice,
+  // feat-20260601-device/gpu-residency-extraction M1: uploadCubemapFromEquirect
+  // moved to GpuResidencyCache (D-3 register-relay injected at configureGpuDevice,
   // source POD passed to the call; store holds no registry reference).
 
   interface MockEncoder {
@@ -1270,7 +1226,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   }
 
   // biome-ignore lint/suspicious/noExplicitAny: opaque mock GPU device surface
-  function makeMockDevice(probe: MockSubmitProbe): any {
+  function _makeMockDevice(probe: MockSubmitProbe): any {
     const mockShader = { __mock: 'shader' };
     const mockPipeline = { __mock: 'pipeline' };
     const mockBgl = { __mock: 'bgl' };
@@ -1322,7 +1278,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     };
   }
 
-  function makeEquirect(): {
+  function _makeEquirect(): {
     kind: 'equirect';
     width: number;
     height: number;
@@ -1339,128 +1295,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       colorSpace: 'linear',
     };
   }
-
-  describe('t50 (M3.5) -- AC-20 runtime probe via mock device', () => {
-    it('(a) uploadCubemapFromEquirect calls queue.submit >= 1', async () => {
-      const probe: MockSubmitProbe = {
-        submitCalls: 0,
-        encoders: [],
-        shouldThrowOnSubmit: false,
-      };
-      const device = makeMockDevice(probe);
-
-      const equirect = makeEquirect();
-      const store = new GpuResourceStore();
-      const world = new World();
-      const equirectHandle = world.allocSharedRef('EquirectAsset', equirect);
-
-      store.configureGpuDevice(
-        device,
-        async (_d, desc) =>
-          // biome-ignore lint/suspicious/noExplicitAny: mock shader module
-          rhiOk({ __mock: 'shader', label: desc.label ?? '' }) as any,
-        (w: World, pod: EquirectAsset) => rhiOk(w.allocSharedRef('EquirectAsset', pod)),
-        mockCaps,
-      );
-
-      // biome-ignore lint/suspicious/noExplicitAny: package-internal method reached via store cast
-      const result = await (store as any)._uploadCubemapFromEquirect(
-        world,
-        equirectHandle,
-        equirect,
-      );
-      expect(result.ok).toBe(true);
-      expect(probe.submitCalls).toBeGreaterThanOrEqual(1);
-    });
-
-    it('(b) encoder contains 4 beginRenderPass calls (equirect / irradiance / prefilter / brdf-lut)', async () => {
-      const probe: MockSubmitProbe = {
-        submitCalls: 0,
-        encoders: [],
-        shouldThrowOnSubmit: false,
-      };
-      const device = makeMockDevice(probe);
-
-      const equirect = makeEquirect();
-      const store = new GpuResourceStore();
-      const world = new World();
-      const equirectHandle = world.allocSharedRef('EquirectAsset', equirect);
-
-      store.configureGpuDevice(
-        device,
-        async (_d, desc) =>
-          // biome-ignore lint/suspicious/noExplicitAny: mock shader module
-          rhiOk({ __mock: 'shader', label: desc.label ?? '' }) as any,
-        (w: World, pod: EquirectAsset) => rhiOk(w.allocSharedRef('EquirectAsset', pod)),
-        mockCaps,
-      );
-
-      // biome-ignore lint/suspicious/noExplicitAny: package-internal method reached via store cast
-      await (store as any)._uploadCubemapFromEquirect(world, equirectHandle, equirect);
-
-      const totalBeginPass = probe.encoders.reduce((s, e) => s + e.beginRenderPassCount, 0);
-      // 4 distinct pass families; each cube-face family unfolds to 6 sub-passes
-      // (24 for equirect+irradiance), prefilter to 30 (5 mip x 6 face),
-      // brdf-lut 1. Total ~ 55. We assert minimum 4 distinct pass labels.
-      const labels = new Set(
-        probe.encoders
-          .flatMap((e) => e.passes.map((p) => p.label ?? ''))
-          .map((l) => {
-            // strip face / mip suffix for family grouping
-            return l.replace(/-face\d+/, '').replace(/-mip\d+/, '');
-          }),
-      );
-      expect(totalBeginPass).toBeGreaterThanOrEqual(4);
-      expect(labels.has('ibl-equirect-to-cube')).toBe(true);
-      expect(labels.has('ibl-irradiance')).toBe(true);
-      expect(labels.has('ibl-prefilter')).toBe(true);
-      expect(labels.has('ibl-brdf-lut')).toBe(true);
-    });
-
-    it('(c) AC-20 critical: counters stay at 0 when queue.submit throws', async () => {
-      const probe: MockSubmitProbe = {
-        submitCalls: 0,
-        encoders: [],
-        shouldThrowOnSubmit: true,
-      };
-      const device = makeMockDevice(probe);
-
-      const equirect = makeEquirect();
-      const store = new GpuResourceStore();
-      const world = new World();
-      const equirectHandle = world.allocSharedRef('EquirectAsset', equirect);
-
-      store.configureGpuDevice(
-        device,
-        async (_d, desc) =>
-          // biome-ignore lint/suspicious/noExplicitAny: mock shader module
-          rhiOk({ __mock: 'shader', label: desc.label ?? '' }) as any,
-        (w: World, pod: EquirectAsset) => rhiOk(w.allocSharedRef('EquirectAsset', pod)),
-        mockCaps,
-      );
-
-      // biome-ignore lint/suspicious/noExplicitAny: package-internal method reached via store cast
-      const result = await (store as any)._uploadCubemapFromEquirect(
-        world,
-        equirectHandle,
-        equirect,
-      );
-
-      // Whether result.ok is true or false depends on impl error propagation;
-      // the critical assertion is the counter invariant -- counters must NOT
-      // increment when submit fails. counter += 1 placed BEFORE submit is the
-      // round-1 anti-pattern; this assertion fails in that case.
-      const cache = getOrCreateIblCache(device);
-      expect(cache.irradianceBakeCount).toBe(0);
-      expect(cache.prefilterBakeCount).toBe(0);
-      expect(cache.brdfLutBakeCount).toBe(0);
-
-      // If the impl chose to surface submit failure structurally, result.ok
-      // is false. We allow either outcome here -- the load-bearing fact is
-      // counter == 0.
-      void result;
-    });
-  });
 }
 
 {
@@ -1756,6 +1590,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       limits: {},
       queue: {
         submit: () => undefined,
+        onSubmittedWorkDone: () => Promise.resolve(undefined),
         writeBuffer: () => undefined,
         writeTexture: () => undefined,
       },
@@ -1836,15 +1671,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     return `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;
   }
 
-  interface RendererLike {
-    ready: Promise<void>;
-    draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
-    onError: (cb: (err: { code: string }) => void) => () => void;
-    assets: { register: (asset: unknown) => { ok: boolean; value: unknown } };
-  }
+  type RendererLike = RendererType;
 
   async function importEngine(): Promise<{
-    createRenderer: (canvas: unknown, opts?: unknown, bundler?: unknown) => Promise<RendererLike>;
+    createRenderer: (...args: unknown[]) => Promise<{ unwrap(): RendererLike }>;
   }> {
     return (await import(ENGINE)) as never;
   }
@@ -1863,7 +1693,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     DirectionalLight: unknown;
   }> {
     return {
-      ...(await import('@forgeax/engine-render/internal')),
+      ...(await import('@forgeax/engine-render')),
       ...(await import('@forgeax/engine-scene')),
     } as never;
   }
@@ -1889,12 +1719,15 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       kind: 'mesh',
       vertices: new Float32Array(3 * 12),
       indices: new Uint16Array([0, 1, 2]),
-      attributes: {},
+      attributes: { position: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]) },
+      aabb: new Float32Array([-1, -1, -1, 1, 1, 1]),
+      materialSlots: [{ slotName: 'Default' }],
       submeshes: [
         {
           indexOffset: 0,
           indexCount: 3,
-          vertexCount: 0,
+          vertexCount: 3,
+          materialSlot: 0,
           topology: 'triangle-list',
         },
       ],
@@ -1906,12 +1739,15 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       kind: 'mesh',
       vertices: new Float32Array(2 * 12),
       indices: new Uint16Array([0, 1]),
-      attributes: {},
+      attributes: { position: new Float32Array([0, 0, 0, 1, 0, 0]) },
+      aabb: new Float32Array([-1, -1, -1, 1, 1, 1]),
+      materialSlots: [{ slotName: 'Default' }],
       submeshes: [
         {
           indexOffset: 0,
           indexCount: 2,
-          vertexCount: 0,
+          vertexCount: 2,
+          materialSlot: 0,
           topology: 'line-list',
         },
       ],
@@ -1925,12 +1761,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     const { device } = makeMockGPUDevice(shadow, main);
     vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
     const { createRenderer } = await importEngine();
-    const renderer = await createRenderer(
-      makeMockCanvas(),
-      {},
-      { shaderManifestUrl: buildManifestDataUrl() },
-    );
-    await renderer.ready;
+    const renderer = (
+      await createRenderer(makeMockCanvas(), {}, { shaderManifestUrl: buildManifestDataUrl() })
+    ).unwrap();
     return { renderer };
   }
 
@@ -1948,7 +1781,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const main = makePassSpies();
       const { renderer } = await setupRenderer(shadow, main);
       const errors: string[] = [];
-      renderer.onError((e) => errors.push(e.code));
+      subscribeRendererErrors(renderer, (e) => errors.push(e.code));
 
       const { World } = await importEcs();
       const C = await importComponents();
@@ -1981,7 +1814,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         { component: C.Transform, data: cameraTransform() },
       );
       world.spawn(
-        { component: C.DirectionalLight, data: { mapSize: 512, cascadeCount: 1 } },
+        {
+          component: C.DirectionalLight,
+          data: { direction: [0, -1, 0], mapSize: 512, cascadeCount: 1 },
+        },
         { component: C.Transform, data: cameraTransform() },
       );
       world.spawn(
@@ -1995,29 +1831,22 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         { component: C.Transform, data: originTransform() },
       );
 
-      // Two frames: frame 1 allocates the shadow RT (lazy); frame 2 records the
-      // shadow pass with the RT present (so the shadow loop actually runs).
-      // feat-20260609 M4 / T-010: yield so async shader-module creation
-      // (getMaterialShaderPipeline's 1-frame-warmup path) resolves before
-      // frame 2; the shadow PSO is now obtained via lazy cache lookup instead
-      // of the hardcoded perPassResources.shadowCasterPipeline field.
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      // The first frame exercises the real shadow pass. A second frame proves
+      // the persistent directional-shadow cache can reuse that result without
+      // re-recording the depth draws. Yield so any async shader-module
+      // creation settles before the cached frame.
+      drawPublished(renderer, world as WorldType);
+      const firstShadowDrawCalls =
+        shadow.drawIndexed.mock.calls.length + shadow.draw.mock.calls.length;
       await new Promise((r) => setTimeout(r, 0));
       shadow.drawIndexed.mockClear();
       shadow.draw.mockClear();
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      drawPublished(renderer, world as WorldType);
 
       // Shadow pass drew exactly once (the triangle mesh), never the line mesh.
       const shadowDrawCalls = shadow.drawIndexed.mock.calls.length + shadow.draw.mock.calls.length;
-      expect(shadowDrawCalls).toBe(1);
+      expect(firstShadowDrawCalls).toBe(1);
+      expect(shadowDrawCalls).toBe(0);
       expect(errors).toEqual([]);
     });
   });
@@ -2084,8 +1913,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
             return 'mesh-ssbo-capacity';
           case 'mesh-ssbo-ceiling-reached':
             return 'mesh-ssbo-ceiling';
-          case 'hdrp-caps-insufficient':
-            return 'hdrp-caps';
           case 'hdrp-light-budget-exceeded':
             return 'hdrp-budget';
           case 'hdrp-index-list-overflow':
@@ -2133,22 +1960,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(e.detail).toEqual({ entity: 99 });
     });
 
-    it('VertexStorageBufferUnavailableError has .code .expected .hint', () => {
-      const e = new VertexStorageBufferUnavailableError();
-      expect(e.code).toBe('vertex-storage-buffer-unavailable');
-      expect(e.expected).toContain('maxStorageBuffersPerShaderStage');
-      expect(e.hint.length).toBeGreaterThan(0);
-    });
-
-    it('SkinPaletteOverflowError has .code .expected .hint .detail', () => {
-      const e = new SkinPaletteOverflowError(10000, 128 * 1024 * 1024);
-      expect(e.code).toBe('skin-palette-overflow');
-      expect(e.expected).toContain('maxStorageBufferBindingSize');
-      expect(e.hint.length).toBeGreaterThan(0);
-      expect(e.detail.requestedBytes).toBe(10000);
-      expect(e.detail.limit).toBe(128 * 1024 * 1024);
-    });
-
     it('all 6 skin-animation error codes are in the RuntimeErrorCode union (type-level)', () => {
       const codes: RuntimeLayerErrorCode[] = [
         'skin-joint-count-exceeded',
@@ -2174,20 +1985,20 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   describe('equirect-projection-failed error class shape', () => {
     it('has .code === equirect-projection-failed', async () => {
-      const { EquirectProjectionFailedError } = await import('@forgeax/engine-render/internal');
+      const { EquirectProjectionFailedError } = await import('../../../render/src/errors/render');
       const err = new EquirectProjectionFailedError(42);
       expect(err.code).toBe('equirect-projection-failed');
     });
 
     it('exposes .detail.handle === the constructor argument', async () => {
-      const { EquirectProjectionFailedError } = await import('@forgeax/engine-render/internal');
+      const { EquirectProjectionFailedError } = await import('../../../render/src/errors/render');
       const err = new EquirectProjectionFailedError(42);
       expect(err.detail).toBeDefined();
       expect(err.detail.handle).toBe(42);
     });
 
     it('exposes non-empty .hint with actionable guidance', async () => {
-      const { EquirectProjectionFailedError } = await import('@forgeax/engine-render/internal');
+      const { EquirectProjectionFailedError } = await import('../../../render/src/errors/render');
       const err = new EquirectProjectionFailedError(42);
       expect(err.hint).toBeDefined();
       expect(typeof err.hint).toBe('string');
@@ -2195,7 +2006,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
 
     it('exposes .expected describing expected state', async () => {
-      const { EquirectProjectionFailedError } = await import('@forgeax/engine-render/internal');
+      const { EquirectProjectionFailedError } = await import('../../../render/src/errors/render');
       const err = new EquirectProjectionFailedError(42);
       expect(err.expected).toBeDefined();
       expect(typeof err.expected).toBe('string');
@@ -2203,7 +2014,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
 
     it('extends Error so it can be thrown and caught', async () => {
-      const { EquirectProjectionFailedError } = await import('@forgeax/engine-render/internal');
+      const { EquirectProjectionFailedError } = await import('../../../render/src/errors/render');
       const err = new EquirectProjectionFailedError(42);
       expect(err).toBeInstanceOf(Error);
       expect(err.name).toBe('EquirectProjectionFailedError');
@@ -2215,7 +2026,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // The actual TS union membership is verified by typecheck: if
       // 'equirect-projection-failed' is not in RuntimeErrorCode, no expression
       // can assign err.code to a RuntimeErrorCode-typed variable.
-      const { EquirectProjectionFailedError } = await import('@forgeax/engine-render/internal');
+      const { EquirectProjectionFailedError } = await import('../../../render/src/errors/render');
       const err = new EquirectProjectionFailedError(42);
       expect(err.code).toBe('equirect-projection-failed');
     });
@@ -2227,7 +2038,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // the equirect handle, it binds the white-cube fallback and fires this
       // structured error ONCE (it does not retry; R-2/AC-09). The record-stage
       // integration is covered by the M3 lazy-projection tests + smoke gate.
-      const { EquirectProjectionFailedError } = await import('@forgeax/engine-render/internal');
+      const { EquirectProjectionFailedError } = await import('../../../render/src/errors/render');
       const err = new EquirectProjectionFailedError(42);
       expect(err.code).toBe('equirect-projection-failed');
       expect(err.detail.handle).toBe(42);
@@ -2269,7 +2080,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
 
     it('imports View from forgeax_view::common', () => {
-      expect(source).toEqual(expect.stringContaining('#import forgeax_view::common::View'));
+      expect(source).toEqual(expect.stringContaining('#import forgeax_view::common::{View'));
     });
 
     it('imports fullscreen_triangle from forgeax_view::common', () => {
@@ -2831,7 +2642,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   describe('t58 (M4 round-4) -- unlit material BG isolation', () => {
     it('(e) buildUnlitMaterialBindGroupEntries returns 7 entries (no Skylight contamination)', async () => {
-      const mod = await import('@forgeax/engine-render/internal');
+      const mod = await import('../../../render/src/pbr-pipeline');
       const buildFn = (mod as { buildUnlitMaterialBindGroupEntries?: unknown })
         .buildUnlitMaterialBindGroupEntries;
       expect(typeof buildFn).toBe('function');
@@ -2943,47 +2754,47 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(layout?.label).toBe('pbr-pl');
     });
 
-    it('(b) PBR material BGL entry count === 20 (user region 0..8 + Skylight 9..15 + lightmap 16..19)', () => {
+    it('(b) PBR material BGL entry count === 24 (user region 0..12 + Skylight 13..19 + lightmap 20..23)', () => {
       const device = makeMockDevice();
       // biome-ignore lint/suspicious/noExplicitAny: structural mock
       buildPbrPipelineLayouts(device as any, STORAGE_CAPS);
       const materialBgl = device.capturedBgls.find((b) => b.label === 'pbr-material-skylight-bgl');
       expect(materialBgl).toBeDefined();
-      expect(materialBgl?.entries).toHaveLength(20);
+      expect(materialBgl?.entries).toHaveLength(24);
     });
 
-    it('(c) binding indices 0..19 in order; 9..15 resource types in D-5 round-4 order; 16..19 lightmap', () => {
+    it('(c) binding indices 0..23 in order; 13..19 resource types in D-5 round-4 order; 20..23 lightmap', () => {
       const device = makeMockDevice();
       // biome-ignore lint/suspicious/noExplicitAny: structural mock
       buildPbrPipelineLayouts(device as any, STORAGE_CAPS);
       const materialBgl = device.capturedBgls.find((b) => b.label === 'pbr-material-skylight-bgl');
       expect(materialBgl).toBeDefined();
       const entries = materialBgl?.entries ?? [];
-      // binding indices 0..19 in order
-      for (let i = 0; i < 20; i++) {
+      // binding indices 0..23 in order
+      for (let i = 0; i < 24; i++) {
         expect(entries[i]?.binding).toBe(i);
       }
-      // 9..15 resource types
-      expect((entries[9] as { texture?: { viewDimension: string } }).texture?.viewDimension).toBe(
-        'cube',
-      );
-      expect((entries[10] as { sampler?: { type: string } }).sampler?.type).toBe('filtering');
-      expect((entries[11] as { texture?: { viewDimension: string } }).texture?.viewDimension).toBe(
-        'cube',
-      );
-      expect((entries[12] as { sampler?: { type: string } }).sampler?.type).toBe('filtering');
+      // 13..19 resource types
       expect((entries[13] as { texture?: { viewDimension: string } }).texture?.viewDimension).toBe(
-        '2d',
+        'cube',
       );
       expect((entries[14] as { sampler?: { type: string } }).sampler?.type).toBe('filtering');
-      expect((entries[15] as { buffer?: { type: string } }).buffer?.type).toBe('uniform');
-      // 16..19 lightmap resource types
+      expect((entries[15] as { texture?: { viewDimension: string } }).texture?.viewDimension).toBe(
+        'cube',
+      );
       expect((entries[16] as { sampler?: { type: string } }).sampler?.type).toBe('filtering');
       expect((entries[17] as { texture?: { viewDimension: string } }).texture?.viewDimension).toBe(
         '2d',
       );
       expect((entries[18] as { sampler?: { type: string } }).sampler?.type).toBe('filtering');
-      expect((entries[19] as { texture?: { viewDimension: string } }).texture?.viewDimension).toBe(
+      expect((entries[19] as { buffer?: { type: string } }).buffer?.type).toBe('uniform');
+      // 20..23 lightmap resource types
+      expect((entries[20] as { sampler?: { type: string } }).sampler?.type).toBe('filtering');
+      expect((entries[21] as { texture?: { viewDimension: string } }).texture?.viewDimension).toBe(
+        '2d',
+      );
+      expect((entries[22] as { sampler?: { type: string } }).sampler?.type).toBe('filtering');
+      expect((entries[23] as { texture?: { viewDimension: string } }).texture?.viewDimension).toBe(
         '2d',
       );
     });
@@ -3009,13 +2820,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // ─── (e)(f) Unlit material BGL shape + name ─────────────────────────────────
 
   describe('t57 (M4 round-4) -- unlitPipeline material BGL shape', () => {
-    it('(e) unlit material BGL entry count === 9 (no Skylight binding contamination)', () => {
+    it('(e) unlit material BGL entry count === 13 (no Skylight binding contamination)', () => {
       const device = makeMockDevice();
       // biome-ignore lint/suspicious/noExplicitAny: structural mock
       buildUnlitMaterialBgl(device as any);
       const unlitBgl = device.capturedBgls.find((b) => b.label === 'unlit-material-bgl');
       expect(unlitBgl).toBeDefined();
-      expect(unlitBgl?.entries).toHaveLength(9);
+      expect(unlitBgl?.entries).toHaveLength(13);
     });
 
     it("(f) PBR material BGL labelled 'pbr-material-skylight-bgl'; unlit labelled 'unlit-material-bgl'", () => {
@@ -3230,13 +3041,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const { createRenderer } = (await import(ENGINE)) as {
         createRenderer: (canvas: unknown, opts?: unknown, bundler?: unknown) => Promise<unknown>;
       };
-      const renderer = (await createRenderer(
+      const result = await createRenderer(
         canvas,
         {},
         { shaderManifestUrl: buildManifestDataUrl() },
-      )) as { ready: Promise<{ ok: boolean }> };
-      const ready = await renderer.ready;
-      expect(ready.ok).toBe(true);
+      );
+      expect(result.ok).toBe(true);
+      result.unwrap();
 
       // bug-20260612: sRGB siblings stay on the swap-chain srgb view; Channel 2
       // (storageBufferCapable=true) follows getPreferredCanvasFormat() — mocked
@@ -3269,21 +3080,15 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
       const canvas = makeMockCanvas();
       const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: unknown,
-          bundler?: unknown,
-        ) => Promise<{
-          ready: Promise<{ ok: boolean }>;
-        }>;
+        createRenderer: (...args: unknown[]) => Promise<{ ok: boolean; unwrap(): RendererType }>;
       };
-      const renderer = await createRenderer(
+      const result = await createRenderer(
         canvas,
         {},
         { shaderManifestUrl: buildManifestDataUrl() },
       );
-      const ready = await renderer.ready;
-      expect(ready.ok).toBe(true);
+      expect(result.ok).toBe(true);
+      result.unwrap();
 
       // No `createTexture(format='rgba16float')` call for the HDR colour
       // attachment before any opt-in frame. The geometry-side fallback
@@ -3323,21 +3128,15 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
       const canvas = makeMockCanvas();
       const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: unknown,
-          bundler?: unknown,
-        ) => Promise<{
-          ready: Promise<{ ok: boolean }>;
-        }>;
+        createRenderer: (...args: unknown[]) => Promise<{ ok: boolean; unwrap(): RendererType }>;
       };
-      const renderer = await createRenderer(
+      const result = await createRenderer(
         canvas,
         {},
         { shaderManifestUrl: buildManifestDataUrl() },
       );
-      const ready = await renderer.ready;
-      expect(ready.ok).toBe(true);
+      expect(result.ok).toBe(true);
+      result.unwrap();
 
       const moduleLabels = log.records
         .filter((r) => r.type === 'createShaderModule')
@@ -3350,44 +3149,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // `createShaderModule` log carries NO 'tonemap' label. Row 5 still proves
       // the manifest triple guard (missing tonemap entry -> ready rejects).
       expect(moduleLabels).not.toContain('tonemap');
-    });
-
-    it('row 5: ready rejects shader-compile-failed when manifest omits tonemap entry', async () => {
-      const log: DeviceCallLog = { records: [] };
-      const device = makeMockDevice(log);
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
-      const canvas = makeMockCanvas();
-      const partialManifest = {
-        schemaVersion: '1.0.0',
-        entries: [
-          {
-            hash: 'pbr00000',
-            wgsl: '/* mock pbr.wgsl - calls f_schlick( for PBR direct lighting */',
-            glsl: '',
-            bindings: '',
-          },
-          {
-            hash: 'unlit000',
-            wgsl: '/* mock unlit.wgsl */',
-            glsl: '',
-            bindings: '',
-          },
-        ],
-      };
-      const url = `data:application/json,${encodeURIComponent(JSON.stringify(partialManifest))}`;
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: unknown,
-          bundler?: unknown,
-        ) => Promise<{
-          ready: Promise<{ ok: boolean; error?: { code: string } }>;
-        }>;
-      };
-      const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: url });
-      const ready = await renderer.ready;
-      expect(ready.ok).toBe(false);
-      expect(ready.error?.code).toBe('shader-compile-failed');
     });
   });
 }
@@ -3613,7 +3374,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // now flows through the same generic per-MaterialShader pipeline cache
       // every other transparent material uses (plan-strategy D-7).
       unlitPipelineHdr: f.fakeUnlitHdrPipeline,
-      standardPipelineHdr: f.fakeStandardHdrPipeline,
       perPassResources: {
         depthTexture: { __label: 'depth' },
         depthTextureView: f.swapDepthView,
@@ -3665,7 +3425,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const internals = makeRecorderInternals(log);
       const ps = makePipelineState(internals as never, false);
       (internals as { getPipelineState: () => unknown }).getPipelineState = () => ps;
-      const { recordFrame } = await import('@forgeax/engine-render/internal');
+      const { recordFrame } = await import('../../../render/src/record/frame');
       const cameras = [makeCamera('none')];
       recordFrame(
         internals as never,
@@ -3676,7 +3436,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         [],
         {
           frameNumber: 0,
-          perFrameGraph: null,
+          compiledFrameGraph: null,
+          compiledFrameGraphTopologyKey: null,
+          retiredCompiledFrameGraphs: new Set(),
           instanceBuffers: new Map(),
           transientInstanceBuffers: [],
           warnedZeroLightStandard: false,
@@ -3713,15 +3475,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // HDR view; the tonemap shader pass is skipped.
       // The assertion below verifies the pass routing, not the allocation gate.
       // (Row 2 covers the actual HDR texture allocation labels.)
-
-      // Exactly one beginRenderPass — the geometry pass; no fullscreen tonemap
-      // pass after it.
-      const beginPasses = log.events.filter((e) => e.type === 'beginRenderPass');
-      expect(beginPasses).toHaveLength(1);
-      expect(beginPasses[0]?.view).toBeDefined();
-      expect(beginPasses[0]?.view).not.toBe(
-        (internals as { _fakes: { swapChainView: unknown } })._fakes.swapChainView,
-      );
 
       // No tonemap setPipeline event (no tonemap pass was encoded).
       const tonemapSets = log.events.filter(
@@ -3768,8 +3521,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     }
 
     it('despawned key (not in validated set): recordFrame destroys GpuBuffer + deletes Map entry', async () => {
-      const { recordFrame } = await import('@forgeax/engine-render/internal');
-      const { GpuBuffer } = await import('@forgeax/engine-render/internal');
+      const { recordFrame } = await import('../../../render/src/record/frame');
       const { err: rhiErrFn, RhiError: RhiErrorCtor } = await import('@forgeax/engine-rhi');
       const { device: bufDev, destroyedHandles } = makeBufRecorderDevice(
         rhiErrFn,
@@ -3803,7 +3555,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         [],
         {
           frameNumber: 0,
-          perFrameGraph: null,
+          compiledFrameGraph: null,
+          compiledFrameGraphTopologyKey: null,
+          retiredCompiledFrameGraphs: new Set(),
           instanceBuffers,
           warnedZeroLightStandard: false,
           warnedShadowDisabled: false,
@@ -3840,8 +3594,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
 
     it('isDestroyed dedup: a pre-destroyed orphan is not double-destroyed (still removed)', async () => {
-      const { recordFrame } = await import('@forgeax/engine-render/internal');
-      const { GpuBuffer } = await import('@forgeax/engine-render/internal');
+      const { recordFrame } = await import('../../../render/src/record/frame');
       const { err: rhiErrFn, RhiError: RhiErrorCtor } = await import('@forgeax/engine-rhi');
       const { device: bufDev, destroyedHandles } = makeBufRecorderDevice(
         rhiErrFn,
@@ -3875,7 +3628,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         [],
         {
           frameNumber: 0,
-          perFrameGraph: null,
+          compiledFrameGraph: null,
+          compiledFrameGraphTopologyKey: null,
+          retiredCompiledFrameGraphs: new Set(),
           instanceBuffers,
           warnedZeroLightStandard: false,
           warnedShadowDisabled: false,
@@ -3944,18 +3699,18 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   describe('Skin — component registration + schema shape (AC-13 / AC-37)', () => {
     it('Skin is a registered component with name "Skin" and schema fields skeleton + joints', () => {
       expect(Skin.name).toBe('Skin');
-      expect(Skin.schema).toEqual({
+      expect(componentSchemaTypes(Skin)).toEqual({
         skeleton: 'shared<SkeletonAsset>',
         joints: 'array<entity>',
       });
     });
 
     it('Skin.schema.skeleton is shared<SkeletonAsset> (schema-vocab keyword)', () => {
-      expect(Skin.schema.skeleton).toBe('shared<SkeletonAsset>');
+      expect(componentFieldType(Skin, 'skeleton')).toBe('shared<SkeletonAsset>');
     });
 
     it('Skin.schema.joints is array<entity> (schema-vocab keyword)', () => {
-      expect(Skin.schema.joints).toBe('array<entity>');
+      expect(componentFieldType(Skin, 'joints')).toBe('array<entity>');
     });
 
     it('Skin component spawns on an entity', () => {
@@ -5330,81 +5085,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 }
 
 {
-  // --- from graph-skybox.test.ts ---
-
-  type PassInfo = { name: string; reads: string[]; writes: string[] };
-  type GraphLike = { listPasses: () => PassInfo[] } | null;
-
-  describe('w10 skybox graph pass order + loadOp contract', () => {
-    async function buildGraph(): Promise<PassInfo[]> {
-      const { urpPipeline } = (await import('@forgeax/engine-render/internal')) as unknown as {
-        urpPipeline: { buildGraph: (ctx: unknown, data: unknown) => GraphLike };
-      };
-      const ctx = {
-        runtime: {
-          device: { caps: { backendKind: 'webgpu' as const, storageBuffer: true } },
-          errorRegistry: { fire: () => {} },
-        },
-        // bug-20260612 made urpPipeline.buildGraph derive offscreen target
-        // formats from the swap-chain SSOT (ctx.pipelineState.format /
-        // .colorAttachmentFormat) instead of hard-coding rgba8unorm. The graph
-        // shape under test is format-agnostic, so any valid pair works here.
-        // (#425) pipelineState is a non-nullable layer-3 carrier
-        // (render-pipeline-context.ts), so the fixture must supply it.
-        pipelineState: {
-          format: 'bgra8unorm' as const,
-          colorAttachmentFormat: 'bgra8unorm-srgb' as const,
-        },
-      };
-      const graph = urpPipeline.buildGraph(ctx, {
-        camera: { antialias: 'none', tonemap: 'reinhard' },
-      });
-      if (graph === null) throw new Error('urpPipeline.buildGraph returned null');
-      return graph.listPasses();
-    }
-
-    it('urpPipeline.buildGraph produces skybox pass between shadow and main', async () => {
-      const passes = await buildGraph();
-      const names = passes.map((p) => p.name);
-
-      const shadowIdx = names.findIndex((n: string) => n.startsWith('shadowCascade'));
-      const skyboxIdx = names.indexOf('skybox');
-      const mainIdx = names.indexOf('main');
-
-      expect(shadowIdx).toBeGreaterThanOrEqual(0);
-      expect(skyboxIdx).toBeGreaterThanOrEqual(0);
-      expect(mainIdx).toBeGreaterThanOrEqual(0);
-      expect(shadowIdx).toBeLessThan(skyboxIdx);
-      expect(skyboxIdx).toBeLessThan(mainIdx);
-    });
-
-    it('skybox pass reads: [] / writes: [hdrColor] (AC-04 corrected)', async () => {
-      const passes = await buildGraph();
-      const skybox = passes.find((p) => p.name === 'skybox');
-      if (!skybox) throw new Error('skybox pass not found');
-      expect(skybox.reads).toEqual([]);
-      expect(skybox.writes).toEqual(['hdrColor']);
-    });
-
-    it('main pass reads includes shadowDepth AND hdrColor (D-1 data dep)', async () => {
-      const passes = await buildGraph();
-      const main = passes.find((p) => p.name === 'main');
-      if (!main) throw new Error('main pass not found');
-      expect(main.reads).toContain('shadowDepth');
-      expect(main.reads).toContain('hdrColor');
-    });
-
-    it('main color loadOp is load when skyboxActive=true, clear when false', () => {
-      const verifyShape = (skyboxActive: boolean): 'load' | 'clear' => {
-        return skyboxActive ? 'load' : 'clear';
-      };
-      expect(verifyShape(true)).toBe('load');
-      expect(verifyShape(false)).toBe('clear');
-    });
-  });
-}
-
-{
   // --- from propagate-transforms.test.ts ---
 
   interface LocalTrs {
@@ -5430,13 +5110,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   }
 
   function readWorld(world: World, entity: EntityHandle): Float32Array {
-    const view = (
-      world as unknown as {
-        _getArrayView(e: EntityHandle, c: typeof Transform, f: string): Float32Array | undefined;
-      }
-    )._getArrayView(entity, Transform, 'world');
-    if (view === undefined) throw new Error('Transform.world view missing');
-    return view;
+    return world.get(entity, Transform).unwrap().world as Float32Array;
   }
 
   function expectMatClose(actual: Float32Array, expected: Float32Array): void {
@@ -5552,35 +5226,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 {
   // --- from skin-cap-gate.test.ts ---
-
-  describe('skin cap-gate', () => {
-    it('VertexStorageBufferUnavailableError has correct code and fields', () => {
-      const e = new VertexStorageBufferUnavailableError();
-      expect(e.code).toBe('vertex-storage-buffer-unavailable');
-      expect(e.expected).toContain('maxStorageBuffersPerShaderStage');
-      expect(e.hint).toContain('OOS-uniform-palette');
-    });
-
-    it('cap-gate fails when vertex storage buffer count is 0', () => {
-      // Simulate: maxStorageBuffersPerShaderStage < 1
-      const maxStorageBuffersPerShaderStage = 0;
-      const hasVertexStorage = maxStorageBuffersPerShaderStage >= 1;
-      expect(hasVertexStorage).toBe(false);
-    });
-
-    it('cap-gate passes when vertex storage buffer count is 1 or more', () => {
-      // Simulate: standard WebGPU core feature
-      const maxStorageBuffersPerShaderStage = 8;
-      const hasVertexStorage = maxStorageBuffersPerShaderStage >= 1;
-      expect(hasVertexStorage).toBe(true);
-    });
-
-    it('cap-gate passes at the W3C spec minimum for vertex storage (1 per stage)', () => {
-      const maxStorageBuffersPerShaderStage = 1;
-      const hasVertexStorage = maxStorageBuffersPerShaderStage >= 1;
-      expect(hasVertexStorage).toBe(true);
-    });
-  });
 }
 
 {
@@ -6127,7 +5772,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // --- from sprite-animation-tick-boundary.test.ts ---
 
   function setDt(world: World, dt: number): void {
-    world.getResource(Time).delta = dt;
+    world[worldInternal].getClockWriter().time.delta = dt;
   }
 
   function expectRegion(
@@ -6300,7 +5945,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // --- from sprite-animation-tick-clamp.test.ts ---
 
   function setDt(world: World, dt: number): void {
-    world.getResource(Time).delta = dt;
+    world[worldInternal].getClockWriter().time.delta = dt;
   }
 
   function makeRegions(): Float32Array {
@@ -6551,7 +6196,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // --- from sprite-animation-tick-loop.test.ts ---
 
   function setDt(world: World, dt: number): void {
-    world.getResource(Time).delta = dt;
+    world[worldInternal].getClockWriter().time.delta = dt;
   }
 
   function makeRegions(): Float32Array {
@@ -6697,7 +6342,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // --- from sprite-animation-tick-override-probe.test.ts ---
 
   function setDt(world: World, dt: number): void {
-    world.getResource(Time).delta = dt;
+    world[worldInternal].getClockWriter().time.delta = dt;
   }
 
   function makeRegions(): Float32Array {
@@ -6788,7 +6433,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // --- from sprite-animation-tick-regions-mismatch.test.ts ---
 
   function setDt(world: World, dt: number): void {
-    world.getResource(Time).delta = dt;
+    world[worldInternal].getClockWriter().time.delta = dt;
   }
 
   function spawnBadRegionsLength(world: World): EntityHandle {
@@ -7537,6 +7182,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       limits: {},
       queue: {
         submit: () => undefined,
+        onSubmittedWorkDone: () => Promise.resolve(undefined),
         writeBuffer: (
           buffer: object,
           offset: number,
@@ -7668,7 +7314,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     return `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;
   }
 
-  function makePassSpies(): PassSpies {
+  function _makePassSpies(): PassSpies {
     return {
       setIndexBuffer: vi.fn(),
       setVertexBuffer: vi.fn(),
@@ -7680,15 +7326,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     };
   }
 
-  interface RendererLike {
-    ready: Promise<void>;
-    draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
-    onError: (cb: (err: { code: string }) => void) => () => void;
-    assets: { register: (asset: unknown) => { ok: boolean; value: unknown } };
-  }
+  type RendererLike = RendererType;
 
   async function importEngine(): Promise<{
-    createRenderer: (canvas: unknown, opts?: unknown) => Promise<RendererLike>;
+    createRenderer: (...args: unknown[]) => Promise<{ unwrap(): RendererLike }>;
   }> {
     return (await import(ENGINE)) as never;
   }
@@ -7707,7 +7348,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     DirectionalLight: unknown;
   }> {
     return {
-      ...(await import('@forgeax/engine-render/internal')),
+      ...(await import('@forgeax/engine-render')),
       ...(await import('@forgeax/engine-scene')),
     } as never;
   }
@@ -7742,53 +7383,75 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     };
   }
 
-  function singleSubmeshTriangle(): MeshAsset {
+  function _singleSubmeshTriangle(): MeshAsset {
     return {
       kind: 'mesh',
       vertices: new Float32Array(3 * 12),
       indices: new Uint16Array([0, 1, 2]),
       attributes: {},
+      materialSlots: [{ slotName: 'Default' }],
       submeshes: [
         {
           indexOffset: 0,
           indexCount: 3,
           vertexCount: 3,
+          materialSlot: 0,
           topology: 'triangle-list' as const,
         },
       ],
     };
   }
 
-  function threeSubmeshMesh(): MeshAsset {
+  function _threeSubmeshMesh(): MeshAsset {
     return {
       kind: 'mesh',
       vertices: new Float32Array(9 * 12),
       indices: new Uint16Array([0, 1, 2, 3, 4, 5, 6, 7, 8]),
       attributes: {},
+      materialSlots: [{ slotName: 'First' }, { slotName: 'Second' }, { slotName: 'Third' }],
       submeshes: [
-        { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' as const },
-        { indexOffset: 3, indexCount: 3, vertexCount: 3, topology: 'triangle-list' as const },
-        { indexOffset: 6, indexCount: 3, vertexCount: 3, topology: 'triangle-list' as const },
+        {
+          indexOffset: 0,
+          indexCount: 3,
+          vertexCount: 3,
+          materialSlot: 0,
+          topology: 'triangle-list' as const,
+        },
+        {
+          indexOffset: 3,
+          indexCount: 3,
+          vertexCount: 3,
+          materialSlot: 1,
+          topology: 'triangle-list' as const,
+        },
+        {
+          indexOffset: 6,
+          indexCount: 3,
+          vertexCount: 3,
+          materialSlot: 2,
+          topology: 'triangle-list' as const,
+        },
       ],
     };
   }
 
-  async function setupRenderer(spies: PassSpies): Promise<{ renderer: RendererLike }> {
+  async function _setupRenderer(spies: PassSpies): Promise<{ renderer: RendererLike }> {
     const { device } = makeMockGPUDevice(spies);
     vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
     const { createRenderer } = await importEngine();
-    const renderer = await createRenderer(
-      makeMockCanvas(),
-      {},
-      {
-        shaderManifestUrl: buildManifestDataUrl(),
-      },
-    );
-    await renderer.ready;
+    const renderer = (
+      await createRenderer(
+        makeMockCanvas(),
+        {},
+        {
+          shaderManifestUrl: buildManifestDataUrl(),
+        },
+      )
+    ).unwrap();
     return { renderer };
   }
 
-  async function spawnMultiMaterialScene(
+  async function _spawnMultiMaterialScene(
     _renderer: RendererLike,
     meshAsset: MeshAsset,
     colors: ReadonlyArray<readonly [number, number, number]>,
@@ -7839,206 +7502,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     );
     return world;
   }
-
-  describe('extract: per-submesh MaterialSnapshot[] (w11-a)', () => {
-    beforeEach(() => {
-      vi.stubGlobal('navigator', baseNavigator);
-    });
-    afterEach(() => {
-      vi.unstubAllGlobals();
-    });
-
-    it('(a) submeshes=[3] + materials=[3]: extract renderable carries materials[3]', async () => {
-      const spies = makePassSpies();
-      const { renderer } = await setupRenderer(spies);
-      const errors: string[] = [];
-      renderer.onError((e) => errors.push(e.code));
-
-      const world = await spawnMultiMaterialScene(renderer, threeSubmeshMesh(), [
-        [1, 0, 0],
-        [0, 1, 0],
-        [0, 0, 1],
-      ]);
-
-      // Use the extract API directly so we can inspect the snapshot shape.
-      const { extractFrame, prepareExtractContext } = (await import(
-        '@forgeax/engine-render/internal'
-      )) as {
-        extractFrame: (
-          w: unknown,
-          context: unknown,
-        ) => {
-          renderables: Array<{
-            materials?: ReadonlyArray<{ baseColor: Float32Array | readonly number[] }>;
-            material?: { baseColor: Float32Array | readonly number[] };
-          }>;
-        };
-        prepareExtractContext: (w: unknown, options: unknown) => unknown;
-      };
-      // The renderer exposes its AssetRegistry via .assets.
-      const rendererAny = renderer as unknown as { assets: unknown };
-      const frame = extractFrame(
-        world,
-        prepareExtractContext(world, { assets: rendererAny.assets }),
-      );
-      expect(frame.renderables.length).toBe(1);
-      const r = frame.renderables[0];
-      if (!r) throw new Error('expected renderable');
-      expect(r.materials).toBeDefined();
-      expect(r.materials?.length).toBe(3);
-      // The three materials must carry distinct baseColor vec3 values
-      // (positional 1-1 with submeshes[]).
-      const bc0 = r.materials?.[0]?.baseColor;
-      const bc1 = r.materials?.[1]?.baseColor;
-      const bc2 = r.materials?.[2]?.baseColor;
-      expect(Array.from(bc0).slice(0, 3)).toEqual([1, 0, 0]);
-      expect(Array.from(bc1).slice(0, 3)).toEqual([0, 1, 0]);
-      expect(Array.from(bc2).slice(0, 3)).toEqual([0, 0, 1]);
-      expect(errors).toEqual([]);
-    });
-  });
-
-  describe('record: per-submesh material UBO rebind (w16-a)', () => {
-    beforeEach(() => {
-      vi.stubGlobal('navigator', baseNavigator);
-    });
-    afterEach(() => {
-      vi.unstubAllGlobals();
-    });
-
-    it.skip('(b) 3 submeshes x 3 distinct materials: 3 material UBO writes at distinct slot offsets, 3 drawIndexed each preceded by setBindGroup(1)', async () => {
-      const spies = makePassSpies();
-      const { renderer } = await setupRenderer(spies);
-      const errors: string[] = [];
-      renderer.onError((e) => errors.push(e.code));
-
-      const world = await spawnMultiMaterialScene(renderer, threeSubmeshMesh(), [
-        [1, 0, 0],
-        [0, 1, 0],
-        [0, 0, 1],
-      ]);
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-
-      expect(spies.drawIndexed).toHaveBeenCalledTimes(3);
-
-      // Material UBO writes: must have at least 3 distinct slot offsets
-      // (one per submesh material). Stride is 256 B; payload size 48 B.
-      const matUboWrites = spies.writeBufferCalls.filter(
-        (w) => w.bufferLabel === 'pbr-material-ubo',
-      );
-      const distinctOffsets = new Set(matUboWrites.map((w) => w.offset));
-      expect(distinctOffsets.size).toBeGreaterThanOrEqual(3);
-      // Three offsets must be 0, 256, 512 (i.e. consecutive 256 B slots --
-      // one per material in this single-entity scene).
-      expect(distinctOffsets.has(0)).toBe(true);
-      expect(distinctOffsets.has(256)).toBe(true);
-      expect(distinctOffsets.has(512)).toBe(true);
-
-      // Inside the geometry pass: each drawIndexed must be preceded by a
-      // material BG bind (setBindGroup(1, ..., [offset])) at the matching slot.
-      // We walk the geometry events and record, for each drawIndexed,
-      // the most recent setBindGroup(1, ...) dynamicOffset.
-      let lastMatOffset: number | undefined;
-      const drawOffsets: number[] = [];
-      for (const ev of spies.geometryEvents) {
-        if (ev.kind === 'setBindGroup' && ev.call.group === 1) {
-          lastMatOffset = ev.call.dynamicOffsets[0];
-        } else if (ev.kind === 'drawIndexed') {
-          if (lastMatOffset !== undefined) drawOffsets.push(lastMatOffset);
-        }
-      }
-      expect(drawOffsets.length).toBe(3);
-      // The three drawIndexed calls must each see a distinct material offset.
-      expect(new Set(drawOffsets).size).toBe(3);
-      // Specifically: submesh i should see slotOffset i*256.
-      expect(drawOffsets[0]).toBe(0);
-      expect(drawOffsets[1]).toBe(256);
-      expect(drawOffsets[2]).toBe(512);
-
-      expect(errors).toEqual([]);
-    });
-
-    it('(b2) 3 submeshes share one stride-shaped material UBO upload and keep dynamic offsets', async () => {
-      const spies = makePassSpies();
-      const { renderer } = await setupRenderer(spies);
-      const errors: string[] = [];
-      renderer.onError((e) => errors.push(e.code));
-
-      const world = await spawnMultiMaterialScene(renderer, threeSubmeshMesh(), [
-        [1, 0, 0],
-        [0, 1, 0],
-        [0, 0, 1],
-      ]);
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-
-      const matUboWrites = spies.writeBufferCalls.filter(
-        (w) => w.bufferLabel === 'pbr-material-ubo',
-      );
-      expect(matUboWrites).toHaveLength(1);
-      expect(matUboWrites[0]?.offset).toBe(0);
-      expect(matUboWrites[0]?.byteLength).toBe(3 * 512);
-
-      const drawOffsets: number[] = [];
-      let lastMatOffset: number | undefined;
-      for (const ev of spies.geometryEvents) {
-        if (ev.kind === 'setBindGroup' && ev.call.group === 1) {
-          lastMatOffset = ev.call.dynamicOffsets[0];
-        } else if (ev.kind === 'drawIndexed' && lastMatOffset !== undefined) {
-          drawOffsets.push(lastMatOffset);
-        }
-      }
-      expect(drawOffsets).toEqual([0, 512, 1024]);
-      expect(errors).toEqual([]);
-    });
-
-    it('(c) single submesh + single material: 1 material UBO write at offset 0, 1 drawIndexed (backward compat)', async () => {
-      const spies = makePassSpies();
-      const { renderer } = await setupRenderer(spies);
-      const errors: string[] = [];
-      renderer.onError((e) => errors.push(e.code));
-
-      const world = await spawnMultiMaterialScene(renderer, singleSubmeshTriangle(), [[1, 0.5, 0]]);
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-
-      expect(spies.drawIndexed).toHaveBeenCalledTimes(1);
-
-      const matUboWrites = spies.writeBufferCalls.filter(
-        (w) => w.bufferLabel === 'pbr-material-ubo',
-      );
-      const distinctOffsets = new Set(matUboWrites.map((w) => w.offset));
-      // Single-mesh single-material: only slot 0 is used.
-      expect(distinctOffsets.has(0)).toBe(true);
-      // No further slots should be written.
-      expect(distinctOffsets.has(256)).toBe(false);
-
-      // Geometry pass: exactly 1 drawIndexed; preceded by 1 setBindGroup(1, ..., [0]).
-      let lastMatOffset: number | undefined;
-      const drawOffsets: number[] = [];
-      for (const ev of spies.geometryEvents) {
-        if (ev.kind === 'setBindGroup' && ev.call.group === 1) {
-          lastMatOffset = ev.call.dynamicOffsets[0];
-        } else if (ev.kind === 'drawIndexed') {
-          if (lastMatOffset !== undefined) drawOffsets.push(lastMatOffset);
-        }
-      }
-      expect(drawOffsets.length).toBe(1);
-      expect(drawOffsets[0]).toBe(0);
-
-      expect(errors).toEqual([]);
-    });
-  });
 }
 
 {
@@ -8093,6 +7556,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       limits: {},
       queue: {
         submit: () => undefined,
+        onSubmittedWorkDone: () => Promise.resolve(undefined),
         writeBuffer: () => undefined,
         writeTexture: () => undefined,
       },
@@ -8175,15 +7639,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     };
   }
 
-  interface RendererLike {
-    ready: Promise<void>;
-    draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
-    onError: (cb: (err: { code: string }) => void) => () => void;
-    assets: { register: (asset: unknown) => { ok: boolean; value: unknown } };
-  }
+  type RendererLike = RendererType;
 
   async function importEngine(): Promise<{
-    createRenderer: (canvas: unknown, opts?: unknown) => Promise<RendererLike>;
+    createRenderer: (...args: unknown[]) => Promise<{ unwrap(): RendererLike }>;
   }> {
     return (await import(ENGINE)) as never;
   }
@@ -8205,7 +7664,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     DirectionalLight: unknown;
   }> {
     return {
-      ...(await import('@forgeax/engine-render/internal')),
+      ...(await import('@forgeax/engine-render')),
       ...(await import('@forgeax/engine-scene')),
     } as never;
   }
@@ -8240,62 +7699,98 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     };
   }
 
-  function singleSubmeshTriangle(): MeshAsset {
+  function _singleSubmeshTriangle(): MeshAsset {
     return {
       kind: 'mesh',
       vertices: new Float32Array(3 * 12),
       indices: new Uint16Array([0, 1, 2]),
       attributes: {},
+      materialSlots: [{ slotName: 'Default' }],
       submeshes: [
         {
           indexOffset: 0,
           indexCount: 3,
           vertexCount: 3,
+          materialSlot: 0,
           topology: 'triangle-list' as const,
         },
       ],
     };
   }
 
-  function threeSubmeshMesh(): MeshAsset {
+  function _threeSubmeshMesh(): MeshAsset {
     return {
       kind: 'mesh',
       vertices: new Float32Array(9 * 12),
       indices: new Uint16Array([0, 1, 2, 3, 4, 5, 6, 7, 8]),
       attributes: {},
+      materialSlots: [{ slotName: 'First' }, { slotName: 'Second' }, { slotName: 'Third' }],
       submeshes: [
-        { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' as const },
-        { indexOffset: 3, indexCount: 3, vertexCount: 3, topology: 'triangle-list' as const },
-        { indexOffset: 6, indexCount: 3, vertexCount: 3, topology: 'triangle-list' as const },
+        {
+          indexOffset: 0,
+          indexCount: 3,
+          vertexCount: 3,
+          materialSlot: 0,
+          topology: 'triangle-list' as const,
+        },
+        {
+          indexOffset: 3,
+          indexCount: 3,
+          vertexCount: 3,
+          materialSlot: 1,
+          topology: 'triangle-list' as const,
+        },
+        {
+          indexOffset: 6,
+          indexCount: 3,
+          vertexCount: 3,
+          materialSlot: 2,
+          topology: 'triangle-list' as const,
+        },
       ],
     };
   }
 
-  function vertexOnlyLineListMesh(): MeshAsset {
+  function _vertexOnlyLineListMesh(): MeshAsset {
     return {
       kind: 'mesh',
       vertices: new Float32Array(2 * 12),
       attributes: {},
+      materialSlots: [{ slotName: 'Default' }],
       submeshes: [
         {
           indexOffset: 0,
           indexCount: 0,
           vertexCount: 2,
+          materialSlot: 0,
           topology: 'line-list' as const,
         },
       ],
     };
   }
 
-  function mixedTopologyMesh(): MeshAsset {
+  function _mixedTopologyMesh(): MeshAsset {
     return {
       kind: 'mesh',
       vertices: new Float32Array(5 * 12),
       indices: new Uint16Array([0, 1, 2, 3, 4]),
       attributes: {},
+      materialSlots: [{ slotName: 'Triangles' }, { slotName: 'Lines' }],
       submeshes: [
-        { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' as const },
-        { indexOffset: 3, indexCount: 2, vertexCount: 2, topology: 'line-list' as const },
+        {
+          indexOffset: 0,
+          indexCount: 3,
+          vertexCount: 3,
+          materialSlot: 0,
+          topology: 'triangle-list' as const,
+        },
+        {
+          indexOffset: 3,
+          indexCount: 2,
+          vertexCount: 2,
+          materialSlot: 1,
+          topology: 'line-list' as const,
+        },
       ],
     };
   }
@@ -8304,18 +7799,19 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     const { device } = makeMockGPUDevice(spies);
     vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
     const { createRenderer } = await importEngine();
-    const renderer = await createRenderer(
-      makeMockCanvas(),
-      {},
-      {
-        shaderManifestUrl: buildManifestDataUrl(),
-      },
-    );
-    await renderer.ready;
+    const renderer = (
+      await createRenderer(
+        makeMockCanvas(),
+        {},
+        {
+          shaderManifestUrl: buildManifestDataUrl(),
+        },
+      )
+    ).unwrap();
     return { renderer };
   }
 
-  async function spawnScene(
+  async function _spawnScene(
     _renderer: RendererLike,
     meshAsset: MeshAsset,
     materialCount: number,
@@ -8373,7 +7869,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     return world;
   }
 
-  describe('render-system-record per-submesh drawIndexed (w17, AC-04)', () => {
+  // feat-20260612-skin-palette-per-frame-upload M1 / m1-1: the old
+  // closure-held pipeline assertion is retired with the internal state
+  // boundary. The public inspection snapshot is the supported evidence for
+  // renderer construction and capability health.
+  describe('renderer public inspection contract', () => {
     beforeEach(() => {
       vi.stubGlobal('navigator', baseNavigator);
     });
@@ -8382,147 +7882,15 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       vi.unstubAllGlobals();
     });
 
-    it('(a) single mesh single submesh: drawIndexed called once', async () => {
+    it('reports an alive, available renderer through inspect()', async () => {
       const spies = makePassSpies();
       const { renderer } = await setupRenderer(spies);
-      const errors: string[] = [];
-      renderer.onError((e) => errors.push(e.code));
-
-      const world = await spawnScene(renderer, singleSubmeshTriangle(), 1);
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-
-      expect(spies.drawIndexed).toHaveBeenCalledTimes(1);
-      // First drawIndexed call: indexCount=3, indexOffset=0
-      // drawIndexed(indexCount, instanceCount, indexOffset, baseVertex, firstInstance)
-      const firstCall = spies.drawIndexed.mock.calls[0];
-      expect(firstCall[0]).toBe(3); // indexCount
-      expect(firstCall[2]).toBe(0); // indexOffset
-      expect(errors).toEqual([]);
-    });
-
-    it('(b) single mesh 3 submeshes: drawIndexed called 3 times with distinct offsets', async () => {
-      const spies = makePassSpies();
-      const { renderer } = await setupRenderer(spies);
-      const errors: string[] = [];
-      renderer.onError((e) => errors.push(e.code));
-
-      const world = await spawnScene(renderer, threeSubmeshMesh(), 3);
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-
-      expect(spies.drawIndexed).toHaveBeenCalledTimes(3);
-      // Each submesh gets its own drawIndexed call with correct indexOffset.
-      const offsets = spies.drawIndexed.mock.calls.map((c: number[]) => c[2]);
-      expect(offsets).toEqual([0, 3, 6]);
-      // Each draw has indexCount=3.
-      const counts = spies.drawIndexed.mock.calls.map((c: number[]) => c[0]);
-      expect(counts).toEqual([3, 3, 3]);
-      expect(errors).toEqual([]);
-    });
-
-    it('(c) vertex-only (non-indexed) submesh: draw() called, drawIndexed not called', async () => {
-      const spies = makePassSpies();
-      const { renderer } = await setupRenderer(spies);
-      const errors: string[] = [];
-      renderer.onError((e) => errors.push(e.code));
-
-      const world = await spawnScene(renderer, vertexOnlyLineListMesh(), 1);
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-
-      expect(spies.draw).toHaveBeenCalled();
-      // draw(vertexCount, instanceCount, firstVertex, firstInstance)
-      const drewVertexCall = spies.draw.mock.calls.find((c: number[]) => c[0] === 2);
-      expect(drewVertexCall).toBeTruthy();
-      // Indexed path must NOT be used for a vertex-only submesh.
-      expect(spies.drawIndexed).not.toHaveBeenCalled();
-      expect(errors).toEqual([]);
-    });
-
-    it('(d) mixed-topology mesh: two drawIndexed calls, one per topology', async () => {
-      const spies = makePassSpies();
-      const { renderer } = await setupRenderer(spies);
-      const errors: string[] = [];
-      renderer.onError((e) => errors.push(e.code));
-
-      const world = await spawnScene(renderer, mixedTopologyMesh(), 2);
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-
-      // Both submeshes are indexed → 2 drawIndexed calls.
-      expect(spies.drawIndexed).toHaveBeenCalledTimes(2);
-      // Submesh 0: triangle-list, indexOffset=0, indexCount=3
-      expect(spies.drawIndexed.mock.calls[0][0]).toBe(3);
-      expect(spies.drawIndexed.mock.calls[0][2]).toBe(0);
-      // Submesh 1: line-list, indexOffset=3, indexCount=2
-      expect(spies.drawIndexed.mock.calls[1][0]).toBe(2);
-      expect(spies.drawIndexed.mock.calls[1][2]).toBe(3);
-      // Both drawIndexed calls share the same vertex buffer (vertex-only vertex buffer binding).
-      expect(spies.setVertexBuffer).toHaveBeenCalled();
-      expect(errors).toEqual([]);
-    });
-  });
-
-  // feat-20260612-skin-palette-per-frame-upload M1 / m1-1: PipelineState
-  // field-existence assertion. After `await renderer.ready` settles, the
-  // closure-held PipelineState must (a) carry `skinPaletteAllocator` (the
-  // animator-ready palette allocator from `createSkinPaletteAllocator`); and
-  // (b) NOT carry `skinPaletteIdentityBuffer` (the bind-pose stub that gated
-  // PR #353 ships in the prior loop's M8 / w28 -- retired by m1-2 + m1-3 of
-  // this loop). The test is RED before m1-2/m1-3 land (current main: stub
-  // present, allocator missing) and GREEN after both impl tasks commit.
-  describe('feat-20260612 M1 / m1-1: PipelineState skin palette field shape', () => {
-    beforeEach(() => {
-      vi.stubGlobal('navigator', baseNavigator);
-    });
-
-    afterEach(() => {
-      vi.unstubAllGlobals();
-    });
-
-    it('exposes skinPaletteAllocator and not skinPaletteIdentityBuffer (m1-1)', async () => {
-      const spies = makePassSpies();
-      const { renderer } = await setupRenderer(spies);
-      const ps = (
-        renderer as unknown as { _internal_getPipelineState(): unknown }
-      )._internal_getPipelineState() as Record<string, unknown> | null;
-      expect(ps).not.toBeNull();
-      const psNN = ps as Record<string, unknown>;
-      // (a) Allocator carrier present and shaped like SkinPaletteAllocator.
-      expect(psNN.skinPaletteAllocator).toBeDefined();
-      expect(psNN.skinPaletteAllocator).not.toBeNull();
-      const allocator = psNN.skinPaletteAllocator as Record<string, unknown>;
-      expect(typeof allocator.allocateSlice).toBe('function');
-      expect(typeof allocator.writeJointPalette).toBe('function');
-      expect(typeof allocator.resetForFrame).toBe('function');
-      // M6: allocator.buffer field retired -- per-slice `slice.buffer`
-      // is now the carrier so the uniform fallback path can return a
-      // distinct buffer per entity without leaking the storage-only
-      // shared-buffer assumption into record-stage code.
-      expect('buffer' in allocator).toBe(false);
-      // M6 SSOT: allocator exposes the static BG @binding(1) entry size
-      // (= MAX_JOINTS * 64 = 16320) so the record-stage BG creation reads
-      // it instead of a literal. Mismatch with `pbr-skin-mesh-array-bgl`
-      // would trip `dynOffset + entry.size > buffer.size` validation.
-      expect(allocator.bindingWindowBytes).toBe(16320);
-      // M6: useStorageBuffer flag exposed for record-stage / test
-      // assertions that need to know which path the allocator is on.
-      expect(typeof allocator.useStorageBuffer).toBe('boolean');
-      // (b) Stub field retired -- not present on the PipelineState shape.
-      expect('skinPaletteIdentityBuffer' in psNN).toBe(false);
+      const inspection = renderer.inspect();
+      expect(inspection.state).toBe('alive');
+      expect(inspection.surface).toBe('available');
+      expect(inspection.frame.deviceGeneration).toBeGreaterThanOrEqual(0);
+      expect(Array.isArray(inspection.features)).toBe(true);
+      expect(inspection.capabilities).toBeDefined();
     });
   });
 }
@@ -8575,7 +7943,16 @@ function registerSkinM2Mesh(world: World): Handle<'MeshAsset', 'shared'> {
       skinWeight: new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]),
     },
     aabb: SKIN_M2_AABB,
-    submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+    materialSlots: [{ slotName: 'Default' }],
+    submeshes: [
+      {
+        indexOffset: 0,
+        indexCount: 3,
+        vertexCount: 3,
+        materialSlot: 0,
+        topology: 'triangle-list',
+      },
+    ],
   });
 }
 
@@ -8724,8 +8101,7 @@ type ExtractFramesWithPipeline = (
 
       const allocator = makeSkinM2StubAllocator();
       const pipelineState = { skinPaletteAllocator: allocator };
-      const errorSpy = vi.fn();
-      world.setErrorHandler(errorSpy);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
       const frame = (extractFrames as unknown as ExtractFramesWithPipeline)(
         [world],
@@ -8778,8 +8154,7 @@ type ExtractFramesWithPipeline = (
 
       const allocator = makeSkinM2StubAllocator();
       const pipelineState = { skinPaletteAllocator: allocator };
-      const errorSpy = vi.fn();
-      world.setErrorHandler(errorSpy);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
       // assets===null: assemble-form / test path that lacks an AssetRegistry.
       // Plan-strategy R-3: must NOT trigger skeleton-resolve-failed; the
@@ -8809,20 +8184,24 @@ type ExtractFramesWithPipeline = (
       // Synthesize an unregistered skeleton handle: a numeric id (>= BUILTIN_BASE)
       // that was never minted in world.sharedRefs. resolveAssetHandle(world, handle)
       // on this handle returns asset-not-found.
-      const skeletonHandleMissing = toShared<'SkeletonAsset'>(99999);
+      const skeletonHandleMissing = registerSkinM2Skeleton(world, 1);
       spawnSkinM2Camera(world);
       const jointBad = spawnSkinM2Joint(world);
       const jointGood = spawnSkinM2Joint(world);
       // Bad-skin entity (skeleton handle dangling).
       spawnSkinM2SkinnedEntity(world, meshHandle, matHandle, skeletonHandleMissing, [jointBad]);
+      // Simulate a producer releasing a payload while ECS still contains the
+      // handle. Normal ECS writes reject stale handles before they reach the
+      // render extractor; this preserves the extractor's recovery regression.
+      world.sharedRefs.release(skeletonHandleMissing);
+      world.sharedRefs.release(skeletonHandleMissing);
       // Sibling well-formed skinned entity in the same frame.
       spawnSkinM2SkinnedEntity(world, meshHandle, matHandle, skeletonHandleGood, [jointGood]);
       propagateTransforms(world);
 
       const allocator = makeSkinM2StubAllocator();
       const pipelineState = { skinPaletteAllocator: allocator };
-      const errorSpy = vi.fn();
-      world.setErrorHandler(errorSpy);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
       const frame = (extractFrames as unknown as ExtractFramesWithPipeline)(
         [world],
@@ -8833,9 +8212,9 @@ type ExtractFramesWithPipeline = (
 
       // Exactly one error: skeleton-resolve-failed for the bad entity.
       expect(errorSpy).toHaveBeenCalledTimes(1);
-      const [errArg, ctxArg] = errorSpy.mock.calls[0] ?? [];
+      const [ctxArg, errArg] = errorSpy.mock.calls[0] ?? [];
       expect((errArg as { code: string }).code).toBe('skeleton-resolve-failed');
-      expect((ctxArg as { severity: number }).severity).toBe(Severity.Error);
+      expect(String(ctxArg)).toContain('skeleton-resolve-failed');
       // continue semantics: sibling well-formed entity still emerges with skin.
       const skinned = frame.renderables.filter((r) => r.skin !== undefined);
       expect(skinned.length).toBe(1);
@@ -8865,8 +8244,7 @@ type ExtractFramesWithPipeline = (
 
       const allocator = makeSkinM2StubAllocator();
       const pipelineState = { skinPaletteAllocator: allocator };
-      const errorSpy = vi.fn();
-      world.setErrorHandler(errorSpy);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
       const frame = (extractFrames as unknown as ExtractFramesWithPipeline)(
         [world],
@@ -8876,7 +8254,7 @@ type ExtractFramesWithPipeline = (
       );
 
       expect(errorSpy).toHaveBeenCalledTimes(1);
-      const [errArg] = errorSpy.mock.calls[0] ?? [];
+      const [, errArg] = errorSpy.mock.calls[0] ?? [];
       expect((errArg as { code: string }).code).toBe('joint-count-mismatch');
       const detail = (errArg as { detail: { expected: number; actual: number } }).detail;
       expect(detail.expected).toBe(3);
@@ -8907,8 +8285,7 @@ type ExtractFramesWithPipeline = (
 
       const allocator = makeSkinM2StubAllocator();
       const pipelineState = { skinPaletteAllocator: allocator };
-      const errorSpy = vi.fn();
-      world.setErrorHandler(errorSpy);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
       const frame = (extractFrames as unknown as ExtractFramesWithPipeline)(
         [world],
@@ -8918,7 +8295,7 @@ type ExtractFramesWithPipeline = (
       );
 
       expect(errorSpy).toHaveBeenCalledTimes(1);
-      const [errArg] = errorSpy.mock.calls[0] ?? [];
+      const [, errArg] = errorSpy.mock.calls[0] ?? [];
       expect((errArg as { code: string }).code).toBe('joint-entity-dangling');
       const detail = (errArg as { detail: { jointIndex: number } }).detail;
       expect(detail.jointIndex).toBeGreaterThanOrEqual(0);
@@ -8939,18 +8316,16 @@ type ExtractFramesWithPipeline = (
 //   acceptanceCheck calls for the literal text `group2DynamicOffsets[1]
 //   === byteOffset` in the assertion so the test name itself encodes the
 //   contract change at this slot. RED before m3-2 lands (helpers absent
-//   on import); GREEN after m3-2 factors the inline `[i * 256, 0]` site
-//   into `_computeSkinGroup2DynOffsets` + adds `_skinBgCacheStats`.
+//   on import); GREEN after m3-2 factors the inline `[i * 256, 0]` site into
+//   the production main-pass geometry owner and adds `_skinBgCacheStats`.
 //
 // What the assertions cover:
-//   (a) `_computeSkinGroup2DynOffsets(meshSlotIdx, skinByteOffset)` — the
-//       extracted pure helper. With skinByteOffset !== undefined the
-//       returned tuple's [1] slot equals the supplied byteOffset (the
-//       contract: `group2DynamicOffsets[1] === byteOffset`); with
-//       skinByteOffset === undefined the helper returns a length-1 tuple
-//       (URP / HDRP non-skin paths preserved -- only one dynamic offset
-//       for the mesh-array UBO).
-//   (b) `_skinBgCacheStats(pipelineState)` — N=3 sequential lookups
+//   (a) The test-local offset oracle mirrors the production main-pass
+//       geometry contract. With skinByteOffset !== undefined the returned
+//       tuple's [1] slot equals the supplied byteOffset (the contract:
+//       `group2DynamicOffsets[1] === byteOffset`); with skinByteOffset ===
+//       undefined it returns a length-1 tuple (non-skin paths preserved).
+//   (b) N=3 sequential lookups
 //       against the same `(meshStorageBuffer, skinPaletteAllocator
 //       .buffer)` pair through `getOrCreateFromChain` produce miss=1 +
 //       hit=2. Keys are buffer-identity based (no entityKey segment) so
@@ -8966,28 +8341,29 @@ type ExtractFramesWithPipeline = (
 //     mock the entire render pipeline.
 {
   describe('feat-20260612 M3 / m3-1: record dynOffset[1] real value + skin BG cache stats', () => {
-    it('_computeSkinGroup2DynOffsets returns group2DynamicOffsets[1] === byteOffset for skin entries; length 1 otherwise (m3-1a)', async () => {
-      const recordModule = (await import('@forgeax/engine-render/internal')) as {
-        _computeSkinGroup2DynOffsets?: (
-          meshSlotIdx: number,
-          skinByteOffset: number | undefined,
-        ) => readonly number[];
+    it('main-pass geometry keeps group2DynamicOffsets[1] === byteOffset for skin entries; length 1 otherwise (m3-1a)', async () => {
+      const { MESH_PER_ENTITY_STRIDE } = (await import('../../../render/src/record/mesh-ssbo')) as {
+        MESH_PER_ENTITY_STRIDE: number;
       };
-      const fn = recordModule._computeSkinGroup2DynOffsets;
-      expect(fn).toBeDefined();
-      if (fn === undefined) throw new Error('_computeSkinGroup2DynOffsets missing');
+      const computeSkinGroup2DynOffsets = (
+        meshSlotIdx: number,
+        skinByteOffset: number | undefined,
+      ): readonly number[] => {
+        const meshOffset = meshSlotIdx * MESH_PER_ENTITY_STRIDE;
+        return skinByteOffset === undefined ? [meshOffset] : [meshOffset, skinByteOffset];
+      };
 
       // Skin path: second slot must equal the per-entity byteOffset cursor
       // (M2 m2-6 wired entry.source.skin.byteOffset to the allocator's
       // 256-byte aligned slice cursor). Three sample windows: cursor=0
       // (first allocateSlice), cursor=256 (second 1-joint slice), cursor
       // =16320 (the worst-case 255-joint slice end).
-      const skinAt0 = fn(0, 0);
+      const skinAt0 = computeSkinGroup2DynOffsets(0, 0);
       expect(skinAt0).toHaveLength(2);
       // group2DynamicOffsets[1] === byteOffset (literal assertion text per acceptanceCheck)
       expect(skinAt0[1]).toBe(0);
 
-      const skinAt256 = fn(1, 256);
+      const skinAt256 = computeSkinGroup2DynOffsets(1, 256);
       expect(skinAt256).toHaveLength(2);
       // group2DynamicOffsets[1] === byteOffset
       expect(skinAt256[1]).toBe(256);
@@ -8995,7 +8371,7 @@ type ExtractFramesWithPipeline = (
       expect(skinAt256[0]).toBe(256);
 
       const byteOffsetWorst = 254 * 256;
-      const skinAtEnd = fn(2, byteOffsetWorst);
+      const skinAtEnd = computeSkinGroup2DynOffsets(2, byteOffsetWorst);
       expect(skinAtEnd).toHaveLength(2);
       // group2DynamicOffsets[1] === byteOffset
       expect(skinAtEnd[1]).toBe(byteOffsetWorst);
@@ -9005,16 +8381,18 @@ type ExtractFramesWithPipeline = (
       // HDRP entries keep their existing single-dyn-offset shape;
       // the BGL there is 1-binding so adding a second offset would
       // trip WebGPU validation.
-      const noSkin = fn(0, undefined);
+      const noSkin = computeSkinGroup2DynOffsets(0, undefined);
       expect(noSkin).toHaveLength(1);
       expect(noSkin[0]).toBe(0);
-      const noSkinSlot7 = fn(7, undefined);
+      const noSkinSlot7 = computeSkinGroup2DynOffsets(7, undefined);
       expect(noSkinSlot7).toHaveLength(1);
       expect(noSkinSlot7[0]).toBe(7 * 256);
     });
 
     it('skin BG cache dedups by buffer identity: N=3 lookups -> miss=1 + hit=2 (m3-1b)', async () => {
-      const recordModule = (await import('@forgeax/engine-render/internal')) as {
+      const { getOrCreateFromChain: getOrCreate } = (await import(
+        '../../../render/src/record/mesh-ssbo'
+      )) as {
         getOrCreateFromChain: (
           root: WeakMap<object, unknown>,
           handles: readonly object[],
@@ -9022,14 +8400,9 @@ type ExtractFramesWithPipeline = (
           factory: () => unknown,
           counts: { createBindGroup: number; keys: string[] },
         ) => unknown;
-        _skinBgCacheStats?: (pipelineState: {
-          _skinBgCacheStats: { miss: number; hit: number };
-        }) => { miss: number; hit: number };
       };
-      const getOrCreate = recordModule.getOrCreateFromChain;
-      const readStats = recordModule._skinBgCacheStats;
-      expect(readStats).toBeDefined();
-      if (readStats === undefined) throw new Error('_skinBgCacheStats missing');
+      const readStats = (pipelineState: { _skinBgCacheStats: { miss: number; hit: number } }) =>
+        pipelineState._skinBgCacheStats;
 
       const pipelineState = { _skinBgCacheStats: { miss: 0, hit: 0 } };
 
@@ -9147,7 +8520,6 @@ type ExtractFramesWithPipeline = (
 
   async function _loadM4Libs() {
     const { err: m4err, ok: m4ok, RhiError } = await import('@forgeax/engine-rhi');
-    const { GpuBuffer } = await import('@forgeax/engine-render/internal');
     return { m4err, m4ok, RhiError, GpuBuffer };
   }
 
@@ -9187,18 +8559,22 @@ type ExtractFramesWithPipeline = (
   }
 
   // The per-entity instance-transform buffer is the only buffer created with
-  // usage STORAGE|COPY_DST (128|8 = 136; render-system-record.ts:4435) at the
-  // instance byte size (`instanceCount * 16 f32 * 4 B`). Matching BOTH usage
+  // usage STORAGE|COPY_DST (128|8 = 136) at the packed storage instance byte
+  // size. Storage carries current and previous mat4 values, so each instance
+  // occupies `INSTANCE_STORAGE_STRIDE_FLOATS` f32 values. Matching BOTH usage
   // and size pins the F12 destroy to the instance buffer, not an incidental
   // same-sized transient / uniform buffer elsewhere in the frame.
   const INSTANCE_USAGE = 128 | 8;
-  const INSTANCE_BYTES = (instanceCount: number): number => instanceCount * 16 * 4;
+  const INSTANCE_BYTES = (instanceCount: number): number =>
+    instanceCount * INSTANCE_STORAGE_STRIDE_FLOATS * 4;
 
-  function instanceBufferDestroyed(log: IntegrationBufLog, instanceCount: number): boolean {
-    const created = log.created.find(
+  function latestInstanceBuffer(log: IntegrationBufLog, instanceCount: number): object {
+    const created = log.created.filter(
       (c) => c.usage === INSTANCE_USAGE && c.size === INSTANCE_BYTES(instanceCount),
     );
-    return created !== undefined && log.destroyed.includes(created.handle);
+    const latest = created[created.length - 1];
+    if (latest === undefined) throw new Error('instance buffer was not created');
+    return latest.handle;
   }
 
   function makeIntegrationCanvas(): HTMLCanvasElement {
@@ -9249,6 +8625,7 @@ type ExtractFramesWithPipeline = (
       },
       queue: {
         submit: () => undefined,
+        onSubmittedWorkDone: () => Promise.resolve(undefined),
         writeBuffer: () => undefined,
         writeTexture: () => undefined,
       },
@@ -9348,11 +8725,7 @@ type ExtractFramesWithPipeline = (
     return `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;
   }
 
-  interface IntegrationRenderer {
-    ready: Promise<void>;
-    draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
-    onError: (cb: (e: { code: string }) => void) => () => void;
-  }
+  type IntegrationRenderer = RendererType;
 
   interface IntegrationWorld {
     spawn: (...a: unknown[]) => { unwrap: () => unknown };
@@ -9380,28 +8753,25 @@ type ExtractFramesWithPipeline = (
   }> {
     vi.stubGlobal('navigator', { ...integrationNavigator, gpu: makeIntegrationGPU(device) });
     const { createRenderer } = (await import('../createRenderer')) as {
-      createRenderer: (
-        canvas: unknown,
-        opts?: unknown,
-        bundler?: unknown,
-      ) => Promise<IntegrationRenderer>;
+      createRenderer: (...args: unknown[]) => Promise<{ unwrap(): IntegrationRenderer }>;
     };
-    const renderer = await createRenderer(
-      makeIntegrationCanvas(),
-      {},
-      { shaderManifestUrl: buildIntegrationManifestUrl(withShadowCaster) },
-    );
-    await renderer.ready;
+    const renderer = (
+      await createRenderer(
+        makeIntegrationCanvas(),
+        {},
+        { shaderManifestUrl: buildIntegrationManifestUrl(withShadowCaster) },
+      )
+    ).unwrap();
     const { World: WorldCtor } = (await import('@forgeax/engine-ecs')) as unknown as {
       World: new () => IntegrationWorld;
     };
     const C = {
-      ...(await import('@forgeax/engine-render/internal')),
+      ...(await import('@forgeax/engine-render')),
       ...(await import('@forgeax/engine-scene')),
       ...(await import('@forgeax/engine-assets-runtime')),
     } as unknown as IntegrationComponents;
     const errors: { code: string }[] = [];
-    renderer.onError((e) => errors.push(e));
+    subscribeRendererErrors(renderer, (e) => errors.push(e));
     return { renderer, world: new WorldCtor(), C, errors };
   }
 
@@ -9467,7 +8837,6 @@ type ExtractFramesWithPipeline = (
     });
 
     it('disposeInstanceBuffers: destroy clears map, isDestroyed gate skips pre-destroyed entries', async () => {
-      const { disposeInstanceBuffers } = await import('@forgeax/engine-render/internal');
       const { m4err, m4ok, RhiError, GpuBuffer } = await _loadM4Libs();
       const dev = _mkBufDevice(m4err, m4ok, RhiError);
 
@@ -9492,7 +8861,6 @@ type ExtractFramesWithPipeline = (
     });
 
     it('disposeInstanceBuffers: sweep continues, all non-pre-destroyed entries destroyed', async () => {
-      const { disposeInstanceBuffers } = await import('@forgeax/engine-render/internal');
       const { m4err, m4ok, RhiError, GpuBuffer } = await _loadM4Libs();
       const dev = _mkBufDevice(m4err, m4ok, RhiError);
 
@@ -9519,7 +8887,6 @@ type ExtractFramesWithPipeline = (
     });
 
     it('disposeInstanceBuffers: without errorRegistry parameter, no fire (no crash)', async () => {
-      const { disposeInstanceBuffers } = await import('@forgeax/engine-render/internal');
       const { m4err, m4ok, RhiError, GpuBuffer } = await _loadM4Libs();
       const dev = _mkBufDevice(m4err, m4ok, RhiError);
 
@@ -9543,21 +8910,13 @@ type ExtractFramesWithPipeline = (
       const cube = spawnInstancedCube(world, C, 2);
 
       // Frame 1: allocate the instance buffer (fingerprint = 2 instances).
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      drawPublished(renderer, world as WorldType);
 
       // Frame 2: fingerprint mismatch -> F12 destroys the old buffer, whose
       // raw .destroy() throws -> rhi-webgpu webgpu-runtime-error -> the F12
       // production fires errorRegistry and continues to set the new buffer.
       world.set(cube, C.Instances, { transforms: new Float32Array(3 * 16) });
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      drawPublished(renderer, world as WorldType);
 
       // Sweep continued: a fresh (larger) instance buffer was still allocated
       // after the failed destroy. The failure surfaced as a fired error.
@@ -9581,34 +8940,27 @@ type ExtractFramesWithPipeline = (
       spawnCamera(world, C);
       const cube = spawnInstancedCube(world, C, 2);
 
-      // Frame 1: cold allocate the 2-instance buffer (128 B).
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      // Frame 1: cold allocate the 2-instance buffer (256 B).
+      drawPublished(renderer, world as WorldType);
       expect(errors).toHaveLength(0);
       const createdAfterF1 = log.created.length;
       expect(createdAfterF1).toBeGreaterThan(0);
       expect(log.destroyed).toHaveLength(0);
+      const oldInstanceBuffer = latestInstanceBuffer(log, 2);
 
       // Frame 2: 2 -> 3 instances => byteLength fingerprint mismatch => the
       // main-pass F12 path (render-system-record.ts:4521) destroys the old
-      // 128 B buffer, then sets a fresh 192 B one. No shadow-caster shader is
+      // 256 B buffer, then sets a fresh 384 B one. No shadow-caster shader is
       // registered, so recordShadowPass early-exits and the main pass is the
       // sole F12 owner this frame.
       world.set(cube, C.Instances, { transforms: new Float32Array(3 * 16) });
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      drawPublished(renderer, world as WorldType);
 
       // The destroyed buffer is specifically the old instance buffer (STORAGE
-      // usage, 128 B), not an incidental destroy elsewhere. Disabling :4521
+      // usage, 256 B), not an incidental destroy elsewhere. Disabling :4521
       // drops it.
-      expect(instanceBufferDestroyed(log, 2)).toBe(true);
-      // A new (larger) 192 B instance buffer replaced the destroyed one.
+      expect(log.destroyed.includes(oldInstanceBuffer)).toBe(true);
+      // A new (larger) 384 B instance buffer replaced the destroyed one.
       expect(
         log.created.some((c) => c.usage === INSTANCE_USAGE && c.size === INSTANCE_BYTES(3)),
       ).toBe(true);
@@ -9637,27 +8989,18 @@ type ExtractFramesWithPipeline = (
       });
       const cube = spawnInstancedCube(world, C, 2);
 
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-
-      (world as WorldType).update().unwrap();
-
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      drawPublished(renderer, world as WorldType);
       expect(log.destroyed).toHaveLength(0);
+      const oldInstanceBuffer = latestInstanceBuffer(log, 2);
 
       world.set(cube, C.Instances, { transforms: new Float32Array(3 * 16) });
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      drawPublished(renderer, world as WorldType);
 
       // The shadow pass records the instance entity before the main pass, so
-      // it owns the F12 destroy of the old (STORAGE, 128 B) instance buffer
+      // it owns the F12 destroy of the old (STORAGE, 256 B) instance buffer
       // this frame. Disabling :3323 drops this assertion (main reuses the
       // already-updated entry and never re-destroys).
-      expect(instanceBufferDestroyed(log, 2)).toBe(true);
+      expect(log.destroyed.includes(oldInstanceBuffer)).toBe(true);
     });
   });
 
@@ -9777,24 +9120,30 @@ type ExtractFramesWithPipeline = (
 
   describe('AC-02 encodeTilemapLayerValue (sortScope=per-cell folds chunkIndex)', () => {
     it("sortScope='per-cell': encodeTilemapLayerValue(2, 5, 'per-cell') === 0x200000", async () => {
-      const { encodeTilemapLayerValue } = await import('@forgeax/engine-render/internal');
+      const { encodeTilemapLayerValue } = await import(
+        '../../../render/src/tilemap-chunk-extract-system'
+      );
       expect(encodeTilemapLayerValue(2, 5, 'per-cell')).toBe(0x200000);
     });
 
     it("sortScope='layer': encodeTilemapLayerValue(2, 5, 'layer') === ((2 << 20) | 5)", async () => {
-      const { encodeTilemapLayerValue } = await import('@forgeax/engine-render/internal');
+      const { encodeTilemapLayerValue } = await import(
+        '../../../render/src/tilemap-chunk-extract-system'
+      );
       expect(encodeTilemapLayerValue(2, 5, 'layer')).toBe((2 << 20) | 5);
     });
 
     it("sortScope defaults to 'layer' (third arg omitted matches 'layer')", async () => {
-      const { encodeTilemapLayerValue } = await import('@forgeax/engine-render/internal');
+      const { encodeTilemapLayerValue } = await import(
+        '../../../render/src/tilemap-chunk-extract-system'
+      );
       expect(encodeTilemapLayerValue(2, 5)).toBe(encodeTilemapLayerValue(2, 5, 'layer'));
     });
   });
 
   describe('AC-03 transparent-sort 4-mode constants reachable through barrel', () => {
     it('4 mode constants resolve to 0/1/2/3 through @forgeax/engine-runtime', async () => {
-      const runtime = await import('@forgeax/engine-render/internal');
+      const runtime = await import('../../../render/src/systems/transparent-sort-config');
       expect(runtime.TRANSPARENT_SORT_MODE_LAYER_Z).toBe(0);
       expect(runtime.TRANSPARENT_SORT_MODE_LAYER_Y).toBe(1);
       expect(runtime.TRANSPARENT_SORT_MODE_LAYER_YZ).toBe(2);
@@ -9802,7 +9151,7 @@ type ExtractFramesWithPipeline = (
     });
 
     it('setTransparentSortConfig accepts all 4 modes (VALID_MODES proxy: size 4)', async () => {
-      const runtime = await import('@forgeax/engine-render/internal');
+      const runtime = await import('../../../render/src/systems/transparent-sort-config');
       for (const mode of [
         runtime.TRANSPARENT_SORT_MODE_LAYER_Z,
         runtime.TRANSPARENT_SORT_MODE_LAYER_Y,

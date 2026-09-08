@@ -610,7 +610,7 @@ export async function extractTarball(tarballPath, destDir) {
   await rm(destDir, { recursive: true, force: true });
   await mkdir(destDir, { recursive: true });
   await new Promise((resolve, reject) => {
-    const child = spawn('tar', ['-xzf', tarballPath, '-C', destDir], {
+    const child = spawn('tar', tarExtractionArgs(tarballPath, destDir), {
       stdio: 'inherit',
     });
     child.on('error', reject);
@@ -626,4 +626,15 @@ export async function extractTarball(tarballPath, destDir) {
           ),
     );
   });
+}
+
+export function tarExtractionArgs(tarballPath, destDir, platform = process.platform) {
+  const localPath = (value) => (platform === 'win32' ? value.replaceAll('\\', '/') : value);
+  return [
+    ...(platform === 'win32' ? ['--force-local'] : []),
+    '-xzf',
+    localPath(tarballPath),
+    '-C',
+    localPath(destDir),
+  ];
 }

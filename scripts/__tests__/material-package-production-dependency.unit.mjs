@@ -11,7 +11,7 @@ test('material package production dependency', async () => {
   );
 
   assert.ok(manifest.dependencies['@forgeax/engine-pack']);
-  assert.ok(manifest.dependencies['@forgeax/engine-shader-compiler']);
+  assert.equal(manifest.dependencies['@forgeax/engine-shader-compiler'], undefined);
   assert.equal(manifest.peerDependencies?.['@forgeax/engine-pack'], undefined);
   assert.equal(manifest.devDependencies?.['@forgeax/engine-pack'], undefined);
 });

@@ -5,10 +5,10 @@
 // D-5 construct-time validation):
 //
 //   const g = defineAnimationGraph((b) => {
-//     const walk = b.clip(walkHandle);
-//     const run = b.clip(runHandle);
+//     const walk = b.clip(walkGuid);
+//     const run = b.clip(runGuid);
 //     const loco = b.blend([walk, run]);       // normalizing
-//     const overlay = b.clip(overlayHandle, 0.3);
+//     const overlay = b.clip(overlayGuid, 0.3);
 //     return b.add(loco, [overlay]);           // non-normalizing; returns root
 //   });                                        // -> Result<AnimationGraph, AnimationGraphError>
 //   if (!g.ok) return; // g.error.code / g.error.hint (AC-11)
@@ -20,7 +20,7 @@
 // structured error (charter P3, requirements AC-11) so it can never be minted
 // into a GUID handle or serialized into a pack (AC-14).
 
-import type { AnimationGraph, AnimationGraphNode, Handle } from '@forgeax/engine-types';
+import type { AnimationGraph, AnimationGraphNode } from '@forgeax/engine-types';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import {
   AnimationGraphCycleError,
@@ -48,7 +48,7 @@ export type AnimationGraphNodeRef = number & {
  */
 export interface AnimationGraphBuilder {
   /** Add a Clip leaf sampling `clip` with the given static `weight` (default 1). */
-  clip(clip: Handle<'AnimationClip', 'shared'>, weight?: number): AnimationGraphNodeRef;
+  clip(clip: string, weight?: number): AnimationGraphNodeRef;
   /** Add a Blend node (normalizing lerp) over `children` with static `weight` (default 1). */
   blend(children: readonly AnimationGraphNodeRef[], weight?: number): AnimationGraphNodeRef;
   /** Add an Add node (non-normalizing) stacking `additive` layers onto `base`; static `weight` default 1. */

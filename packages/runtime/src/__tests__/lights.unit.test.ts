@@ -12,43 +12,54 @@
 //   - packages/runtime/src/__tests__/lightslot-layout.test.ts
 //   - packages/runtime/src/__tests__/point-light-defaults.test.ts
 //   - packages/runtime/src/__tests__/point-light-spawn-bounds.test.ts
-//   - packages/runtime/src/__tests__/render-multi-light-cap.test.ts
 //   - packages/runtime/src/__tests__/spot-light-defaults.test.ts
 //   - packages/runtime/src/__tests__/spot-light-spawn-bounds.test.ts
 //
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
-import type { World as WorldType } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
+import { componentDefinition, componentSchema } from '@forgeax/engine-ecs/internal';
 import { vec3 } from '@forgeax/engine-math';
-import type { Renderer as RendererType } from '@forgeax/engine-render';
-import type {
-  PointLightSnapshot,
-  ShadowInvalidConfigError,
-  SpotLightSnapshot,
-} from '@forgeax/engine-render/internal';
+import { Camera, DirectionalLight, PointLight, Skylight, SpotLight } from '@forgeax/engine-render';
+import { propagateTransforms, Transform } from '@forgeax/engine-scene';
+import { describe, expect, it } from 'vitest';
+import {
+  computeInvRangeSquared,
+  degToCos,
+  validateDirectionalLightData,
+  validateSpotLightData,
+} from '../../../render/src/components/light-helpers';
+import type { ShadowInvalidConfigError } from '../../../render/src/errors/render';
 import {
   BYTES_PER_LIGHT_SLOT,
-  buildPbrViewBglEntries,
-  Camera,
-  computeInvRangeSquared,
-  DirectionalLight,
-  degToCos,
-  extractFrame,
   LIGHTSLOT_LAYOUT,
   LightSlotKind,
-  PointLight,
   packLightArrayHeader,
   packPointLight,
   packSpotLight,
-  prepareExtractContext,
-  Skylight,
-  SpotLight,
-} from '@forgeax/engine-render/internal';
-import { propagateTransforms, Transform } from '@forgeax/engine-scene';
-import type { Handle } from '@forgeax/engine-types';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+} from '../../../render/src/light-buffer-layout';
+import { buildPbrViewBglEntries } from '../../../render/src/pbr-pipeline';
+import type {
+  PointLightSnapshot,
+  SpotLightSnapshot,
+} from '../../../render/src/render-system-extract';
+import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
+
+type LightSpawnResult = ReturnType<World['spawn']>;
+
+function spawnValidatedLight(
+  world: World,
+  component: typeof DirectionalLight | typeof SpotLight,
+  data: Readonly<Record<string, unknown>>,
+): LightSpawnResult {
+  const validation =
+    component === DirectionalLight
+      ? validateDirectionalLightData(data)
+      : validateSpotLightData(data);
+  if (!validation.ok) return validation as unknown as LightSpawnResult;
+  return world.spawn({ component, data: data as never });
+}
 
 {
   // ─── feat-20260709 M2 / w4: vec-collapse schema shape + default equivalence ───
@@ -60,36 +71,36 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
   // be explicit -- Transform quat/scale precedent).
   describe('lights vec-collapse schema shape (w4, AC-01 + E1)', () => {
     it('DirectionalLight direction/color are array<f32,3>; color default [1,1,1], direction no default', () => {
-      expect(DirectionalLight.schema.direction).toBe('array<f32, 3>');
-      expect(DirectionalLight.schema.color).toBe('array<f32, 3>');
-      expect('directionX' in DirectionalLight.schema).toBe(false);
-      expect('colorR' in DirectionalLight.schema).toBe(false);
-      const defaults = DirectionalLight.defaults as Record<string, unknown>;
+      expect(componentSchema(DirectionalLight).direction).toBe('array<f32, 3>');
+      expect(componentSchema(DirectionalLight).color).toBe('array<f32, 3>');
+      expect('directionX' in componentSchema(DirectionalLight)).toBe(false);
+      expect('colorR' in componentSchema(DirectionalLight)).toBe(false);
+      const defaults = componentDefinition(DirectionalLight).defaults as Record<string, unknown>;
       expect(Array.from(defaults.color as Float32Array)).toEqual([1, 1, 1]);
       expect('direction' in defaults).toBe(false);
     });
 
     it('SpotLight direction/color are array<f32,3>; color default [1,1,1], direction no default', () => {
-      expect(SpotLight.schema.direction).toBe('array<f32, 3>');
-      expect(SpotLight.schema.color).toBe('array<f32, 3>');
-      expect('directionX' in SpotLight.schema).toBe(false);
-      expect('colorR' in SpotLight.schema).toBe(false);
-      const defaults = SpotLight.defaults as Record<string, unknown>;
+      expect(componentSchema(SpotLight).direction).toBe('array<f32, 3>');
+      expect(componentSchema(SpotLight).color).toBe('array<f32, 3>');
+      expect('directionX' in componentSchema(SpotLight)).toBe(false);
+      expect('colorR' in componentSchema(SpotLight)).toBe(false);
+      const defaults = componentDefinition(SpotLight).defaults as Record<string, unknown>;
       expect(Array.from(defaults.color as Float32Array)).toEqual([1, 1, 1]);
       expect('direction' in defaults).toBe(false);
     });
 
     it('PointLight color is array<f32,3> with default [1,1,1]', () => {
-      expect(PointLight.schema.color).toBe('array<f32, 3>');
-      expect('colorR' in PointLight.schema).toBe(false);
-      const defaults = PointLight.defaults as Record<string, unknown>;
+      expect(componentSchema(PointLight).color).toBe('array<f32, 3>');
+      expect('colorR' in componentSchema(PointLight)).toBe(false);
+      const defaults = componentDefinition(PointLight).defaults as Record<string, unknown>;
       expect(Array.from(defaults.color as Float32Array)).toEqual([1, 1, 1]);
     });
 
     it('Skylight color is array<f32,3> with default [1,1,1]', () => {
-      expect(Skylight.schema.color).toBe('array<f32, 3>');
-      expect('colorR' in Skylight.schema).toBe(false);
-      const defaults = Skylight.defaults as Record<string, unknown>;
+      expect(componentSchema(Skylight).color).toBe('array<f32, 3>');
+      expect('colorR' in componentSchema(Skylight)).toBe(false);
+      const defaults = componentDefinition(Skylight).defaults as Record<string, unknown>;
       expect(Array.from(defaults.color as Float32Array)).toEqual([1, 1, 1]);
     });
 
@@ -133,13 +144,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 {
   describe('direct-light physical semantic inputs', () => {
     it('keeps the three public light kinds on the shared intensity and range surface', () => {
-      expect(DirectionalLight.schema.intensity).toBe('f32');
-      expect(PointLight.schema.intensity).toBe('f32');
-      expect(SpotLight.schema.intensity).toBe('f32');
-      expect(PointLight.schema.range).toBe('f32');
-      expect(SpotLight.schema.range).toBe('f32');
-      expect('physicalIntensity' in PointLight.schema).toBe(false);
-      expect('physicalIntensity' in SpotLight.schema).toBe(false);
+      expect(componentSchema(DirectionalLight).intensity).toBe('f32');
+      expect(componentSchema(PointLight).intensity).toBe('f32');
+      expect(componentSchema(SpotLight).intensity).toBe('f32');
+      expect(componentSchema(PointLight).range).toBe('f32');
+      expect(componentSchema(SpotLight).range).toBe('f32');
+      expect('physicalIntensity' in componentSchema(PointLight)).toBe(false);
+      expect('physicalIntensity' in componentSchema(SpotLight)).toBe(false);
     });
 
     it('uses meters for finite point and spot ranges without a hidden zero-range multiplier', () => {
@@ -174,7 +185,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     ] as const) {
       it(`${name}: explicit zero-vector direction is rejected with field='direction'`, () => {
         const world = new World();
-        const r = world.spawn({ component, data: { direction: [0, 0, 0] } });
+        const r = spawnValidatedLight(world, component, { direction: [0, 0, 0] });
         expect(r.ok).toBe(false);
         if (!r.ok) {
           expect(r.error.code).toBe('spawn-light-invalid-bounds');
@@ -188,7 +199,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       it(`${name}: omitted direction (layer-3 all-zero) is rejected with field='direction'`, () => {
         const world = new World();
-        const r = world.spawn({ component, data: {} });
+        const r = spawnValidatedLight(world, component, {});
         expect(r.ok).toBe(false);
         if (!r.ok) {
           expect(r.error.code).toBe('spawn-light-invalid-bounds');
@@ -253,11 +264,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         const dl = DirectionalLight;
 
         expect(dl.name).toBe('DirectionalLight');
-        expect(dl.schema).toBeDefined();
+        expect(componentSchema(dl)).toBeDefined();
 
-        expect(dl.defaults).toBeDefined();
-        // biome-ignore lint/style/noNonNullAssertion: dl.defaults asserted defined just above
-        const defaults = dl.defaults!;
+        expect(componentDefinition(dl).defaults).toBeDefined();
+        // biome-ignore lint/style/noNonNullAssertion: defaults asserted defined just above
+        const defaults = componentDefinition(dl).defaults!;
 
         expect(defaults.cascadeCount).toBe(4);
         expect(defaults.splitLambda).toBeCloseTo(0.75, 5);
@@ -272,19 +283,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         // 1 castShadow + 8 shadow = 12 fields (feat-20260709 M2 collapsed
         // direction/color from 6 per-axis scalars to 2 array<f32,3> columns;
         // nearPlane removed — derived from camera near; farPlane -> shadowDistance)
-        expect(Object.keys(dl.schema).length).toBe(12);
-        expect('direction' in dl.schema).toBe(true);
-        expect('color' in dl.schema).toBe(true);
-        expect('cascadeCount' in dl.schema).toBe(true);
-        expect('splitLambda' in dl.schema).toBe(true);
-        expect('cascadeBlend' in dl.schema).toBe(true);
-        expect('mapSize' in dl.schema).toBe(true);
-        expect('depthBias' in dl.schema).toBe(true);
-        expect('normalBias' in dl.schema).toBe(true);
-        expect('shadowDistance' in dl.schema).toBe(true);
-        expect('nearPlane' in dl.schema).toBe(false);
-        expect('farPlane' in dl.schema).toBe(false);
-        expect('pcfKernelSize' in dl.schema).toBe(true);
+        expect(Object.keys(componentSchema(dl)).length).toBe(12);
+        expect('direction' in componentSchema(dl)).toBe(true);
+        expect('color' in componentSchema(dl)).toBe(true);
+        expect('cascadeCount' in componentSchema(dl)).toBe(true);
+        expect('splitLambda' in componentSchema(dl)).toBe(true);
+        expect('cascadeBlend' in componentSchema(dl)).toBe(true);
+        expect('mapSize' in componentSchema(dl)).toBe(true);
+        expect('depthBias' in componentSchema(dl)).toBe(true);
+        expect('normalBias' in componentSchema(dl)).toBe(true);
+        expect('shadowDistance' in componentSchema(dl)).toBe(true);
+        expect('nearPlane' in componentSchema(dl)).toBe(false);
+        expect('farPlane' in componentSchema(dl)).toBe(false);
+        expect('pcfKernelSize' in componentSchema(dl)).toBe(true);
         // DirectionalLightShadow is deleted; the old orthoHalfExtent field is gone
       });
 
@@ -1529,7 +1540,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         expect(LIGHTSLOT_LAYOUT.kindOffset).toBe(48);
       });
       it('pad at byte 52 (3 x u32 = 12 bytes of padding)', () => {
-        expect(LIGHTSLOT_LAYOUT.padOffset).toBe(52);
+        expect(LIGHTSLOT_LAYOUT.shadowPayloadOffset).toBe(52);
       });
       // feat-20260612-point-light-shadows-urp-hdrp M4 / T-M4-4 (plan-strategy §D-8):
       // pad lanes carry the per-light shadow triple on the HDRP path.
@@ -1638,7 +1649,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       it('autocomplete application point: payload.range / color / intensity inferred without as casts (AC-01)', () => {
         const world = new World();
-        // The data argument shape is `Partial<ShapeOf<PointLight.schema>>`; each
+        // The data argument shape is `Partial<ShapeOf<componentSchema(PointLight)>>`; each
         // optional field flows in as its field type (color as a numeric tuple)
         // so the call below type-checks without any `as` assertion. The very
         // fact that this body compiles is the AC-01 autocomplete witness (no
@@ -1657,549 +1668,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         expect(view.range).toBe(7);
         expect(view.color[0]).toBeCloseTo(0.25, 5);
         expect(view.intensity).toBe(2);
-      });
-    });
-  });
-}
-
-{
-  // ─── from point-light-spawn-bounds.test.ts ───
-  describe('point-light-spawn-bounds.test.ts', () => {
-    describe('PointLight spawn-time fail-fast bounds (M1 w4, AC-06 a)', () => {
-      it('range < 0 spawn returns Result.err with spawn-light-invalid-bounds + field=range', () => {
-        const world = new World();
-        const r = world.spawn({ component: PointLight, data: { range: -1 } });
-        expect(r.ok).toBe(false);
-        if (!r.ok) {
-          expect(r.error.code).toBe('spawn-light-invalid-bounds');
-          if (r.error.code === 'spawn-light-invalid-bounds') {
-            const detail = (r.error as unknown as { detail: { field: string; got: number } })
-              .detail;
-            expect(detail.field).toBe('range');
-            expect(detail.got).toBe(-1);
-            const hint = (r.error as unknown as { hint: string }).hint;
-            expect(hint).toContain('use Number.POSITIVE_INFINITY for unlimited range');
-            expect(hint).toContain('non-negative meter value');
-          }
-        }
-      });
-
-      it('range = NaN spawn returns Result.err (treated as invalid)', () => {
-        const world = new World();
-        const r = world.spawn({ component: PointLight, data: { range: Number.NaN } });
-        expect(r.ok).toBe(false);
-        if (!r.ok) {
-          expect(r.error.code).toBe('spawn-light-invalid-bounds');
-          if (r.error.code === 'spawn-light-invalid-bounds') {
-            const detail = (r.error as unknown as { detail: { field: string; got: number } })
-              .detail;
-            expect(detail.field).toBe('range');
-            expect(Number.isNaN(detail.got)).toBe(true);
-          }
-        }
-      });
-
-      it('range = +Infinity spawn passes (KHR no-truncation default)', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: PointLight,
-          data: { range: Number.POSITIVE_INFINITY },
-        });
-        expect(r.ok).toBe(true);
-      });
-
-      it('range = 0 spawn passes (boundary: zero range light still spawns)', () => {
-        const world = new World();
-        const r = world.spawn({ component: PointLight, data: { range: 0 } });
-        expect(r.ok).toBe(true);
-      });
-
-      it('range = 5 (positive finite) spawn passes', () => {
-        const world = new World();
-        const r = world.spawn({ component: PointLight, data: { range: 5 } });
-        expect(r.ok).toBe(true);
-      });
-
-      it('omitted range spawn passes (layer-2 default = +Infinity)', () => {
-        const world = new World();
-        const r = world.spawn({ component: PointLight, data: {} });
-        expect(r.ok).toBe(true);
-      });
-    });
-  });
-}
-
-{
-  // ─── from render-multi-light-cap.test.ts ───
-  describe('render-multi-light-cap.test.ts', () => {
-    const ENGINE = '../createRenderer';
-
-    interface MockGL2Context {
-      __mockTag: 'webgl2';
-      getExtension: () => null;
-      getParameter: () => number;
-      isContextLost: () => boolean;
-    }
-
-    function makeMockGL2(): MockGL2Context {
-      return {
-        __mockTag: 'webgl2',
-        getExtension: () => null,
-        getParameter: () => 1,
-        isContextLost: () => false,
-      };
-    }
-
-    interface CanvasOptions {
-      webgl2: 'context' | 'null';
-      webgpu?: 'context' | 'null';
-    }
-
-    function makeMockCanvas(opts: CanvasOptions): HTMLCanvasElement {
-      const canvas = {
-        width: 800,
-        height: 600,
-        getContext(kind: string): unknown {
-          if (kind === 'webgl2') {
-            return opts.webgl2 === 'context' ? makeMockGL2() : null;
-          }
-          if (kind === 'webgpu') {
-            if (opts.webgpu === 'context') {
-              return {
-                __mockTag: 'webgpu-canvas-context',
-                configure: () => undefined,
-                unconfigure: () => undefined,
-                getCurrentTexture: () => ({ createView: () => ({}) }),
-              };
-            }
-            return null;
-          }
-          return null;
-        },
-        addEventListener: () => undefined,
-        removeEventListener: () => undefined,
-      };
-      return canvas as Partial<HTMLCanvasElement> as HTMLCanvasElement;
-    }
-
-    interface DeviceCallLog {
-      encoderFinishCount: number;
-      drawIndexedCount: number;
-      setBindGroupCount: number;
-      beginRenderPassCount: number;
-      setPipelineCount: number;
-      queueSubmitCount: number;
-      writeBufferCount: number;
-    }
-
-    function makeMockGPUDevice(log: DeviceCallLog): { device: unknown } {
-      const lost = new Promise<unknown>(() => undefined);
-      const device = {
-        __mockTag: 'gpu-device',
-        lost,
-        features: new Set(),
-        limits: {},
-        queue: {
-          submit: () => {
-            log.queueSubmitCount++;
-          },
-          writeBuffer: () => {
-            log.writeBufferCount++;
-          },
-          writeTexture: () => undefined,
-        },
-        createShaderModule: () => ({ getCompilationInfo: async () => ({ messages: [] }) }),
-        createBindGroupLayout: () => ({}),
-        createPipelineLayout: () => ({}),
-        createRenderPipeline: () => ({}),
-        createBindGroup: () => ({}),
-        createBuffer: () => ({
-          getMappedRange: () => new ArrayBuffer(64),
-          unmap: () => undefined,
-        }),
-        createCommandEncoder: () => ({
-          beginRenderPass: () => {
-            log.beginRenderPassCount++;
-            return {
-              setPipeline: () => {
-                log.setPipelineCount++;
-              },
-              setVertexBuffer: () => undefined,
-              setIndexBuffer: () => undefined,
-              setBindGroup: () => {
-                log.setBindGroupCount++;
-              },
-              draw: () => undefined,
-              drawIndexed: () => {
-                log.drawIndexedCount++;
-              },
-              end: () => undefined,
-            };
-          },
-          finish: () => {
-            log.encoderFinishCount++;
-            return {};
-          },
-        }),
-        createTexture: () => ({ createView: () => ({}) }),
-        createSampler: () => ({}),
-        destroy: () => undefined,
-      };
-      return { device };
-    }
-
-    function makeMockGPU(deviceObj: unknown): unknown {
-      return {
-        requestAdapter: async () => ({
-          requestDevice: async () => deviceObj,
-        }),
-        getPreferredCanvasFormat: () => 'bgra8unorm',
-      };
-    }
-
-    const baseNavigator: Navigator = {
-      userAgent: 'mock-engine-test',
-    } as Partial<Navigator> as Navigator;
-
-    function buildManifestDataUrl(): string {
-      const manifest = {
-        schemaVersion: '1.0.0',
-        entries: [
-          { hash: 'pbr00000', wgsl: '/* pbr stub - calls f_schlick( */', glsl: '', bindings: '' },
-          { hash: 'unlit000', wgsl: '/* unlit stub */', glsl: '', bindings: '' },
-          {
-            hash: 'tonemap0',
-            wgsl: '/* tonemap stub - struct TonemapParams { exposure: f32 }; */',
-            glsl: '',
-            bindings: '',
-          },
-        ],
-      };
-      return `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;
-    }
-
-    function makeLog(): DeviceCallLog {
-      return {
-        encoderFinishCount: 0,
-        drawIndexedCount: 0,
-        setBindGroupCount: 0,
-        beginRenderPassCount: 0,
-        setPipelineCount: 0,
-        queueSubmitCount: 0,
-        writeBufferCount: 0,
-      };
-    }
-
-    beforeEach(() => {
-      vi.stubGlobal('navigator', { ...baseNavigator });
-    });
-
-    afterEach(() => {
-      vi.unstubAllGlobals();
-    });
-
-    async function importEngine(): Promise<{
-      createRenderer: (
-        canvas: unknown,
-        opts?: unknown,
-        bundler?: unknown,
-      ) => Promise<{
-        backend: string;
-        ready: Promise<void>;
-        draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
-        onError: (
-          cb: (err: { code: string; detail?: unknown; hint?: string; expected?: string }) => void,
-        ) => () => void;
-      }>;
-    }> {
-      return (await import(ENGINE)) as never;
-    }
-
-    async function importEcs(): Promise<{
-      World: new () => {
-        spawn: (...componentDatas: unknown[]) => unknown;
-      };
-    }> {
-      return (await import('@forgeax/engine-ecs')) as never;
-    }
-
-    async function importComponents(): Promise<{
-      Transform: unknown;
-      MeshFilter: unknown;
-      MeshRenderer: unknown;
-      Camera: unknown;
-      DirectionalLight: unknown;
-      PointLight: unknown;
-      SpotLight: unknown;
-      HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
-      HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
-    }> {
-      return {
-        ...(await import('@forgeax/engine-render/internal')),
-        ...(await import('@forgeax/engine-scene')),
-      } as never;
-    }
-
-    interface TestSetup {
-      createRenderer: (
-        canvas: unknown,
-        opts?: unknown,
-        bundler?: unknown,
-      ) => Promise<{
-        backend: string;
-        ready: Promise<void>;
-        draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
-        onError: (
-          cb: (err: { code: string; detail?: unknown; hint?: string; expected?: string }) => void,
-        ) => () => void;
-      }>;
-      log: DeviceCallLog;
-    }
-
-    async function setupWebGPU(): Promise<TestSetup> {
-      const log = makeLog();
-      const { device } = makeMockGPUDevice(log);
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
-      const engine = await importEngine();
-      return { createRenderer: engine.createRenderer, log };
-    }
-
-    function identityTransform(): Record<string, number[]> {
-      return { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] };
-    }
-
-    function cameraTransform(): Record<string, number[]> {
-      return { ...identityTransform(), pos: [0, 0, 3] };
-    }
-
-    function pointLightData(intensity: number): Record<string, number | number[]> {
-      return { color: [1, 1, 1], intensity, range: 10 };
-    }
-
-    function spotLightData(intensity: number): Record<string, number | number[]> {
-      return {
-        direction: [0, -1, 0],
-        color: [1, 1, 1],
-        intensity,
-        range: 10,
-        innerConeDeg: 10,
-        outerConeDeg: 30,
-      };
-    }
-
-    function directionalLightData(intensity: number): Record<string, number | number[]> {
-      return {
-        direction: [0, -1, 0],
-        color: [1, 1, 1],
-        intensity,
-      };
-    }
-
-    describe('record-time multi-light cap fail-fast (M3 w19)', () => {
-      it("PointLight N>4 fires warn-once console.warn with detail.type='point'", async () => {
-        const { createRenderer } = await setupWebGPU();
-        const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-        const renderer = await createRenderer(
-          canvas,
-          {},
-          { shaderManifestUrl: buildManifestDataUrl() },
-        );
-        await renderer.ready;
-        const { World } = await importEcs();
-        const C = await importComponents();
-        const world = new World();
-        world.spawn(
-          { component: C.Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
-          { component: C.Transform, data: cameraTransform() },
-        );
-        // 5 PointLights (N=5 > 4 first-slice cap).
-        for (let i = 0; i < 5; i++) {
-          world.spawn(
-            {
-              component: C.Transform,
-              data: { ...identityTransform(), pos: [i, 0, 0] },
-            },
-            { component: C.PointLight, data: pointLightData(1) },
-          );
-        }
-
-        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-          throw new Error('World attachment failed');
-        }
-        (world as WorldType).update().unwrap();
-        renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-
-        const multiLightCalls = warnSpy.mock.calls.filter(
-          (c) =>
-            typeof c[0] === 'string' &&
-            c[0].startsWith('[forgeax] render-system-multi-light point:'),
-        );
-        expect(multiLightCalls.length).toBe(1);
-        const detail = multiLightCalls[0]?.[1] as
-          | { detail?: { type: string; got: number } }
-          | undefined;
-        expect(detail).toBeDefined();
-        expect(detail?.detail?.type).toBe('point');
-        expect(detail?.detail?.got).toBe(5);
-        warnSpy.mockRestore();
-      });
-
-      it("SpotLight N>4 fires warn-once console.warn with detail.type='spot'", async () => {
-        const { createRenderer } = await setupWebGPU();
-        const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-        const renderer = await createRenderer(
-          canvas,
-          {},
-          { shaderManifestUrl: buildManifestDataUrl() },
-        );
-        await renderer.ready;
-        const { World } = await importEcs();
-        const C = await importComponents();
-        const world = new World();
-        world.spawn(
-          { component: C.Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
-          { component: C.Transform, data: cameraTransform() },
-        );
-        for (let i = 0; i < 5; i++) {
-          world.spawn(
-            { component: C.Transform, data: { ...identityTransform(), pos: [i, 0, 0] } },
-            { component: C.SpotLight, data: spotLightData(1) },
-          );
-        }
-
-        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-          throw new Error('World attachment failed');
-        }
-        (world as WorldType).update().unwrap();
-        renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-
-        const multiLightCalls = warnSpy.mock.calls.filter(
-          (c) =>
-            typeof c[0] === 'string' &&
-            c[0].startsWith('[forgeax] render-system-multi-light spot:'),
-        );
-        expect(multiLightCalls.length).toBe(1);
-        const detail = multiLightCalls[0]?.[1] as
-          | { detail?: { type: string; got: number } }
-          | undefined;
-        expect(detail).toBeDefined();
-        expect(detail?.detail?.type).toBe('spot');
-        expect(detail?.detail?.got).toBe(5);
-        warnSpy.mockRestore();
-      });
-
-      it("DirectionalLight N>1 fires warn-once console.warn with detail.type='directional' (regression guard)", async () => {
-        const { createRenderer } = await setupWebGPU();
-        const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-        const renderer = await createRenderer(
-          canvas,
-          {},
-          { shaderManifestUrl: buildManifestDataUrl() },
-        );
-        await renderer.ready;
-        const { World } = await importEcs();
-        const C = await importComponents();
-        const world = new World();
-        world.spawn(
-          { component: C.Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
-          { component: C.Transform, data: cameraTransform() },
-        );
-        world.spawn({ component: C.DirectionalLight, data: directionalLightData(1) });
-        world.spawn({ component: C.DirectionalLight, data: directionalLightData(2) });
-
-        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-          throw new Error('World attachment failed');
-        }
-        (world as WorldType).update().unwrap();
-        renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-
-        const multiLightCalls = warnSpy.mock.calls.filter(
-          (c) =>
-            typeof c[0] === 'string' &&
-            c[0].startsWith('[forgeax] render-system-multi-light directional:'),
-        );
-        expect(multiLightCalls.length).toBeGreaterThanOrEqual(1);
-        const detail = multiLightCalls[0]?.[1] as
-          | { detail?: { type: string; got: number } }
-          | undefined;
-        expect(detail?.detail?.type).toBe('directional');
-        expect(detail?.detail?.got).toBe(2);
-        warnSpy.mockRestore();
-      });
-
-      it('exactly 4 PointLights pass silently (first-slice cap at N=4)', async () => {
-        const { createRenderer } = await setupWebGPU();
-        const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-        const renderer = await createRenderer(
-          canvas,
-          {},
-          { shaderManifestUrl: buildManifestDataUrl() },
-        );
-        await renderer.ready;
-        const { World } = await importEcs();
-        const C = await importComponents();
-        const world = new World();
-        world.spawn(
-          { component: C.Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
-          { component: C.Transform, data: cameraTransform() },
-        );
-        for (let i = 0; i < 4; i++) {
-          world.spawn(
-            { component: C.Transform, data: { ...identityTransform(), pos: [i, 0, 0] } },
-            { component: C.PointLight, data: pointLightData(1) },
-          );
-        }
-
-        const errors: { code: string }[] = [];
-        renderer.onError((e) => errors.push(e));
-        if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-          throw new Error('World attachment failed');
-        }
-        (world as WorldType).update().unwrap();
-        renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-
-        expect(errors.some((e) => e.code === 'render-system-multi-light')).toBe(false);
-      });
-
-      it('4 PointLights + 4 SpotLights together pass silently (cap is per-bucket)', async () => {
-        const { createRenderer } = await setupWebGPU();
-        const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-        const renderer = await createRenderer(
-          canvas,
-          {},
-          { shaderManifestUrl: buildManifestDataUrl() },
-        );
-        await renderer.ready;
-        const { World } = await importEcs();
-        const C = await importComponents();
-        const world = new World();
-        world.spawn(
-          { component: C.Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
-          { component: C.Transform, data: cameraTransform() },
-        );
-        for (let i = 0; i < 4; i++) {
-          world.spawn(
-            { component: C.Transform, data: { ...identityTransform(), pos: [i, 0, 0] } },
-            { component: C.PointLight, data: pointLightData(1) },
-          );
-          world.spawn(
-            { component: C.Transform, data: { ...identityTransform(), pos: [0, i, 0] } },
-            { component: C.SpotLight, data: spotLightData(1) },
-          );
-        }
-
-        const errors: { code: string }[] = [];
-        renderer.onError((e) => errors.push(e));
-        if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-          throw new Error('World attachment failed');
-        }
-        (world as WorldType).update().unwrap();
-        renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-
-        expect(errors.some((e) => e.code === 'render-system-multi-light')).toBe(false);
       });
     });
   });
@@ -2282,124 +1750,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         expect(view.outerConeDeg).toBe(35);
         expect(view.range).toBe(9);
         expect(view.color[0]).toBeCloseTo(0.4, 5);
-      });
-    });
-  });
-}
-
-{
-  // ─── from spot-light-spawn-bounds.test.ts ───
-  describe('spot-light-spawn-bounds.test.ts', () => {
-    describe('SpotLight spawn-time fail-fast bounds (M1 w7, AC-06 b+c)', () => {
-      it('range < 0 spawn returns Result.err with detail.field=range', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: SpotLight,
-          data: { direction: [0, -1, 0], range: -2 },
-        });
-        expect(r.ok).toBe(false);
-        if (!r.ok) {
-          expect(r.error.code).toBe('spawn-light-invalid-bounds');
-          if (r.error.code === 'spawn-light-invalid-bounds') {
-            const detail = (r.error as unknown as { detail: { field: string; got: number } })
-              .detail;
-            expect(detail.field).toBe('range');
-            expect(detail.got).toBe(-2);
-            const hint = (r.error as unknown as { hint: string }).hint;
-            expect(hint).toContain('use Number.POSITIVE_INFINITY for unlimited range');
-          }
-        }
-      });
-
-      it('outerConeDeg <= innerConeDeg spawn returns Result.err with detail.field=innerOuter', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: SpotLight,
-          data: {
-            direction: [0, -1, 0],
-            innerConeDeg: 30,
-            outerConeDeg: 25,
-          },
-        });
-        expect(r.ok).toBe(false);
-        if (!r.ok) {
-          expect(r.error.code).toBe('spawn-light-invalid-bounds');
-          if (r.error.code === 'spawn-light-invalid-bounds') {
-            const detail = (r.error as unknown as { detail: { field: string; got: number } })
-              .detail;
-            expect(detail.field).toBe('innerOuter');
-            const hint = (r.error as unknown as { hint: string }).hint;
-            expect(hint).toContain('inner cone is the saturated bright region');
-            expect(hint).toContain('outer cone is the falloff edge');
-          }
-        }
-      });
-
-      it('outerConeDeg > 90 spawn returns Result.err with detail.field=outerNinety', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: SpotLight,
-          data: {
-            direction: [0, -1, 0],
-            outerConeDeg: 91,
-          },
-        });
-        expect(r.ok).toBe(false);
-        if (!r.ok) {
-          expect(r.error.code).toBe('spawn-light-invalid-bounds');
-          if (r.error.code === 'spawn-light-invalid-bounds') {
-            const detail = (r.error as unknown as { detail: { field: string; got: number } })
-              .detail;
-            expect(detail.field).toBe('outerNinety');
-            expect(detail.got).toBe(91);
-            const hint = (r.error as unknown as { hint: string }).hint;
-            expect(hint).toContain('a spot light cone wider than 90 degrees becomes a point light');
-            expect(hint).toContain('use PointLight instead');
-          }
-        }
-      });
-
-      it('innerConeDeg=0 + outerConeDeg=45 (defaults) is valid', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: SpotLight,
-          data: { direction: [0, -1, 0] },
-        });
-        expect(r.ok).toBe(true);
-      });
-
-      it('outerConeDeg = 90 (boundary) is valid', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: SpotLight,
-          data: {
-            direction: [0, -1, 0],
-            outerConeDeg: 90,
-          },
-        });
-        expect(r.ok).toBe(true);
-      });
-
-      it('range = +Infinity (default) + range = 0 + range = positive finite all valid', () => {
-        const world = new World();
-        expect(
-          world.spawn({
-            component: SpotLight,
-            data: { direction: [0, -1, 0], range: Number.POSITIVE_INFINITY },
-          }).ok,
-        ).toBe(true);
-        expect(
-          world.spawn({
-            component: SpotLight,
-            data: { direction: [0, -1, 0], range: 0 },
-          }).ok,
-        ).toBe(true);
-        expect(
-          world.spawn({
-            component: SpotLight,
-            data: { direction: [0, -1, 0], range: 8 },
-          }).ok,
-        ).toBe(true);
       });
     });
   });
@@ -2540,20 +1890,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       });
 
       it('schema has 12 fields (3 light + 1 castShadow + 8 shadow)', () => {
-        expect(Object.keys(DirectionalLight.schema).length).toBe(12);
-        expect('direction' in DirectionalLight.schema).toBe(true);
-        expect('color' in DirectionalLight.schema).toBe(true);
-        expect('castShadow' in DirectionalLight.schema).toBe(true);
-        expect('cascadeCount' in DirectionalLight.schema).toBe(true);
-        expect('splitLambda' in DirectionalLight.schema).toBe(true);
-        expect('cascadeBlend' in DirectionalLight.schema).toBe(true);
-        expect('mapSize' in DirectionalLight.schema).toBe(true);
-        expect('depthBias' in DirectionalLight.schema).toBe(true);
-        expect('normalBias' in DirectionalLight.schema).toBe(true);
-        expect('shadowDistance' in DirectionalLight.schema).toBe(true);
-        expect('nearPlane' in DirectionalLight.schema).toBe(false);
-        expect('farPlane' in DirectionalLight.schema).toBe(false);
-        expect('pcfKernelSize' in DirectionalLight.schema).toBe(true);
+        expect(Object.keys(componentSchema(DirectionalLight)).length).toBe(12);
+        expect('direction' in componentSchema(DirectionalLight)).toBe(true);
+        expect('color' in componentSchema(DirectionalLight)).toBe(true);
+        expect('castShadow' in componentSchema(DirectionalLight)).toBe(true);
+        expect('cascadeCount' in componentSchema(DirectionalLight)).toBe(true);
+        expect('splitLambda' in componentSchema(DirectionalLight)).toBe(true);
+        expect('cascadeBlend' in componentSchema(DirectionalLight)).toBe(true);
+        expect('mapSize' in componentSchema(DirectionalLight)).toBe(true);
+        expect('depthBias' in componentSchema(DirectionalLight)).toBe(true);
+        expect('normalBias' in componentSchema(DirectionalLight)).toBe(true);
+        expect('shadowDistance' in componentSchema(DirectionalLight)).toBe(true);
+        expect('nearPlane' in componentSchema(DirectionalLight)).toBe(false);
+        expect('farPlane' in componentSchema(DirectionalLight)).toBe(false);
+        expect('pcfKernelSize' in componentSchema(DirectionalLight)).toBe(true);
       });
     });
   });
@@ -2565,9 +1915,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     describe('DirectionalLight.validate() shadow field enforcement', () => {
       it('rejects even pcfKernelSize (2) with ShadowInvalidConfigError', () => {
         const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { direction: [0, -1, 0], pcfKernelSize: 2 },
+        const r = spawnValidatedLight(world, DirectionalLight, {
+          direction: [0, -1, 0],
+          pcfKernelSize: 2,
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2583,9 +1933,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       it('rejects pcfKernelSize < 1 (0) with ShadowInvalidConfigError', () => {
         const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { direction: [0, -1, 0], pcfKernelSize: 0 },
+        const r = spawnValidatedLight(world, DirectionalLight, {
+          direction: [0, -1, 0],
+          pcfKernelSize: 0,
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2597,9 +1947,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       it('rejects pcfKernelSize < 1 (-1) with ShadowInvalidConfigError', () => {
         const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { direction: [0, -1, 0], pcfKernelSize: -1 },
+        const r = spawnValidatedLight(world, DirectionalLight, {
+          direction: [0, -1, 0],
+          pcfKernelSize: -1,
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2638,9 +1988,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       it('rejects mapSize < 1 with ShadowInvalidConfigError', () => {
         const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { direction: [0, -1, 0], mapSize: 0 },
+        const r = spawnValidatedLight(world, DirectionalLight, {
+          direction: [0, -1, 0],
+          mapSize: 0,
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2651,9 +2001,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       it('rejects cascadeCount < 1 with ShadowInvalidConfigError', () => {
         const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { direction: [0, -1, 0], cascadeCount: 0 },
+        const r = spawnValidatedLight(world, DirectionalLight, {
+          direction: [0, -1, 0],
+          cascadeCount: 0,
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2664,9 +2014,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       it('rejects cascadeCount > 4 with ShadowInvalidConfigError', () => {
         const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { direction: [0, -1, 0], cascadeCount: 5 },
+        const r = spawnValidatedLight(world, DirectionalLight, {
+          direction: [0, -1, 0],
+          cascadeCount: 5,
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2678,9 +2028,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       it('rejects non-integer cascadeCount (1.5) with ShadowInvalidConfigError', () => {
         const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { direction: [0, -1, 0], cascadeCount: 1.5 },
+        const r = spawnValidatedLight(world, DirectionalLight, {
+          direction: [0, -1, 0],
+          cascadeCount: 1.5,
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2691,9 +2041,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       it('rejects splitLambda < 0 with ShadowInvalidConfigError', () => {
         const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { direction: [0, -1, 0], splitLambda: -0.1 },
+        const r = spawnValidatedLight(world, DirectionalLight, {
+          direction: [0, -1, 0],
+          splitLambda: -0.1,
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2704,9 +2054,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       it('rejects splitLambda > 1 with ShadowInvalidConfigError', () => {
         const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { direction: [0, -1, 0], splitLambda: 1.1 },
+        const r = spawnValidatedLight(world, DirectionalLight, {
+          direction: [0, -1, 0],
+          splitLambda: 1.1,
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2735,9 +2085,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       it('rejects cascadeBlend < 0 with ShadowInvalidConfigError', () => {
         const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { direction: [0, -1, 0], cascadeBlend: -0.01 },
+        const r = spawnValidatedLight(world, DirectionalLight, {
+          direction: [0, -1, 0],
+          cascadeBlend: -0.01,
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2748,9 +2098,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       it('rejects cascadeBlend > 0.5 with ShadowInvalidConfigError', () => {
         const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { direction: [0, -1, 0], cascadeBlend: 0.51 },
+        const r = spawnValidatedLight(world, DirectionalLight, {
+          direction: [0, -1, 0],
+          cascadeBlend: 0.51,
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2840,9 +2190,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       it('castShadow=true (explicit) still enforces pcfKernelSize odd>=1', () => {
         const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { direction: [0, -1, 0], castShadow: true, pcfKernelSize: 2 },
+        const r = spawnValidatedLight(world, DirectionalLight, {
+          direction: [0, -1, 0],
+          castShadow: true,
+          pcfKernelSize: 2,
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2853,9 +2204,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       it('omitted castShadow (treated as default true) still enforces pcfKernelSize odd>=1', () => {
         const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { direction: [0, -1, 0], pcfKernelSize: 2 },
+        const r = spawnValidatedLight(world, DirectionalLight, {
+          direction: [0, -1, 0],
+          pcfKernelSize: 2,
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2881,10 +2232,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     //
     // visibility flags mirror the WebGPU GPUShaderStage bitmask:
     //   VERTEX = 0x1, FRAGMENT = 0x2.
+    const VISIBILITY_VERTEX = 0x1;
     const VISIBILITY_FRAGMENT = 0x2;
     const VISIBILITY_VERTEX_FRAGMENT = 0x1 | 0x2;
 
-    describe('binding 8 = spotShadowMap (D-5 always-on, last view-BG entry)', () => {
+    describe('binding 8 = spotShadowMap (D-5 always-on shadow entry)', () => {
       it('declares binding 8 as a depth 2D texture, FRAGMENT-only', () => {
         const entries = buildPbrViewBglEntries({ storageBuffer: true });
         const b8 = entries.find((e) => e.binding === 8);
@@ -2902,10 +2254,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         expect(noStorage.some((e) => e.binding === 8)).toBe(true);
       });
 
-      it('binding 8 is the last entry (no binding 9)', () => {
+      it('reserves binding 9 and keeps Points/Lines at binding 10', () => {
         const entries = buildPbrViewBglEntries({ storageBuffer: true });
         expect(entries.some((e) => e.binding === 9)).toBe(false);
-        expect(entries.some((e) => e.binding === 10)).toBe(false);
+        const pointsLines = entries.find((e) => e.binding === 10);
+        expect(pointsLines?.buffer?.type).toBe('uniform');
+        expect(pointsLines?.visibility).toBe(VISIBILITY_VERTEX);
       });
     });
 
@@ -2921,18 +2275,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     // UBO (binding 0). This block locks that the spot matrices add ZERO new view
     // BGL buffer bindings (the WebGL2 budget invariant).
     describe('spotLightViewProj folded into View UBO (binding 0), not a new binding', () => {
-      it('view BGL declares no uniform buffer beyond binding 7 (only binding 0 = view, 6/7 = point/cascade)', () => {
+      it('view BGL includes only the vertex Points/Lines UBO beyond binding 7', () => {
         // Enumerate uniform-buffer entries on the view BGL. After the w25 fold,
-        // the only uniform buffers are binding 0 (View UBO, carries the spot
-        // matrices in its tail), binding 6 (point shadowParams) and binding 7
-        // (shadowCasterCascade). No standalone spot-matrix uniform buffer.
+        // uniform buffers are binding 0 (View UBO, carries the spot matrices
+        // in its tail), binding 6 (point shadowParams), binding 7
+        // (shadowCasterCascade), and binding 10 (Points/Lines view). No
+        // standalone spot-matrix uniform buffer exists.
         const entries = buildPbrViewBglEntries({ storageBuffer: true });
         const uniformBufferBindings = entries
           .filter((e) => e.buffer?.type === 'uniform')
           .map((e) => e.binding)
           .sort((a, b) => a - b);
         // storageBuffer=true: bindings 1+2 are read-only-storage (not uniform).
-        expect(uniformBufferBindings).toEqual([0, 6, 7]);
+        expect(uniformBufferBindings).toEqual([0, 6, 7, 10]);
       });
 
       it('storageBuffer=false: WebGL2 fallback uniform-buffer bindings stay within budget', () => {
@@ -2997,12 +2352,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       });
     });
 
-    describe('full binding roster is contiguous 0..8', () => {
-      it('exposes exactly bindings 0..8 with no gaps (binding 9 folded into View UBO, w25)', () => {
+    describe('full binding roster reserves 9 for Points/Lines at 10', () => {
+      it('exposes bindings 0..8 plus binding 10, with binding 9 reserved', () => {
         const bindings = buildPbrViewBglEntries({ storageBuffer: true })
           .map((e) => e.binding)
           .sort((a, b) => a - b);
-        expect(bindings).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+        expect(bindings).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 10]);
       });
     });
   });
@@ -3016,9 +2371,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     describe('SpotLight.validate() shadow field enforcement', () => {
       it('rejects even pcfKernelSize (2) with ShadowInvalidConfigError', () => {
         const world = new World();
-        const r = world.spawn({
-          component: SpotLight,
-          data: { direction: [0, -1, 0], pcfKernelSize: 2 },
+        const r = spawnValidatedLight(world, SpotLight, {
+          direction: [0, -1, 0],
+          pcfKernelSize: 2,
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -3031,9 +2386,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       it('rejects pcfKernelSize < 1 (0) with ShadowInvalidConfigError', () => {
         const world = new World();
-        const r = world.spawn({
-          component: SpotLight,
-          data: { direction: [0, -1, 0], pcfKernelSize: 0 },
+        const r = spawnValidatedLight(world, SpotLight, {
+          direction: [0, -1, 0],
+          pcfKernelSize: 0,
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -3044,9 +2399,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       it('rejects mapSize < 1 with ShadowInvalidConfigError', () => {
         const world = new World();
-        const r = world.spawn({
-          component: SpotLight,
-          data: { direction: [0, -1, 0], mapSize: 0 },
+        const r = spawnValidatedLight(world, SpotLight, {
+          direction: [0, -1, 0],
+          mapSize: 0,
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -3057,9 +2412,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
       it('rejects farPlane <= nearPlane with ShadowInvalidConfigError', () => {
         const world = new World();
-        const r = world.spawn({
-          component: SpotLight,
-          data: { direction: [0, -1, 0], nearPlane: 10, farPlane: 5 },
+        const r = spawnValidatedLight(world, SpotLight, {
+          direction: [0, -1, 0],
+          nearPlane: 10,
+          farPlane: 5,
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');

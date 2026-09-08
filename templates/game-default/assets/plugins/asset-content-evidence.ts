@@ -4,6 +4,7 @@ import { Skylight } from '@forgeax/engine-render';
 import type { Renderer } from '@forgeax/engine-render';
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { EquirectAsset } from '@forgeax/engine-types';
+import type { Context } from '@forgeax/engine-plugin';
 
 export const GAME_DEFAULT_HDR_GUID = '81eec382-392f-5a93-8998-0ecf11ef7990';
 const MISSING_GUID = '00000000-0000-4000-8000-000000000000';
@@ -31,16 +32,16 @@ export type GameDefaultAssetEvidence = {
     readonly load: AssetLoadWitness;
     readonly reloads: number;
     readonly intensity: number | null;
-    readonly passNames: readonly string[];
+    readonly features: readonly string[];
   };
 };
 
 type AssetContentEvidenceArgs = {
+  readonly context: Context;
   readonly assets: AssetRegistry | undefined;
   readonly renderer: Renderer | undefined;
   readonly world: World;
   readonly skylight: EntityHandle | undefined;
-  readonly registerCleanup?: (cleanup: () => void) => void;
 };
 
 function witnessFromResult(result: Awaited<ReturnType<AssetRegistry['loadByGuid']>>): AssetLoadWitness {
@@ -114,13 +115,16 @@ export function installAssetContentEvidence(args: AssetContentEvidenceArgs): voi
         load: latest,
         reloads,
         intensity: skylight?.ok ? skylight.value.intensity : null,
-        passNames: [...args.renderer!.perFramePassNames],
+        features: [...args.renderer!.inspect().features],
       };
     },
   };
   const host = globalThis as unknown as Record<string, unknown>;
   host[GAME_DEFAULT_ASSET_EVIDENCE_KEY] = evidence;
-  args.registerCleanup?.(() => {
-    if (host[GAME_DEFAULT_ASSET_EVIDENCE_KEY] === evidence) delete host[GAME_DEFAULT_ASSET_EVIDENCE_KEY];
-  });
+  args.context.effect(
+    () => () => {
+      if (host[GAME_DEFAULT_ASSET_EVIDENCE_KEY] === evidence) delete host[GAME_DEFAULT_ASSET_EVIDENCE_KEY];
+    },
+    'game-default/asset-evidence',
+  );
 }

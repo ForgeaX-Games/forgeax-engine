@@ -6,6 +6,7 @@
 
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { err, ok, type Result, type RhiError } from '@forgeax/engine-rhi';
+import { isEngineMaterial } from '@forgeax/engine-shader';
 import {
   type ArtifactDescriptor,
   ASSET_ERROR_HINTS,
@@ -16,15 +17,22 @@ import {
   type AssetErrorDetail,
   type AssetRef,
   type CatalogSubject,
-  derive,
   type ImageError,
   type ImageMetadata,
   type LoadContext,
   type LoaderAsyncResult,
   type MaterialAsset,
+  type MeshAsset,
   type ParseErrorDetail,
 } from '@forgeax/engine-types';
 import type { AssetRegistry, ParsedPackFile } from '../asset-registry';
+import {
+  createMaterialLoader,
+  type MaterialLoadError,
+  type MaterialLoadRequest,
+  type MaterialPublication,
+  type MaterialReady,
+} from '../material/loader';
 import { readArtifact } from './artifact-io';
 import { fetchPackIndex, resolveCatalogAssetUrl } from './catalog';
 import { buildBreadcrumbHint, buildSceneChildContext } from './instantiate';
@@ -92,7 +100,220 @@ export async function loadByGuid<T = Asset>(
     componentField?: string;
   },
 ): Promise<Result<T, AssetError | ImageError | RhiError>> {
-  return loadByGuidInternal(registry, guid, parentContext, false);
+  return loadByGuidInternal(registry, guid, parentContext, new Set());
+}
+
+function cookedRecordFromPayload(payload: Record<string, unknown>): unknown {
+  if (payload.schemaVersion === 'material-cook/3') return payload;
+  if (payload.cooked !== null && typeof payload.cooked === 'object') return payload.cooked;
+  if (payload.record !== null && typeof payload.record === 'object') return payload.record;
+  return undefined;
+}
+
+function materialArtifactKey(
+  record: Record<string, unknown> | undefined,
+  descriptors: Readonly<Record<string, ArtifactDescriptor>>,
+): string | undefined {
+  const artifact = record?.artifact;
+  const path =
+    artifact !== null && typeof artifact === 'object' && 'path' in artifact
+      ? (artifact as { readonly path?: unknown }).path
+      : undefined;
+  if (typeof path === 'string') {
+    const match = Object.entries(descriptors).find(([, descriptor]) => descriptor.path === path);
+    if (match !== undefined) return match[0];
+  }
+  const shaderArtifacts = Object.entries(descriptors).filter(
+    ([, descriptor]) => descriptor.mediaType === 'text/wgsl',
+  );
+  return shaderArtifacts.length === 1 ? shaderArtifacts[0]?.[0] : undefined;
+}
+
+function materialRecordPath(descriptor: ArtifactDescriptor): string {
+  return `${descriptor.path}.record.json`;
+}
+
+function inlineMaterialArtifact(
+  record: Record<string, unknown> | undefined,
+): MaterialPublication['artifact'] | undefined {
+  const artifact = record?.artifact;
+  if (artifact === null || typeof artifact !== 'object' || Array.isArray(artifact)) {
+    return undefined;
+  }
+  const bytes = (artifact as { readonly bytes?: unknown }).bytes;
+  const normalizedBytes =
+    bytes instanceof Uint8Array
+      ? new Uint8Array(bytes)
+      : Array.isArray(bytes) &&
+          bytes.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)
+        ? Uint8Array.from(bytes)
+        : undefined;
+  if (normalizedBytes === undefined) return undefined;
+  const digest = (artifact as { readonly digest?: unknown }).digest;
+  return {
+    bytes: normalizedBytes,
+    ...(typeof digest === 'string' ? { digest } : {}),
+  };
+}
+
+async function loadMaterialPublicationByGuid(
+  registry: AssetRegistry,
+  request: MaterialLoadRequest,
+): Promise<MaterialPublication | undefined> {
+  const parsedGuid = AssetGuid.parse(request.guid);
+  if (!parsedGuid.ok) return undefined;
+  const entry = await resolveCatalogEntry(registry, request.guid.toLowerCase());
+  if (entry === undefined) return undefined;
+  let pack = registry.packFileCache.get(entry.packageUrl);
+  if (pack === undefined) {
+    const fetched = await fetchAndCachePackFile(
+      registry,
+      entry.packageUrl,
+      request.guid.toLowerCase(),
+    );
+    if (!fetched.ok) return undefined;
+    pack = registry.packFileCache.get(entry.packageUrl);
+  }
+  const asset = pack?.assets.find(
+    (candidate) => candidate.guid.toLowerCase() === request.guid.toLowerCase(),
+  );
+  if (asset === undefined || asset.kind !== 'material') return undefined;
+  const record = cookedRecordFromPayload(asset.payload);
+  const recordObject =
+    record !== undefined && typeof record === 'object' && record !== null
+      ? (record as Record<string, unknown>)
+      : undefined;
+  const artifactKey = materialArtifactKey(recordObject, asset.artifacts ?? {});
+  if (artifactKey === undefined) {
+    const inlineArtifact = inlineMaterialArtifact(recordObject);
+    if (inlineArtifact !== undefined) {
+      return {
+        guid: request.guid,
+        record,
+        artifact: inlineArtifact,
+      };
+    }
+    return {
+      guid: request.guid,
+      record,
+      artifactError: {
+        code: 'asset-artifact-missing',
+        expected: 'a published material artifact descriptor',
+      },
+    };
+  }
+  const descriptor = asset.artifacts?.[artifactKey];
+  if (descriptor === undefined) {
+    return {
+      guid: request.guid,
+      record,
+      artifactError: {
+        code: 'asset-artifact-missing',
+        expected: `artifact descriptor '${artifactKey}'`,
+      },
+    };
+  }
+  let publicationRecord = record;
+  if (publicationRecord === undefined) {
+    const recordArtifact = await readArtifact({
+      packageUrl: entry.packageUrl,
+      guid: request.guid,
+      artifactKey: `${artifactKey}.record`,
+      descriptor: {
+        path: materialRecordPath(descriptor),
+        mediaType: 'application/json',
+      },
+    });
+    if (!recordArtifact.ok) return undefined;
+    try {
+      publicationRecord = JSON.parse(new TextDecoder().decode(recordArtifact.value));
+    } catch {
+      publicationRecord = null;
+    }
+  }
+  const artifactCacheKey = `${entry.packageUrl}\0${request.guid.toLowerCase()}\0${artifactKey}`;
+  const artifact = await registry.artifactCache.read(artifactCacheKey, () =>
+    readArtifact({
+      packageUrl: entry.packageUrl,
+      guid: request.guid,
+      artifactKey,
+      descriptor,
+    }),
+  );
+  if (!artifact.ok) {
+    if (artifact.error.code === 'asset-artifact-missing') {
+      return {
+        guid: request.guid,
+        record: publicationRecord,
+        artifactError: {
+          code: artifact.error.code,
+          expected: artifact.error.expected,
+          actual: artifact.error.detail.observed,
+        },
+      };
+    }
+    if (artifact.error.code === 'asset-artifact-integrity-mismatch') {
+      return {
+        guid: request.guid,
+        record: publicationRecord,
+        artifactError: {
+          code: artifact.error.code,
+          expected: artifact.error.expected,
+          actual: artifact.error.detail.observed,
+        },
+      };
+    }
+    return {
+      guid: request.guid,
+      record: publicationRecord,
+      artifactError: {
+        code: 'asset-artifact-missing',
+        expected: artifact.error.expected,
+        actual: artifact.error.detail.observed,
+      },
+    };
+  }
+  return {
+    guid: request.guid,
+    record: publicationRecord,
+    artifact: {
+      bytes: artifact.value,
+    },
+  };
+}
+
+export async function loadMaterialReadyByGuid(
+  registry: AssetRegistry,
+  request: MaterialLoadRequest,
+): Promise<MaterialReady | MaterialLoadError> {
+  const publication = await loadMaterialPublicationByGuid(registry, request);
+  return loadMaterialReadyPublication(registry, request, publication);
+}
+
+function publicationSpecializationKey(publication: MaterialPublication | undefined): string {
+  const record = publication?.record;
+  if (record === null || typeof record !== 'object') return '';
+  const specializationKey = (record as { readonly specializationKey?: unknown }).specializationKey;
+  return typeof specializationKey === 'string' ? specializationKey : '';
+}
+
+async function loadMaterialReadyPublication(
+  registry: AssetRegistry,
+  request: MaterialLoadRequest,
+  publication: MaterialPublication | undefined,
+): Promise<MaterialReady | MaterialLoadError> {
+  const loader = createMaterialLoader({
+    loadPublication: async () => publication,
+    loadReference: async (guid) => {
+      const parsed = AssetGuid.parse(guid);
+      if (!parsed.ok) return true;
+      const result = await loadByGuid(registry, parsed.value);
+      return result.ok;
+    },
+  });
+  const readiness = await loader.load(request);
+  registry.recordMaterialReadiness(request.guid, readiness);
+  return readiness;
 }
 
 async function loadByGuidInternal<T = Asset>(
@@ -104,7 +325,7 @@ async function loadByGuidInternal<T = Asset>(
         componentField?: string;
       }
     | undefined,
-  allowProvisional: boolean,
+  ancestry: ReadonlySet<string>,
 ): Promise<Result<T, AssetError | ImageError | RhiError>> {
   const guidKey = AssetGuid.format(guid).toLowerCase();
 
@@ -115,7 +336,11 @@ async function loadByGuidInternal<T = Asset>(
   if (existing !== undefined) {
     const state = registry.loadState.get(guidKey);
     if (state?.status === 'provisional') {
-      if (allowProvisional) {
+      // A provisional value is only a legal bridge for a true SCC back-edge.
+      // A sibling or unrelated concurrent load must await its owning promise;
+      // otherwise the parent reaches promoteReady while the dependency is
+      // still provisional and reports a spurious public-readiness failure.
+      if (ancestry.has(guidKey)) {
         const provisional = registry.loadState.getProvisional<T>(guidKey);
         if (provisional !== undefined) return ok(provisional);
       } else {
@@ -155,19 +380,14 @@ async function loadByGuidInternal<T = Asset>(
     const genAtStart = registry.generations.get(guidKey) ?? 0;
     const globalGenAtStart = registry.globalGeneration;
 
-    const promise = loadByGuidProd<T>(registry, guid, guidKey, parentContext);
-    registry.inFlight.set(guidKey, promise);
-    try {
-      const result = await promise;
+    const promise = (async () => {
+      const result = await loadByGuidProd<T>(registry, guid, guidKey, parentContext, ancestry);
       // F22: if the generation counters changed since the Promise was
-      // created, discard the result -- the asset was invalidated. The
-      // inFlight.delete in the finally block still runs (correctly).
+      // created, discard the result -- the asset was invalidated.
       if (
         genAtStart !== (registry.generations.get(guidKey) ?? 0) ||
         globalGenAtStart !== registry.globalGeneration
       ) {
-        // Clean up catalog -- loadByGuidProd may have already written
-        // the payload via catalog() before the generation check runs.
         registry.assetCatalog.delete(guidKey);
         registry.loadState.remove(guidKey);
         return err(
@@ -176,11 +396,15 @@ async function loadByGuidInternal<T = Asset>(
             expected: `GUID ${guidKey} was invalidated during load`,
             hint: ASSET_ERROR_HINTS['asset-invalidated'],
           }),
-        );
+        ) as Result<T, AssetError | ImageError | RhiError>;
       }
       return result;
+    })();
+    registry.inFlight.set(guidKey, promise);
+    try {
+      return await promise;
     } finally {
-      registry.inFlight.delete(guidKey);
+      if (registry.inFlight.get(guidKey) === promise) registry.inFlight.delete(guidKey);
     }
   }
 
@@ -260,6 +484,7 @@ export async function loadByGuidProd<T = Asset>(
     sceneEntityId?: number;
     componentField?: string;
   },
+  ancestry: ReadonlySet<string> = new Set(),
 ): Promise<Result<T, AssetError | ImageError | RhiError>> {
   // feat-20260603-asset-import-loader-injection M4 / w31 (AC-19 lazy iron law):
   // wrap the DDC fetch + load path so a DDC miss can be routed through the
@@ -282,7 +507,7 @@ export async function loadByGuidProd<T = Asset>(
       return transportOrFail<T>(registry, guid, guidKey, 'asset-not-imported');
     }
     // Catalog hit: try the DDC load path.
-    const result = await ddcLoad<T>(registry, guid, guidKey, entry, parentContext);
+    const result = await ddcLoad<T>(registry, guid, guidKey, entry, parentContext, ancestry);
     if (result.ok) return result;
     // DDC miss: only route through transport when the error indicates a
     // missing pack file (not a parse / validation failure inside the pack) or
@@ -360,11 +585,12 @@ export async function resolveCatalogEntry(
  * its `packageUrl` and register each package fully -- all of its GUIDs and
  * their entry display names in one `registerPackage` call. Registering the
  * whole package at once (rather than one GUID per load) means the package
- * cardinality is known up front, so `resolveName` returns the basename for a
- * genuinely single-asset package and the entry name for a multi-asset one,
- * with no incremental 1->N promotion needed on the prod path. The name travels
- * entry -> Package, never through the payload (Risk-3 JSON-roundtrip safety),
- * and covers both the sync (parseAssetPayload) and async (texture/font) loads.
+ * cardinality is known up front, so `resolveName` preserves an explicit entry
+ * name for both single- and multi-asset packages and uses the package basename
+ * only as a fallback. There is no incremental 1->N promotion needed on the
+ * prod path. The name travels entry -> Package, never through the payload
+ * (Risk-3 JSON-roundtrip safety), and covers both the sync (parseAssetPayload)
+ * and async (texture/font) loads.
  */
 export function registerPackagesFromIndex(
   registry: AssetRegistry,
@@ -427,6 +653,7 @@ export async function ddcLoad<T = Asset>(
     sceneEntityId?: number;
     componentField?: string;
   },
+  ancestry: ReadonlySet<string> = new Set(),
 ): Promise<Result<T, AssetError | ImageError | RhiError>> {
   if (typeof entry.packageUrl !== 'string' || entry.packageUrl.length === 0) {
     return err(
@@ -604,11 +831,13 @@ export async function ddcLoad<T = Asset>(
           asset.kind === 'material' &&
           (ref.sourceField?.fieldName === 'parent' ||
             (parentGuidKey !== undefined && refGuidKey === parentGuidKey));
+        const childAncestry = new Set(ancestry);
+        childAncestry.add(guidKey);
         return loadByGuidInternal(
           registry,
           parsedRef.value,
           childContext ?? parentContext,
-          true,
+          childAncestry,
         ).then((r) => ({
           guidKey: refGuidKey,
           result: r,
@@ -706,6 +935,42 @@ export async function ddcLoad<T = Asset>(
     }
   }
 
+  // A Mesh default is a typed dependency, not merely a loadable GUID. This
+  // check deliberately lives outside the `refs.length > 0` branch: a producer
+  // that puts a default GUID in the payload but omits the matching refs[] edge
+  // must fail closed instead of publishing a Mesh whose dependency closure is
+  // incomplete.
+  if (asset.kind === 'mesh') {
+    const directRefGuids = new Set(refs.map((ref) => ref.guid.toLowerCase()));
+    const slots = (asset as MeshAsset).materialSlots;
+    for (let slotIndex = 0; slotIndex < slots.length; slotIndex++) {
+      const slot = slots[slotIndex];
+      if (slot?.defaultMaterial === undefined) continue;
+      const defaultMaterialGuid = AssetGuid.format(slot.defaultMaterial).toLowerCase();
+      const loaded = directRefGuids.has(defaultMaterialGuid)
+        ? registry.assetCatalog.get(defaultMaterialGuid)?.payload
+        : undefined;
+      if (loaded?.kind === 'material') continue;
+      const actualKind = directRefGuids.has(defaultMaterialGuid)
+        ? (loaded?.kind ?? 'missing')
+        : 'missing-ref-edge';
+      const error = new AssetError({
+        code: 'asset-parse-failed',
+        expected: `mesh ${guidKey} materialSlots[${slotIndex}] (${slot.slotName}) default ${defaultMaterialGuid} to reference a MaterialAsset`,
+        hint: `recook mesh ${guidKey}; slot ${slotIndex} '${slot.slotName}' resolves to ${actualKind}, not 'material'`,
+        detail: {
+          meshAssetGuid: guidKey,
+          slotIndex,
+          slotName: slot.slotName,
+          defaultMaterialGuid,
+          actualKind,
+        },
+      });
+      purgeFailedLoad(registry, guidKey, entry.packageUrl, error);
+      return err(error);
+    }
+  }
+
   registry.loadState.promoteReady(guidKey);
   if (registry.loadState.getReady(guidKey) === undefined) {
     const error = new AssetError({
@@ -715,6 +980,21 @@ export async function ddcLoad<T = Asset>(
     });
     purgeFailedLoad(registry, guidKey, entry.packageUrl, error);
     return err(error);
+  }
+  const registeredAsset = registeredPayload as Asset;
+  if (registeredAsset.kind === 'material' && !isEngineMaterial(registeredAsset)) {
+    const publication = await loadMaterialPublicationByGuid(registry, {
+      guid: guidKey,
+      specializationKey: '',
+    });
+    await loadMaterialReadyPublication(
+      registry,
+      {
+        guid: guidKey,
+        specializationKey: publicationSpecializationKey(publication),
+      },
+      publication,
+    );
   }
   return ok(registeredPayload as T);
 }
@@ -871,9 +1151,10 @@ export async function transportOrFail<T = Asset>(
           packageUrl: resolveCatalogAssetUrl(registry, e.packageUrl),
           kind: e.kind,
           // Carry the transport's derived display name into the cache row.
-          // buildCatalog already resolves it (deriveAssetName: basename of the
-          // source for single-/no-storedName sub-assets), so a freshly imported
-          // GLB's 1000+ sub-assets show as "<file>.glb" in the Content Browser
+          // buildCatalog already resolves it through deriveAssetName (authored
+          // names are preserved and the source basename is the fallback, so a
+          // freshly imported GLB's 1000+ sub-assets show as "<file>.glb" in the
+          // Content Browser
           // instead of blank. Dropping it here made listCatalog fall back to
           // `entry.name ?? ''` — the whole-index re-read path (else branch) kept
           // names, so only the incremental patch path was blank.
@@ -1354,7 +1635,7 @@ export function makeLoadContext(registry: AssetRegistry): LoadContext {
     getMaterialShaderTextureFieldNames: (shaderId: string) => {
       const lookup = registry.shaderRegistry.findMaterialArtifact(shaderId);
       if (!lookup.ok) return undefined;
-      return derive(lookup.value.paramSchema).textureFieldNames;
+      return lookup.value.paramSchemaProjection.derivedInterface.textureFieldNames;
     },
     transcodeCaps: registry.transcodeCaps,
     device: undefined,

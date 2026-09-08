@@ -19,39 +19,40 @@
 //   - "// 3. bootstrap"               entry point wiring + keydown HUD
 
 // 1. engine usage
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { type App, createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { TONEMAP_REINHARD_EXTENDED, perspective } from '@forgeax/engine-render';
-import { createDevImportTransport } from '@forgeax/engine-runtime';
+import { TONEMAP_NONE, perspective } from '@forgeax/engine-render';
+
 import { Materials } from '@forgeax/engine-render';
 import { PointLight, PostProcessParams } from '@forgeax/engine-render';
 
 import { createBoxGeometry } from '@forgeax/engine-geometry';
-import type { MaterialAsset, MeshAsset, RenderPipelineAsset, TextureAsset } from '@forgeax/engine-types';
-import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
+import type { MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
+import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
+import { captureCanvasPixels } from '@forgeax/apps-shared/canvas-capture';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 import {
+  exposeLearnRenderTestApp,
+  trackLearnRenderTestBootstrap,
+} from '../../../../shared/src/learn-render-test-lifecycle';
+import {
   HDR_EXPOSURE_POSTPROCESS_ID,
-  HDR_PASSTHROUGH_POSTPROCESS_ID,
-  HDR_PIPELINE_ID,
-  LDR_PIPELINE_ID,
   hdrDisplayNameByKey,
+  hdrFeature,
   installHdrPipelineByKey,
-  makeHdrPipeline,
   setHdrPipelineRegistryForTest,
+  type HdrMode,
 } from './hdr-pipeline';
 
 // 2. example-specific glue
 
-const PACK_INDEX_URL = '/pack-index.json';
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-5-6-hdr',
-);
+
 
 // LO exposure default value (LearnOpenGL section 5.6, default exposure=1.0).
 // Grep-able constant so AI users land on the per-pixel exposure scalar.
@@ -63,12 +64,15 @@ const LO_EXPOSURE = 1.0;
 const EXPOSURE_MIN = 0.1;
 const EXPOSURE_MAX = 10.0;
 const EXPOSURE_STEP = 0.1;
+let currentExposure = LO_EXPOSURE;
+let currentMode: HdrMode = 'hdr';
 
-// 16 B params UBO: [exposure(f32), pad, pad, pad]. Pack the live exposure into
-// the first f32 slot the ExposureParams WGSL struct reads (M-B2 data-driven).
-function packExposureBytes(exposure: number): Uint8Array {
+// 16 B params UBO: [exposure(f32), mode(f32), pad, pad].
+function packExposureBytes(exposure: number, mode: 0 | 1 = 0): Uint8Array {
   const buf = new ArrayBuffer(16);
-  new Float32Array(buf)[0] = exposure;
+  const values = new Float32Array(buf);
+  values[0] = exposure;
+  values[1] = mode;
   return new Uint8Array(buf);
 }
 
@@ -257,6 +261,9 @@ fn fs_main(in : FullscreenOutput) -> @location(0) vec4<f32> {
 }
 `;
 
+void HDR_LO_EXPOSURE_WGSL;
+void HDR_PASSTHROUGH_WGSL;
+
 // Floats per procedural-mesh vertex (position3 + normal3 + uv2 + tangent4).
 // createBoxGeometry emits this 12-float interleaved stride.
 const FLOATS_PER_VERTEX = 12;
@@ -279,7 +286,7 @@ const NORMAL_FLOAT_OFFSET = 3;
 // now-inward faces visible under default back-face culling.
 //
 // Both the interleaved `vertices` buffer (the render-record consumer:
-// gpu-resource-store writeBuffer(vbo, 0, mesh.vertices)) AND the derived
+// GPU residency cache writeBuffer(vbo, 0, mesh.vertices)) AND the derived
 // `attributes.normal` view are negated to keep them consistent (charter SSOT).
 function negateInPlace(buf: Float32Array, start: number, count: number): void {
   for (let i = start; i < start + count; i++) {
@@ -329,20 +336,21 @@ if (canvas === null) {
   throw new Error("[learn-render 5.6 hdr] missing <canvas id='app'> in index.html");
 }
 
-void bootstrap(canvas);
+const bootstrapPromise = bootstrap(canvas);
+trackLearnRenderTestBootstrap(bootstrapPromise, canvas);
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
-    {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
+    { features: [hdrFeature] },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     console.error('[learn-render 5.6 hdr] createApp failed:', appRes.error);
     return;
   }
   const app = appRes.value;
-  const renderer = app.renderer;
+  exposeLearnRenderTestApp(app, target);
   const world = app.world;
   app.onError((error) => {
     console.error('[learn-render 5.6 hdr] app.onError:', error.code, error.hint);
@@ -355,9 +363,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     if (bus !== undefined) bus.push({ code: error.code, hint: error.hint });
   });
 
-  const assets = renderer.assets;
-  assets.configureRuntimeBinding(runtimeBinding);
-  assets.configurePackIndex(PACK_INDEX_URL);
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[learn-render 5.6 hdr] asset host unavailable');
+    return;
+  }
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   // Wood texture for the tunnel walls + floor (inward-facing box interior;
   // see invertMesh below).
@@ -528,7 +539,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
             near: CAMERA_NEAR,
             far: CAMERA_FAR,
           }),
-          tonemap: TONEMAP_REINHARD_EXTENDED,
+          tonemap: TONEMAP_NONE,
         },
       },
     )
@@ -548,52 +559,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // First-person controls so AI users can walk down the tunnel and
   // compare HDR vs LDR detail at different distances from the strong
   // light.
-  addFirstPersonSystem(app.world, app.renderer, {
+  addFirstPersonSystem(app.world, {
     name: 'learn-render-5.6-first-person',
     overrideBackend: undefined,
   });
 
-  // Five-step chain (mirrors gamma-correction 5.2 idiom):
-  //   1. postProcess.register(SHADER_ID, { source, reads })  x 2
-  //   2. registerPipeline(PIPELINE_ID, makeHdrPipeline(mode)) x 2
-  //   3. build RenderPipelineAsset POD                         x 2
-  //   4. installPipeline(initialAsset)                        boot default
-  //   5. window keydown 1/2 -> installHdrPipelineByKey
-  try {
-    renderer.postProcess.register(HDR_EXPOSURE_POSTPROCESS_ID, {
-      source: HDR_LO_EXPOSURE_WGSL,
-      // feat-20260621 M-B2: declare the 16 B exposure params UBO so the engine
-      // eager-creates it + wires the 3-entry @group(1) BGL (texture@0 +
-      // sampler@1 + buffer@2). Default = LO exposure 1.0.
-      params: { byteSize: 16, defaultValue: packExposureBytes(LO_EXPOSURE) },
-      reads: ['offscreenHdr'],
-    });
-    renderer.registerPipeline(HDR_PIPELINE_ID, makeHdrPipeline('hdr'));
-    renderer.postProcess.register(HDR_PASSTHROUGH_POSTPROCESS_ID, {
-      source: HDR_PASSTHROUGH_WGSL,
-      reads: ['offscreenHdr'],
-    });
-    renderer.registerPipeline(LDR_PIPELINE_ID, makeHdrPipeline('ldr'));
-  } catch (e) {
-    console.error('[learn-render 5.6 hdr] register threw:', e);
-    return;
-  }
-
-  const hdrAsset: RenderPipelineAsset = {
-    kind: 'render-pipeline',
-    pipelineId: HDR_PIPELINE_ID,
-  };
-  const ldrAsset: RenderPipelineAsset = {
-    kind: 'render-pipeline',
-    pipelineId: LDR_PIPELINE_ID,
-  };
-
   setHdrPipelineRegistryForTest({
-    assetsByKey: new Map([
-      ['1', hdrAsset],
-      ['2', ldrAsset],
-    ]),
-    renderer,
+    setMode: (mode) => {
+      currentMode = mode;
+      world.set(exposureParamsEntity, PostProcessParams, {
+        data: packExposureBytes(currentExposure, mode === 'hdr' ? 0 : 1),
+      });
+    },
   });
 
   const startRes = app.start();
@@ -603,13 +580,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   const initialInstall = installHdrPipelineByKey('1');
-  if (!initialInstall.ok) {
-    console.error(
-      '[learn-render 5.6 hdr] initial installHdrPipelineByKey(1) failed:',
-      initialInstall.error,
-    );
-    return;
-  }
+  if (!initialInstall.ok) return;
 
   window.addEventListener('resize', () => {
     const dpr = devicePixelRatio;
@@ -622,7 +593,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     let activeKey: '1' | '2' = '1';
     // Live exposure (feat-20260621 M-B2 / R-B5/R-B6): Q lowers, E raises. The
     // value drives the PostProcessParams.data each change; HUD shows it live.
-    let exposure = LO_EXPOSURE;
+    let exposure = currentExposure;
     const hudElement = document.getElementById('hud');
     const renderHud = (): void => {
       if (hudElement === null) return;
@@ -638,10 +609,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       if (lower === 'q' || lower === 'e') {
         const next = lower === 'e' ? exposure + EXPOSURE_STEP : exposure - EXPOSURE_STEP;
         exposure = Math.min(EXPOSURE_MAX, Math.max(EXPOSURE_MIN, next));
+        currentExposure = exposure;
         // Data-driven update: write the new 16 B params into the component; the
         // engine uploads it to the eager-created UBO next frame (no setter).
         world.set(exposureParamsEntity, PostProcessParams, {
-          data: packExposureBytes(exposure),
+          data: packExposureBytes(exposure, currentMode === 'hdr' ? 0 : 1),
         });
         renderHud();
         return;
@@ -661,26 +633,33 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     });
   }
 
-  console.warn(`[learn-render 5.6 hdr] backend=${renderer.backend}`);
-
-  installCaptureHook(app, world);
+  installCaptureHook(app, world, target);
 }
 
 // RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives
 // one update + draw + readPixels so the live canvas read is anchored to the same
 // frame the capture records. Only meaningful when the page is served with
 // FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
-function installCaptureHook(app: App, world: App['world']): void {
+function installCaptureHook(app: App, world: App['world'], canvas: HTMLCanvasElement): void {
   type CaptureHook = () => Promise<Uint8Array>;
   const win = window as unknown as { __captureHdr?: CaptureHook };
   const renderer = app.renderer;
+  const attached = renderer.attach(world);
+  if (!attached.ok) throw attached.error;
+  const lease = attached.value;
   win.__captureHdr = async (): Promise<Uint8Array> => {
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    const r = await renderer.readPixels();
+    const frame = renderer.draw({
+      leases: [lease],
+      camera: { lease },
+      environment: { lease },
+    });
+    if (!frame.ok) throw frame.error;
+    await renderer.observe(frame.value, { include: ['draws'] });
+    const r = await captureCanvasPixels(canvas);
     if (!r.ok) {
       throw new Error(
-        `[learn-render 5.6 hdr] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
+        `[learn-render 5.6 hdr] canvas capture failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
       );
     }
     return r.value;

@@ -1,11 +1,11 @@
 import type { EntityHandle } from '@forgeax/engine-ecs';
-import { World } from '@forgeax/engine-ecs';
+import { createWorldContext, World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-scene';
 import type { AnimationClip, AnimationTargetIdValue, Handle } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { subscribeAnimationDiagnostics } from '../animation-diagnostic';
 import { AnimationPlayer } from '../animation-player';
-import { AnimationTargetId, AnimationTargets } from '../animation-target';
+import { AnimatedBy, AnimationTargetId, AnimationTargets } from '../animation-target';
 import { animationPlugin } from '../plugin';
 import { _resetAnimationWarnsForTests } from '../systems/advance-animation-player';
 
@@ -30,7 +30,7 @@ function clip(targetId = TARGET_ID): AnimationClip {
 }
 
 async function playerWithClip(world: World, animationClip = clip()): Promise<EntityHandle> {
-  expect((await animationPlugin().build(world)).ok).toBe(true);
+  await createWorldContext(world, [animationPlugin()]);
   const handle = world.allocSharedRef('AnimationClip', animationClip);
   return world
     .spawn({
@@ -119,16 +119,14 @@ describe('animation runtime diagnostics', () => {
     expect(diagnostics(warn)).toHaveLength(3);
   });
 
-  it('reuses stable target bindings and invalidates them on owning ECS changes', async () => {
+  it('reuses stable target bindings until relationship inputs change', async () => {
     const world = new World();
     const player = await playerWithClip(world);
     const target = world.spawn({ component: Transform, data: {} }).unwrap() as EntityHandle;
     world
       .addComponent(target, { component: AnimationTargetId, data: { value: TARGET_ID } })
       .unwrap();
-    world
-      .addComponent(player, { component: AnimationTargets, data: { targets: [target] } })
-      .unwrap();
+    world.addComponent(target, { component: AnimatedBy, data: { player } }).unwrap();
     const get = vi.spyOn(world, 'get');
 
     world.update(0.25);
@@ -148,7 +146,7 @@ describe('animation runtime diagnostics', () => {
     const bindingReadsAfterStructuralChange = get.mock.calls.filter(
       ([, component]) => component === AnimationTargets || component === AnimationTargetId,
     ).length;
-    expect(bindingReadsAfterStructuralChange).toBeGreaterThan(bindingReadsAfterStableUpdate);
+    expect(bindingReadsAfterStructuralChange).toBe(bindingReadsAfterStableUpdate);
 
     world.addComponent(target, { component: Transform, data: {} }).unwrap();
     world.set(target, AnimationTargetId, { value: 'b'.repeat(32) }).unwrap();
@@ -159,16 +157,14 @@ describe('animation runtime diagnostics', () => {
     expect(bindingReadsAfterIdChange).toBeGreaterThan(bindingReadsAfterStructuralChange);
   });
 
-  it('emits structured diagnostics for missing Transform, duplicate IDs, stale targets, and missing channels', async () => {
+  it('emits structured diagnostics for missing Transform, duplicate IDs, and missing channels', async () => {
     const world = new World();
     const player = await playerWithClip(world);
     const target = world.spawn({ component: Transform, data: {} }).unwrap() as EntityHandle;
     world
       .addComponent(target, { component: AnimationTargetId, data: { value: TARGET_ID } })
       .unwrap();
-    world
-      .addComponent(player, { component: AnimationTargets, data: { targets: [target] } })
-      .unwrap();
+    world.addComponent(target, { component: AnimatedBy, data: { player } }).unwrap();
     world.removeComponent(target, Transform).unwrap();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
@@ -186,7 +182,7 @@ describe('animation runtime diagnostics', () => {
     world
       .addComponent(duplicate, { component: AnimationTargetId, data: { value: TARGET_ID } })
       .unwrap();
-    world.set(player, AnimationTargets, { targets: [target, duplicate] }).unwrap();
+    world.addComponent(duplicate, { component: AnimatedBy, data: { player } }).unwrap();
     world.update(0.25);
     expect(diagnostics(warn)).toContainEqual(
       expect.objectContaining({
@@ -196,18 +192,10 @@ describe('animation runtime diagnostics', () => {
     );
 
     world.despawn(duplicate).unwrap();
-    world.set(player, AnimationTargets, { targets: [duplicate] }).unwrap();
     world.update(0.25);
-    expect(diagnostics(warn)).toContainEqual(
-      expect.objectContaining({
-        code: 'animation-target-owner-stale',
-        detail: expect.objectContaining({ reason: 'target-stale', targetId: TARGET_ID }),
-      }),
-    );
 
     const secondClip: AnimationClip = { kind: 'animation-clip', duration: 1, channels: [] };
     const secondHandle = world.allocSharedRef('AnimationClip', secondClip);
-    world.set(player, AnimationTargets, { targets: [target] }).unwrap();
     world.set(player, AnimationPlayer, {
       clips: [
         world.get(player, AnimationPlayer).unwrap().clips[0] as unknown as Handle<

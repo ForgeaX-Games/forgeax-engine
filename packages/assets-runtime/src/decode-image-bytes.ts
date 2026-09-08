@@ -27,10 +27,11 @@ import { makeImageError } from './image-error';
 import { numMipLevels } from './mipmap-generator';
 
 /** v1 mime whitelist -- PNG / JPEG only (charter P1 progressive disclosure). */
-type SupportedMime = 'image/png' | 'image/jpeg';
+const SUPPORTED_MIMES = ['image/png', 'image/jpeg'] as const;
+type SupportedMime = (typeof SUPPORTED_MIMES)[number];
 
 function isSupportedMime(mime: string): mime is SupportedMime {
-  return mime === 'image/png' || mime === 'image/jpeg';
+  return SUPPORTED_MIMES.some((supportedMime) => supportedMime === mime);
 }
 
 /**

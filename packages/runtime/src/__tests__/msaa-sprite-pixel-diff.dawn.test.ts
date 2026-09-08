@@ -36,7 +36,6 @@
 
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
-import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
 import {
   ANTIALIAS_MSAA,
   ANTIALIAS_NONE,
@@ -44,10 +43,11 @@ import {
   MeshFilter,
   MeshRenderer,
   TONEMAP_NONE,
-} from '@forgeax/engine-render/internal';
+} from '@forgeax/engine-render';
+import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import { createRenderer } from '../index';
+import { constructRuntimeRendererHost } from '../renderer-host';
 import { drawPublished } from './draw-published';
 
 const WIDTH = 256;
@@ -222,21 +222,24 @@ describe('feat-20260604-msaa M2 w9 [F-1]: LDR sprite + MSAA split sub-pass cover
       removeEventListener() {},
     } as unknown as HTMLCanvasElement;
 
-    let renderer: Awaited<ReturnType<typeof createRenderer>>;
+    let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
     try {
-      renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+      host = await constructRuntimeRendererHost(
+        mockCanvas,
+        {},
+        {
+          shaderManifestUrl: ENGINE_MANIFEST_URL,
+        },
+      );
     } finally {
       globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
     }
-    expect(renderer.backend).toBe('webgpu');
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
-    if (!ready.ok) return;
+    expect(host.ok).toBe(true);
+    if (!host.ok) throw host.error;
+    const { renderer, assets } = host.value;
+    expect(renderer.inspect().state).toBe('alive');
     const device = sharedDevice;
     if (device === undefined) throw new Error('GPUDevice not captured');
-
-    const assets = renderer.assets;
-    if (assets === null) throw new Error('AssetRegistry is null');
 
     // Catalogue + upload a small sprite texture, a sampler, and a
     // forgeax::sprite material. feat-20260625 M2/M3 (D-3): sprite is now
@@ -245,9 +248,7 @@ describe('feat-20260604-msaa M2 w9 [F-1]: LDR sprite + MSAA split sub-pass cover
     // in the record stage. feat-20260614 M8: AssetRegistry holds GUID->
     // payload only (no handle concept); texture/sampler are referenced
     // from the material values by GUID string and resolved to per-
-    // World column handles at extract. The explicit uploadTexture call
-    // exercises the GPU residency path via a column handle minted on an
-    // upload-only World.
+    // World column handles at extract. The record stage owns GPU residency.
     //
     // Falsification (smoke harness sensitivity claim, not committed to CI):
     // if the sprite pass's blend state is hand-rewritten to `src=one /
@@ -272,19 +273,6 @@ describe('feat-20260604-msaa M2 w9 [F-1]: LDR sprite + MSAA split sub-pass cover
     const texCatalog = assets.catalog(TEX_GUID, synthPod as never);
     expect(texCatalog.ok, 'sprite texture catalog').toBe(true);
     if (!texCatalog.ok) return;
-
-    const uploadWorld = new World();
-    const textureHandle = uploadWorld.allocSharedRef('TextureAsset', synthPod);
-    const uploadRes = await renderer.store.uploadTexture(textureHandle, synthPod as never, {
-      bytes: synth.data,
-      width: synth.width,
-      height: synth.height,
-      mime: 'image/png',
-      colorSpace: 'srgb',
-      mipmap: false,
-    });
-    expect(uploadRes.ok, 'sprite texture upload').toBe(true);
-    if (!uploadRes.ok) return;
 
     const samplerCatalog = assets.catalog(SAMPLER_GUID, {
       kind: 'sampler',
@@ -342,7 +330,10 @@ describe('feat-20260604-msaa M2 w9 [F-1]: LDR sprite + MSAA split sub-pass cover
     // under MSAA. Capture every RhiError fired through the renderer's
     // fan-out channel during this draw.
     const msaaErrors: Array<{ code: string }> = [];
-    const unsubscribe = renderer.onError((err) => msaaErrors.push({ code: err.code }));
+    const unsubscribe = renderer.subscribe((event) => {
+      if (event.kind !== 'error') return;
+      msaaErrors.push({ code: event.error.code });
+    });
     const worldMsaa = new World();
     spawnSpriteScene(worldMsaa, spriteMaterialPayload, ANTIALIAS_MSAA);
     const drawnMsaa = drawPublished(renderer, worldMsaa);

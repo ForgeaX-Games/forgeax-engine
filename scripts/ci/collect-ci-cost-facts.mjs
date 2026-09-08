@@ -5,7 +5,12 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { POOL_LABELS } from './check-runner-pool-labels.mjs';
-import { observeArtifactDownload } from './download-artifact-with-retry.mjs';
+import {
+  downloadArtifact,
+  observeArtifactDownload,
+  RETRY_DELAYS_SECONDS,
+  retryArtifact,
+} from './download-artifact-with-retry.mjs';
 import { isFingerprint } from './evidence/fingerprint.mjs';
 import { parseGhPages } from './parse-gh-pages.mjs';
 
@@ -170,17 +175,14 @@ async function measureExpandedBytes(artifacts) {
       async (artifact) => {
         const archive = join(root, `${artifact.id}.zip`);
         const destination = join(root, String(artifact.id));
-        let bytes;
-        const observed = await observeArtifactDownload(async () => {
-          const response = await execFileAsync(
-            'gh',
-            ['api', `repos/${process.env.GITHUB_REPOSITORY}/actions/artifacts/${artifact.id}/zip`],
-            { encoding: 'buffer', maxBuffer: 1024 * 1024 * 1024 },
-          );
-          bytes = response.stdout;
-          return bytes.byteLength;
-        });
-        writeFileSync(archive, bytes);
+        const observed = await retryArtifact(
+          (transferAttempt) =>
+            observeArtifactDownload(
+              () => downloadArtifact(process.env.GITHUB_REPOSITORY, String(artifact.id), archive),
+              { transferAttempt },
+            ),
+          { onRetry: async () => {} },
+        );
         // Artifact ZIPs can contain duplicate paths when producers merge outputs.
         // Cost collection is a read-only measurement, so overwrite deterministically
         // instead of letting unzip prompt on a non-interactive runner.
@@ -194,7 +196,7 @@ async function measureExpandedBytes(artifacts) {
         return [
           artifact.id,
           {
-            ...observed,
+            ...observed.value,
             expandedDiskBytes: kibibytes * 1024,
           },
         ];
@@ -328,7 +330,10 @@ function jobForIdentity(jobs, identity) {
   return matches.length === 1 ? matches[0] : null;
 }
 function timingJobForIdentity(jobs, identity) {
-  const matrixJobs = jobs.filter((job) => job.name.startsWith(`${identity}-`));
+  const matrixJobs = jobs.filter((job) => {
+    if (!job.name.startsWith(`${identity}-`)) return false;
+    return /^\d+$/.test(job.name.slice(identity.length + 1));
+  });
   const candidates =
     matrixJobs.length > 0 ? matrixJobs : jobs.filter((job) => job.name === identity);
   return (
@@ -472,7 +477,10 @@ function validDownload(value) {
     timestamp(value.startedAt) &&
     timestamp(value.completedAt) &&
     Number.isFinite(value.elapsedSeconds) &&
-    value.elapsedSeconds >= 0
+    value.elapsedSeconds >= 0 &&
+    Number.isInteger(value.transferAttempt) &&
+    value.transferAttempt >= 1 &&
+    value.transferAttempt <= RETRY_DELAYS_SECONDS.length
   );
 }
 

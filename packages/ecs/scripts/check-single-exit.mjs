@@ -13,8 +13,8 @@
 //     (X != 'ecs', X != 'engine') re-exporting any of the gated symbols
 //     using `export ... from '@forgeax/engine-ecs'` (named or `* as`).
 //
-// Gated symbol set (the new vocabulary added across this loop family):
-//   - Handle, SchemaFieldType, ManagedRefStore, EcsErrorCode,
+// Gated symbol set (the ECS-owned vocabulary):
+//   - SchemaFieldType, ManagedRefStore, EcsErrorCode,
 //     EcsErrorDetail, EcsError, ScheduleToken, Update, FixedUpdate, Time,
 //     FixedTime, TimeDeltaInvalidError, TimeConfigInvalidError,
 //     ScheduleScopeMismatchError
@@ -25,8 +25,8 @@
 //     `buffer<N>` schema fields; same single-import affordance contract)
 //
 // Importing these symbols is fine and expected — the gate only forbids
-// re-exporting them through another package's barrel. AI users always reach
-// for `import { Handle, ... } from '@forgeax/engine-ecs'`.
+// re-exporting them through another package's barrel. `Handle` and `Result`
+// are owned by @forgeax/engine-types and are never forwarded by ECS.
 //
 // Freeze-list (markers, not regex matchers):
 //   - 'fixed-size-mismatch' / 'fixed-array-overflow' / 'array-pop-empty' /
@@ -35,11 +35,7 @@
 //     check-no-managed-array-error-code grep gate covers the 4 deleted
 //     literals; this freeze-list documents the surviving members so AI
 //     users tracing the cut have a single anchored declaration site)
-//   - world.push / world.pop / world.capacity (the 3 new World command
-//     methods added by M2 / w8 replacing the deleted FixedArrayView /
-//     VarArrayView value-shape surface; freeze-list-only — World is not
-//     re-exported from any non-ecs package, so the gate cannot fire on
-//     these and the entries are documentary anchors)
+//   - relationship target writes (the target is materialized and read-only)
 //
 // FixedArrayView / VarArrayView were removed from the gated set in
 // feat-20260515-buffer-array-vocab-collapse M5 / w27 — the value-shape
@@ -55,7 +51,6 @@ import { join } from 'node:path';
 import process from 'node:process';
 
 const GATED_SYMBOLS = [
-  'Handle',
   'SchemaFieldType',
   'ManagedRefStore',
   'EcsErrorCode',
@@ -80,9 +75,7 @@ const GATED_SYMBOLS = [
 // check-no-managed-array-error-code gate. Listed here for cross-cut
 // discoverability via `git grep` against a single SSOT.
 const FREEZE_LIST_MARKERS = [
-  'world.push',
-  'world.pop',
-  'world.capacity',
+  'relationship target writes',
   "'fixed-size-mismatch'",
   "'fixed-array-overflow'",
   "'array-pop-empty'",
@@ -188,4 +181,3 @@ void FREEZE_LIST_MARKERS;
 console.log(
   `[check-single-exit] OK — no @forgeax/engine-ecs gated symbols re-exported from other packages.`,
 );
-

@@ -16,6 +16,7 @@
 import type { CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import { Time, Update, type World } from '@forgeax/engine-ecs';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { vec3 } from '@forgeax/engine-math';
 import {
   CharacterController,
@@ -180,7 +181,7 @@ function driveCharacter(
     // integrate gravity or read position during this window.
     if (!pw.hasBody(character)) return;
 
-    const snap = app.renderer.input.snapshot(app.world);
+    const snap = app.world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
     let dx = 0;
     let dz = 0;
     if (snap) {

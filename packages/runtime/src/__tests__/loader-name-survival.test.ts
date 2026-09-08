@@ -13,11 +13,11 @@
 //                 after loadByGuid (parseAssetPayload sync branch) resolveName
 //                 returns each stored name.
 //   AC-08 async — a texture in its own (single-asset) package; after loadByGuid
-//                 (texture upstream async branch) resolveName returns the
-//                 basename derived from its package path. Without the entry ->
-//                 Package wiring the texture would land in a null package and
-//                 resolveName would be '' -- so basename here still proves the
-//                 async load path registered the package post-roundtrip.
+//                 (texture upstream async branch) resolveName preserves the
+//                 explicit entry name. Without the entry -> Package wiring the
+//                 texture would land in a null package and resolveName would be
+//                 '' -- so the named result proves the async load path registered
+//                 the package post-roundtrip.
 //   FALSIFY     — the same pack with the entry name stripped degrades to
 //                 basename(path), proving the assertion is name-sensitive (not
 //                 a tautology). The FALSIFY block does not gate CI; it documents
@@ -188,10 +188,9 @@ describe('loader name survival (AC-08)', () => {
 
     const r = await reg.loadByGuid(parseGuid(TEX));
     expect(r.ok).toBe(true);
-    // Single-asset texture package -> basename(path) (AC-01). The wiring is what
-    // makes this non-empty: without entry -> Package the texture lands in a null
-    // package and resolveName would be ''.
-    expect(reg.resolveName(TEX)).toBe('diffuse.pack.json');
+    // An explicit entry name wins even for a single-asset package. The wiring
+    // makes this name survive the async JSON-roundtrip path.
+    expect(reg.resolveName(TEX)).toBe('Diffuse');
   });
 
   it('FALSIFY: stripped entry.name degrades to basename, proving name-sensitivity', async () => {

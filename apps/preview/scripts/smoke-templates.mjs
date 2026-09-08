@@ -3,9 +3,9 @@
 // Preview host -> template bootstrap -> WebGPU frame loop. Runtime browser
 // errors are the oracle. game-default keeps its deeper gameplay projection
 // assertions; every other template must at least load, start, size its canvas,
-// and leave the renderer healthy.
+// and leave the renderer alive.
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { chromium } from 'playwright';
@@ -18,24 +18,40 @@ const ARTIFACT_DIR = resolve(
 const PORT = Number.parseInt(process.env.FORGEAX_TEMPLATE_SMOKE_PORT ?? '5201', 10);
 const ORIGIN = `http://127.0.0.1:${PORT}`;
 const CHROME_CHANNEL = process.env.FORGEAX_CHROME_CHANNEL ?? 'chrome';
+const SELECTED_TEMPLATE_SLUGS = (process.env.FORGEAX_TEMPLATE_SMOKE_SLUGS ?? '')
+  .split(',')
+  .map((slug) => slug.trim())
+  .filter((slug) => slug.length > 0);
 
 function discoverTemplates() {
-  const entries = readdirSync(TEMPLATES_ROOT, { withFileTypes: true })
+  let entries = readdirSync(TEMPLATES_ROOT, { withFileTypes: true })
     .filter((entry) => (
       entry.isDirectory()
       && !entry.name.startsWith('.')
       && !entry.name.startsWith('_')
       && entry.name !== 'node_modules'
     ))
+    // A stale package-local node_modules directory can survive a template
+    // removal in a contributor checkout. It is not a template and must not
+    // turn the discovery pass into a false missing-manifest failure.
+    .filter((entry) => {
+      const children = readdirSync(join(TEMPLATES_ROOT, entry.name), { withFileTypes: true });
+      return !(children.length === 1 && children[0]?.name === 'node_modules');
+    })
     .sort((a, b) => a.name.localeCompare(b.name));
   if (entries.length === 0) throw new Error(`no engine templates found under ${TEMPLATES_ROOT}`);
+  if (SELECTED_TEMPLATE_SLUGS.length > 0) {
+    const selected = new Set(SELECTED_TEMPLATE_SLUGS);
+    const available = new Set(entries.map((entry) => entry.name));
+    const missing = [...selected].filter((slug) => !available.has(slug));
+    if (missing.length > 0) throw new Error(`unknown engine templates: ${missing.join(', ')}`);
+    entries = entries.filter((entry) => selected.has(entry.name));
+  }
 
   return entries.map((entry) => {
     const root = join(TEMPLATES_ROOT, entry.name);
     const manifestPath = join(root, 'forge.json');
-    const entryPath = join(root, 'main.ts');
     if (!existsSync(manifestPath)) throw new Error(`${entry.name}: missing forge.json`);
-    if (!existsSync(entryPath)) throw new Error(`${entry.name}: missing main.ts`);
     let manifest;
     try {
       manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
@@ -47,10 +63,31 @@ function discoverTemplates() {
       || typeof manifest !== 'object'
       || typeof manifest.id !== 'string'
       || typeof manifest.name !== 'string'
+      || typeof manifest.entry !== 'string'
+      || manifest.entry.length === 0
     ) {
-      throw new Error(`${entry.name}: forge.json must declare string id and name`);
+      throw new Error(`${entry.name}: forge.json must declare string id, name, and entry`);
     }
-    return { slug: entry.name, id: manifest.id, name: manifest.name, manifest };
+    const entryPath = resolve(root, manifest.entry);
+    const relativeEntry = relative(root, entryPath);
+    if (
+      relativeEntry.length === 0
+      || relativeEntry === '..'
+      || relativeEntry.startsWith(`..${sep}`)
+      || isAbsolute(relativeEntry)
+    ) {
+      throw new Error(`${entry.name}: forge.json entry must stay inside the template`);
+    }
+    if (!existsSync(entryPath)) {
+      throw new Error(`${entry.name}: missing forge.json entry ${manifest.entry}`);
+    }
+    return {
+      slug: entry.name,
+      id: manifest.id,
+      name: manifest.name,
+      entry: manifest.entry,
+      manifest,
+    };
   });
 }
 
@@ -142,9 +179,9 @@ async function smokeTemplate(template, evidence) {
     () => {
       const inspection = globalThis.__forgeaxPreviewInspection;
       const canvas = document.querySelector('canvas');
-      const health = inspection?.renderer.health();
+      const state = inspection?.renderer.health()?.reason;
       return inspection !== undefined
-        && health?.reason === 'alive'
+        && state === 'alive'
         && (canvas?.width ?? 0) > 0
         && (canvas?.height ?? 0) > 0;
     },
@@ -169,7 +206,7 @@ async function smokeTemplate(template, evidence) {
     if (inspection === undefined) throw new Error('Preview inspection global is unavailable');
     return {
       listed: inspection.list(),
-      health: inspection.renderer.health(),
+      state: inspection.renderer.health(),
       canvas: {
         width: document.querySelector('canvas')?.width ?? 0,
         height: document.querySelector('canvas')?.height ?? 0,
@@ -181,7 +218,7 @@ async function smokeTemplate(template, evidence) {
     template.manifest.defaultScene === undefined
     && message.includes('render-system-no-camera')
   ));
-  if (probe.health.reason !== 'alive') throw new Error(`${template.slug} renderer is not alive: ${JSON.stringify(probe.health)}`);
+  if (probe.state.reason !== 'alive') throw new Error(`${template.slug} renderer is not alive: ${JSON.stringify(probe.state)}`);
   if (probe.canvas.width <= 0 || probe.canvas.height <= 0) {
     throw new Error(`${template.slug} canvas has no drawable size: ${JSON.stringify(probe.canvas)}`);
   }

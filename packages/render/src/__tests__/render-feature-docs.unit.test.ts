@@ -25,18 +25,18 @@ describe('RenderFeature documentation surface', () => {
       '## RenderFeature: the producer seam',
       'type FrameData',
       'createRenderer(canvas, { features: [feature] })',
-      "context.staging.addPass('named-pass'",
-      'execute: ({ pass })',
+      'plan(data, context)',
+      'named resources and passes',
       'active RenderGraph',
       'RenderFeature',
-      'RenderPipeline',
+      'Standard Pipeline',
       'RenderGraph pass',
-      'Material pass',
     ]) {
       expect(topSurface).toContain(token);
     }
     expect(topSurface).not.toContain('passContext.commands');
-    expect(topSurface).toContain('graph-only Wave 1 feature');
+    expect(topSurface).not.toContain('context.staging.addPass');
+    expect(topSurface).not.toContain('graph-only Wave 1 feature');
     expect(runtimeReadme).toContain('createRenderer(canvas, options?, bundler?)');
     expect(appSkill).toContain('Renderer feature assembly');
   });
@@ -49,10 +49,11 @@ describe('RenderFeature documentation surface', () => {
       'error.code',
       'error.hint',
       'error.detail',
-      'renderFeatureDiagnostics()',
+      'renderer.subscribe()',
+      'renderer.inspect()',
       'renderer.recover()',
       'renderer.dispose()',
-      'renderer.registerPipeline(id, pipeline)',
+      'RenderFeaturePlan',
     ]) {
       expect(surface).toContain(token);
     }

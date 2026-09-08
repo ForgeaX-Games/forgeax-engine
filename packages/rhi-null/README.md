@@ -12,8 +12,9 @@ import { createRenderer } from '@forgeax/engine-runtime';
 // shaped like a canvas -- RhiNull never touches the DOM, so a minimal stub is
 // enough (the dogfood tests use one; see packages/runtime/src/__tests__).
 const canvas = { width: 1, height: 1 } as unknown as HTMLCanvasElement;
-const renderer = await createRenderer(canvas, { rhi });
-await renderer.ready; // resolves ok -- createShaderModule skips WGSL compilation
+const created = await createRenderer(canvas, { rhi });
+if (!created.ok) throw created.error;
+const renderer = created.value;
 ```
 
 The exported `rhi` singleton has the `RhiBackendPack`-mandated shape (`RhiInstance & { acquireCanvasContext; createShaderModule }`). `createRenderer` picks it up via Channel 1's `rendererOptions.rhi` escape hatch -- no backend auto-selection logic is modified, no `navigator.gpu` probe involved.
@@ -30,7 +31,7 @@ The exported `rhi` singleton has the `RhiBackendPack`-mandated shape (`RhiInstan
 
 ## Capabilities
 
-`device.caps` reports the D-5 profile: every boolean cap is `true` except the three `@reserved-for-wgpu-native-only` fields (`multiDrawIndirect`, `pushConstants`, `textureBindingArray`), which are `false`. `maxColorAttachments` is 8. The headless backend maximizes structural coverage -- any `caps.X` gate in the engine codebase passes through:
+`renderer.inspect().capabilities` reports the D-5 profile: every boolean cap is `true` except the three `@reserved-for-wgpu-native-only` fields (`multiDrawIndirect`, `pushConstants`, `textureBindingArray`), which are `false`. `maxColorAttachments` is 8. The headless backend maximizes structural coverage -- any `caps.X` gate in the engine codebase passes through:
 
 | Cap | Value | Note |
 |:--|:--|:--|
@@ -74,13 +75,14 @@ interface HandleRecord {
 }
 ```
 
-**Readback for assertions** -- `renderer.device` is typed `RhiDevice` (the spec surface), so cast it to `RhiNullDevice` to reach the ledger + counters:
+**Readback for assertions** -- the device ledger is an owner-local test concern. Public `Renderer` exposes no device; inject the RhiNull pack into a package-local construction test when counters are needed:
 
 ```ts
 import type { RhiNullDevice } from '@forgeax/engine-rhi-null';
 
-const device = renderer.device as unknown as RhiNullDevice;
+const device = ownerLocalDevice as RhiNullDevice;
 device.totalDrawCount = 0;       // reset before a frame if you assert deltas
+device.totalDispatchCount = 0;
 renderer.draw(world);
 const records = device.bookkeeper.allRecords(); // snapshot of all ledger rows
 ```
@@ -89,6 +91,7 @@ M3 unit tests read this to assert:
 
 - **Create / destroy pairing** (`kind: 'Buffer'` count == `kind: 'Buffer'` with `destroyed === true` count)
 - **Draw count >= 1** (`device.totalDrawCount` after `renderer.draw(world)`)
+- **Compute dispatch count** (`device.totalDispatchCount`, including indirect dispatch)
 - **Bind-group assembly counts** (`device.totalBindGroupCount`)
 - **Pass schedule order** -- prefer the type-safe `renderer.perFramePassNames` (no cast needed); `device.framePassNames` is the same data on the cast `RhiNullDevice`
 - **BGL / PSO shape** (ledger entries with `kind: 'BindGroupLayout'` / `kind: 'RenderPipeline'`)
@@ -113,7 +116,7 @@ M3 unit tests read this to assert:
 |:--|:--|:--|
 | Surface | Partial stub (caller chooses what to mock) | Full `implements RhiDevice` (tsc-complete) |
 | Ledger | None (assert `.toHaveBeenCalled()` on mocks) | `Bookkeeper.allRecords()` + `totalDrawCount` / `framePassNames` |
-| Integration depth | Tests one function call at a time | Exercises real `createRenderer` -> `renderer.ready` -> `renderer.draw(world)` path |
+| Integration depth | Tests one function call at a time | Exercises real `createRenderer` -> `Result<Renderer>` -> `renderer.draw(frame)` path |
 | Handle validation | None | Cross-device and double-destroy fail-fast |
 | Render-graph coverage | Mock `RhiCommandEncoder` return values | Real pass scheduling through URP default pipeline |
 

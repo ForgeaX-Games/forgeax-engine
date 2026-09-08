@@ -7,12 +7,84 @@ import {
 } from '../src/node';
 
 const endpoints: NetEndpoint[] = [];
+const invalidMaxQueuedEvents = [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY];
 
 afterEach(() => {
   for (const endpoint of endpoints.splice(0)) endpoint.close();
 });
 
 describe('Node WebSocket endpoint entry', () => {
+  it('returns bounded structured listener option failures before bind and retries the same port', async () => {
+    const port = await reservePort();
+    const address = `ws://127.0.0.1:${port}`;
+
+    for (const maxQueuedEvents of invalidMaxQueuedEvents) {
+      const result = await listenWebSocketEndpoint({ port, maxQueuedEvents });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('connection-failed');
+        expect(result.error.detail.address).toBe(address);
+        expect(result.error.detail.cause).toBe('maxQueuedEvents must be a positive integer');
+        expect(result.error.detail.cause.length).toBeLessThan(128);
+      }
+    }
+
+    const repaired = await listenWebSocketEndpoint({ port, maxQueuedEvents: 4 });
+    expect(repaired.ok).toBe(true);
+    if (!repaired.ok) return;
+    const listener = track(repaired.value);
+
+    expect(listener.close().ok).toBe(true);
+    const reused = await listenWebSocketEndpoint({ port, maxQueuedEvents: 4 });
+    expect(reused.ok).toBe(true);
+    if (reused.ok) {
+      track(reused.value);
+      expect(reused.value.close().ok).toBe(true);
+    }
+  });
+
+  it('returns structured client option failures without a peer and retries the same URL', async () => {
+    const port = await reservePort();
+    const url = `ws://127.0.0.1:${port}`;
+    const started = await listenWebSocketEndpoint({ port });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    const listener = track(started.value);
+
+    for (const maxQueuedEvents of invalidMaxQueuedEvents) {
+      const result = await connectWebSocketClientEndpoint(url, { maxQueuedEvents });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('connection-failed');
+        expect(result.error.detail.address).toBe(url);
+        expect(result.error.detail.cause).toBe('maxQueuedEvents must be a positive integer');
+        expect(result.error.detail.cause.length).toBeLessThan(128);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(listener.poll()).toEqual([]);
+    }
+
+    const repaired = await connectWebSocketClientEndpoint(url, { maxQueuedEvents: 4 });
+    expect(repaired.ok).toBe(true);
+    if (!repaired.ok) return;
+    const client = track(repaired.value);
+    const peerId = await connectedPeer(listener);
+    const bytes = new Uint8Array([11, 7, 3, 1]);
+
+    expect(client.send(peerId, bytes).ok).toBe(true);
+    const received = await eventOf(listener, 'message');
+    expect(received.kind).toBe('message');
+    if (received.kind === 'message') expect(received.data).toEqual(bytes);
+
+    expect(client.close().ok).toBe(true);
+    const repeatedClose = client.close();
+    expect(repeatedClose.ok).toBe(false);
+    if (!repeatedClose.ok) expect(repeatedClose.error.code).toBe('already-closed');
+    expect((await eventOf(listener, 'peer-disconnected')).kind).toBe('peer-disconnected');
+  });
+
   it('reports listener bind failures as connection-failed', async () => {
     const port = await reservePort();
     const holder = createServer();

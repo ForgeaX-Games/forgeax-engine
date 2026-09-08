@@ -11,7 +11,7 @@
 //           cycle A→B→A no stack overflow
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { defineComponent } from '@forgeax/engine-ecs';
+import { type Component, defineComponent } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type {
   AssetError,
@@ -31,6 +31,18 @@ const MESH_GUID = 'a0000000-0000-4000-a000-000000000004';
 const MISSING_SUB_GUID = 'a0000000-0000-4000-a000-000000009999';
 const CYCLE_A_GUID = 'b0000000-0000-4000-b000-000000000001';
 const CYCLE_B_GUID = 'b0000000-0000-4000-b000-000000000002';
+const WRONG_DEFAULT_KIND_GUID = 'a0000000-0000-4000-a000-000000000005';
+
+// ECS component reflection is World/owner-local after the ECS architecture
+// update. The recursive prod-path breadcrumb still needs the scene schema, so
+// inject the test vocabulary into AssetRegistry explicitly.
+const BreadcrumbTransform = defineComponent('Transform', { pos: 'array<f32, 3>' });
+const BreadcrumbMeshFilter = defineComponent('MeshFilter', {
+  assetHandle: 'shared<MeshAsset>',
+});
+const BreadcrumbMeshRenderer = defineComponent('MeshRenderer', {
+  materials: 'array<shared<MaterialAsset>>',
+});
 
 function parseGuid(s: string): AssetGuid {
   const r = AssetGuid.parse(s);
@@ -53,7 +65,11 @@ function makeMesh(): TypesMeshAsset {
     ]),
     indices: new Uint16Array([0, 1, 2]),
     attributes: {},
-    submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+    submeshes: [
+      { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list', materialSlot: 0 },
+    ],
+
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 
@@ -90,7 +106,18 @@ function makeTestSceneAsset(subRefs: { meshGuid: string; materialGuids: string[]
 // ── registry setup ──────────────────────────────────────────────────────────
 
 function makeRegistry(): AssetRegistry {
-  return new AssetRegistry(makeMockShaderRegistry());
+  return new AssetRegistry(
+    makeMockShaderRegistry(),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    new Map<string, Component>([
+      [BreadcrumbTransform.name, BreadcrumbTransform],
+      [BreadcrumbMeshFilter.name, BreadcrumbMeshFilter],
+      [BreadcrumbMeshRenderer.name, BreadcrumbMeshRenderer],
+    ]),
+  );
 }
 
 function preregisterMesh(reg: AssetRegistry): void {
@@ -207,7 +234,12 @@ describe('AC-07 — transitive failure attribution', () => {
     // Pack-index: scene + mesh present, material missing.
     const packIndex = [
       { guid: SCENE_GUID, packageUrl: '/packs/scene.pack.json', kind: 'scene' },
-      { guid: MESH_GUID, packageUrl: '/packs/mesh.pack.json', kind: 'mesh' },
+      {
+        guid: MESH_GUID,
+        packageUrl: '/packs/mesh.pack.json',
+        kind: 'mesh',
+        materialSlots: [{ slotName: 'Default' }],
+      },
       // MISSING_SUB_GUID intentionally absent
     ];
 
@@ -253,7 +285,17 @@ describe('AC-07 — transitive failure attribution', () => {
             attributes: {},
           },
           refs: [],
-          submeshes: [{ indexOffset: 0, indexCount: 0, vertexCount: 0, topology: 'triangle-list' }],
+          submeshes: [
+            {
+              indexOffset: 0,
+              indexCount: 0,
+              vertexCount: 0,
+              topology: 'triangle-list',
+              materialSlot: 0,
+            },
+          ],
+
+          materialSlots: [{ slotName: 'Default' }],
         },
       ],
     };
@@ -323,6 +365,161 @@ describe('AC-07 — transitive failure attribution', () => {
   });
 });
 
+describe('mesh default material ready boundary', () => {
+  it.each([
+    ['empty refs', []],
+    ['unrelated refs', [WRONG_DEFAULT_KIND_GUID]],
+  ])('rejects a payload default omitted from %s before ready', async (_label, refs) => {
+    const reg = makeRegistry();
+    if (refs.length > 0) {
+      reg.catalog(parseGuid(WRONG_DEFAULT_KIND_GUID), {
+        kind: 'texture' as const,
+        width: 1,
+        height: 1,
+        format: 'rgba8unorm' as const,
+        data: new Uint8Array([255, 255, 255, 255]),
+        colorSpace: 'srgb' as const,
+        mipmap: false,
+      });
+    }
+    const omittedDefaultGuid = 'b0000000-0000-4000-b000-000000000099';
+    reg.configurePackIndex('/pack-index.json');
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url === '/pack-index.json') {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve([
+              { guid: MESH_GUID, packageUrl: '/packs/missing-edge.pack.json', kind: 'mesh' },
+            ]),
+        });
+      }
+      if (url === '/packs/missing-edge.pack.json') {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              schemaVersion: '2.0.0',
+              kind: 'internal-text-package',
+              assets: [
+                {
+                  guid: MESH_GUID,
+                  kind: 'mesh',
+                  refs,
+                  payload: {
+                    vertices: [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1],
+                    indices: [0, 0, 0],
+                    attributes: {},
+                    submeshes: [
+                      {
+                        indexOffset: 0,
+                        indexCount: 3,
+                        vertexCount: 1,
+                        topology: 'triangle-list',
+                        materialSlot: 0,
+                      },
+                    ],
+                    materialSlots: [{ slotName: 'Body', defaultMaterial: omittedDefaultGuid }],
+                  },
+                },
+              ],
+            }),
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    }) as typeof globalThis.fetch;
+
+    const result = await reg.loadByGuid<TypesMeshAsset>(parseGuid(MESH_GUID));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect((result.error as AssetError).detail).toMatchObject({
+        meshAssetGuid: MESH_GUID,
+        defaultMaterialGuid: omittedDefaultGuid,
+        actualKind: 'missing-ref-edge',
+      });
+    }
+    expect(reg.inspect().assets.some((entry) => entry.guid === MESH_GUID)).toBe(false);
+  });
+
+  it('rejects a loaded non-material default before the Mesh becomes ready', async () => {
+    const reg = makeRegistry();
+    reg.catalog(parseGuid(WRONG_DEFAULT_KIND_GUID), {
+      kind: 'texture' as const,
+      width: 1,
+      height: 1,
+      format: 'rgba8unorm' as const,
+      data: new Uint8Array([255, 255, 255, 255]),
+      colorSpace: 'srgb' as const,
+      mipmap: false,
+    });
+
+    const packIndex = [
+      { guid: MESH_GUID, packageUrl: '/packs/wrong-default.pack.json', kind: 'mesh' },
+    ];
+    const meshPack = {
+      schemaVersion: '2.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: MESH_GUID,
+          kind: 'mesh',
+          payload: {
+            vertices: [
+              -0.5, 0, 0.5, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0.5, 0, 0.5, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0.5,
+              0, -0.5, 0, 1, 0, 1, 1, 1, 0, 0, 1,
+            ],
+            indices: [0, 1, 2],
+            attributes: {},
+            submeshes: [
+              {
+                indexOffset: 0,
+                indexCount: 3,
+                vertexCount: 3,
+                topology: 'triangle-list',
+                materialSlot: 0,
+              },
+            ],
+            materialSlots: [
+              {
+                slotName: 'Body',
+                sourceKey: 'gltf:material:0',
+                defaultMaterial: WRONG_DEFAULT_KIND_GUID,
+              },
+            ],
+          },
+          refs: [WRONG_DEFAULT_KIND_GUID],
+        },
+      ],
+    };
+
+    reg.configurePackIndex('/pack-index.json');
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url === '/pack-index.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      if (url === '/packs/wrong-default.pack.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(meshPack) });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    }) as typeof globalThis.fetch;
+
+    const result = await reg.loadByGuid<TypesMeshAsset>(parseGuid(MESH_GUID));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const error = result.error as AssetError;
+      expect(error.code).toBe('asset-parse-failed');
+      expect(error.detail).toEqual({
+        meshAssetGuid: MESH_GUID,
+        slotIndex: 0,
+        slotName: 'Body',
+        defaultMaterialGuid: WRONG_DEFAULT_KIND_GUID,
+        actualKind: 'texture',
+      });
+    }
+    expect(reg.inspect().assets.some((entry) => entry.guid === MESH_GUID)).toBe(false);
+  });
+});
+
 // ── M2 GUIDs ───────────────────────────────────────────────────────────────
 const TEXTURE_A_GUID = 'c0000000-0000-4000-c000-000000000001';
 const TEXTURE_B_GUID = 'c0000000-0000-4000-c000-000000000002';
@@ -353,7 +550,14 @@ describe('AC-08 — in-flight dedup + cycle', () => {
   it('concurrent loadByGuid(g) 3-way shares in-flight promise — only 1 pack fetch', async () => {
     const reg = makeRegistry();
 
-    const packIndex = [{ guid: MESH_GUID, packageUrl: '/packs/mesh.pack.json', kind: 'mesh' }];
+    const packIndex = [
+      {
+        guid: MESH_GUID,
+        packageUrl: '/packs/mesh.pack.json',
+        kind: 'mesh',
+        materialSlots: [{ slotName: 'Default' }],
+      },
+    ];
 
     const meshPack = {
       schemaVersion: '2.0.0',
@@ -371,7 +575,17 @@ describe('AC-08 — in-flight dedup + cycle', () => {
             attributes: {},
           },
           refs: [],
-          submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+          submeshes: [
+            {
+              indexOffset: 0,
+              indexCount: 3,
+              vertexCount: 3,
+              topology: 'triangle-list',
+              materialSlot: 0,
+            },
+          ],
+
+          materialSlots: [{ slotName: 'Default' }],
         },
       ],
     };
@@ -696,7 +910,12 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
 
     const packIndex = [
       { guid: SCENE_GLTF_GUID, packageUrl: '/packs/scene-gltf.pack.json', kind: 'scene' },
-      { guid: MESH_GUID, packageUrl: '/packs/mesh.pack.json', kind: 'mesh' },
+      {
+        guid: MESH_GUID,
+        packageUrl: '/packs/mesh.pack.json',
+        kind: 'mesh',
+        materialSlots: [{ slotName: 'Default' }],
+      },
       {
         guid: MATERIAL_A_GUID,
         packageUrl: '/packs/mat.pack.json',
@@ -749,8 +968,11 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
               indexCount: 0,
               vertexCount: 0,
               topology: 'triangle-list',
+              materialSlot: 0,
             },
           ],
+
+          materialSlots: [{ slotName: 'Default' }],
         },
       ],
     };
@@ -865,8 +1087,15 @@ const LEAF_FIXTURES: readonly LeafFixture[] = [
       indices: new Uint16Array([0]),
       attributes: {},
       submeshes: [
-        { indexOffset: 0, indexCount: 0, vertexCount: 0, topology: 'triangle-list' as const },
+        {
+          indexOffset: 0,
+          indexCount: 0,
+          vertexCount: 0,
+          topology: 'triangle-list' as const,
+          materialSlot: 0,
+        },
       ],
+      materialSlots: [{ slotName: 'Default' }],
     }),
   },
   {
@@ -915,6 +1144,7 @@ const LEAF_FIXTURES: readonly LeafFixture[] = [
     makeAsset: () => ({
       kind: 'audio' as const,
       sourceKey: 'fixture-audio',
+      mediaType: 'audio/ogg' as const,
       bytes: new Uint8Array(),
     }),
   },

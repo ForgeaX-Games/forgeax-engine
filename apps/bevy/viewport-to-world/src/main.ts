@@ -16,7 +16,7 @@ if (!appResult.ok) {
   console.error('[bevy-viewport-to-world] createApp failed:', appResult.error);
 } else {
   const app = appResult.value;
-  console.warn(`[bevy-viewport-to-world] backend=${app.renderer.backend}`);
+  console.warn(`[bevy-viewport-to-world] state=${app.renderer.inspect().state}`);
   const scene = buildViewportToWorldWorld(app.world);
   const cursor = { x: canvas.width * 0.5, y: canvas.height * 0.5 };
 

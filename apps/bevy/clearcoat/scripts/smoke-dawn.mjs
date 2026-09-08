@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -75,14 +76,12 @@ const appResult = await createApp(mockCanvas, {}, { shaderManifestUrl: manifestU
 globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 if (!appResult.ok) { console.error(`[smoke] createApp failed: ${appResult.error.code}`); process.exit(1); }
 const app = appResult.value;
-app.renderer.onError((error) => errors.push(error));
+subscribeSmokeErrors(app.renderer, (error) => errors.push(error));
 app.onError((error) => errors.push(error));
-const ready = await app.renderer.ready;
-if (!ready.ok) { console.error(`[smoke] renderer.ready failed: ${ready.error.code}`); process.exit(1); }
 const guid = AssetGuid.parse(hdrGuid);
 if (!guid.ok) { console.error(`[smoke] GUID parse failed: ${guid.error.code}`); process.exit(1); }
-app.renderer.assets.configurePackIndex('/pack-index.json');
-const hdr = await app.renderer.assets.loadByGuid(guid.value);
+app.assets.configurePackIndex('/pack-index.json');
+const hdr = await app.assets.loadByGuid(guid.value);
 if (!hdr.ok) { console.error(`[smoke] HDR load failed: ${hdr.error.code}`); process.exit(1); }
 const equirect = app.world.allocSharedRef('EquirectAsset', hdr.value);
 buildClearcoatWorld(app.world, equirect, width / height);
@@ -117,12 +116,12 @@ const rightLuma = patchMean(195, 275, 45, 145);
 let maxLuma = 0;
 for (let i = 0; i < tight.length; i += 4) maxLuma = Math.max(maxLuma, lumaAt(i / 4 % width, Math.floor(i / 4 / width)));
 const failures = [];
-if (app.renderer.backend !== 'webgpu') failures.push(`backend=${app.renderer.backend}`);
+if (rendererBackend(app.renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(app.renderer)}`);
 if (frames < targetFrames) failures.push(`frames=${frames} < ${targetFrames}`);
 if (errors.length > 0) failures.push(`engine errors=${errors.map((error) => error.code).join(',')}`);
 if (maxLuma <= 0.02) failures.push(`clearcoat scene is dark: maxLuma=${maxLuma.toFixed(4)}`);
 if (Math.abs(leftLuma - rightLuma) <= 0.001) failures.push(`coat contrast missing: left=${leftLuma.toFixed(4)} right=${rightLuma.toFixed(4)}`);
-console.log(`[smoke] backend=${app.renderer.backend} frames=${frames} leftLuma=${leftLuma.toFixed(4)} rightLuma=${rightLuma.toFixed(4)} png=${pngOut}`);
+console.log(`[smoke] backend=${rendererBackend(app.renderer)} frames=${frames} leftLuma=${leftLuma.toFixed(4)} rightLuma=${rightLuma.toFixed(4)} png=${pngOut}`);
 if (failures.length > 0) {
   console.error(`[smoke] FAIL - ${failures.join('; ')}`);
   sharedDevice.destroy?.(); delete globalThis.navigator.gpu; process.exit(1);

@@ -13,6 +13,7 @@
     "smoke": "node scripts/smoke-dawn.mjs"
   },
   "forgeax": {
+    "smokeInvocation": "pnpm --filter @forgeax/app-learn-render-4-advanced-opengl-9-instancing smoke",
     "metrics": {
       "bundle-size": {
         "enabled": false,

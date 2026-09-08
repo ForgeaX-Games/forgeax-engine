@@ -1,15 +1,12 @@
 import { AssetRegistry, HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
-import {
-  extractFrames,
-  type MaterialSnapshotCachesByWorld,
-  MeshFilter,
-  MeshRenderer,
-} from '@forgeax/engine-render/internal';
 import { Transform } from '@forgeax/engine-scene';
 import type { ShaderRegistry } from '@forgeax/engine-shader';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { MeshFilter } from '../components/mesh-filter';
+import { MeshRenderer } from '../components/mesh-renderer';
+import { extractFrames, type MaterialSnapshotCachesByWorld } from '../render-system-extract';
 
 describe('material snapshot mutation', () => {
   it('projects in-place material value updates into the next extracted frame', () => {
@@ -42,14 +39,14 @@ describe('material snapshot mutation', () => {
     );
     const materialCaches: MaterialSnapshotCachesByWorld = new WeakMap();
 
-    const first = extractFrames([world], 0, assets, undefined, undefined, materialCaches)
-      .renderables[0]?.material;
+    const first = extractFrames([world], 0, assets, undefined, materialCaches).renderables[0]
+      ?.material;
     expect(first?.baseColor).toEqual(new Float32Array([1, 0, 0]));
 
     values.baseColor = [0, 1, 0, 1];
 
-    const second = extractFrames([world], 0, assets, undefined, undefined, materialCaches)
-      .renderables[0]?.material;
+    const second = extractFrames([world], 0, assets, undefined, materialCaches).renderables[0]
+      ?.material;
     expect(second?.baseColor).toEqual(new Float32Array([0, 1, 0]));
     expect(second).not.toBe(first);
   });

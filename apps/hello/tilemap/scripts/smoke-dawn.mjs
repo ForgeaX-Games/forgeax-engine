@@ -6,7 +6,7 @@
 //   - Registers a TilesetAsset (4 regions x 4 tile entries).
 //   - Spawns a Tilemap (cols=8 rows=8 chunkSize=4) + one TileLayer with
 //     a hand-chosen anchor table along the diagonal.
-//   - Calls renderer.draw(world) for 60+ frames; on frame 60 mutates the
+//   - Calls the lease-bound renderer.draw request for 60+ frames; on frame 60 mutates the
 //     TileLayer in place + markTileLayerDirty triggers a rebuild pass.
 //   - Pixel readback samples the framebuffer to confirm the rebuild has
 //     changed at least one channel by >= 0.1 max-channel-delta.
@@ -100,12 +100,10 @@ const mockCanvas = {
   removeEventListener() {},
 };
 
-let runtime;
 let ecs;
 let render;
 let authoring;
 try {
-  runtime = await import('@forgeax/engine-runtime');
   ecs = await import('@forgeax/engine-ecs');
   render = await import('@forgeax/engine-render');
   authoring = await import('@forgeax/engine-render/authoring');
@@ -116,8 +114,8 @@ try {
 const {
   Camera,
 } = render;
-const { TileLayer, Tilemap, markTileLayerDirty } = authoring;
-const { createRenderer } = runtime;
+const { TileLayer, Tilemap } = authoring;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { ChildOf, Transform } = await import('@forgeax/engine-scene');
 const { World } = ecs;
 
@@ -127,20 +125,22 @@ const manifestUrl = `data:application/json,${encodeURIComponent(readFileSync(man
 
 const world = new World();
 let renderer;
+let assets;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: manifestUrl });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: manifestUrl });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  assets = constructed.value.assets;
 } catch (createErr) {
   await deferred(`createRenderer threw: ${createErr instanceof Error ? createErr.message : String(createErr)}`);
 }
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const errors = [];
-renderer.onError((e) => errors.push({ code: e.code }));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') errors.push({ code: event.error.code });
+});
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  await deferred(`renderer.ready failed: ${ready.error.code}`);
-}
 
 function buildSyntheticTileAtlas() {
   const width = 32;
@@ -175,23 +175,15 @@ const atlasPayload = {
   mipmap: false,
 };
 const atlasHandle = world.allocSharedRef('TextureAsset', atlasPayload);
-const uploadResult = await renderer.store.uploadTexture(atlasHandle, atlasPayload, {
-  bytes: atlas.data,
-  width: atlas.width,
-  height: atlas.height,
-  mime: 'image/png',
-  colorSpace: 'srgb',
-  mipmap: false,
-});
-if (!uploadResult.ok) {
-  console.error(`[hello-tilemap smoke] atlas upload failed: ${uploadResult.error.code}`);
+const atlasCatalog = assets.catalog('hello-tilemap/atlas', atlasPayload);
+if (!atlasCatalog.ok) {
+  console.error(`[hello-tilemap smoke] atlas catalog failed: ${atlasCatalog.error.code}`);
   process.exit(1);
 }
 
 const tileset = {
   kind: 'tileset',
-  guid: 'hello-tilemap/atlas',
-  atlases: [atlasHandle],
+  atlases: ['hello-tilemap/atlas'],
   tileWidth: 16,
   tileHeight: 16,
   columns: 2,
@@ -204,7 +196,11 @@ const tileset = {
   ],
   tiles: [{ regionIndex: 0 }, { regionIndex: 1 }, { regionIndex: 2 }, { regionIndex: 3 }],
 };
-const tilesetHandle = world.allocSharedRef('TilesetAsset', tileset);
+const tilesetCatalog = assets.catalog('hello-tilemap/tileset', tileset);
+if (!tilesetCatalog.ok) {
+  console.error(`[hello-tilemap smoke] tileset catalog failed: ${tilesetCatalog.error.code}`);
+  process.exit(1);
+}
 
 const cols = 8;
 const rows = 8;
@@ -212,7 +208,7 @@ const tilemap = world
   .spawn(
     {
       component: Tilemap,
-      data: { cols, rows, tileSize: [1, 1], chunkSize: 4, tileset: tilesetHandle },
+      data: { cols, rows, tileSize: [1, 1], chunkSize: 4, tileset: 'hello-tilemap/tileset' },
     },
     { component: Transform, data: {} },
   )
@@ -241,11 +237,15 @@ for (let f = 0; f < TARGET_FRAMES; f++) {
     const view = world.get(layer, TileLayer).unwrap().tiles;
     view[0] = 0;
     view[7 * cols + 7] = 1;
-    markTileLayerDirty(world, layer).unwrap();
+    world.set(layer, TileLayer, { dirty: 1 }).unwrap();
     dirtyTriggered = true;
   }
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = renderer.draw({
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  });
   if (!r.ok) {
     console.error(`[hello-tilemap smoke] draw frame ${f} error: ${r.error.code}`);
     process.exit(1);

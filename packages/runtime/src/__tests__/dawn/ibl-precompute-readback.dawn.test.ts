@@ -16,14 +16,16 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { composeShader } from '@forgeax/engine-naga';
-import {
-  GpuResourceStore,
-  getOrCreateIblCache,
-  setIblComposedShaders,
-} from '@forgeax/engine-render/internal';
-import { ok } from '@forgeax/engine-rhi';
+import { ok, type RhiDevice, type Texture } from '@forgeax/engine-rhi';
+import { _internal_getRawDevice, createShaderModule, rhi } from '@forgeax/engine-rhi-webgpu';
 import type { EquirectAsset, TextureFormat } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { DeviceScope } from '../../../../render/src/device/device-scope';
+import { GpuResidencyCache } from '../../../../render/src/device/gpu-residency';
+import {
+  getOrCreateIblCache,
+  setIblComposedShaders,
+} from '../../../../render/src/ibl/IblPipelineCache';
 
 const mockCaps = {
   backendKind: 'webgpu' as const,
@@ -47,7 +49,7 @@ const mockCaps = {
   maxColorAttachments: 8,
 };
 
-// feat-20260601-gpu-resource-store-extraction M1 (D-3 falsifiable anchor): a
+// feat-20260601-device/gpu-residency-extraction M1 (D-3 falsifiable anchor): a
 // single store._uploadCubemapFromEquirect(world, srcHandle, srcPod) returns the
 // cube handle, and store.getCubemapGpuTexture(cubeHandle) reads it back -- the
 // single-call contract is preserved. The cube POD register-relay is injected
@@ -114,8 +116,17 @@ function makeWhiteEquirect(): EquirectAsset {
   };
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: native GPUDevice has minimal typing here
-async function readbackRgba16f(device: any, texture: any, arrayLayer: number, mipLevel: number) {
+/** Raw resource conversion is confined to this Dawn readback boundary. */
+function rawTexture(texture: Texture): GPUTexture {
+  return texture as unknown as GPUTexture;
+}
+
+async function readbackRgba16f(
+  device: GPUDevice,
+  texture: GPUTexture,
+  arrayLayer: number,
+  mipLevel: number,
+): Promise<number[]> {
   // Read one pixel from (0,0) of (face=arrayLayer, mip=mipLevel).
   const bytesPerRow = 256;
   const buffer = device.createBuffer({
@@ -159,81 +170,79 @@ describe('t51 (M3.5) -- dawn IBL 4-pass non-zero readback', () => {
       // dawn-node tests stand in for vite-plugin-shader by composing on
       // demand via @forgeax/engine-naga.
       await composeIblShadersForDawn();
-      // biome-ignore lint/suspicious/noExplicitAny: dynamic global navigator typed minimally
-      const adapter = await (navigator as any).gpu.requestAdapter();
-      const device = await adapter.requestDevice();
+      const adapterResult = await rhi.requestAdapter();
+      if (!adapterResult.ok) throw adapterResult.error;
+      const deviceResult = await adapterResult.value.requestDevice();
+      if (!deviceResult.ok) throw deviceResult.error;
+      const rhiDevice: RhiDevice = deviceResult.value;
+      const rawDevice = _internal_getRawDevice(rhiDevice);
+      if (rawDevice === undefined) {
+        throw new Error('Dawn IBL readback requires the RHI WebGPU raw-device test boundary');
+      }
 
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
+      const scope = DeviceScope.create(0, 'ibl-dawn-test');
+      store.bindDeviceScope(scope);
       const world = new World();
       const equirect = makeWhiteEquirect();
       const equirectHandle = world.allocSharedRef('EquirectAsset', equirect);
 
-      // We pass the raw GPUDevice directly so the runtime exercises the
-      // same dawn path that user-mesh-upload.dawn.test.ts uses. The cube POD
-      // register-relay is injected here (D-3).
+      // The production path receives the opaque RhiDevice and the same
+      // Result-returning shader factory used by the WebGPU backend. Raw GPU
+      // access remains confined to readback below.
       store.configureGpuDevice(
-        // biome-ignore lint/suspicious/noExplicitAny: dawn device shape
-        device as any,
-        // biome-ignore lint/suspicious/noExplicitAny: dawn device shape
-        async (d: any, desc: { code: string; label?: string }) => {
-          const mod = d.createShaderModule({ code: desc.code, label: desc.label });
-          // biome-ignore lint/suspicious/noExplicitAny: matching shim Result shape
-          return { ok: true, value: mod, unwrap: () => mod, unwrapOr: () => mod } as any;
-        },
+        rhiDevice,
+        undefined,
         (w: World, pod: EquirectAsset) => ok(w.allocSharedRef('EquirectAsset', pod)),
         mockCaps,
       );
+      store.configureIblDevice(rhiDevice, createShaderModule);
 
       // Single call returns the cube handle (D-3 single-call contract). The
       // projection method is @internal (private) after feat-20260630 M2 / w11;
       // the dawn test reaches it through the store internals.
-      // biome-ignore lint/suspicious/noExplicitAny: private method access for the dawn IBL readback probe
-      const result = await (store as any)._uploadCubemapFromEquirect(
-        world,
-        equirectHandle,
-        equirect,
-      );
+      const result = await store._uploadCubemapFromEquirect(world, equirectHandle, equirect);
       expect(result.ok).toBe(true);
       if (!result.ok) return;
 
       const cubeHandle = result.value;
-      // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture
-      const cubeTexture = store.getCubemapGpuTexture(cubeHandle as any);
+      const cubeTexture = store.getCubemapGpuTexture(cubeHandle);
       expect(cubeTexture).toBeDefined();
+      if (cubeTexture === undefined) return;
 
-      // feat-20260612 M3 / w11 (1c76c1b9): GpuResourceStore handle maps now
+      // feat-20260612 M3 / w11 (1c76c1b9): GpuResidencyCache handle maps now
       // hold the GpuTexture wrapper (`{handle, isDestroyed, destroy()}`).
       // dawn-node `copyTextureToBuffer` consumes the raw GPUTexture handle,
       // so the wrapper unwrap goes via `.handle` here. The IBL cache slots
       // below still hold raw textures (the ibl/IblPipelineCache wrapping is
       // OOS for this feat -- D-8 / OOS-10).
-      // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture
-      const cubeRaw = (cubeTexture as any).handle;
+      const cubeRaw = rawTexture(cubeTexture.handle);
 
       // (a) equirect-to-cube face 0 center pixel != 0
-      const cubePx = await readbackRgba16f(device, cubeRaw, 0, 0);
+      const cubePx = await readbackRgba16f(rawDevice, cubeRaw, 0, 0);
       expect(cubePx.some((c) => c !== 0)).toBe(true);
 
       // (b) irradiance, (c) prefilter, (d) brdfLut: the textures live on
-      // IblPipelineCache after t52/t53. Read via cache slots.
-      const cache = getOrCreateIblCache(device);
-      // biome-ignore lint/suspicious/noExplicitAny: cache slots typed any
-      const irrTex = (cache as any).irradianceTexture;
-      // biome-ignore lint/suspicious/noExplicitAny: cache slots typed any
-      const prefTex = (cache as any).prefilterTexture;
-      // biome-ignore lint/suspicious/noExplicitAny: cache slots typed any
-      const brdfTex = (cache as any).brdfLutTexture;
+      // IblPipelineCache after t52/t53. Read opaque cache slots through the
+      // test-only raw texture boundary.
+      const cache = getOrCreateIblCache(scope);
+      const {
+        irradianceTexture: irrTex,
+        prefilterTexture: prefTex,
+        brdfLutTexture: brdfTex,
+      } = cache;
       expect(irrTex).toBeDefined();
       expect(prefTex).toBeDefined();
       expect(brdfTex).toBeDefined();
+      if (irrTex === undefined || prefTex === undefined || brdfTex === undefined) return;
 
-      const irrPx = await readbackRgba16f(device, irrTex, 0, 0);
+      const irrPx = await readbackRgba16f(rawDevice, rawTexture(irrTex), 0, 0);
       expect(irrPx.some((c) => c !== 0)).toBe(true);
 
-      const prefPx = await readbackRgba16f(device, prefTex, 0, 0);
+      const prefPx = await readbackRgba16f(rawDevice, rawTexture(prefTex), 0, 0);
       expect(prefPx.some((c) => c !== 0)).toBe(true);
 
-      const brdfPx = await readbackRgba16f(device, brdfTex, 0, 0);
+      const brdfPx = await readbackRgba16f(rawDevice, rawTexture(brdfTex), 0, 0);
       expect(brdfPx.some((c) => c !== 0)).toBe(true);
     },
     60_000,

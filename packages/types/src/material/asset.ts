@@ -24,11 +24,12 @@ export interface MaterialParameter {
   readonly colorSpace?: MaterialColorSpace;
   readonly default?: MaterialValue;
   readonly optional?: boolean;
-  readonly static?: boolean;
 }
 
 export interface MaterialTextureCoordinates {
   readonly set?: number;
+  /** Producer-owned logical-to-physical texture extent correction. */
+  readonly physicalUvScale?: readonly [number, number];
   readonly transform?: {
     readonly offset?: readonly [number, number];
     readonly scale?: readonly [number, number];
@@ -36,15 +37,39 @@ export interface MaterialTextureCoordinates {
   };
 }
 
+export interface ResolvedMaterialTextureCoordinates {
+  readonly set: number;
+  readonly transform: {
+    readonly offset: readonly [number, number];
+    readonly scale: readonly [number, number];
+    readonly rotation: number;
+  };
+}
+
+export function resolveMaterialTextureCoordinates(
+  coordinates?: MaterialTextureCoordinates,
+): ResolvedMaterialTextureCoordinates {
+  return {
+    set: coordinates?.set ?? 0,
+    transform: {
+      offset: coordinates?.transform?.offset ?? [0, 0],
+      scale: coordinates?.transform?.scale ?? [1, 1],
+      rotation: coordinates?.transform?.rotation ?? 0,
+    },
+  };
+}
+
+export type MaterialTextureReference = AssetGuid | number | string;
+
 export interface MaterialTextureValue {
-  readonly texture: AssetGuid;
-  readonly sampler?: AssetGuid;
+  readonly texture: MaterialTextureReference;
+  readonly sampler?: MaterialTextureReference;
   readonly coordinates?: MaterialTextureCoordinates;
   readonly normalScale?: number;
   readonly occlusionStrength?: number;
 }
 
-export type MaterialValue = boolean | number | readonly number[] | MaterialTextureValue;
+export type MaterialValue = boolean | number | readonly number[] | string | MaterialTextureValue;
 
 export interface MaterialProgram {
   readonly module: string;
@@ -61,6 +86,12 @@ export interface MaterialPass {
 
 export type MaterialPassList = readonly [MaterialPass, ...MaterialPass[]];
 
+/**
+ * One authored material subject. Pack publishes the resolved contract;
+ * runtime and render consume read-only projections. Values and module slots
+ * are runtime data with a closed compiler context; compiler macros and
+ * feature defines are not part of this contract.
+ */
 export interface MaterialAsset {
   readonly kind: 'material';
   /**
@@ -76,6 +107,29 @@ export interface MaterialAsset {
   readonly values?: Readonly<Record<string, MaterialValue | null>>;
 }
 
+export interface MaterialAuthoringErrorDetail {
+  readonly code: 'material-authoring-field-forbidden';
+  readonly owner: 'material-runtime' | 'material-authoring';
+  readonly field: string;
+  readonly actual: unknown;
+  readonly action: 'remove-field';
+}
+
+export class MaterialAssetContractError extends Error {
+  readonly code = 'material-authoring-field-forbidden' as const;
+  readonly expected =
+    'material authoring contains only runtime values and source-owned module selection';
+  readonly hint =
+    'remove the compiler macro field and use a runtime value, module slot, or compiler context';
+  readonly detail: MaterialAuthoringErrorDetail;
+
+  constructor(detail: Omit<MaterialAuthoringErrorDetail, 'code'>) {
+    super(`${detail.field}: material compiler macro fields are not supported`);
+    this.name = 'MaterialAssetContractError';
+    this.detail = { code: 'material-authoring-field-forbidden', ...detail };
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -87,6 +141,17 @@ export function assertMaterialAsset(
 ): asserts value is MaterialAsset {
   if (!isRecord(value) || value.kind !== 'material') {
     throw new Error(`${context}: expected a material asset`);
+  }
+  for (const field of Object.keys(value)) {
+    if (!['kind', 'colorSpace', 'parent', 'passes', 'parameters', 'values'].includes(field)) {
+      throw new MaterialAssetContractError({
+        owner:
+          field === 'features' || field === 'defines' ? 'material-authoring' : 'material-runtime',
+        field,
+        actual: value[field],
+        action: 'remove-field',
+      });
+    }
   }
   if (
     value.colorSpace !== undefined &&
@@ -140,6 +205,14 @@ export function assertMaterialAsset(
         parameter.colorSpace !== 'linear'
       ) {
         throw new Error(`${context}: parameter ${index} has invalid colorSpace`);
+      }
+      if ('static' in parameter) {
+        throw new MaterialAssetContractError({
+          owner: 'material-authoring',
+          field: 'parameters.static',
+          actual: parameter.static,
+          action: 'remove-field',
+        });
       }
     }
   }

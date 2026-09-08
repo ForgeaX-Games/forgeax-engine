@@ -5,9 +5,9 @@ export function semanticSnapshot(state: SnakeGameState) {
     tick: state.tick,
     food: { ...state.food },
     snakes: [...state.snakes.values()]
-      .sort((left, right) => left.peerId - right.peerId)
+      .sort((left, right) => left.sessionId - right.sessionId)
       .map((snake) => ({
-        peerId: snake.peerId,
+        sessionId: snake.sessionId,
         direction: snake.direction,
         score: snake.score,
         cells: snake.cells.map((cell) => ({ ...cell })),

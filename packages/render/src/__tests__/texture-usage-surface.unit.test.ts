@@ -13,14 +13,9 @@ const consumerSources = [
   readFileSync(new URL('../render-data.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('../shadow-atlas.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('../ssao-buffers.ts', import.meta.url), 'utf8'),
-  readFileSync(new URL('../hdrp-buffers.ts', import.meta.url), 'utf8'),
-  readFileSync(new URL('../gpu-resource-store.ts', import.meta.url), 'utf8'),
-  readFileSync(new URL('../render-system.ts', import.meta.url), 'utf8'),
-  readFileSync(new URL('../hdrp-pipeline.ts', import.meta.url), 'utf8'),
-  readFileSync(new URL('../urp-pipeline.ts', import.meta.url), 'utf8'),
+  readFileSync(new URL('../device/gpu-residency.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('../ibl/IblPipelineCache.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('../ibl/skylight-bind-group.ts', import.meta.url), 'utf8'),
-  readFileSync(new URL('../renderer/renderer-factory.ts', import.meta.url), 'utf8'),
 ];
 
 describe('texture usage owner', () => {
@@ -44,5 +39,20 @@ describe('texture usage owner', () => {
         /GPU_TEXTURE_USAGE_(RENDER_ATTACHMENT|TEXTURE_BINDING)\s*\|\s*GPU_TEXTURE_USAGE_(RENDER_ATTACHMENT|TEXTURE_BINDING)/,
       );
     }
+  });
+
+  it('keeps typed pipelines on graph access declarations instead of physical usage bits', async () => {
+    const graphOwners = await Promise.all([
+      readFileSync(new URL('../pipeline/standard-forward-lane.ts', import.meta.url), 'utf8'),
+      readFileSync(new URL('../pipeline/standard-pipeline.ts', import.meta.url), 'utf8'),
+      readFileSync(new URL('../typed-shadow-passes.ts', import.meta.url), 'utf8'),
+    ]);
+    for (const source of graphOwners) {
+      expect(source).not.toMatch(/usage:\s*0x[0-9a-f]+/i);
+    }
+    expect(graphOwners.join('\n')).toMatch(
+      /usage: '(?:color-attachment|depth-stencil-write|storage-write)'/,
+    );
+    expect(graphOwners[2]).toContain('gpu-texture-usage');
   });
 });

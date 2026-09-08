@@ -1,5 +1,4 @@
-// ecs-error-code-31.test-d - EcsErrorCode union widening type-test
-// (feat-20260608-scene-nesting-ecs-fication M1 / w6).
+// ecs-error-code-31.test-d - owner error union boundary type-test.
 //
 // Coverage (plan-strategy D-9):
 //   - EcsErrorCode union has gained the 31st member 'scene-override-type-
@@ -30,17 +29,9 @@
 import { describe, expectTypeOf, it } from 'vitest';
 import type { EcsErrorCode } from '../errors';
 
-describe('EcsErrorCode 31st member (D-9)', () => {
-  it("includes the 'scene-override-type-mismatch' literal", () => {
-    expectTypeOf<'scene-override-type-mismatch'>().toExtend<EcsErrorCode>();
-  });
-
-  it('exhaustive switch over EcsErrorCode requires the new case', () => {
-    function _exhaust(code: EcsErrorCode): string {
-      if (code === 'scene-override-type-mismatch') return 'override-type-mismatch';
-      return 'other';
-    }
-    expectTypeOf(_exhaust).parameter(0).toEqualTypeOf<EcsErrorCode>();
+describe('owner error union boundary', () => {
+  it("keeps 'scene-override-type-mismatch' out of EcsErrorCode", () => {
+    expectTypeOf<'scene-override-type-mismatch'>().not.toExtend<EcsErrorCode>();
   });
 });
 

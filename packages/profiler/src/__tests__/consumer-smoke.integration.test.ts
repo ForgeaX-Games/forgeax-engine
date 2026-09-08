@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { buildProfileModel } from '@forgeax/engine-profiler';
 import { describe, expect, it } from 'vitest';
 
+// @perf-budget-skip: intentional public-entry subprocess smoke gate.
 const packageRoot = fileURLToPath(new URL('../../', import.meta.url));
 const scriptPath = fileURLToPath(new URL('../../scripts/consume-smoke.mjs', import.meta.url));
 const fixturePath = fileURLToPath(

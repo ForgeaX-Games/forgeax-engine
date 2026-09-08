@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { defineComponent, World } from '@forgeax/engine-ecs';
 import { createMemoryEndpointPair } from '../src/endpoint/memory';
-import { applyReplicaBatch, createReplicaCoordinator } from '../src/replication/replica';
+import { applyReplicationPacket, createReplicaCoordinator } from '../src/replication/replica';
 import { defineReplication } from '../src/replication/profile';
 
 const NetworkedReplica = defineComponent('NetworkedReplica', { enabled: 'bool' });
@@ -24,23 +24,25 @@ describe('replica atomic validation', () => {
   it('rejects stale and duplicate authority ticks before World mutation', () => {
     const world = new World();
     const replica = createReplicaCoordinator(world, profile());
-    const batch = { version: 1, fingerprint: profile().fingerprint, tick: 1, full: true, entities: [] };
-    expect(applyReplicaBatch(replica, batch).ok).toBe(true);
-    const duplicate = applyReplicaBatch(replica, batch);
-    expect(duplicate.ok).toBe(false);
-    if (duplicate.ok) return;
-    expect(duplicate.error.code).toBe('ordering-invalid-tick');
+    const packet = { version: 2, kind: 'baseline' as const, sessionId: 17 as never, epoch: 1, sequence: 1, fingerprint: profile().fingerprint, tick: 1, entities: [] };
+    expect(applyReplicationPacket(replica, packet).ok).toBe(true);
+    const duplicate = applyReplicationPacket(replica, packet);
+    expect(duplicate.ok).toBe(true);
+    expect(replica.lastPacketOutcome).toBe('duplicate');
     expect(replica.snapshot()).toEqual([]);
   });
 
   it('rejects zero and unknown identities before allocating ECS entities', () => {
     const world = new World();
     const replica = createReplicaCoordinator(world, profile());
-    const result = applyReplicaBatch(replica, {
-      version: 1,
+    const result = applyReplicationPacket(replica, {
+      version: 2,
+      kind: 'baseline',
+      sessionId: 17 as never,
+      epoch: 1,
+      sequence: 1,
       fingerprint: profile().fingerprint,
       tick: 1,
-      full: true,
       entities: [{ id: 0, kind: 'upsert' as const, components: [] }],
     });
     expect(result.ok).toBe(false);
@@ -52,11 +54,14 @@ describe('replica atomic validation', () => {
   it('allocates all same-batch spawns before remapping forward references', () => {
     const world = new World();
     const replica = createReplicaCoordinator(world, profile());
-    const result = applyReplicaBatch(replica, {
-      version: 1,
+    const result = applyReplicationPacket(replica, {
+      version: 2,
+      kind: 'baseline',
+      sessionId: 17 as never,
+      epoch: 1,
+      sequence: 1,
       fingerprint: profile().fingerprint,
       tick: 1,
-      full: true,
       entities: [
         { id: 1, kind: 'upsert' as const, components: [{ name: 'LinkReplica', data: { target: 2 } }] },
         { id: 2, kind: 'upsert' as const, components: [{ name: 'NetworkedReplica', data: { enabled: true } }] },
@@ -66,24 +71,26 @@ describe('replica atomic validation', () => {
     expect(replica.snapshot().map((entry) => entry.id)).toEqual([1, 2]);
   });
 
-  it('rejects unresolved cross-batch references and disconnects the sender', () => {
-    const [authorityEndpoint, replicaEndpoint] = createMemoryEndpointPair();
+  it('rejects unresolved cross-batch references without closing the transport owner', () => {
+    const [, replicaEndpoint] = createMemoryEndpointPair();
     const world = new World();
     const replica = createReplicaCoordinator(world, profile(), replicaEndpoint);
-    authorityEndpoint.poll();
     replicaEndpoint.poll();
-    const result = applyReplicaBatch(replica, {
-      version: 1,
+    const result = applyReplicationPacket(replica, {
+      version: 2,
+      kind: 'baseline',
+      sessionId: 17 as never,
+      epoch: 1,
+      sequence: 1,
       fingerprint: profile().fingerprint,
       tick: 1,
-      full: true,
       entities: [{ id: 1, kind: 'upsert' as const, components: [{ name: 'LinkReplica', data: { target: 77 } }] }],
     });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.code).toBe('remap-unresolved-reference');
     expect(replica.snapshot()).toEqual([]);
-    expect(authorityEndpoint.poll()).toContainEqual({ kind: 'peer-disconnected', peerId: 2 });
+    expect(replica.disconnect()).toBeUndefined();
   });
 
   it.each([
@@ -92,11 +99,14 @@ describe('replica atomic validation', () => {
   ])('rejects zero NetEntityId references before World mutation', (data) => {
     const world = new World();
     const replica = createReplicaCoordinator(world, profile());
-    const result = applyReplicaBatch(replica, {
-      version: 1,
+    const result = applyReplicationPacket(replica, {
+      version: 2,
+      kind: 'baseline',
+      sessionId: 17 as never,
+      epoch: 1,
+      sequence: 1,
       fingerprint: profile().fingerprint,
       tick: 1,
-      full: true,
       entities: [{ id: 1, kind: 'upsert' as const, components: [{ name: 'LinkReplica', data }] }],
     });
 
@@ -110,11 +120,14 @@ describe('replica atomic validation', () => {
   it('remaps Uint32Array entity references by their elements', () => {
     const world = new World();
     const replica = createReplicaCoordinator(world, profile());
-    const result = applyReplicaBatch(replica, {
-      version: 1,
+    const result = applyReplicationPacket(replica, {
+      version: 2,
+      kind: 'baseline',
+      sessionId: 17 as never,
+      epoch: 1,
+      sequence: 1,
       fingerprint: profile().fingerprint,
       tick: 1,
-      full: true,
       entities: [
         { id: 1, kind: 'upsert' as const, components: [{ name: 'LinkReplica', data: { targets: new Uint32Array([2]) } }] },
         { id: 2, kind: 'upsert' as const, components: [{ name: 'NetworkedReplica', data: { enabled: true } }] },
@@ -129,11 +142,14 @@ describe('replica atomic validation', () => {
   it('preserves a null ECS entity field without resolving it as a NetEntityId', () => {
     const world = new World();
     const replica = createReplicaCoordinator(world, profile());
-    const result = applyReplicaBatch(replica, {
-      version: 1,
+    const result = applyReplicationPacket(replica, {
+      version: 2,
+      kind: 'baseline',
+      sessionId: 17 as never,
+      epoch: 1,
+      sequence: 1,
       fingerprint: profile().fingerprint,
       tick: 1,
-      full: true,
       entities: [{ id: 1, kind: 'upsert' as const, components: [{ name: 'LinkReplica', data: { target: null } }] }],
     });
 
@@ -144,11 +160,14 @@ describe('replica atomic validation', () => {
   it('rejects unknown component fields before allocating an ECS entity', () => {
     const world = new World();
     const replica = createReplicaCoordinator(world, profile());
-    const result = applyReplicaBatch(replica, {
-      version: 1,
+    const result = applyReplicationPacket(replica, {
+      version: 2,
+      kind: 'baseline',
+      sessionId: 17 as never,
+      epoch: 1,
+      sequence: 1,
       fingerprint: profile().fingerprint,
       tick: 1,
-      full: true,
       entities: [{ id: 1, kind: 'upsert' as const, components: [{ name: 'LinkReplica', data: { forged: true } }] }],
     });
 

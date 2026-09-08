@@ -8,7 +8,8 @@
 // chapter to the forgeax engine surface. LO 1.4 covers GLSL `texture(
 // sampler2D, vTexCoord)` sampling on a `container.jpg` image loaded via
 // `stb_image.h`; in forgeax the equivalent surface is the 4-step recipe:
-//   (1) configurePackIndex(...)                 -- wire GUID -> URL map.
+//   (1) configureRuntimeAssetCatalog(...)      -- select the dev scope or
+//                                                   static build catalog.
 //   (2) loadByGuid<TextureAsset>(containerGuid) -- resolve the container
 //                                                   image handle (the
 //                                                   GUID is minted into
@@ -68,7 +69,7 @@
 //     this file; AI users read the 3 sections + the 3 GUID literals
 //     and have the full LO 1.4 -> forgeax picture in one directory.
 //   - P3 (explicit failure):  `EngineEnvironmentError` surfaces the
-//     "no usable backend" path; `await renderer.ready` returns a
+//     "no usable backend" path; `await host initialization` returns a
 //     `Result` whose `.ok === false` branch is logged via console
 //     .error -- no silent fallback. loadByGuid Err arms switch on
 //     err.code and log structured detail.
@@ -91,28 +92,30 @@
 // `EngineEnvironmentError` narrowing class, and the engine-builtin
 // HANDLE_CUBE mesh handle. The runtime AssetRegistry surface this
 // example consumes:
-//   - configurePackIndex(url)               -- wire the prod fetch
-//                                               path (loadByGuid
-//                                               consults the pack
-//                                               index catalog before
-//                                               falling back to dev /
-//                                               registerWithGuid).
+//   - configureRuntimeAssetCatalog(...)      -- select the scoped dev
+//                                               catalog or the prod fetch
+//                                               path (loadByGuid consults
+//                                               the catalog before falling
+//                                               back to registerWithGuid).
 //   - loadByGuid<T>(guid)                   -- single entry that
 //                                               resolves Handle<T> on
 //                                               cache-hit or fetches
 //                                               the asset payload from
 //                                               the pack-index URL on
 //                                               cache-miss.
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { World } from '@forgeax/engine-ecs';
+import { captureCanvasPixels } from '@forgeax/apps-shared/canvas-capture';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_CUBE, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import { createDevImportTransport, Engine, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
 
-import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
+import { unwrapHandle } from '@forgeax/engine-types';
 import type { Handle, MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import materialPackJson from '../assets/material-wood.pack.json';
@@ -144,19 +147,16 @@ const CONTAINER_TEXTURE_GUID = '019e3969-1d46-773e-988c-a10e305ff2a4';
 const CUBE_MESH_GUID = '019e3968-6007-71ae-856e-1fd6c9728cfb';
 const WOOD_MATERIAL_GUID = '019e2cc6-5e6a-757c-a001-b69bc85af3c3';
 // `@forgeax/engine-vite-plugin-pack` serves the catalog at
-// `/pack-index.json` in dev (configureServer middleware) and emits the
-// same file in `dist/` at build time (generateBundle hook); the URL is
-// stable across dev / prod (charter P4 consistent abstraction).
+// the scoped `runtimeBinding.catalogUrl` in dev (configureServer middleware)
+// and emits `/pack-index.json` in `dist/` at build time (generateBundle hook).
+// `configureRuntimeAssetCatalog` owns this dev/prod selection.
 // feat-20260517-vite-plugin-image-build-time-cook M5 w14: the legacy
 // 1x1 saddle-brown stand-in pixel + registerWithGuid<TextureAsset>
 // pre-seed block has been deleted. The texture handle now resolves
 // through the production fetch chain: `loadByGuid<TextureAsset>` ->
-// fetch(/pack-index.json) -> entry.kind='texture' -> fetch(jpg/.bin) ->
+// fetch(catalogUrl) -> entry.kind='texture' -> fetch(jpg/.bin) ->
 // parseImage (dev) / skip-decode (prod) -> AssetRegistry.uploadTexture.
-const PACK_INDEX_URL = '/pack-index.json';
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-1-4-textures',
-);
+
 
 interface MaterialPackEntry {
   readonly guid: string;
@@ -179,7 +179,7 @@ interface MaterialPackFile {
 }
 
 // 3. bootstrap - locate the canvas the index.html document declares,
-// hand it to Engine.create, await renderer.ready (the engine internal
+// hand it to Engine.create, await host initialization (the engine internal
 // pipeline + RHI handshake), wire the AssetRegistry, route the 4-step
 // loadByGuid recipe, spawn the cube entity onto the world, and drive
 // the rAF loop. All Err branches log a structured detail line so the
@@ -193,7 +193,7 @@ void bootstrap(canvas);
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   try {
-    const renderer = await Engine.create(
+    const constructed = await constructRuntimeRendererHost(
       target,
       {},
       // feat-20260608 / M2: BundlerOptions third arg aggregates the
@@ -203,27 +203,24 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       // raw container.jpg row resolves through POST /__import on a DDC
       // miss. Absent => loadByGuid<TextureAsset> would surface
       // `asset-not-imported`.
-      { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
+      { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
     );
-    renderer.onError((e) => {
-      console.error('[learn-render 1.4 textures] renderer.onError:', e.code, e.hint);
+    if (!constructed.ok) throw constructed.error;
+    const renderer = constructed.value.renderer;
+    const assets = constructed.value.assets;
+    renderer.subscribe((event) => {
+      if (event.kind !== 'error') return;
+      const e = event.error;
+      console.error('[learn-render 1.4 textures] renderer error:', e.code, e.hint);
       const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;
       if (bus !== undefined) bus.push({ code: e.code, hint: e.hint });
     });
-    const ready = await renderer.ready;
-    if (!ready.ok) {
-      console.error('[learn-render 1.4 textures] renderer.ready failed:', ready.error);
-      return;
-    }
-    const assets = renderer.assets;
-
     // Step (1): wire the prod pack-index URL. loadByGuid fast-path
     // checks the in-memory map first; on miss it falls back to the
     // configured URL. `@forgeax/engine-vite-plugin-pack` serves the
     // catalog at this URL in dev and emits the same file in `dist/` at
     // build time (charter P4 consistent abstraction).
-    assets.configureRuntimeBinding(runtimeBinding);
-    assets.configurePackIndex(PACK_INDEX_URL);
+    configureRuntimeAssetCatalog(assets, runtimeBinding);
 
     // Parse the 3 GUID literals once. Each parse Result narrows the
     // string into an `AssetGuid` brand consumed by loadByGuid + the
@@ -241,7 +238,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // Step (2): the AC-15 (c) loadByGuid call stack -- 3 entries; no
     // build-time decode helper import + no AssetRegistry low-level
     // upload call site appears in this file. The texture handle resolves
-    // through the production fetch chain (configurePackIndex above);
+    // through the configured catalog fetch chain above;
     // the cube + material handles resolve through the Map fast-path
     // seeded by the registerWithGuid calls below (cube alias to
     // engine-builtin HANDLE_CUBE; material reconstructed from the
@@ -264,7 +261,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // off HANDLE_CUBE via the two-tier `resolveAssetHandle` (M8 D-15) and
     // re-catalogued under the demo GUID via `catalog`.
     const world = new World();
-    const worldAttachment1 = renderer.attachWorld(world);
+    const worldAttachment1 = renderer.attach(world);
     if (!worldAttachment1.ok) throw worldAttachment1.error;
     const cubeAssetRes = resolveAssetHandle<MeshAsset>(world, HANDLE_CUBE);
     if (!cubeAssetRes.ok) {
@@ -363,7 +360,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // TextureGpuView (research F-6 fix) on every frame.
     const tick = (): void => {
       world.update().unwrap();
-      const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      const drawn = renderer.draw({
+        leases: [worldAttachment1.value],
+        camera: { lease: worldAttachment1.value },
+        environment: { lease: worldAttachment1.value },
+      });
       if (!drawn.ok) {
         console.error('[learn-render 1.4 textures] draw failed:', drawn.error);
         return;
@@ -374,24 +375,23 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // Capture hook used by the M8 bench-screenshot recorder + any
     // downstream readback path: re-draw the world before sampling so
     // the canvas presents a fresh frame on every snapshot. Body
-    // delegates to renderer.readPixels() (engine API since 2026-05-17;
-    // AGENTS.md §Breaking changes) -- the createImageBitmap +
-    // OffscreenCanvas + getImageData recipe lives in
-    // packages/runtime/src/createRenderer.ts now (architecture
-    // principle 1 SSOT). Direct page.screenshot of WebGPU canvases
+    // delegates to the host-owned canvas capture helper. Direct page.screenshot
     // returns black PNGs on chromium 130 surface state; the
-    // OffscreenCanvas bounce inside readPixels() observes the
-    // presented frame correctly.
+    // compositor capture is not used here because it can observe a stale frame.
     type TexturesCaptureHook = () => Promise<Uint8Array>;
     const win = window as unknown as { __captureTextures?: TexturesCaptureHook };
     win.__captureTextures = async (): Promise<Uint8Array> => {
       world.update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-      const r = await renderer.readPixels();
-      if (!r.ok) throw new Error(`[learn-render 1.4 textures] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`);
+      renderer.draw({
+        leases: [worldAttachment1.value],
+        camera: { lease: worldAttachment1.value },
+        environment: { lease: worldAttachment1.value },
+      });
+      const r = await captureCanvasPixels(target);
+      if (!r.ok) throw new Error(`[learn-render 1.4 textures] canvas capture failed: ${r.error.hint}`);
       return r.value;
     };
-    console.warn(`[learn-render 1.4 textures] backend=${renderer.backend}`);
+    console.warn(`[learn-render 1.4 textures] backend=${renderer.inspect().capabilities.backendKind}`);
   } catch (err: unknown) {
     if (err instanceof EngineEnvironmentError) {
       console.error('[learn-render 1.4 textures] no usable backend:', err);

@@ -23,8 +23,9 @@
 //   @binding(3) rotation      : SkyboxRotation (UBO)
 
 #import forgeax_view::common::FullscreenOutput
-#import forgeax_view::common::View
+#import forgeax_view::common::{View, FogViewParams, FogRay}
 #import forgeax_view::common::fullscreen_triangle
+#import forgeax_view::fog::{apply_fog}
 #import forgeax_pbr::ibl_shared::{inverseRotateEnvironment}
 
 @group(0) @binding(0) var cubemap       : texture_cube<f32>;
@@ -66,5 +67,9 @@ fn skyboxDirection(uv : vec2<f32>) -> vec3<f32> {
 fn skybox_fs(in : FullscreenOutput) -> @location(0) vec4<f32> {
   let dir = skyboxDirection(in.uv);
   let color = textureSample(cubemap, cubemapSampler, dir).rgb;
-  return vec4<f32>(color, 1.0);
+  return apply_fog(
+    view.fog,
+    FogRay(view.cameraPos, dir, max(view.temporalProjection.y, 0.0)),
+    vec4<f32>(color, 1.0),
+  );
 }

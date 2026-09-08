@@ -29,12 +29,12 @@
 
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
-import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render/internal';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { RenderQueue } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { createRenderer } from '../index';
+import { constructRuntimeRendererHost } from '../renderer-host';
 
 const WIDTH = 256;
 const HEIGHT = 256;
@@ -158,21 +158,24 @@ describe('bug-20260611 stencil-outline pixel-presence (dawn)', () => {
       removeEventListener() {},
     } as unknown as HTMLCanvasElement;
 
-    let renderer: Awaited<ReturnType<typeof createRenderer>>;
+    let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
     try {
-      renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+      host = await constructRuntimeRendererHost(
+        mockCanvas,
+        {},
+        {
+          shaderManifestUrl: ENGINE_MANIFEST_URL,
+        },
+      );
     } finally {
       globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
     }
-    expect(renderer.backend).toBe('webgpu');
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
-    if (!ready.ok) return;
+    expect(host.ok).toBe(true);
+    if (!host.ok) throw host.error;
+    const { renderer } = host.value;
+    expect(renderer.inspect().state).toBe('alive');
     const device = sharedDevice;
     if (device === undefined) throw new Error('GPUDevice not captured');
-
-    const assets = renderer.assets;
-    if (assets === null) throw new Error('renderer.assets is null');
 
     const world = new World();
 
@@ -276,9 +279,15 @@ describe('bug-20260611 stencil-outline pixel-presence (dawn)', () => {
       },
     );
 
-    expect(renderer.attachWorld(world).ok).toBe(true);
+    const attachment = renderer.attach(world);
+    expect(attachment.ok).toBe(true);
+    if (!attachment.ok) throw attachment.error;
     world.update(1 / 60).unwrap();
-    const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const drawn = renderer.draw({
+      leases: [attachment.value],
+      camera: { lease: attachment.value },
+      environment: { lease: attachment.value },
+    });
     expect(drawn.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
     if (renderTarget === undefined) throw new Error('renderTarget not configured');

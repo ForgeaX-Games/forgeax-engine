@@ -18,8 +18,7 @@ import { type DefineComponentOptions, defineComponent } from '../component';
 
 describe('DefineComponentOptions — arrayStride option-bit removed (w3, AC-05)', () => {
   it('arrayStride is no longer a key on DefineComponentOptions', () => {
-    type Schema = { f: 'array<f32>' };
-    type Opts = DefineComponentOptions<Schema>;
+    type Opts = DefineComponentOptions;
     // @ts-expect-error 'arrayStride' is no longer a key on DefineComponentOptions
     // after feat-20260515 w5 (stride responsibility migrated to RenderSystem
     // extract entry).

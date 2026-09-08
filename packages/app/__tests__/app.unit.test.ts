@@ -14,11 +14,14 @@
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
-import { err, ok, type Result, World } from '@forgeax/engine-ecs';
+import { createRenderReadLease } from '@forgeax/engine-ecs/projection';
+import { World } from '@forgeax/engine-ecs';
 import { RhiError } from '@forgeax/engine-rhi/errors';
+import { err, ok, type Result } from '@forgeax/engine-types';
+import type { Plugin } from '@forgeax/engine-plugin';
 import { Transform } from '@forgeax/engine-scene';
 import { registerPropagateTransforms } from '@forgeax/engine-scene';
-import type { Renderer } from '@forgeax/engine-render';
+import type { RenderFrameInput, Renderer } from '@forgeax/engine-render';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/create-app';
@@ -28,7 +31,6 @@ import {
   AppError,
   type AppErrorCode,
 } from '../src/errors';
-import type { GameEntry } from '../src/game-context';
 import {
   ErrorFanoutRegistry,
   type ErrorFanoutOptions,
@@ -87,12 +89,12 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
     return new ErrorFanoutRegistry(opts);
   }
 
-  function makeRendererStubEF(drawImpl?: (w: World) => unknown): Renderer {
+  function makeRendererStubEF(drawImpl?: () => unknown): Renderer {
     return {
-      attachWorld: () => ({ ok: true, value: undefined }),
-      draw(w: World): unknown {
+      attach: (attachedWorld: World) => ({ ok: true, value: createRenderReadLease(attachedWorld) }),
+      draw(_request: RenderFrameInput): unknown {
         if (drawImpl !== undefined) {
-          return drawImpl(w);
+          return drawImpl();
         }
         return undefined;
       },
@@ -361,6 +363,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
     'app-frame-step-invalid',
     'app-system-update-failed',
     'app-pointer-lock-failed',
+    'app-plugin-activation-failed',
     'app-execution-tier-unavailable',
     'app-execution-bootstrap-failed',
     'app-execution-deadline-exceeded',
@@ -584,6 +587,8 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
               return 'e';
             case 'app-pointer-lock-failed':
               return 'f';
+            case 'app-plugin-activation-failed':
+              return 'plugin';
             case 'app-execution-tier-unavailable':
               return 'g';
             case 'app-execution-bootstrap-failed':
@@ -626,6 +631,8 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
                 ? { cause: 0 }
                 : code === 'app-pointer-lock-failed'
                   ? { path: 'w3c' as const, cause: 0 }
+                  : code === 'app-plugin-activation-failed'
+                    ? { cause: 0 }
                   : code === 'app-execution-tier-unavailable'
                     ? {
                         requestedTier: 'shared' as const,
@@ -670,14 +677,15 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
 {
   // ─── from frame-loop.test.ts ───
 
-  function makeRendererStubFL(): { renderer: Renderer; drawCalls: readonly World[][] } {
-    // feat-20260708-composited-multi-world-rendering M3: draw is now
-    // draw(worlds, { cameraOwner, resourceOwner }); the stub records the worlds array per call.
-    const drawCalls: World[][] = [];
+  function makeRendererStubFL(): { renderer: Renderer; drawCalls: RenderFrameInput[] } {
+    const drawCalls: RenderFrameInput[] = [];
     const renderer = {
-      attachWorld: () => ({ ok: true, value: undefined }),
-      draw(worlds: readonly World[]): void {
-        drawCalls.push([...worlds]);
+      attach: (attachedWorld: World) => ({
+        ok: true,
+        value: createRenderReadLease(attachedWorld),
+      }),
+      draw(request: RenderFrameInput): void {
+        drawCalls.push(request);
       },
     } as unknown as Renderer;
     return { renderer, drawCalls };
@@ -820,32 +828,34 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
         const now = makeNowFakeFL([0, 16]);
         const { raf, pendingCallbacks } = makeRafFakeFL();
         const callOrder: string[] = [];
-        (renderer as unknown as { attachWorld: (w: World) => { ok: true; value: undefined } }).attachWorld = (
+        (renderer as unknown as { attach: (w: World) => ReturnType<typeof createRenderReadLease> }).attach = (
           w,
         ) => {
           expect(w).toBe(world);
           callOrder.push('attach');
-          return { ok: true, value: undefined };
+          return { ok: true, value: createRenderReadLease(w) };
         };
         updateSpy.mockImplementation(() => {
           callOrder.push('update');
           return { ok: true, value: undefined };
         });
         const origDraw = renderer.draw;
-        (renderer as { draw: (w: readonly World[], o: { cameraOwner: number; resourceOwner: number }) => void }).draw = (
-          w: readonly World[],
-          o: { cameraOwner: number; resourceOwner: number },
+        (renderer as { draw: (request: RenderFrameInput) => void }).draw = (
+          request: RenderFrameInput,
         ): void => {
           callOrder.push('draw');
-          origDraw.call(renderer, w as World[], o);
+          origDraw.call(renderer, request);
         };
         const loop = createFrameLoop({ world, renderer, now, raf });
         loop.start();
         pendingCallbacks[0]?.(0);
         expect(callOrder).toEqual(['attach', 'update', 'draw']);
         expect(drawCalls).toHaveLength(1);
-        // M3 / AC-03: the frame-loop wraps the single world into [world].
-        expect(drawCalls[0]).toEqual([world]);
+        const request = drawCalls[0];
+        expect(request?.leases).toHaveLength(1);
+        expect(request?.leases[0]?.worldIdentity).toBe(world.identity);
+        expect(request?.camera.lease).toBe(request?.leases[0]);
+        expect(request?.environment.lease).toBe(request?.leases[0]);
       });
     });
 
@@ -872,28 +882,24 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
 {
   // ─── from load-game.test.ts ───
 
-  function makeStubEntry(): GameEntry {
-    return async (_ctx) => {
-      // no-op entry
-    };
+  function makeStubPlugin(): Plugin {
+    return { name: 'test-gameplay', apply: () => undefined };
   }
 
   describe('load-game.test.ts', () => {
     describe('loadGame success path (AC-07)', () => {
-      it('resolves with Result.ok containing the bootstrap export when resolver returns a valid module', async () => {
-        const entry = makeStubEntry();
-        const r = await loadGame('my-game', async () => ({ bootstrap: entry }));
+      it('resolves with Result.ok containing the native gameplay plugin', async () => {
+        const gameplay = makeStubPlugin();
+        const r = await loadGame('my-game', async () => ({ default: gameplay }));
         expect(r.ok).toBe(true);
         if (r.ok) {
-          expect(r.value).toBe(entry);
+          expect(r.value).toBe(gameplay);
         }
       });
 
-      it('resolves with a sync function (auto-wrapped as Promise<void>)', async () => {
-        const syncEntry: GameEntry = () => {
-          // sync function -- JS runtime auto-wraps undefined return to Promise<void>
-        };
-        const r = await loadGame('sync-game', async () => ({ bootstrap: syncEntry }));
+      it('accepts a Cordis function plugin', async () => {
+        const gameplay: Plugin = () => undefined;
+        const r = await loadGame('sync-game', async () => ({ default: gameplay }));
         expect(r.ok).toBe(true);
         if (r.ok) {
           expect(typeof r.value).toBe('function');
@@ -923,7 +929,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
     });
 
     describe('loadGame invalid-format (AC-07 / AC-08)', () => {
-      it('returns Result.err with code invalid-format when module has no bootstrap export', async () => {
+      it('returns Result.err with code invalid-format when module has no default export', async () => {
         const r = await loadGame('bad-game', async () => ({ foo: 1 }) as unknown as Record<string, unknown>);
         expect(r.ok).toBe(false);
         if (!r.ok) {
@@ -932,12 +938,12 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
           expect(err.code).toBe('invalid-format');
           const detail = err.detail as { exportKeys: string[] };
           expect(detail.exportKeys).toContain('foo');
-          expect(detail.exportKeys).not.toContain('bootstrap');
+          expect(detail.exportKeys).not.toContain('default');
         }
       });
 
-      it('returns Result.err with code invalid-format when bootstrap export is null', async () => {
-        const r = await loadGame('null-game', async () => ({ bootstrap: null }) as unknown as Record<string, unknown>);
+      it('returns Result.err with code invalid-format when default export is null', async () => {
+        const r = await loadGame('null-game', async () => ({ default: null }) as unknown as Record<string, unknown>);
         expect(r.ok).toBe(false);
         if (!r.ok) {
           const err = r.error as LoadGameError;
@@ -945,8 +951,8 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
         }
       });
 
-      it('returns Result.err with code invalid-format when bootstrap export is not a function', async () => {
-        const r = await loadGame('string-game', async () => ({ bootstrap: 'not-a-function' }) as unknown as Record<string, unknown>);
+      it('returns Result.err with code invalid-format when default export is not a plugin', async () => {
+        const r = await loadGame('string-game', async () => ({ default: 'not-a-plugin' }) as unknown as Record<string, unknown>);
         expect(r.ok).toBe(false);
         if (!r.ok) {
           const err = r.error as LoadGameError;
@@ -992,15 +998,12 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
 {
   // ─── from ready-barrier.test.ts ───
 
-  type ReadyResult = Result<void, RhiError>;
-
-  function makeRendererStubRB(ready: Promise<ReadyResult>): Renderer {
+  function makeRendererStubRB(): Renderer {
     return {
-      backend: 'webgpu' as const,
-      ready,
-      attachWorld: () => ({ ok: true, value: undefined }),
-      draw(): void {
+      attach: (attachedWorld: World) => ({ ok: true, value: createRenderReadLease(attachedWorld) }),
+      draw(): { ok: true; value: undefined } {
         // no-op
+        return { ok: true, value: undefined };
       },
       onError(): () => void {
         return () => {
@@ -1017,42 +1020,16 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
 
   describe('ready-barrier.test.ts', () => {
     describe('createApp readiness barrier', () => {
-      it('does not resolve until renderer.ready settles', async () => {
-        let resolveReady: (r: ReadyResult) => void = () => {
-          // assigned synchronously by the Promise executor below
-        };
-        const ready = new Promise<ReadyResult>((resolve) => {
-          resolveReady = resolve;
-        });
-        const renderer = makeRendererStubRB(ready);
-
-        let settled = false;
-        const appPromise = createApp({ renderer, world: new World() }).then((r) => {
-          settled = true;
-          return r;
-        });
-
-        await Promise.resolve();
-        expect(settled).toBe(false);
-
-        resolveReady({ ok: true, value: undefined });
-        const result = await appPromise;
-        expect(settled).toBe(true);
+      it('assembles without a renderer.ready barrier', async () => {
+        const result = await createApp({ renderer: makeRendererStubRB(), world: new World() });
         expect(result.ok).toBe(true);
       });
 
-      it('fail-fasts as Result.err when renderer.ready settles err', async () => {
-        const rhiError = new RhiError({
-          code: 'shader-compile-failed',
-          expected: 'Renderer.ready three-step strict-serial succeeds',
-          hint: 'fix the WGSL pipeline source',
-        });
-        const renderer = makeRendererStubRB(Promise.resolve({ ok: false, error: rhiError }));
-
+      it('does not expose a renderer.ready dependency', async () => {
+        const renderer = makeRendererStubRB();
         const result = await createApp({ renderer, world: new World() });
-        expect(result.ok).toBe(false);
-        if (result.ok) return;
-        expect(result.error).toBe(rhiError);
+        expect(result.ok).toBe(true);
+        expect('ready' in renderer).toBe(false);
       });
     });
   });

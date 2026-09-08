@@ -9,7 +9,7 @@
 // world.set shows up on screen immediately, no rebuild/refresh.
 //
 // The eval scope carries the five live roots (world / renderer / assets /
-// debugAdapter / profiler) + _import(specifier) — identical to the WS-server
+// rhiCapture / profiler) + _import(specifier) — identical to the WS-server
 // eval channel. Profiler is present only when the page opted in.
 // Handle discovery uses the World-owned row iterator:
 //   const q=world.query({}); if(!q.ok) throw q.error; Array.from(q.value,row=>row.entity)
@@ -53,7 +53,7 @@ const { code: posCode, flags } = parseArgs(process.argv, {
   value: ['file'],
 });
 const introspectCode =
-  "const m = await _import('@forgeax/engine-remote/introspect'); return m.buildIntrospectDoc('127.0.0.1', 0, { world, renderer, assets, ...(debugAdapter !== undefined ? { debugAdapter } : {}), ...(profiler !== undefined ? { profiler } : {}) });";
+  "const m = await _import('@forgeax/engine-remote/introspect'); return m.buildIntrospectDoc('127.0.0.1', 0, { world, renderer, assets, ...(rhiCapture !== undefined ? { rhiCapture } : {}), ...(profiler !== undefined ? { profiler } : {}) });";
 const latestProfileCode =
   "if (profiler === undefined) return { ok: false, error: { code: 'profiler-not-enabled', expected: 'an opted-in profiler root', hint: 'Pass profiler to createApp and retry after a host frame boundary.', detail: { enabled: false } } }; return profiler.latestCapture();";
 let code;

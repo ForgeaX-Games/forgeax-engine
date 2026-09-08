@@ -28,6 +28,27 @@ export interface NativeCooker<P = unknown, I = unknown> {
   cook(input: I): NativeCookDraft<P> | Promise<NativeCookDraft<P>>;
 }
 
+export interface NativeCookTransactionSnapshot<P = unknown> {
+  readonly draft: NativeCookDraft<P>;
+  readonly generation: number;
+}
+
+export interface NativeCookTransactionOptions<P = unknown, I = unknown> {
+  readonly key: string;
+  readonly input: I;
+  readonly previous?: NativeCookTransactionSnapshot<P>;
+  readonly validate?: (draft: NativeCookDraft<P>) => string | undefined;
+  readonly publish?: (draft: NativeCookDraft<P>, generation: number) => void | Promise<void>;
+}
+
+export interface NativeCookTransactionResult<P = unknown> extends NativeCookTransactionSnapshot<P> {
+  readonly status: 'committed' | 'recovered';
+  readonly lastKnownGood: NativeCookDraft<P>;
+  readonly candidateGeneration: number;
+  readonly lastKnownGoodGeneration: number;
+  readonly recoveryHint?: string;
+}
+
 function canonicalize(value: unknown): unknown {
   if (value instanceof Uint8Array) return Buffer.from(value).toString('base64');
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -65,6 +86,24 @@ function failure(key: string, detail: NativeCookErrorDetail): Result<never, Asse
     detail,
     recovery: { action: `rerun native cooker ${key}`, retryable: true },
   });
+}
+
+function transactionFailure(key: string, reason: string): Result<never, AssetStageError> {
+  return failure(key, { guid: 'unknown', producer: reason });
+}
+
+function recovered<P>(
+  key: string,
+  previous: NativeCookTransactionSnapshot<P>,
+): NativeCookTransactionResult<P> {
+  return {
+    ...previous,
+    status: 'recovered',
+    lastKnownGood: previous.draft,
+    candidateGeneration: previous.generation + 1,
+    lastKnownGoodGeneration: previous.generation,
+    recoveryHint: `repair ${key} and submit a new candidate generation`,
+  };
 }
 
 /** Injectable build-time table for native authored Pack producers. */
@@ -159,5 +198,38 @@ export class NativeCookerRegistry {
       receipt,
     };
     return ok(product);
+  }
+
+  async runTransaction<P = unknown, I = unknown>(
+    options: NativeCookTransactionOptions<P, I>,
+  ): Promise<Result<NativeCookTransactionResult<P>, AssetStageError>> {
+    const candidate = await this.runDraft<P, I>(options.key, options.input);
+    if (!candidate.ok) {
+      return options.previous === undefined
+        ? candidate
+        : ok(recovered(options.key, options.previous));
+    }
+    const invalidReason = options.validate?.(candidate.value);
+    if (invalidReason !== undefined) {
+      return options.previous === undefined
+        ? transactionFailure(options.key, invalidReason)
+        : ok(recovered(options.key, options.previous));
+    }
+    const generation = (options.previous?.generation ?? 0) + 1;
+    try {
+      await options.publish?.(candidate.value, generation);
+    } catch {
+      return options.previous === undefined
+        ? transactionFailure(options.key, 'atomic producer publication failed')
+        : ok(recovered(options.key, options.previous));
+    }
+    return ok({
+      draft: candidate.value,
+      generation,
+      status: 'committed',
+      lastKnownGood: candidate.value,
+      candidateGeneration: generation,
+      lastKnownGoodGeneration: generation,
+    });
   }
 }

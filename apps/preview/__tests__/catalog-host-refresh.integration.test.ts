@@ -34,13 +34,6 @@ describe('preview host catalog refresh', () => {
     expect(source).toContain('createParticleCodeNativeCookerFromRoots([templateAssetRoot])');
   });
 
-  it('keeps candidate and last-known-good generations observable at the host boundary', async () => {
-    const lifecycleSource = await readFile(new URL('../../../packages/vite-plugin-pack/src/dev/native-cooker-lifecycle.ts', import.meta.url), 'utf8');
-    expect(lifecycleSource).toContain('candidateGeneration');
-    expect(lifecycleSource).toContain('lastKnownGoodGeneration');
-    expect(lifecycleSource).toContain('recoveryHint');
-  });
-
   it('observes a watched preview asset mutation and requests the configured host reload', async () => {
     const baseline = await readFile(sourceMaterial, 'utf8');
     const previewInlineConfig = await loadPreviewConfig();

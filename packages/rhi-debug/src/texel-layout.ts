@@ -13,7 +13,7 @@
 // the prefilter map has a 5-mip roughness chain. Snapshotting them with the old
 // assumptions either skipped them (-> replay renders unlit/black) or would have
 // seeded corrupt bytes. This module computes the real per-subresource layout so a
-// full snapshot + faithful seed round-trips any color format with a known texel
+// full snapshot + faithful seed round-trips each color format with a known texel
 // block footprint, including block-compressed formats.
 
 /**
@@ -133,7 +133,7 @@ const COMPRESSED_BLOCKS: Partial<Record<GPUTextureFormat, TextureBlockLayout>> =
   'astc-12x12-unorm-srgb': { blockWidth: 12, blockHeight: 12, bytesPerBlock: 16 },
 };
 
-/** Return the WebGPU texel-block footprint for any supported color format. */
+/** Return the WebGPU texel-block footprint for each supported color format. */
 export function textureBlockLayout(
   format: GPUTextureFormat | undefined,
 ): TextureBlockLayout | undefined {
@@ -245,6 +245,36 @@ export interface TextureLayout {
   readonly slices: readonly SubresourceSlice[];
   /** Total tight byte length across every subresource (the blob size). */
   readonly totalBytes: number;
+}
+
+export interface TextureExtent {
+  readonly width: number;
+  readonly height: number;
+  readonly layerCount: number;
+}
+
+/** Project a serialized GPU texture extent onto the dimensions used by snapshots. */
+export function projectTextureExtent(size: unknown): TextureExtent {
+  if (typeof size === 'number') return { width: size, height: 1, layerCount: 1 };
+  if (Array.isArray(size)) {
+    const width = typeof size[0] === 'number' ? size[0] : 1;
+    const height = typeof size[1] === 'number' ? size[1] : width;
+    const layerCount = typeof size[2] === 'number' ? size[2] : 1;
+    return { width, height, layerCount };
+  }
+  if (size !== null && typeof size === 'object') {
+    const record = size as {
+      readonly width?: unknown;
+      readonly height?: unknown;
+      readonly depthOrArrayLayers?: unknown;
+    };
+    const width = typeof record.width === 'number' ? record.width : 1;
+    const height = typeof record.height === 'number' ? record.height : width;
+    const layerCount =
+      typeof record.depthOrArrayLayers === 'number' ? record.depthOrArrayLayers : 1;
+    return { width, height, layerCount };
+  }
+  return { width: 1, height: 1, layerCount: 1 };
 }
 
 /**

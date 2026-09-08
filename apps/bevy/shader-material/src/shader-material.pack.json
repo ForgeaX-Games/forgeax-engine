@@ -6,6 +6,7 @@
       "guid": "e97e725d-0f45-5317-9472-5b41f19a1684",
       "kind": "material",
       "sourceKey": "shader-material.wgsl",
+      "execution": "cooked",
       "payload": {
         "kind": "material",
         "passes": [

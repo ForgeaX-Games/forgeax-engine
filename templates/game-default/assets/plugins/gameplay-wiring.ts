@@ -1,6 +1,7 @@
 import { Camera } from '@forgeax/engine-render';
-import type { BootstrapContext } from '@forgeax/engine-app';
+import type { GameHost } from '@forgeax/engine-app';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import type { Context } from '@forgeax/engine-plugin';
 import { HitFlash } from './components/gameplay';
 import { toggleCustomProjectileMesh } from './custom-projectile-mesh';
 import { resetFbxMeshSwap } from './fbx-mesh-swap';
@@ -20,8 +21,9 @@ import { TOP_DOWN_OFFSET_Z, TOP_DOWN_Y } from './camera-controller';
 import { applyAssetLabAction, type AssetLabActionResult } from './asset-lab-actions';
 
 export type GameplayWiringArgs = {
+  readonly context: Context;
   readonly world: World;
-  readonly host: BootstrapContext | undefined;
+  readonly host: GameHost | undefined;
   readonly assetEvidenceMode: boolean;
   readonly targets: GameplayTargetFeatures;
   readonly session: GameplaySession;
@@ -67,6 +69,7 @@ export function installGameplayWiring(args: GameplayWiringArgs): void {
 
   if (host !== undefined) {
     installGameplayProjection({
+      context: args.context,
       host,
       world,
       camera,
@@ -99,6 +102,7 @@ export function installGameplayWiring(args: GameplayWiringArgs): void {
       sentinel: session.sentinel,
       sentinelReadiness: session.sentinelReadiness,
       lightingMode: session.lightingMode,
+      resonanceForge: targets.resonanceForge,
       projectileEntities: session.projectileEntities,
       triggerFlash: () => triggerFlash(),
       triggerScore: session.triggerScore,
@@ -109,7 +113,7 @@ export function installGameplayWiring(args: GameplayWiringArgs): void {
       resetFbxMeshSwap: (state) => resetFbxMeshSwap(world, state),
       resetGltfMeshSwap: (state) => resetGltfMeshSwap(world, state),
       setProjectileVisual,
-      visibilitySnapshot: () => targets.visibilityLoop.snapshot(host.renderer),
+      visibilitySnapshot: () => targets.visibilityLoop.snapshot(),
     });
   }
 
@@ -177,6 +181,7 @@ export function installGameplayWiring(args: GameplayWiringArgs): void {
     });
 
     installGameplayRenderEvidence({
+      context: args.context,
       host,
       world,
       root,

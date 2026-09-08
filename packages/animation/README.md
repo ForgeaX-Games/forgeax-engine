@@ -4,6 +4,12 @@
 > Ordinary entities and skin joints use the same `AnimationTargetId` model. A
 > target needs `Transform`, but does not need `Skin` or a renderer component.
 
+Engine profiles install `animationPayloadsPlugin(lookup)` as the resolver
+Provider and `animationRuntimePlugin()` as the World consumer. Their
+`provide/inject` edge makes the dependency explicit. `animationPlugin(lookup?)`
+remains the direct standalone composition for a World that does not need a
+separately replaceable resolver.
+
 ## Quick start
 
 ```ts
@@ -14,12 +20,12 @@ import {
   bindAnimationTargets,
   deriveAnimationTargetId,
 } from '@forgeax/engine-animation';
-import { World } from '@forgeax/engine-ecs';
+import { createWorldContext, World } from '@forgeax/engine-ecs';
 import { ChildOf, Name, Transform } from '@forgeax/engine-scene';
 import type { AnimationClip } from '@forgeax/engine-types';
 
 const world = new World();
-await animationPlugin().build(world);
+const context = await createWorldContext(world, [animationPlugin()]);
 
 const targetId = deriveAnimationTargetId(['Root', 'Planet']);
 const clip = {
@@ -57,6 +63,7 @@ const target = world.spawn(
 const bound = bindAnimationTargets(world, player, [target]);
 if (!bound.ok) throw bound.error;
 world.update(1 / 60);
+await context.fiber.restart();
 ```
 
 For imported scenes, collect targets explicitly from `SceneInstance.mapping`.

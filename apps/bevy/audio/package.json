@@ -42,6 +42,7 @@
     "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/apps-shared": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",

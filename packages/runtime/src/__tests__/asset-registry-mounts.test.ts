@@ -17,6 +17,7 @@
 //   (f) mounts.memberFirst / mounts.memberCount / mounts.parent (LocalEntityId)
 //       are NOT refs[] indices -- they are local entity ids preserved as-is.
 
+import { AnimationPlayer } from '@forgeax/engine-animation';
 import {
   type Asset,
   AssetRegistry,
@@ -25,6 +26,8 @@ import {
 } from '@forgeax/engine-assets-runtime';
 import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { MeshFilter, SceneInstance } from '@forgeax/engine-render';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
 import {
   type AnimationClip,
   BUILTIN_BASE,
@@ -35,9 +38,6 @@ import {
   unwrapHandle,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import '@forgeax/engine-render/internal';
-import { AnimationPlayer } from '@forgeax/engine-animation';
-import { MeshFilter } from '@forgeax/engine-render/internal';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 /** Access the private parseAssetPayload method via structural view-cast. */
@@ -507,12 +507,24 @@ function mkMeshAsset(): MeshAsset {
     ]),
     indices: new Uint16Array([0, 1, 2]),
     attributes: {},
-    submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+    submeshes: [
+      { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list', materialSlot: 0 },
+    ],
+
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 
 function mkClipAsset(duration: number): AnimationClip {
   return { kind: 'animation-clip', duration, channels: [] };
+}
+
+function makeMountWorld(): World {
+  const world = new World();
+  for (const component of [Transform, ChildOf, MeshFilter, AnimationPlayer, SceneInstance]) {
+    world.components.register(component).unwrap();
+  }
+  return world;
 }
 
 /** First descendant (excluding `root`) that carries `token`. */
@@ -540,7 +552,7 @@ describe('feat-20260713 M3 / w10 — override value GUID→handle resolution (AC
 
   it('scalar shared<> override value GUID resolves to a live handle on the member', () => {
     const reg = mkReg();
-    const world = new World();
+    const world = makeMountWorld();
     reg.catalog(pgOv(OV_MESH_GUID), mkMeshAsset());
     reg.catalog(pgOv(SCENE_CHILD_GUID), childScene() as Asset);
 
@@ -585,7 +597,7 @@ describe('feat-20260713 M3 / w10 — override value GUID→handle resolution (AC
 
   it('array<shared<>> override value GUID array resolves to a handle array; number elements pass through (D-8)', () => {
     const reg = mkReg();
-    const world = new World();
+    const world = makeMountWorld();
     reg.catalog(pgOv(OV_CLIP_A_GUID), mkClipAsset(1.5));
     reg.catalog(pgOv(SCENE_CHILD_GUID), childScene() as Asset);
 
@@ -636,7 +648,7 @@ describe('feat-20260713 M3 / w10 — override value GUID→handle resolution (AC
 
   it('unresolvable override value GUID → AssetError fail-fast, no half-initialized member', () => {
     const reg = mkReg();
-    const world = new World();
+    const world = makeMountWorld();
     reg.catalog(pgOv(SCENE_CHILD_GUID), childScene() as Asset);
 
     const parent: SceneAsset = {
@@ -673,7 +685,7 @@ describe('feat-20260713 M3 / w10 — override value GUID→handle resolution (AC
 
   it('patch-form (field present) scalar shared<> override value GUID resolves too', () => {
     const reg = mkReg();
-    const world = new World();
+    const world = makeMountWorld();
     reg.catalog(pgOv(OV_MESH_GUID), mkMeshAsset());
     // Child member already carries MeshFilter (patch replaces its assetHandle).
     const child: SceneAsset = {
@@ -722,7 +734,7 @@ describe('feat-20260713 M3 / w11 — envelope-less scene override value resoluti
 
   it('override value GUID resolves even when the PARENT scene has no catalogued envelope', () => {
     const reg = mkReg();
-    const world = new World();
+    const world = makeMountWorld();
     // Sub-asset + child scene are catalogued; the PARENT scene is NOT (built +
     // allocSharedRef'd directly, no reg.catalog). sceneGuidKey is undefined so
     // _resolveSceneGuids takes the entity-walk fallback branch; the override

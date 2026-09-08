@@ -1,7 +1,8 @@
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { EquirectAsset } from '@forgeax/engine-types';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { type EquirectAsset } from '@forgeax/engine-types';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { buildSkyboxWorld } from './skybox';
 
@@ -19,7 +20,7 @@ bootstrap(canvas).catch((error: unknown) => {
 });
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
-  const bundler = { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() };
+  const bundler = { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) };
   const appResult = await createApp(target, {}, bundler);
   if (!appResult.ok) {
     console.error('[bevy-skybox] createApp failed:', appResult.error);
@@ -27,13 +28,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   const app = appResult.value;
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[bevy-skybox] asset owner is unavailable');
+    return;
+  }
   const guidResult = AssetGuid.parse(NEWPORT_LOFT_GUID);
   if (!guidResult.ok) {
     console.error('[bevy-skybox] HDR GUID parse failed:', guidResult.error.code);
     return;
   }
-  app.renderer.assets.configurePackIndex('/pack-index.json');
-  const hdrResult = await app.renderer.assets.loadByGuid<EquirectAsset>(guidResult.value);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
+  const hdrResult = await assets.loadByGuid<EquirectAsset>(guidResult.value);
   if (!hdrResult.ok) {
     console.error('[bevy-skybox] HDR load failed:', hdrResult.error.code, hdrResult.error.hint);
     return;

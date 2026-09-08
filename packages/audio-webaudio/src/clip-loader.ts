@@ -15,15 +15,28 @@
 // - P4 consistent abstraction: parallel to image/gltf loader patterns
 
 import { AudioError } from '@forgeax/engine-audio';
-import { err, ok, type Result } from '@forgeax/engine-ecs';
-import type { AudioClipAsset } from '@forgeax/engine-types';
+import { type AudioClipAsset, err, ok, type Result } from '@forgeax/engine-types';
 
 export async function decodeAudioClipBytes(
   guid: string,
   bytes: Uint8Array,
+  mediaType: `audio/${string}`,
 ): Promise<Result<AudioClipAsset, AudioError>> {
+  if (mediaType.length <= 'audio/'.length || bytes.byteLength === 0) {
+    return err(
+      new AudioError({
+        code: 'decode-failed',
+        expected: `non-empty audio mediaType and source bytes for GUID ${guid}`,
+        hint: 'verify the audio artifact mediaType and recook the source bytes',
+        detail: {
+          code: 'decode-failed' as const,
+          reason: 'audio mediaType or source bytes are empty',
+        },
+      }),
+    );
+  }
   try {
-    return ok({ kind: 'audio', sourceKey: guid, bytes: bytes.slice() });
+    return ok({ kind: 'audio', sourceKey: guid, mediaType, bytes: bytes.slice() });
   } catch (e) {
     return err(
       new AudioError({

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "kind": "wasm-release-handoff",
+  "status": "blocked",
+  "engineCommit": "ad2188093fe41019b7037f754254fa0c1a19c566",
+  "prUrl": "https://github.com/ForgeaX-Games/forgeax-engine/pull/2739",
+  "branchOrWorktree": "/Users/you/projects/ForgeaX-Games/forgeax-engine/.codex-loop-worktrees/material-reflection-engine-worktrees/feat-20260825-material-reflection-engine-owner-cut-mainline",
+  "sourceContentKey": "sha256-46dafdc239db077e9b3b54b4d2622f10c8e9e5c76b8bd811a06c597d5ba8b1ef",
+  "artifactSha256": "40c2b706ec3bb40a97cda8302491d0a34da0744b214db8993ae4c74590d550b7",
+  "glueSha256": "6cc49495a4686a2a0ecf7cb53fc933388f4f7ff42647ca686271aef26b730ff6",
+  "compilerFingerprint": "sha256-0f47b9f3deb7057ca22901763a13d9ef3a9c8f82c70a4a5c2f6a0819dfbdbfd5",
+  "mainReachable": false,
+  "releaseAvailable": false,
+  "downstreamPinned": false,
+  "publishable": false,
+  "blockers": [
+    {
+      "command": "pnpm sdk:build -- --version 0.0.0-m6-mainline --output /tmp/forgeax-sdk-m6-mainline-a",
+      "exitCode": 1,
+      "detail": "check-engine-skills rejected skills/forgeax-engine-cli/SKILL.md because references/authoring-operations.md is missing"
+    },
+    {
+      "command": "pnpm sdk:build -- --version 0.0.0-m6-mainline --output /tmp/forgeax-sdk-m6-mainline-b",
+      "exitCode": 1,
+      "detail": "same independent skill-link validation failure"
+    }
+  ],
+  "handoffBoundary": "Step 4 candidate only; protected main, release, and downstream pins remain Step 7 responsibilities"
+}

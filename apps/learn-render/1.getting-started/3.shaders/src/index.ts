@@ -34,7 +34,7 @@
 //     this file; AI users read the 3 sections + the sibling play.wgsl
 //     and have the full LO 1.3 -> forgeax picture in one directory.
 //   - P3 (explicit failure):  `EngineEnvironmentError` surfaces the
-//     "no usable backend" path; `await renderer.ready` returns a
+//     "no usable backend" path; `await host initialization` returns a
 //     `Result` whose `.ok === false` branch is logged via console.
 //     error - no silent fallback.
 //   - P4 (consistent abstraction):  the same `Engine.create({ canvas
@@ -58,10 +58,11 @@
 // drives the actual GPU dispatch when MaterialAsset.shadingModel
 // resolves to 'unlit').
 import { World } from '@forgeax/engine-ecs';
+import { captureCanvasPixels } from '@forgeax/apps-shared/canvas-capture';
 import { HANDLE_TRIANGLE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { Engine, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import playShaderSrc from './shaders/play.wgsl?raw';
@@ -142,7 +143,7 @@ function computePulse(nowMs: number, basePulseTime: number): number {
 }
 
 // 3. bootstrap - locate the canvas the index.html document declares,
-// hand it to Engine.create, await renderer.ready (the engine internal
+// hand it to Engine.create, await host initialization (the engine internal
 // pipeline + RHI handshake), spawn the pulse scene, drive the rAF
 // loop with the LO 1.3 pulse animation idiom, then expose the pulse
 // scalar + capture hook on globalThis so the AI user (and the bench-
@@ -158,19 +159,21 @@ void bootstrap(canvas);
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   try {
-    const renderer = await Engine.create(target, {}, forgeaxBundlerAdapter());
-    renderer.onError((e) => {
-      console.error('[learn-render 1.3 shaders] renderer.onError:', e.code, e.hint);
+    const created = await createRenderer(target, {}, forgeaxBundlerAdapter());
+    if (!created.ok) {
+      console.error('[learn-render 1.3 shaders] renderer construction failed:', created.error);
+      return;
+    }
+    const renderer = created.value;
+    renderer.subscribe((event) => {
+      if (event.kind !== 'error') return;
+      const e = event.error;
+      console.error('[learn-render 1.3 shaders] renderer error:', e.code, e.hint);
       const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;
       if (bus !== undefined) bus.push({ code: e.code, hint: e.hint });
     });
-    const ready = await renderer.ready;
-    if (!ready.ok) {
-      console.error('[learn-render 1.3 shaders] renderer.ready failed:', ready.error);
-      return;
-    }
     const world = new World();
-    const worldAttachment1 = renderer.attachWorld(world);
+    const worldAttachment1 = renderer.attach(world);
     if (!worldAttachment1.ok) throw worldAttachment1.error;
     spawnPulseScene(world);
     const basePulseTime = performance.now();
@@ -183,7 +186,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const tick = (): void => {
       pulse = computePulse(performance.now(), basePulseTime);
       world.update().unwrap();
-      const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      const drawn = renderer.draw({
+        leases: [worldAttachment1.value],
+        camera: { lease: worldAttachment1.value },
+        environment: { lease: worldAttachment1.value },
+      });
       if (!drawn.ok) {
         console.error('[learn-render 1.3 shaders] draw failed:', drawn.error);
         return;
@@ -208,16 +215,16 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     win.__captureShaders = async (): Promise<{ pixels: Uint8Array; pulse: number }> => {
       pulse = computePulse(performance.now(), basePulseTime);
       world.update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-      // Body delegates pixel readback to renderer.readPixels() (engine
-      // API since 2026-05-17; AGENTS.md §Breaking changes); the
+      // Body delegates pixel capture to the host-owned canvas helper; the
       // wrapper combines engine pixels + the LO 1.3 pulse scalar so
       // bench-screenshot.mjs reads both in one shot.
-      const r = await renderer.readPixels();
-      if (!r.ok) throw new Error(`[learn-render 1.3 shaders] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`);
+      const r = await captureCanvasPixels(target);
+      if (!r.ok) throw new Error(`[learn-render 1.3 shaders] canvas capture failed: ${r.error.hint}`);
       return { pixels: r.value, pulse };
     };
-    console.warn(`[learn-render 1.3 shaders] backend=${renderer.backend}`);
+    console.warn(
+      `[learn-render 1.3 shaders] backend=${renderer.inspect().capabilities.backendKind}`,
+    );
   } catch (err: unknown) {
     if (err instanceof EngineEnvironmentError) {
       console.error('[learn-render 1.3 shaders] no usable backend:', err);

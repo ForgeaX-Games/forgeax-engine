@@ -7,6 +7,7 @@
       "kind": "material",
       "name": "Arc Nova Ember Facet",
       "sourceKey": "arc-nova-ember-shard.wgsl",
+      "execution": "cooked",
       "payload": {
         "kind": "material",
         "passes": [

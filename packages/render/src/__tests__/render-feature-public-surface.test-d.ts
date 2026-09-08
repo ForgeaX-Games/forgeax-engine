@@ -1,14 +1,10 @@
 import type {
   RenderError,
-  Renderer,
-  RendererOptions,
   RenderFeature,
-  RenderFeatureContributeContext,
-  RenderFeatureDiagnostics,
   RenderFeatureErrorDescriptor,
   RenderFeatureExtractContext,
-  RenderFeaturePassContext,
-  RenderFeaturePrepareContext,
+  RenderFeaturePlan,
+  RenderFeaturePlanContext,
 } from '@forgeax/engine-render';
 import { ok } from '@forgeax/engine-types';
 
@@ -22,24 +18,15 @@ const feature = {
     const owner: number = context.owner;
     return ok<FrameData>({ visibleCount: owner });
   },
-  prepare(data: FrameData, context: RenderFeaturePrepareContext) {
+  plan(data: FrameData, context: RenderFeaturePlanContext) {
     const count: number = data.visibleCount;
     const frameNumber: number = context.frame.frameNumber;
+    const plan: RenderFeaturePlan = { resources: [], passes: [] };
     void count;
     void frameNumber;
-    return ok(undefined);
-  },
-  contribute(data: FrameData, context: RenderFeatureContributeContext) {
-    const count: number = data.visibleCount;
-    void count;
-    void context.staging;
-    return ok(undefined);
+    return ok(plan);
   },
 } satisfies RenderFeature<FrameData>;
-
-const options: RendererOptions = { features: [feature] };
-const diagnostics = (renderer: Renderer): readonly RenderFeatureDiagnostics[] =>
-  renderer.renderFeatureDiagnostics();
 
 const errorDescriptor = (error: RenderError): RenderFeatureErrorDescriptor | undefined => {
   switch (error.code) {
@@ -56,13 +43,8 @@ const errorDescriptor = (error: RenderError): RenderFeatureErrorDescriptor | und
   }
 };
 
-const passContext = (context: RenderFeaturePassContext): number => context.frame.frameNumber;
-// @ts-expect-error Wave1 pass execution does not expose incomplete GPU draw state
-passContext.commands;
 void errorDescriptor;
-void options;
-void diagnostics;
-void passContext;
+void feature;
 
 // The renderer host and construction context are internal implementation seams.
 // @ts-expect-error host internals are not part of the render root surface

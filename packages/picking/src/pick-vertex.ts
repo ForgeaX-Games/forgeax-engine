@@ -44,18 +44,13 @@
 //          plan-tasks.json w5/w8 acceptanceCheck.
 
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
-import { Entity, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { mat4, ray, type Vec3Like, vec2, vec3 } from '@forgeax/engine-math';
 import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
-import {
-  computeScreenRay,
-  readWorldMatrix,
-  type TableLike,
-  type WorldInternalView,
-} from './pick-core';
+import { computeScreenRay, readWorldMatrix } from './pick-core';
 
 // ── types ────────────────────────────────────────────────────────────────
 
@@ -257,7 +252,7 @@ function collectVertexHits(
   }
 
   // ── entity world transform (D-9: requires propagateTransforms preamble) ──
-  const entityWorld = readWorldMatrix(world as WorldInternalView, entity);
+  const entityWorld = readWorldMatrix(world, entity);
   if (entityWorld === undefined) {
     return [];
   }
@@ -544,63 +539,45 @@ export function pickVertex(
 
   // ── walk renderable archetypes (Transform + MeshFilter + MeshRenderer) ──
   // Reuse pick.ts archetype walk skeleton (research Finding 1).
-  const worldInternal = world as unknown as {
-    _getGraph(): { tables: TableLike[] };
-  };
-  const graph = worldInternal._getGraph();
+  const query = world.query({ read: [Transform, MeshFilter, MeshRenderer] }).unwrap();
 
   const allCandidates: VertexHit[] = [];
 
-  for (const table of graph.tables) {
-    if (!table || table.size === 0) continue;
-    if (!table.components.some((c) => c.id === MeshRenderer.id)) continue;
-    if (!table.components.some((c) => c.id === MeshFilter.id)) continue;
-    if (!table.components.some((c) => c.id === Transform.id)) continue;
+  for (const row of query) {
+    const assetHandleRaw = Math.round(row.get(MeshFilter).assetHandle as number);
+    if (assetHandleRaw === 0) continue;
+    const meshRes = resolveAssetHandle<MeshAsset>(world, toShared<'MeshAsset'>(assetHandleRaw));
+    if (!meshRes.ok) continue;
 
-    const mfCols = table.storage.get(MeshFilter.id)?.fields;
-    if (!mfCols) continue;
-    const assetHandleView = mfCols.get('assetHandle')?.view as Uint32Array | undefined;
-    if (!assetHandleView) continue;
+    // read entity (mirrors pick.ts:190)
+    const entity = row.entity;
 
-    for (let i = 0; i < table.size; i++) {
-      const assetHandleRaw = Math.round(assetHandleView[i] ?? 0);
-      if (assetHandleRaw === 0) continue;
-      const meshRes = resolveAssetHandle<MeshAsset>(world, toShared<'MeshAsset'>(assetHandleRaw));
-      if (!meshRes.ok) continue;
+    // read entity world matrix
+    const entityWorld = readWorldMatrix(world, entity);
+    if (entityWorld === undefined) continue;
 
-      // read entity (mirrors pick.ts:190)
-      const entitySelfView = table.storage.get(Entity.id)?.fields.get('self')?.view as
-        | Uint32Array
-        | undefined;
-      const entity = (entitySelfView?.[i] ?? 0) as EntityHandle;
+    // AABB coarse cull (R-2): if aabb present, test ray intersection.
+    // If aabb===undefined (builtin), fall through to collectVertexHits (AC-07).
+    const mesh = meshRes.value;
+    if (
+      mesh.aabb !== undefined &&
+      !rayHitsWorldAabb(r, mesh.aabb, entityWorld as unknown as mat4.Mat4Like)
+    ) {
+      continue;
+    }
 
-      // read entity world matrix
-      const entityWorld = readWorldMatrix(world as WorldInternalView, entity);
-      if (entityWorld === undefined) continue;
-
-      // AABB coarse cull (R-2): if aabb present, test ray intersection.
-      // If aabb===undefined (builtin), fall through to collectVertexHits (AC-07).
-      const mesh = meshRes.value;
-      if (
-        mesh.aabb !== undefined &&
-        !rayHitsWorldAabb(r, mesh.aabb, entityWorld as unknown as mat4.Mat4Like)
-      ) {
-        continue;
-      }
-
-      // Collect vertices for this entity
-      const entityHits = collectVertexHits(
-        world,
-        cameraEntity,
-        screenX,
-        screenY,
-        viewportWidth,
-        viewportHeight,
-        entity,
-      );
-      for (const h of entityHits) {
-        allCandidates.push(h);
-      }
+    // Collect vertices for this entity
+    const entityHits = collectVertexHits(
+      world,
+      cameraEntity,
+      screenX,
+      screenY,
+      viewportWidth,
+      viewportHeight,
+      entity,
+    );
+    for (const h of entityHits) {
+      allCandidates.push(h);
     }
   }
 

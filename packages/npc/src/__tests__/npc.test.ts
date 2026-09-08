@@ -1,4 +1,4 @@
-import { World } from '@forgeax/engine-ecs';
+import { createWorldContext, World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
 import { createNpcClientAdapter, NpcBrain, type NpcBrainBinding, npcPlugin } from '../index';
 
@@ -73,7 +73,7 @@ describe('NpcBrain', () => {
         },
       },
     });
-    expect((await plugin.build(world)).ok).toBe(true);
+    await createWorldContext(world, [plugin]);
     world
       .spawn({
         component: NpcBrain,

@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import { type GltfMetaJson, reimportReuseMeta } from '../reimport-reuse-meta.js';
-import { deriveGltfSourceKeys } from '../source-key.js';
+import {
+  deriveGltfSourceKeys,
+  type GltfSourceKeyError,
+  type GltfSourceKeyErrorCode,
+} from '../source-key.js';
 
 const META_BASE: GltfMetaJson = {
   schemaVersion: 1,
@@ -15,6 +19,10 @@ const META_BASE: GltfMetaJson = {
 };
 
 describe('glTF producer sourceKey', () => {
+  it('derives the public error-code alias from its error owner', () => {
+    expectTypeOf<GltfSourceKeyErrorCode>().toEqualTypeOf<GltfSourceKeyError['code']>();
+  });
+
   it('derives stable semantic keys without using sourceIndex or locator', () => {
     const result = deriveGltfSourceKeys([
       { kind: 'mesh', sourceIndex: 4, name: 'Hero' },
@@ -35,6 +43,17 @@ describe('glTF producer sourceKey', () => {
   it('uses the semantic kind for one anonymous output, never sourceIndex', () => {
     const result = deriveGltfSourceKeys([{ kind: 'mesh', sourceIndex: 7 }]);
     expect(result).toEqual({ ok: true, keys: ['mesh'], conflicts: [] });
+  });
+
+  it('persists an output display name in the generated sub-asset entry', () => {
+    const result = reimportReuseMeta([{ kind: 'mesh', sourceIndex: 0, name: 'Hero' }], undefined);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.subAssets[0]).toMatchObject({
+      kind: 'mesh',
+      sourceKey: 'mesh:Hero',
+      name: 'Hero',
+    });
   });
 
   it('rejects two anonymous outputs of one kind as ambiguous', () => {

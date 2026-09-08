@@ -8,7 +8,6 @@ import {
   drawMesh2dArcsBounds,
   makeTextureAsset,
   makeTexturePixels,
-  TEXTURE_SIZE,
 } from './mesh2d-arcs.js';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
@@ -28,15 +27,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const pixels = makeTexturePixels();
   const texture = makeTextureAsset(pixels);
   const textureHandle = app.world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', texture);
-  const upload = await app.renderer.store.uploadTexture(textureHandle, texture, {
-    bytes: pixels,
-    width: TEXTURE_SIZE,
-    height: TEXTURE_SIZE,
-    mime: 'image/png',
-    colorSpace: 'srgb',
-    mipmap: false,
-  });
-  if (!upload.ok) return console.error('[bevy-mesh2d-arcs] texture upload failed:', upload.error);
 
   const scene = buildMesh2dArcsWorld(app.world, unwrapHandle(textureHandle));
   const debugDraw = app.debugDraw;

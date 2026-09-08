@@ -1,15 +1,13 @@
 #!/usr/bin/env node
-// hello-hdrp-lighting headless smoke (feat-20260609-hdrp-cluster-fragment-ggx M5 / w20).
+// Standard clustered-lighting Dawn smoke.
 //
 // Upgraded from structural-only to pixel readback ε <= 0.05 vs committed
-// baseline PNG. The 256-light scene renders through HDRP cluster-forward;
-// the smoke engine routes bootstrap + dawn-node + mock canvas + render
-// loop + pixel readback + per-pixel delta vs baseline (AC-01).
+// baseline PNG. The 256-light scene renders through the Standard clustered
+// lane; the smoke drives the Runtime host, receipt-bound observation, Dawn
+// readback, and per-pixel delta vs baseline (AC-01).
 //
-// FALSIFY=force-urp -- skips installPipeline; pixel must differ > 0.05
-//   from HDRP baseline (proves smoke discriminability).
-// FALSIFY=cluster-grid-zero -- sets FORGEAX_HDRP_FALSIFY_CLUSTER_GRID_ZERO=1;
-//   pixel diff vs HDRP baseline must exceed 0.05 (AC-10 falsifiability).
+// FALSIFY=force-direct -- selects the Standard direct lane; pixel output must
+// differ from the clustered baseline (proves smoke discriminability).
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -22,9 +20,12 @@ const SMOKE_PIXEL_EPSILON = Number.parseFloat(process.env.SMOKE_PIXEL_EPSILON ??
 const FALSIFY = process.env.FALSIFY ?? '';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const MONOREPO_ROOT = resolve(here, '..', '..', '..', '..');
 const BASELINE_PATH = resolve(
-  MONOREPO_ROOT,
+  here,
+  '..',
+  '..',
+  '..',
+  '..',
   'forgeax-engine-assets',
   '.forgeax-harness',
   'forgeax-loop',
@@ -35,20 +36,17 @@ const BASELINE_PATH = resolve(
 
 // 200x150 keeps 4:3 aspect (camera fov / aspect numbers below stay valid)
 // but cuts fragment work to 1/16 of 800x600. Lavapipe in CI is fully CPU-
-// bound on the cluster-forward fragment shader (every pixel iterates O(30-
+// bound on the clustered fragment shader (every pixel iterates O(30-
 // 60) lights), so the smaller canvas drops the CI step from ~160s to ~10s.
-// The pixel readback gate still catches PSO variant misroute / cluster-grid
+// The pixel readback gate still catches PSO variant misroute / cluster indexing
 // FALSIFY because the cube + floor + light-driven gradient occupy roughly
 // the same proportion of the frame -- this is a CPU cost cut, not a coverage
-// cut. Baseline regenerated under forgeax-engine-assets/.../screenshots/.
+// cut. Baseline is stored under forgeax-engine-assets/.../screenshots/.
 const WIDTH = 200;
 const HEIGHT = 150;
 
-// Known-noise app.onError codes during 256-light HDRP demo.
-const KNOWN_NOISE_CODES = new Set([
-  'hdrp-light-budget-exceeded',
-  'hdrp-index-list-overflow',
-]);
+// Standard lane smoke treats every renderer error as actionable.
+const KNOWN_NOISE_CODES = new Set();
 
 const consoleErrors = [];
 const originalConsoleError = console.error.bind(console);
@@ -56,11 +54,6 @@ console.error = (...args) => {
   consoleErrors.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
   originalConsoleError(...args);
 };
-
-// FALSIFY=cluster-grid-zero: inject falsify env var before engine loads.
-if (FALSIFY === 'cluster-grid-zero') {
-  process.env.FORGEAX_HDRP_FALSIFY_CLUSTER_GRID_ZERO = '1';
-}
 
 let create;
 let globals;
@@ -88,19 +81,6 @@ Object.defineProperty(globalThis.navigator, 'gpu', { value: gpu, configurable: t
 // path (test:browser project) does not run smoke-dawn.mjs; the real Channel 2
 // BGRA path is exercised through the helper unmodified there.
 gpu.getPreferredCanvasFormat = () => 'rgba8unorm';
-
-let rafQueue = [];
-let rafCounter = 1;
-globalThis.requestAnimationFrame = (cb) => {
-  const id = rafCounter++;
-  rafQueue.push({ id, cb });
-  return id;
-};
-globalThis.cancelAnimationFrame = (id) => {
-  rafQueue = rafQueue.filter((f) => f.id !== id);
-};
-const realPerformanceNow = globalThis.performance?.now?.bind(globalThis.performance) ?? (() => Date.now());
-globalThis.performance = globalThis.performance ?? { now: () => Date.now() };
 
 let sharedDevice;
 const originalRequestAdapter = globalThis.navigator.gpu.requestAdapter.bind(globalThis.navigator.gpu);
@@ -152,11 +132,10 @@ const mockCanvas = {
   removeEventListener() {},
 };
 
-const enginePkg = await import('@forgeax/engine-app');
-const { createApp } = enginePkg;
-
-const runtimePkg = await import('@forgeax/engine-runtime');
-const { HDRP_PIPELINE_ID } = await import('@forgeax/engine-render/internal');
+const { World } = await import('@forgeax/engine-ecs');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
+const { DEFAULT_STANDARD_PROFILE } = await import('@forgeax/engine-render');
+const { createShaderModule, rhi } = await import('@forgeax/engine-rhi-webgpu');
 const {
   Camera,
   MeshFilter,
@@ -174,42 +153,37 @@ const {
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
 
-const appResult = await createApp(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL }).catch((err) => {
-  originalConsoleError(`[smoke] FAIL - createApp threw: ${err instanceof Error ? err.message : String(err)}`);
+const constructed = await constructRuntimeRendererHost(
+  mockCanvas,
+  {
+    standardProfile: {
+      ...DEFAULT_STANDARD_PROFILE,
+      lighting: FALSIFY === 'force-direct' ? 'direct' : 'clustered',
+      lightCount: 256,
+    },
+  },
+  { shaderManifestUrl: MANIFEST_URL },
+  { rhi, createShaderModule },
+).catch((err) => {
+  originalConsoleError(`[smoke] FAIL - renderer host threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 });
 globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 
-if (!appResult.ok) {
-  originalConsoleError(`[smoke] FAIL - createApp returned err: ${JSON.stringify({ code: appResult.error.code, hint: appResult.error.hint })}`);
+if (!constructed.ok) {
+  originalConsoleError(`[smoke] FAIL - renderer host returned err: ${JSON.stringify({ code: constructed.error.code, hint: constructed.error.hint })}`);
   process.exit(1);
 }
-const app = appResult.value;
-console.log(`[hello-hdrp-lighting] backend=${app.renderer.backend}`);
+const renderer = constructed.value.renderer;
+console.log(`[hello-standard-lighting] backend=${renderer.inspect().capabilities.backendKind}`);
 
-const assets = app.renderer.assets;
-if (assets === null) {
-  originalConsoleError('[smoke] FAIL - AssetRegistry is null');
+const world = new World();
+const attached = renderer.attach(world);
+if (!attached.ok) {
+  originalConsoleError(`[smoke] FAIL - renderer.attach: ${attached.error.code} - ${attached.error.hint}`);
   process.exit(1);
 }
-
-const world = app.world;
-
-let installSuccess = false;
-if (FALSIFY === 'force-urp') {
-  console.log('[smoke] FALSIFY=force-urp -- skipping installPipeline(hdrpHandle)');
-} else {
-  const installRes = app.renderer.installPipeline({
-    kind: 'render-pipeline',
-    pipelineId: HDRP_PIPELINE_ID,
-    config: { clusterGrid: { x: 16, y: 9, z: 24 } },
-  });
-  if (!installRes.ok) {
-    originalConsoleError(`[smoke] FAIL - installPipeline: ${installRes.error.code} - ${installRes.error.hint}`);
-    process.exit(1);
-  }
-  installSuccess = true;
-}
+const lease = attached.value;
 
 const matHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
@@ -249,7 +223,7 @@ function mulberry32(seed) {
   };
 }
 const rng = mulberry32(0x484452_50);
-// Light geometry MUST stay in sync with apps/hello/hdrp-lighting/src/main.ts
+// Light geometry MUST stay in sync with the Standard lighting demo source.
 // (the demo SSOT). y above the cube top + range >= ground gap ensure both
 // floor and cube faces receive healthy NdotL. range 2.5..4.0m fits the new
 // 1 MiB LIGHT_INDEX_LIST_CAPACITY with grid 16x9x24.
@@ -312,59 +286,42 @@ world.spawn(
 );
 
 const onErrorEvents = [];
-app.onError((err) => onErrorEvents.push({ code: err.code, hint: err.hint, detail: err.detail }));
-
-const ready = await app.renderer.ready;
-if (!ready.ok) {
-  originalConsoleError(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
-
-let fakeNow = 0;
-globalThis.performance.now = () => fakeNow;
-
-const startResult = app.start();
-if (!startResult.ok) {
-  originalConsoleError(`[smoke] FAIL - app.start() returned err: ${startResult.error.code}`);
-  process.exit(1);
-}
+renderer.subscribe((event) => {
+  if (event.kind === 'error') {
+    onErrorEvents.push({ code: event.error.code, hint: event.error.hint, detail: event.error.detail });
+  }
+});
 
 let totalFrames = 0;
+let latestReceipt;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-  const due = rafQueue.shift();
-  if (!due) break;
-  fakeNow += 16.67;
-  due.cb(fakeNow);
+  world.update().unwrap();
+  const drawn = renderer.draw({
+    leases: [lease],
+    camera: { lease },
+    environment: { lease },
+  });
+  if (!drawn.ok) {
+    originalConsoleError(`[smoke] FAIL - draw frame ${i}: ${drawn.error.code} - ${drawn.error.hint}`);
+    process.exit(1);
+  }
+  latestReceipt = drawn.value;
   totalFrames++;
-  // Yield to microtask + macrotask each frame so async shader-module pre-bake
-  // promises (rhi-webgpu's createShaderModule + getCompilationInfo) settle and
-  // the next raf cb hits the warmed module cache instead of returning the
-  // pending 'rhi-not-available' err for 300 straight frames.
   if (i % 16 === 15) await delay(1);
 }
 
-await delay(2000);
-
-// After warmup, drain any newly queued raf cbs so the post-warmup PSOs land
-// in materialShaderPipelineCache and get used for the final readback frame.
-for (let i = 0; i < 32; i++) {
-  const due = rafQueue.shift();
-  if (!due) break;
-  fakeNow += 16.67;
-  due.cb(fakeNow);
-  totalFrames++;
-  if (i % 8 === 7) await delay(1);
-}
-
-globalThis.performance.now = realPerformanceNow;
-
-console.log(`[smoke] frames observed=${totalFrames}`);
-
-const stopResult = app.stop();
-if (!stopResult.ok) {
-  originalConsoleError(`[smoke] FAIL - app.stop() returned err: ${stopResult.error.code}`);
+if (latestReceipt === undefined) {
+  originalConsoleError('[smoke] FAIL - no successful FrameReceipt was produced');
   process.exit(1);
 }
+console.log(`[smoke] frames observed=${totalFrames}`);
+
+const observed = await renderer.observe(latestReceipt, { include: ['timings', 'draws', 'bindings'] });
+if (!observed.ok) {
+  originalConsoleError(`[smoke] FAIL - receipt observation: ${observed.error.code} - ${observed.error.hint}`);
+  process.exit(1);
+}
+console.log(`[smoke] receipt observed frame=${observed.value.frameId} includes=${observed.value.include.join(',')}`);
 
 // --- Pixel readback -----------------------------------------------------------
 
@@ -414,14 +371,14 @@ for (let y = 0; y < HEIGHT; y++) {
     tightRgba[dst + 3] = bytes[off + 3] ?? 0;
   }
 }
-
 // --- Verdict ------------------------------------------------------------------
 
 const failures = [];
 
 // (a) backend check
-if (app.renderer.backend !== 'webgpu') {
-  failures.push(`(a) backend=${app.renderer.backend} (expected webgpu)`);
+const inspection = renderer.inspect();
+if (inspection.capabilities.backendKind !== 'webgpu') {
+  failures.push(`(a) backend=${inspection.capabilities.backendKind} (expected webgpu)`);
 }
 
 // (b) frame count
@@ -429,11 +386,11 @@ if (totalFrames < SMOKE_MIN_FRAMES) {
   failures.push(`(b) frames=${totalFrames} < ${SMOKE_MIN_FRAMES}`);
 }
 
-// (c) app.onError filtered to unknown codes
+// (c) Renderer error events filtered to unknown codes
 const unknownErrors = onErrorEvents.filter((e) => !KNOWN_NOISE_CODES.has(e.code));
 if (unknownErrors.length > 0) {
   failures.push(
-    `(c) app.onError fired ${unknownErrors.length} unknown-code times: ${JSON.stringify(unknownErrors.slice(0, 3))}`,
+    `(c) Renderer error events fired ${unknownErrors.length} unknown-code times: ${JSON.stringify(unknownErrors.slice(0, 3))}`,
   );
 }
 
@@ -445,8 +402,7 @@ if (unexpectedConsoleErrors.length > 0) {
 }
 
 // FALSIFY modes: diff vs baseline.
-const falsifyClusterGridZero = FALSIFY === 'cluster-grid-zero';
-const falsifyForceUrp = FALSIFY === 'force-urp';
+const falsifyForceDirect = FALSIFY === 'force-direct';
 
 if (!existsSync(BASELINE_PATH)) {
   const png = writeReferencePng(tightRgba, WIDTH, HEIGHT);
@@ -472,22 +428,21 @@ if (!existsSync(BASELINE_PATH)) {
       if (d > SMOKE_PIXEL_EPSILON) exceedCount++;
     }
     console.log(`[smoke] pixelDelta=${JSON.stringify({ maxDelta: maxDelta.toFixed(4), exceedCount })}`);
-    if (falsifyClusterGridZero || falsifyForceUrp) {
+    if (falsifyForceDirect) {
       // Falsify modes must FAIL -- diff must exceed threshold.
       const exceedRatio = exceedCount / (WIDTH * HEIGHT);
       if (exceedRatio < 0.001) {
         failures.push(
-          `(e) AC-10 falsify ${FALSIFY}: expected pixel diff > eps=${SMOKE_PIXEL_EPSILON} but only ${exceedCount} pixels exceeded (ratio=${exceedRatio.toFixed(6)}, maxDelta=${maxDelta.toFixed(4)}) -- smoke NOT discriminative`,
+          `(e) falsify ${FALSIFY}: expected pixel diff > eps=${SMOKE_PIXEL_EPSILON} but only ${exceedCount} pixels exceeded (ratio=${exceedRatio.toFixed(6)}, maxDelta=${maxDelta.toFixed(4)}) -- smoke NOT discriminative`,
         );
-        // When the baseline PNG is all-black (pre-rebake state), falsify
-        // cannot produce a difference because the rendering is already
-        // black. Re-bake the baseline (delete the PNG and re-run smoke)
-        // after verifying HDRP rendering is producing lit output.
+        // When the baseline PNG is all-black, falsify cannot produce a
+        // difference because the rendering is already black. Re-bake the
+        // baseline after verifying Standard rendering is producing lit output.
         if (maxDelta < 0.001) {
-          console.warn(`[smoke] hint: maxDelta=${maxDelta.toFixed(4)} suggests baseline PNG is all-black; verify HDRP rendering produces lit pixels, then delete ${BASELINE_PATH} and re-run smoke to re-bake`);
+          console.warn(`[smoke] hint: maxDelta=${maxDelta.toFixed(4)} suggests baseline PNG is all-black; verify Standard rendering produces lit pixels, then delete ${BASELINE_PATH} and re-run smoke to re-bake`);
         }
       } else {
-        console.log(`[smoke] AC-10 falsify ${FALSIFY} FAIL as expected: ${exceedCount} pixels exceed eps=${SMOKE_PIXEL_EPSILON} (max=${maxDelta.toFixed(4)})`);
+        console.log(`[smoke] falsify ${FALSIFY} failed as expected: ${exceedCount} pixels exceed eps=${SMOKE_PIXEL_EPSILON} (max=${maxDelta.toFixed(4)})`);
       }
     } else if (exceedCount > 0) {
       failures.push(
@@ -512,9 +467,11 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - backend=${app.renderer.backend}, frames=${totalFrames}, hdrpInstalled=${installSuccess}, app.onError-known-noise-only=${onErrorEvents.length}, console.error=0`,
+  `[smoke] PASS - backend=${inspection.capabilities.backendKind}, frames=${totalFrames}, standardLane=${falsifyForceDirect ? 'direct' : 'clustered'}, rendererErrors=0, console.error=0`,
 );
 
+lease.dispose();
+await renderer.dispose();
 if (sharedDevice) sharedDevice.destroy?.();
 delete globalThis.navigator.gpu;
 process.exit(0);

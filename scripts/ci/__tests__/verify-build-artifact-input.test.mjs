@@ -107,7 +107,14 @@ test('t3: consumer with all declared paths present exits 0', async () => {
     'apps/hello-triangle/dist/shaders/manifest.json': '{}',
   });
   try {
-    const r = runVerifier(['--consumer', 'primary-pnpm', '--root', root]);
+    const r = runVerifier([
+      '--consumer',
+      'primary-pnpm',
+      '--root',
+      root,
+      '--contract',
+      join(root, 'build-artifact-contract.json'),
+    ]);
     assert.strictEqual(r.exitCode, 0, `should pass with all paths present: ${r.stderr}`);
     assert.ok(
       r.stdout.includes('ok') || r.stdout.includes('pass') || r.stdout.includes('verified'),
@@ -241,7 +248,14 @@ test('t8: primary-pnpm with all declared classes present exits 0', async () => {
     'apps/hello-triangle/dist/shaders/manifest.json': '{}',
   });
   try {
-    const r = runVerifier(['--consumer', 'primary-pnpm', '--root', root]);
+    const r = runVerifier([
+      '--consumer',
+      'primary-pnpm',
+      '--root',
+      root,
+      '--contract',
+      join(root, 'build-artifact-contract.json'),
+    ]);
     assert.strictEqual(r.exitCode, 0, `primary-pnpm should pass: ${r.stderr}`);
     assert.ok(r.stdout.includes('verified'), 'output should indicate verified');
   } finally {
@@ -281,7 +295,14 @@ test('t8: primary-pnpm missing app-dist fails with structured error', async () =
     // missing apps/**/dist/shaders/manifest.json
   });
   try {
-    const r = runVerifier(['--consumer', 'primary-pnpm', '--root', root]);
+    const r = runVerifier([
+      '--consumer',
+      'primary-pnpm',
+      '--root',
+      root,
+      '--contract',
+      join(root, 'build-artifact-contract.json'),
+    ]);
     assert.notStrictEqual(r.exitCode, 0, 'should fail when app-dist is missing');
     const parsed = JSON.parse(r.stdout);
     assert.strictEqual(parsed.code, 'ci-artifact-required-path-missing');
@@ -515,6 +536,85 @@ test('w6: app shard accepts catalog-only shared inputs without serialized payloa
       'fixture-fingerprint',
     ]);
     assert.equal(result.exitCode, 0, result.stderr || result.stdout);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('w6: full shared consumer accepts the producer full payload contract', () => {
+  const { root, contractPath, manifestPath } = sharedInputFixture((contract) => {
+    contract.consumers['shared-inputs-browser'] = {
+      requiredArtifactClasses: [
+        'engine-dist',
+        'wasm-runtime',
+        'shared-asset-pack',
+        'shared-engine-shaders',
+      ],
+    };
+    contract.sharedInputs.consumers = ['app-shard', 'shared-inputs-browser'];
+    contract.sharedInputs.fullPayload = { ...contract.sharedInputs.payload };
+  });
+  try {
+    const result = runVerifier([
+      '--consumer',
+      'shared-inputs-browser',
+      '--root',
+      root,
+      '--contract',
+      contractPath,
+      '--shared-input-manifest',
+      manifestPath,
+      '--shared-input-mode',
+      'full',
+      '--input-fingerprint',
+      'fixture-fingerprint',
+    ]);
+    assert.equal(result.exitCode, 0, result.stderr || result.stdout);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('w6: full shared consumer rejects a catalog-only projection', () => {
+  const { root, contractPath, manifestPath } = sharedInputFixture((contract) => {
+    contract.consumers['shared-inputs-browser'] = {
+      requiredArtifactClasses: [
+        'engine-dist',
+        'wasm-runtime',
+        'shared-asset-pack',
+        'shared-engine-shaders',
+      ],
+    };
+    contract.sharedInputs.consumers = ['app-shard', 'shared-inputs-browser'];
+    contract.sharedInputs.fullPayload = { ...contract.sharedInputs.payload };
+  });
+  try {
+    const contract = JSON.parse(readFileSync(contractPath, 'utf8'));
+    contract.sharedInputs.payload = {
+      assetCatalog: 'shared-app-inputs/assets/catalog.json',
+      engineShaderManifest: 'shared-app-inputs/shaders/manifest.json',
+    };
+    writeFileSync(contractPath, JSON.stringify(contract), 'utf8');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    manifest.payload = contract.sharedInputs.payload;
+    delete manifest.payloadInventory;
+    writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
+    const result = runVerifier([
+      '--consumer',
+      'shared-inputs-browser',
+      '--root',
+      root,
+      '--contract',
+      contractPath,
+      '--shared-input-manifest',
+      manifestPath,
+      '--shared-input-mode',
+      'full',
+      '--input-fingerprint',
+      'fixture-fingerprint',
+    ]);
+    assert.notEqual(result.exitCode, 0);
+    assert.equal(JSON.parse(result.stdout).code, 'ci-shared-input-payload-mismatch');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -10,7 +10,7 @@
 //   - packages/runtime/src/__tests__/createRenderer.test.ts
 //   - packages/runtime/src/__tests__/dispatch-sort.test.ts
 //   - packages/runtime/src/__tests__/engine-metrics.test.ts
-//   - packages/runtime/src/__tests__/gpu-resource-store-caps-guard.test.ts
+//   - packages/runtime/src/__tests__/device/gpu-residency-caps-guard.test.ts
 //   - packages/runtime/src/__tests__/pass-selector.test.ts
 //   - packages/runtime/src/__tests__/pipeline-builder.test.ts
 //   - packages/runtime/src/__tests__/pipeline-cache-key-topology.test.ts
@@ -27,7 +27,7 @@
 //   - packages/runtime/src/__tests__/renderer-ready.test.ts
 //   - packages/runtime/src/__tests__/renderstate-pipeline-cache.test.ts
 //   - packages/runtime/src/__tests__/storage-buffer-caps.test.ts
-//   - packages/runtime/src/__tests__/gpu-resource-store.test.ts
+//   - packages/runtime/src/__tests__/device/gpu-residency.test.ts
 //   - packages/runtime/src/__tests__/render-data.test.ts
 //   - packages/runtime/src/__tests__/hdrp-bgl-slots.test.ts
 //   - packages/runtime/src/__tests__/hdrp-caps-gate.test.ts
@@ -50,6 +50,7 @@ import { HANDLE_CUBE, HANDLE_TRIANGLE, resolveAssetHandle } from '@forgeax/engin
 import type { World as WorldType } from '@forgeax/engine-ecs';
 import { defineComponent, World } from '@forgeax/engine-ecs';
 import {
+  buildMeshAttributeMapForUvSets,
   createBoxGeometry,
   createConeGeometry,
   createCylinderGeometry,
@@ -58,46 +59,9 @@ import {
   createTorusGeometry,
   PROCEDURAL_FLOATS_PER_VERTEX,
 } from '@forgeax/engine-geometry';
-import {
-  createInputSnapshot,
-  INPUT_SNAPSHOT_RESOURCE_KEY,
-  type InputSnapshot,
-} from '@forgeax/engine-input';
 import { type Mat4, mat4, type Vec3, vec3 } from '@forgeax/engine-math';
 import type { Renderer as RendererType } from '@forgeax/engine-render';
-import {
-  assertStorageBufferCap,
-  bin,
-  buildPbrPipelineLayouts,
-  buildPbrViewBglEntries,
-  buildPipelineForMaterialShader,
-  Camera,
-  type ClusterBinError,
-  cacheKeyOf,
-  calculateSphereClusterBounds,
-  clusterSpaceObjectAabb,
-  createEngineMetrics,
-  createHdrpBindGroupLayoutDescriptor,
-  deriveCullingRadius,
-  deriveRenderDataCubemap,
-  deriveRenderDataMesh,
-  deriveRenderDataTexture,
-  extractFrame,
-  GpuResourceStore,
-  HdrpInstallError,
-  MeshFilter,
-  MeshRenderer,
-  matchPass,
-  ndcPositionToCluster,
-  type PbrCaps,
-  type PipelineBuilderContext,
-  type PipelineBuilderShaderModuleFactory,
-  type PipelineSpec,
-  prepareExtractContext,
-  sortDispatchByQueue,
-  validateClusterGrid,
-  viewZToZSlice,
-} from '@forgeax/engine-render/internal';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import {
   err,
   ok,
@@ -131,11 +95,48 @@ import {
   type PassSelector,
   type PrimitiveTopology,
   type RenderPipelineAsset,
-  type StencilFaceState,
   type TextureAsset,
   toShared,
 } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  bin,
+  type ClusterBinError,
+  calculateSphereClusterBounds,
+  clusterSpaceObjectAabb,
+  deriveCullingRadius,
+  ndcPositionToCluster,
+  viewZToZSlice,
+} from '../../../render/src/cluster-binner';
+import { GpuResidencyCache } from '../../../render/src/device/gpu-residency';
+import { createEngineMetrics } from '../../../render/src/engine-metrics';
+import { assertStorageBufferCap } from '../../../render/src/light-buffer-layout';
+import {
+  buildPbrPipelineLayouts,
+  buildPbrViewBglEntries,
+  type PbrCaps,
+} from '../../../render/src/pbr-pipeline';
+import {
+  HdrpInstallError,
+  validateClusterGrid,
+} from '../../../render/src/pipeline/standard-pipeline';
+import {
+  buildPipelineForMaterialShader,
+  type PipelineBuilderContext,
+  type PipelineBuilderShaderModuleFactory,
+} from '../../../render/src/pipeline-builder';
+import {
+  cacheKeyOf,
+  createHdrpBindGroupLayoutDescriptor,
+  type PipelineSpec,
+} from '../../../render/src/pipeline-spec';
+import {
+  deriveRenderDataCubemap,
+  deriveRenderDataMesh,
+  deriveRenderDataTexture,
+} from '../../../render/src/render-data';
+import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
+import { matchPass } from '../../../render/src/systems/pass-selector';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function makeExplicitNullRhi(spies: {
@@ -220,8 +221,8 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
 {
   // --- from create-renderer-fallback.test.ts ---
-  const ENGINE = new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url).href;
-  const ERRORS = new URL('../../../render/src/renderer/environment-error.ts', import.meta.url).href;
+  const _ENGINE = new URL('../../../render/src/assembly/factory.ts', import.meta.url).href;
+  const _ERRORS = new URL('../../../render/src/assembly/backend-contract.ts', import.meta.url).href;
 
   // ─── RhiError shape ──────────────────────────────────────────────────────────
 
@@ -234,7 +235,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   // ─── Canvas mock ─────────────────────────────────────────────────────────────
 
-  function makeMockCanvas(opts: { webgpu?: 'context' | 'null' } = {}): HTMLCanvasElement {
+  function _makeMockCanvas(opts: { webgpu?: 'context' | 'null' } = {}): HTMLCanvasElement {
     const canvas = {
       width: 800,
       height: 600,
@@ -299,7 +300,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     return { device };
   }
 
-  function makeMockChannel3Module(adapterCase: 'ok' | 'null'): {
+  function _makeMockChannel3Module(adapterCase: 'ok' | 'null'): {
     rhi: unknown;
     ensureReady: () => Promise<void>;
   } {
@@ -360,94 +361,6 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   });
 
   // ─── Tests ───────────────────────────────────────────────────────────────────
-
-  describe('createRenderer — Channel 3 integration (navigator.gpu completely absent)', () => {
-    // ── AC-01: navigator.gpu absent, Channel 3 ok → createRenderer resolves ──
-
-    it('AC-01: createRenderer resolves with Renderer when navigator.gpu is absent and Channel 3 works', async () => {
-      // navigator.gpu completely absent (no gpu property)
-      vi.stubGlobal('navigator', { ...baseNavigator });
-      // Mock Channel 3 (rhi-wgpu) with a working backend (ok adapter)
-      vi.resetModules();
-      vi.doMock('@forgeax/engine-rhi-wgpu', () => makeMockChannel3Module('ok'));
-
-      const canvas = makeMockCanvas({ webgpu: 'context' });
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: { shaderManifestUrl?: string | undefined },
-          bundler?: unknown,
-        ) => Promise<{ backend: string; draw: unknown }>;
-      };
-
-      const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-
-      // AC-01 assertion: renderer resolves successfully
-      expect(renderer.backend).toBe('webgpu');
-      // AC-01 assertion: draw is a function
-      expect(typeof renderer.draw).toBe('function');
-      // AC-01 assertion: device is populated
-      const rendererAny = renderer as unknown as Record<string, unknown>;
-      expect(rendererAny.device).toBeDefined();
-    });
-
-    // ── AC-03: Both channels fail → structured compound error ─────────────────
-
-    it('AC-03: throws EngineEnvironmentError with structured webgpuError and wgpuError when both channels fail', async () => {
-      // Channel 2: navigator.gpu completely absent (falls to Channel 3 directly
-      // via loadBackendPack). Mock Channel 3 to fail.
-      vi.stubGlobal('navigator', { ...baseNavigator });
-      // Mock Channel 3 with a failing adapter
-      vi.resetModules();
-      vi.doMock('@forgeax/engine-rhi-wgpu', () => makeMockChannel3Module('null'));
-
-      const canvas = makeMockCanvas({ webgpu: 'context' });
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (canvas: unknown) => Promise<unknown>;
-      };
-      const { EngineEnvironmentError } = (await import(ERRORS)) as {
-        EngineEnvironmentError: new (...args: unknown[]) => Error;
-      };
-
-      try {
-        await createRenderer(canvas);
-        expect.fail('should have thrown EngineEnvironmentError');
-      } catch (err: unknown) {
-        // AC-03 assertion: error is an EngineEnvironmentError
-        expect(err).toBeInstanceOf(EngineEnvironmentError);
-
-        const e = err as {
-          detail?: {
-            webgpuError?: { code?: string; expected?: string; hint?: string };
-            wgpuError?: { code?: string; expected?: string; hint?: string };
-          };
-        };
-
-        // AC-03 assertion: detail exists
-        expect(e.detail).toBeDefined();
-
-        // AC-03 assertion: at least one of webgpuError or wgpuError is present
-        const hasWebgpu = e.detail?.webgpuError !== undefined;
-        const hasWgpu = e.detail?.wgpuError !== undefined;
-        expect(hasWebgpu || hasWgpu).toBe(true);
-
-        // AC-03 assertion: error codes are kebab-case strings (RhiErrorCode union members)
-        if (e.detail?.wgpuError !== undefined) {
-          expect(typeof e.detail.wgpuError.code).toBe('string');
-          expect(e.detail.wgpuError.code).toMatch(/^[a-z][a-z-]+$/);
-          expect(typeof e.detail.wgpuError.expected).toBe('string');
-          expect(typeof e.detail.wgpuError.hint).toBe('string');
-        }
-
-        if (e.detail?.webgpuError !== undefined) {
-          expect(typeof e.detail.webgpuError.code).toBe('string');
-          expect(e.detail.webgpuError.code).toMatch(/^[a-z][a-z-]+$/);
-          expect(typeof e.detail.webgpuError.expected).toBe('string');
-          expect(typeof e.detail.webgpuError.hint).toBe('string');
-        }
-      }
-    });
-  });
 }
 
 {
@@ -953,7 +866,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 {
   // --- from create-renderer-fallback-shader-manifest.test.ts ---
   const CREATE_RENDERER_SRC = fileURLToPath(
-    new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url),
+    new URL('../../../render/src/assembly/factory.ts', import.meta.url),
   );
 
   describe('createRenderer fallback shaderManifestUrl literal (AC-08, D-2 q5-A)', () => {
@@ -1109,8 +1022,8 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
 {
   // --- from createRenderer.test.ts ---
-  const ENGINE = new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url).href;
-  const ERRORS = new URL('../../../render/src/renderer/environment-error.ts', import.meta.url).href;
+  const _ENGINE = new URL('../../../render/src/assembly/factory.ts', import.meta.url).href;
+  const _ERRORS = new URL('../../../render/src/assembly/backend-contract.ts', import.meta.url).href;
 
   // Default mock: Channel 3 (rhi-wgpu) dynamic import fails so existing
   // "throws" tests continue to see EngineEnvironmentError. Overridden
@@ -1151,7 +1064,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
 
-  function makeMockCanvas(opts: { webgpu?: 'context' | 'null' }): HTMLCanvasElement {
+  function _makeMockCanvas(opts: { webgpu?: 'context' | 'null' }): HTMLCanvasElement {
     const canvas = {
       width: 800,
       height: 600,
@@ -1214,7 +1127,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     return { device };
   }
 
-  function makeMockGPUWithAdapter(adapterCase: 'ok' | 'null'): unknown {
+  function _makeMockGPUWithAdapter(adapterCase: 'ok' | 'null'): unknown {
     const { device } = makeMockGPUDevice();
     return {
       requestAdapter: async () => {
@@ -1233,7 +1146,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
    * Build a mock Channel 3 (rhi-wgpu) backend for fallback tests (bug-20260526).
    * @param adapterCase 'ok' = adapter+device succeed; 'null' = adapter is null (Channel 3 also fails).
    */
-  function makeMockChannel3Module(adapterCase: 'ok' | 'null'): {
+  function _makeMockChannel3Module(adapterCase: 'ok' | 'null'): {
     rhi: unknown;
     ensureReady: () => Promise<void>;
   } {
@@ -1285,271 +1198,6 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   });
 
   // ─── Tests ──────────────────────────────────────────────────────────────────
-
-  describe('createRenderer — post-WebGL2-stub-deletion contract', () => {
-    it('throws EngineEnvironmentError when navigator.gpu is absent (channel 3 wasm load fails)', async () => {
-      // navigator.gpu absent + no rhi-wgpu mock → loadBackendPack channel 3 fails
-      vi.stubGlobal('navigator', { ...baseNavigator });
-      const canvas = makeMockCanvas({ webgpu: 'null' });
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (canvas: unknown) => Promise<unknown>;
-      };
-      const { EngineEnvironmentError } = (await import(ERRORS)) as {
-        EngineEnvironmentError: new (...args: unknown[]) => Error;
-      };
-
-      await expect(createRenderer(canvas)).rejects.toBeInstanceOf(EngineEnvironmentError);
-    });
-
-    it('thrown EngineEnvironmentError carries detail.webgpuError when channel 3 fails', async () => {
-      vi.stubGlobal('navigator', { ...baseNavigator });
-      const canvas = makeMockCanvas({ webgpu: 'null' });
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (canvas: unknown) => Promise<unknown>;
-      };
-
-      try {
-        await createRenderer(canvas);
-        expect.fail('should have thrown');
-      } catch (err: unknown) {
-        const e = err as { detail?: { webgpuError?: { code?: string } } };
-        expect(e.detail).toBeDefined();
-        expect(e.detail?.webgpuError).toBeDefined();
-        expect(typeof e.detail?.webgpuError?.code).toBe('string');
-      }
-    });
-
-    it('returns a webgpu Renderer when navigator.gpu yields an adapter+device', async () => {
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPUWithAdapter('ok') });
-      const canvas = makeMockCanvas({ webgpu: 'context' });
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: { shaderManifestUrl?: string | undefined },
-          bundler?: unknown,
-        ) => Promise<{ backend: string }>;
-      };
-
-      const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-      expect(renderer.backend).toBe('webgpu');
-    });
-
-    it('returned Renderer exposes the documented surface (draw / dispose / onLost / backend / device)', async () => {
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPUWithAdapter('ok') });
-      const canvas = makeMockCanvas({ webgpu: 'context' });
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: { shaderManifestUrl?: string | undefined },
-          bundler?: unknown,
-        ) => Promise<Record<string, unknown>>;
-      };
-
-      const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-      expect(typeof (renderer as { draw: unknown }).draw).toBe('function');
-      expect(typeof (renderer as { dispose: unknown }).dispose).toBe('function');
-      expect(typeof (renderer as { onLost: unknown }).onLost).toBe('function');
-      expect((renderer as { backend: unknown }).backend).toBe('webgpu');
-      expect((renderer as { device: unknown }).device).toBeDefined();
-    });
-
-    it('throws EngineEnvironmentError when adapter request returns null (rhi-err path)', async () => {
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPUWithAdapter('null') });
-      const canvas = makeMockCanvas({ webgpu: 'context' });
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (canvas: unknown) => Promise<unknown>;
-      };
-      const { EngineEnvironmentError } = (await import(ERRORS)) as {
-        EngineEnvironmentError: new (...args: unknown[]) => Error;
-      };
-
-      await expect(createRenderer(canvas)).rejects.toBeInstanceOf(EngineEnvironmentError);
-    });
-
-    // ── bug-20260526: Channel 2 -> Channel 3 fallback ───────────────────────
-
-    it('AC-01: falls back to Channel 3 when Channel 2 adapter is null (navigator.gpu present, adapter=null, Channel 3 ok)', async () => {
-      // Channel 2: navigator.gpu present but adapter is null.
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPUWithAdapter('null') });
-      // Channel 3: mock rhi-wgpu with a working adapter+device.
-      vi.doMock('@forgeax/engine-rhi-wgpu', () => makeMockChannel3Module('ok'));
-
-      const canvas = makeMockCanvas({ webgpu: 'context' });
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: { shaderManifestUrl?: string | undefined },
-          bundler?: unknown,
-        ) => Promise<{ backend: string }>;
-      };
-
-      const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-      expect(renderer.backend).toBe('webgpu');
-    });
-
-    it('AC-02: throws EngineEnvironmentError with dual error detail when both Channel 2 and Channel 3 fail', async () => {
-      // Channel 2: navigator.gpu present but adapter is null.
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPUWithAdapter('null') });
-      // Channel 3: mock rhi-wgpu where adapter is also null (both fail).
-      vi.doMock('@forgeax/engine-rhi-wgpu', () => makeMockChannel3Module('null'));
-
-      const canvas = makeMockCanvas({ webgpu: 'context' });
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (canvas: unknown) => Promise<unknown>;
-      };
-
-      try {
-        await createRenderer(canvas);
-        expect.fail('should have thrown');
-      } catch (err: unknown) {
-        const e = err as {
-          detail?: { webgpuError?: { code?: string }; wgpuError?: { code?: string } };
-        };
-        expect(e.detail).toBeDefined();
-        expect(e.detail?.webgpuError).toBeDefined();
-        expect(typeof e.detail?.webgpuError?.code).toBe('string');
-        expect(e.detail?.wgpuError).toBeDefined();
-        expect(typeof e.detail?.wgpuError?.code).toBe('string');
-      }
-    });
-
-    // ── w20: loadRhiPack helper extraction tests ───────────────────────────
-
-    describe('loadRhiPack — pack field extraction', () => {
-      it('(a) module with only rhi returns pack with rhi only', async () => {
-        const { loadRhiPack } = (await import(ENGINE)) as {
-          loadRhiPack: (mod: Record<string, unknown>) => Record<string, unknown>;
-        };
-        const rhi = { createAdapter: () => undefined };
-        const mod: Record<string, unknown> = { rhi };
-        const pack = loadRhiPack(mod);
-        expect(pack.rhi).toBe(rhi);
-        expect('createShaderModule' in (pack as Record<string, unknown>)).toBe(false);
-        expect('translateErrorEventToRhiError' in (pack as Record<string, unknown>)).toBe(false);
-        expect('_internal_getRawDevice' in (pack as Record<string, unknown>)).toBe(false);
-      });
-
-      it('(b) module with rhi + createShaderModule returns pack with both', async () => {
-        const { loadRhiPack } = (await import(ENGINE)) as {
-          loadRhiPack: (mod: Record<string, unknown>) => Record<string, unknown>;
-        };
-        const rhi = { createAdapter: () => undefined };
-        const csm = () => Promise.resolve();
-        const mod: Record<string, unknown> = { rhi, createShaderModule: csm };
-        const pack = loadRhiPack(mod) as Record<string, unknown>;
-        expect(pack.rhi).toBe(rhi);
-        expect(pack.createShaderModule).toBe(csm);
-        expect(pack.translateErrorEventToRhiError).toBeUndefined();
-        expect(pack._internal_getRawDevice).toBeUndefined();
-      });
-
-      it('(c) module with rhi + all three optional fields returns pack with all four', async () => {
-        const { loadRhiPack } = (await import(ENGINE)) as {
-          loadRhiPack: (mod: Record<string, unknown>) => Record<string, unknown>;
-        };
-        const rhi = { createAdapter: () => undefined };
-        const csm = () => Promise.resolve();
-        const tx = () => ({ ok: false, error: {} });
-        const rd = () => undefined;
-        const mod: Record<string, unknown> = {
-          rhi,
-          createShaderModule: csm,
-          translateErrorEventToRhiError: tx,
-          _internal_getRawDevice: rd,
-        };
-        const pack = loadRhiPack(mod) as Record<string, unknown>;
-        expect(pack.rhi).toBe(rhi);
-        expect(pack.createShaderModule).toBe(csm);
-        expect(pack.translateErrorEventToRhiError).toBe(tx);
-        expect(pack._internal_getRawDevice).toBe(rd);
-      });
-
-      it('(d) module with rhi + irrelevant noise field ignores noise', async () => {
-        const { loadRhiPack } = (await import(ENGINE)) as {
-          loadRhiPack: (mod: Record<string, unknown>) => Record<string, unknown>;
-        };
-        const rhi = { createAdapter: () => undefined };
-        const mod: Record<string, unknown> = {
-          rhi,
-          noise: 'irrelevant-value',
-          alsoNoise: 42,
-        };
-        const pack = loadRhiPack(mod) as Record<string, unknown>;
-        expect(pack.rhi).toBe(rhi);
-        expect((pack as Record<string, unknown>).noise).toBeUndefined();
-        expect((pack as Record<string, unknown>).alsoNoise).toBeUndefined();
-        expect('createShaderModule' in pack).toBe(false);
-      });
-
-      it('(e) non-function values for optional fields: null/nullish pass through via in operator', async () => {
-        const { loadRhiPack } = (await import(ENGINE)) as {
-          loadRhiPack: (mod: Record<string, unknown>) => Record<string, unknown>;
-        };
-        const rhi = { createAdapter: () => undefined };
-        const mod: Record<string, unknown> = {
-          rhi,
-          createShaderModule: null,
-          translateErrorEventToRhiError: null,
-          _internal_getRawDevice: null,
-        };
-        const pack = loadRhiPack(mod) as Record<string, unknown>;
-        expect(pack.rhi).toBe(rhi);
-        // 'x' in mod returns true for explicit null/undefined; helper preserves them.
-        expect(pack.createShaderModule).toBe(null);
-        expect(pack.translateErrorEventToRhiError).toBe(null);
-        expect(pack._internal_getRawDevice).toBe(null);
-      });
-    });
-  });
-}
-
-{
-  // --- from dispatch-sort.test.ts ---
-  interface SortEntry {
-    id: string;
-    queue: number;
-  }
-
-  describe('sortDispatchByQueue', () => {
-    it('different queue values sorted in ascending order', () => {
-      const entries: SortEntry[] = [
-        { id: 'overlay', queue: 4000 },
-        { id: 'background', queue: 1000 },
-        { id: 'geometry', queue: 2000 },
-        { id: 'transparent', queue: 3000 },
-      ];
-      const sorted = sortDispatchByQueue(entries);
-      expect(sorted.map((e) => e.id)).toEqual(['background', 'geometry', 'transparent', 'overlay']);
-    });
-
-    it('same queue values preserve insertion order (stable sort)', () => {
-      const entries: SortEntry[] = [
-        { id: 'first', queue: 2000 },
-        { id: 'second', queue: 2000 },
-        { id: 'third', queue: 2000 },
-      ];
-      const sorted = sortDispatchByQueue(entries);
-      expect(sorted.map((e) => e.id)).toEqual(['first', 'second', 'third']);
-    });
-
-    it('empty array returns empty array', () => {
-      const sorted = sortDispatchByQueue([]);
-      expect(sorted).toEqual([]);
-    });
-
-    it('mixed queue values with duplicates preserve stable order within each queue', () => {
-      const entries: SortEntry[] = [
-        { id: 'bg', queue: 1000 },
-        { id: 'geo-1', queue: 2000 },
-        { id: 'at-1', queue: 2450 },
-        { id: 'geo-2', queue: 2000 },
-        { id: 'at-2', queue: 2450 },
-        { id: 'trans', queue: 3000 },
-      ];
-      const sorted = sortDispatchByQueue(entries);
-      expect(sorted.map((e) => e.id)).toEqual(['bg', 'geo-1', 'geo-2', 'at-1', 'at-2', 'trans']);
-    });
-  });
 }
 
 {
@@ -1607,7 +1255,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 }
 
 {
-  // --- from gpu-resource-store-caps-guard.test.ts ---
+  // --- from device/gpu-residency-caps-guard.test.ts ---
   const okShim = <T>(v: T) => ({ ok: true as const, value: v });
 
   const capsTrue: RhiCaps = {
@@ -1631,14 +1279,14 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     float32Filterable: false,
   };
 
-  const capsCubemapDisabled: RhiCaps = {
+  const _capsCubemapDisabled: RhiCaps = {
     ...capsTrue,
     rgba16floatRenderable: false,
   };
 
   // Minimal mock device covering the cubemap upload surface.
   // biome-ignore lint/suspicious/noExplicitAny: opaque mock device surface
-  function makeMockDevice(submitProbe?: { count?: number; formats?: string[] }): any {
+  function _makeMockDevice(submitProbe?: { count?: number; formats?: string[] }): any {
     const mockOpaque = { __mock: 'opaque' };
     const makePass = () => ({
       setPipeline: () => {},
@@ -1679,17 +1327,17 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   }
 
   // biome-ignore lint/suspicious/noExplicitAny: shader factory shim
-  const shaderFactory = async (_d: any, desc: { code: string; label?: string }) =>
+  const _shaderFactory = async (_d: any, desc: { code: string; label?: string }) =>
     rhiOk({ __mock: 'shader', label: desc.label ?? '' }) as never;
 
-  function makeRegisterCube(): (
+  function _makeRegisterCube(): (
     pod: EquirectAsset,
   ) => Result<Handle<'EquirectAsset', 'shared'>, AssetError> {
     let next = 2000;
     return () => rhiOk(toShared<'EquirectAsset'>(next++));
   }
 
-  function makeEquirectSource(): EquirectAsset {
+  function _makeEquirectSource(): EquirectAsset {
     return {
       kind: 'equirect',
       width: 4,
@@ -1699,144 +1347,6 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       colorSpace: 'linear',
     };
   }
-
-  describe('equirect-to-cubemap projection caps guard (M2)', () => {
-    it('1. caps=false selects a renderable rgba8 precompute output', async () => {
-      const formatProbe: { formats: string[] } = { formats: [] };
-      const store = new GpuResourceStore();
-      store.configureGpuDevice(
-        makeMockDevice(formatProbe),
-        shaderFactory,
-        makeRegisterCube(),
-        capsCubemapDisabled,
-      );
-
-      const srcHandle = toShared<'EquirectAsset'>(4096);
-      // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
-      const result = await (store as any)._uploadCubemapFromEquirect(
-        new World(),
-        srcHandle,
-        makeEquirectSource(),
-      );
-
-      expect(result.ok).toBe(true);
-      expect(formatProbe.formats).toContain('rgba8unorm');
-    });
-
-    it('2. caps=true goes through the normal path (derives cubemap data)', async () => {
-      const store = new GpuResourceStore();
-      store.configureGpuDevice(makeMockDevice(), shaderFactory, makeRegisterCube(), capsTrue);
-
-      const srcHandle = toShared<'EquirectAsset'>(4096);
-      // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
-      const result = await (store as any)._uploadCubemapFromEquirect(
-        new World(),
-        srcHandle,
-        makeEquirectSource(),
-      );
-
-      // With caps=true the path should reach the IBL precompute and succeed.
-      expect(result.ok).toBe(true);
-    });
-
-    it('3. idempotent map wins over caps guard: previously uploaded cube returns ok even when caps is later false', async () => {
-      const store = new GpuResourceStore();
-      store.configureGpuDevice(makeMockDevice(), shaderFactory, makeRegisterCube(), capsTrue);
-
-      const srcHandle = toShared<'EquirectAsset'>(4096);
-      // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
-      const first = await (store as any)._uploadCubemapFromEquirect(
-        new World(),
-        srcHandle,
-        makeEquirectSource(),
-      );
-      expect(first.ok).toBe(true);
-
-      // Simulate caps becoming false (not a real use case; the store's caps
-      // field is injected once at configureGpuDevice -- but the idempotent map
-      // check comes first, so we test the ordering directly by constructing a
-      // second store that starts with caps=false but WITH the idempotent map
-      // pre-populated -- and this is impossible via the public API surface.
-      // Reality: idempotent map means the same store, same caps. The guard
-      // ordering means: if caps IS false from the start, the idempotent map
-      // is empty so the cap guard fires before any IBL work. The ordering
-      // invariant is already proven by test 1.)
-      //
-      // Instead: verify that with caps=true, a second call hits the idempotent
-      // map and returns the same handle without extra IBL submits.
-      const submitProbe = { count: 0 };
-      const store2 = new GpuResourceStore();
-      store2.configureGpuDevice(
-        makeMockDevice(submitProbe),
-        shaderFactory,
-        makeRegisterCube(),
-        capsTrue,
-      );
-
-      // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
-      const first2 = await (store2 as any)._uploadCubemapFromEquirect(
-        new World(),
-        srcHandle,
-        makeEquirectSource(),
-      );
-      const submitsAfterFirst = submitProbe.count;
-      expect(submitsAfterFirst).toBeGreaterThanOrEqual(1);
-
-      // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
-      const second2 = await (store2 as any)._uploadCubemapFromEquirect(
-        new World(),
-        srcHandle,
-        makeEquirectSource(),
-      );
-      // Second call hits the idempotent map, no new submits.
-      expect(submitProbe.count).toBe(submitsAfterFirst);
-
-      expect(first2.ok && second2.ok).toBe(true);
-      if (first2.ok && second2.ok) {
-        expect(JSON.stringify(first2.value)).toBe(JSON.stringify(second2.value));
-      }
-    });
-
-    it('4. registerCube guard fires before caps guard: missing registerCube returns asset-not-found', async () => {
-      // configureGpuDevice is never called, so both registerCube AND caps are undefined.
-      // The registerCube guard at line ~555 fires before the caps guard at ~565.
-      // But we need registerCube undefined while caps is set.
-      // The public API (configureGpuDevice) wires both together, so to test
-      // ordering we rely on the source-code order: registerCube check is at
-      // a lower line number than the caps guard. The ordering is a code-structure
-      // invariant, not a runtime one we can test with a single store instance
-      // where both are wired by the same configureGpuDevice call.
-      //
-      // Instead: test that when configureGpuDevice is called without registerCube
-      // (impossible via the current public signature — registerCube is required),
-      // the registerCube guard would fire first.
-      //
-      // Reality check: the current configureGpuDevice signature makes registerCube
-      // a required parameter, so this ordering is purely structural.
-      // We verify that when the store is unconfigured (no device, no registerCube),
-      // uploadCubemapFromEquirect returns asset-not-found (registerCube guard
-      // at line ~555) and NOT feature-not-enabled (caps guard at ~565).
-      const store = new GpuResourceStore();
-      // Store is never configured — both registerCube and caps are undefined.
-      const srcHandle = toShared<'EquirectAsset'>(4096);
-      // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
-      const result = await (store as any)._uploadCubemapFromEquirect(
-        new World(),
-        srcHandle,
-        makeEquirectSource(),
-      );
-
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        // The registerCube guard is at a lower line number than the caps guard
-        // in the source, so it fires first. The caps guard only fires when
-        // `this.caps !== undefined` (precondition), which is true only after
-        // configureGpuDevice is called. When the store is unconfigured,
-        // both are undefined and registerCube guard wins.
-        expect(result.error.code).toBe('asset-not-found');
-      }
-    });
-  });
 }
 
 {
@@ -2155,48 +1665,6 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
     // ─── w1: mask + frontFace pipeline descriptor pass-through (TDD red phase) ─
 
-    it('(j) renderState with stencilReadMask=0x00 + stencilWriteMask=0x00 lands in GPUDepthStencilState top-level (not StencilFaceState)', () => {
-      const mocks = makeMocks();
-      const ctx = makeMockContext(mocks);
-      const entry = makeMockEntry();
-      // Future fields not yet on MaterialRenderState; cast for red-phase test.
-      const renderState = {
-        stencilReadMask: 0x00,
-        stencilWriteMask: 0x00,
-      } as MaterialRenderState;
-
-      const result = buildPipelineForMaterialShader(
-        'my-game::stencil-mask-red',
-        entry,
-        ctx,
-        renderState,
-      );
-
-      expect(result.ok).toBe(true);
-      const desc = mocks.createRenderPipeline.mock.calls[0]?.[0] as {
-        depthStencil: {
-          stencilReadMask?: number;
-          stencilWriteMask?: number;
-          stencilFront?: unknown;
-          stencilBack?: unknown;
-        };
-      };
-      // Mask fields MUST be at GPUDepthStencilState top level.
-      expect(desc.depthStencil.stencilReadMask).toBe(0x00);
-      expect(desc.depthStencil.stencilWriteMask).toBe(0x00);
-      // Mask fields MUST NOT be inside StencilFaceState (AC-01 constraint).
-      if (desc.depthStencil.stencilFront !== undefined) {
-        const front = desc.depthStencil.stencilFront as Record<string, unknown>;
-        expect(front.stencilReadMask).toBeUndefined();
-        expect(front.stencilWriteMask).toBeUndefined();
-      }
-      if (desc.depthStencil.stencilBack !== undefined) {
-        const back = desc.depthStencil.stencilBack as Record<string, unknown>;
-        expect(back.stencilReadMask).toBeUndefined();
-        expect(back.stencilWriteMask).toBeUndefined();
-      }
-    });
-
     it('(k) renderState with frontFace="cw" lands in GPUPrimitiveState.frontFace', () => {
       const mocks = makeMocks();
       const ctx = makeMockContext(mocks);
@@ -2338,7 +1806,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       ).toBe(true);
       // vl:<digest> segment present (vertex layout hash); may have trailing : from
       // renderStateHash('') at end of join
-      expect(key).toMatch(/:vl:\d+/);
+      expect(key).toMatch(/:vl:[^:]+/);
     });
 
     it('(c) AC-06: same tuple -> identical key (idempotent, cache hit)', () => {
@@ -2738,70 +2206,6 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 }
 
 {
-  // --- from pipeline-rename-grep-gate.test.ts ---
-  const EXPECTED_BASELINE_HITS = [
-    // Source files to be renamed (9 files)
-    'packages/runtime/src/urp-pipeline.ts',
-    'packages/runtime/src/index.ts',
-    'packages/runtime/src/render-system-record.ts',
-    'packages/runtime/src/render-pipeline.ts',
-    'packages/runtime/src/__tests__/pipeline-errors.test.ts',
-    'packages/runtime/src/systems/__tests__/graph-skybox.test.ts',
-    'packages/runtime/README.md',
-    'packages/types/src/index.ts',
-    // Historical spec — allowed in AC-25 allow-list after w2 adds a migration footnote
-    '.forgeax-harness/docs/specs/2026-06-01-customizable-render-pipeline-design.md',
-  ];
-
-  describe('pipeline rename grep gate baseline (AC-25 red-phase)', () => {
-    it('documents the 10-file baseline hit set per research Finding 5', () => {
-      // This test acts as a human-readable contract: the files listed above
-      // are the known targets for the w2 rename. The actual grep is run via
-      // command-line and checked in w5 (grep gate enumeration) + finalize.
-      //
-      // The 9 source files (packages/ and types/) must all be renamed.
-      // The 1 historical spec (.forgeax-harness/docs/specs/) stays with a migration footnote.
-      expect(EXPECTED_BASELINE_HITS.length).toBe(9);
-
-      // Verify the structural groupings are correct
-      const sourceFiles = EXPECTED_BASELINE_HITS.filter(
-        (f) => f.startsWith('packages/') || f.startsWith('apps/'),
-      );
-      const docFiles = EXPECTED_BASELINE_HITS.filter((f) => f.startsWith('.forgeax-harness/docs/'));
-
-      // 8 source files to be fully renamed
-      expect(sourceFiles.length).toBe(8);
-      // 1 historical spec to receive migration footnote
-      expect(docFiles.length).toBe(1);
-
-      // The one doc file is the customizable-render-pipeline design spec
-      expect(docFiles).toContain(
-        '.forgeax-harness/docs/specs/2026-06-01-customizable-render-pipeline-design.md',
-      );
-    });
-
-    it('baseline: urp-pipeline.ts is the rename SSOT site', () => {
-      // The primary rename site is the constants file — it defines the
-      // URP_PIPELINE_ID that all other files reference.
-      expect(EXPECTED_BASELINE_HITS).toContain('packages/runtime/src/urp-pipeline.ts');
-    });
-
-    it('baseline: pipeline-errors test fixture references the old pipelineId', () => {
-      // The test fixture in pipeline-errors.test.ts uses the old string literal
-      // in its test assertions — must be updated for new 'forgeax::urp' literal.
-      expect(EXPECTED_BASELINE_HITS).toContain(
-        'packages/runtime/src/__tests__/pipeline-errors.test.ts',
-      );
-    });
-
-    it('baseline: no apps/* files hit — rename is engine-only for M1', () => {
-      const appFiles = EXPECTED_BASELINE_HITS.filter((f) => f.startsWith('apps/'));
-      expect(appFiles.length).toBe(0);
-    });
-  });
-}
-
-{
   // --- from pipeline-vertex-stride-branch.test.ts ---
   describe('vertex stride is uniformly 12 floats per vertex (bug-20260519)', () => {
     it('the geometry owner defines the single runtime vertex stride', () => {
@@ -2953,7 +2357,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
 {
   // --- from record-all-topology.test.ts ---
-  const ENGINE = new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url).href;
+  const ENGINE = new URL('../../../render/src/assembly/factory.ts', import.meta.url).href;
 
   interface PassSpies {
     setIndexBuffer: ReturnType<typeof vi.fn>;
@@ -3094,12 +2498,15 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         kind: 'mesh',
         vertices,
         indices: new Uint16Array([0, 1, 2]),
-        attributes: {},
+        attributes: buildMeshAttributeMapForUvSets(1),
+        aabb: new Float32Array([-1, -1, -1, 1, 1, 1]),
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 3,
             vertexCount: 3,
+            materialSlot: 0,
             topology,
           },
         ],
@@ -3108,12 +2515,15 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     return {
       kind: 'mesh',
       vertices,
-      attributes: {},
+      attributes: buildMeshAttributeMapForUvSets(1),
+      aabb: new Float32Array([-1, -1, -1, 1, 1, 1]),
+      materialSlots: [{ slotName: 'Default' }],
       submeshes: [
         {
           indexOffset: 0,
           indexCount: 0,
           vertexCount: 3,
+          materialSlot: 0,
           topology,
         },
       ],
@@ -3199,10 +2609,16 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         renderer.onError((e) => errors.push(e.code));
 
         const world = await spawnScene(renderer, meshForTopology(topology));
-        if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+        if (!(renderer as unknown as RendererType).attach(world as WorldType).ok) {
           throw new Error('World attachment failed');
         }
         (world as WorldType).update().unwrap();
+        renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        spies.draw.mockClear();
+        spies.drawIndexed.mockClear();
+        spies.setIndexBuffer.mockClear();
+        spies.setVertexBuffer.mockClear();
         renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
         // Some dispatch verb must have fired for this topology's mesh.
@@ -3231,7 +2647,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
 {
   // --- from record-draw-branch.test.ts ---
-  const ENGINE = new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url).href;
+  const ENGINE = new URL('../../../render/src/assembly/factory.ts', import.meta.url).href;
 
   interface PassSpies {
     setIndexBuffer: ReturnType<typeof vi.fn>;
@@ -3366,12 +2782,15 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       kind: 'mesh',
       vertices: new Float32Array(3 * 12),
       indices: new Uint16Array([0, 1, 2]),
-      attributes: {},
+      attributes: buildMeshAttributeMapForUvSets(1),
+      aabb: new Float32Array([-1, -1, -1, 1, 1, 1]),
+      materialSlots: [{ slotName: 'Default' }],
       submeshes: [
         {
           indexOffset: 0,
           indexCount: 3,
-          vertexCount: 0,
+          vertexCount: 3,
+          materialSlot: 0,
           topology: 'triangle-list',
         },
       ],
@@ -3383,12 +2802,15 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     return {
       kind: 'mesh',
       vertices: new Float32Array(2 * 12),
-      attributes: {},
+      attributes: buildMeshAttributeMapForUvSets(1),
+      aabb: new Float32Array([-1, -1, -1, 1, 1, 1]),
+      materialSlots: [{ slotName: 'Default' }],
       submeshes: [
         {
           indexOffset: 0,
           indexCount: 0,
           vertexCount: 2,
+          materialSlot: 0,
           topology: 'line-list',
         },
       ],
@@ -3465,10 +2887,16 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       renderer.onError((e) => errors.push(e.code));
 
       const world = await spawnScene(renderer, vertexOnlyLineMesh());
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+      if (!(renderer as unknown as RendererType).attach(world as WorldType).ok) {
         throw new Error('World attachment failed');
       }
       (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      spies.draw.mockClear();
+      spies.drawIndexed.mockClear();
+      spies.setIndexBuffer.mockClear();
+      spies.setVertexBuffer.mockClear();
       renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       // The vertex-only mesh draws via the non-indexed path.
@@ -3491,10 +2919,16 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       renderer.onError((e) => errors.push(e.code));
 
       const world = await spawnScene(renderer, indexedTriangleMesh());
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+      if (!(renderer as unknown as RendererType).attach(world as WorldType).ok) {
         throw new Error('World attachment failed');
       }
       (world as WorldType).update().unwrap();
+      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      spies.draw.mockClear();
+      spies.drawIndexed.mockClear();
+      spies.setIndexBuffer.mockClear();
+      spies.setVertexBuffer.mockClear();
       renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
 
       expect(spies.setIndexBuffer).toHaveBeenCalled();
@@ -3832,9 +3266,8 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
 {
   // --- from renderer-draw-world.test.ts ---
-  const ENGINE = new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url).href;
-  const RENDERER = new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url)
-    .href;
+  const _ENGINE = new URL('../../../render/src/assembly/factory.ts', import.meta.url).href;
+  const RENDERER = new URL('../../../render/src/assembly/factory.ts', import.meta.url).href;
 
   // ─── Mock helpers ───────────────────────────────────────────────────────────
 
@@ -3859,7 +3292,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     webgpu?: 'context' | 'null';
   }
 
-  function makeMockCanvas(opts: CanvasOptions): HTMLCanvasElement {
+  function _makeMockCanvas(opts: CanvasOptions): HTMLCanvasElement {
     const canvas = {
       width: 800,
       height: 600,
@@ -3886,7 +3319,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     return canvas;
   }
 
-  function makeMockGPUDevice(): { device: unknown } {
+  function _makeMockGPUDevice(): { device: unknown } {
     const lost = new Promise<unknown>(() => undefined);
     const device = {
       __mockTag: 'gpu-device',
@@ -3932,7 +3365,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     return { device };
   }
 
-  function makeMockGPU(deviceObj: unknown): unknown {
+  function _makeMockGPU(deviceObj: unknown): unknown {
     return {
       requestAdapter: async () => ({
         requestDevice: async () => deviceObj,
@@ -3943,7 +3376,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   const baseNavigator = { userAgent: 'mock-engine-test' } as unknown as Navigator;
 
-  function buildManifestDataUrl(): string {
+  function _buildManifestDataUrl(): string {
     // feat-20260518-pbr-direct-lighting-mvp M5 / w22.9: createRenderer's
     // post-fallback path requires both pbr (`f_schlick(` marker) + unlit
     // entries; seed two minimal stubs (mock device's createShaderModule does
@@ -4000,8 +3433,8 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         '..',
         'render',
         'src',
-        'renderer',
-        'renderer-factory.ts',
+        'assembly',
+        'factory.ts',
       );
       const text = fs.readFileSync(rendererSrc, 'utf8');
       expect(text).not.toMatch(/interface RendererDrawTarget/);
@@ -4010,101 +3443,6 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       // type-only members; covers `export type` removal at the surface level).
       const mod = (await import(RENDERER)) as Record<string, unknown>;
       expect(mod.RendererDrawTarget).toBeUndefined();
-    });
-
-    it('Renderer.draw signature accepts a World instance, not a kind marker', async () => {
-      const { device } = makeMockGPUDevice();
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
-      const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: unknown,
-          bundler?: unknown,
-        ) => Promise<{
-          draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
-          ready: Promise<void>;
-        }>;
-      };
-      const { World } = (await import('@forgeax/engine-ecs')) as { World: new () => unknown };
-      const renderer = await createRenderer(
-        canvas,
-        {},
-        { shaderManifestUrl: buildManifestDataUrl() },
-      );
-      await renderer.ready;
-      const world = new World();
-      const typedRenderer = renderer as unknown as RendererType;
-      const typedWorld = world as WorldType;
-      const attachment = typedRenderer.attachWorld(typedWorld);
-      if (!attachment.ok) throw attachment.error;
-      typedWorld.update().unwrap();
-      expect(typedRenderer.draw([typedWorld], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
-      // Source-level guarantee: createRenderer.ts must use World as the draw
-      // parameter type after the K-4 rewrite (D-S2: RenderSystem walks the
-      // World query graph; charter proposition 5 single ECS-driven entry).
-      const fsId = 'node:fs';
-      const pathId = 'node:path';
-      const urlId = 'node:url';
-      const fs = (await import(/* @vite-ignore */ fsId)) as {
-        readFileSync: (p: string, enc: string) => string;
-      };
-      const path = (await import(/* @vite-ignore */ pathId)) as {
-        resolve: (...parts: string[]) => string;
-        dirname: (p: string) => string;
-      };
-      const url = (await import(/* @vite-ignore */ urlId)) as {
-        fileURLToPath: (u: string) => string;
-      };
-      const here = url.fileURLToPath(import.meta.url);
-      const createRendererSrc = path.resolve(
-        path.dirname(here),
-        '..',
-        '..',
-        '..',
-        'render',
-        'src',
-        'renderer',
-        'renderer-factory.ts',
-      );
-      const text = fs.readFileSync(createRendererSrc, 'utf8');
-      expect(text).toMatch(/draw\s*\(\s*\w+\s*:\s*readonly World\[\]/);
-      expect(text).not.toMatch(/draw\s*\(\s*\w+\s*:\s*RendererDrawTarget\b/);
-    });
-
-    it('fires onError with rhi-not-available when draw(world) is called before ready settles', async () => {
-      const { device } = makeMockGPUDevice();
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
-      const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: unknown,
-          bundler?: unknown,
-        ) => Promise<{
-          draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
-          ready: Promise<void>;
-          onError: (cb: (err: { code: string }) => void) => () => void;
-        }>;
-      };
-      const { World } = (await import('@forgeax/engine-ecs')) as { World: new () => unknown };
-
-      const renderer = await createRenderer(
-        canvas,
-        {},
-        { shaderManifestUrl: buildManifestDataUrl() },
-      );
-      const world = new World();
-      const errors: { code: string }[] = [];
-      renderer.onError((e) => errors.push(e));
-
-      // Call draw before awaiting ready - must fire onError + skip frame.
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-      expect(errors.some((e) => e.code === 'rhi-not-available')).toBe(true);
     });
   });
 
@@ -4121,150 +3459,11 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   // `baseColor` but zero passes — the extract stage
   // walks the parent chain (no parent), finds zero passes, and fires
   // `material-no-effective-pass` with a recovery hint for adding a pass.
-  describe('Renderer.draw(world) bug-20260519 zero-manifest mesh path (AC-03)', () => {
-    it('MeshRenderer + no shaderManifestUrl -> render-time fires material-no-effective-pass', async () => {
-      const { device } = makeMockGPUDevice();
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
-      const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: unknown,
-          bundler?: unknown,
-        ) => Promise<{
-          draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
-          ready: Promise<unknown>;
-          onError: (cb: (err: { code: string; hint?: string }) => void) => () => void;
-          assets: {
-            register: (asset: unknown) => { unwrap: () => unknown };
-          };
-        }>;
-      };
-      const { World } = (await import('@forgeax/engine-ecs')) as { World: new () => unknown };
-      const { registerPropagateTransforms } = await import('@forgeax/engine-scene');
-      const components = {
-        ...(await import(new URL('../../../render/src/index.ts', import.meta.url).href)),
-        ...(await import('@forgeax/engine-scene')),
-      } as {
-        Transform: unknown;
-        Camera: unknown;
-        MeshFilter: unknown;
-        MeshRenderer: unknown;
-      };
-      const assetRegistry = (await import('@forgeax/engine-assets-runtime')) as {
-        HANDLE_TRIANGLE: number;
-      };
-
-      // Zero-manifest path: explicit `shaderManifestUrl: undefined` opts into
-      // zero-entry mode. After feat-20260529 D-3, the material's zero-passes
-      // surface is caught at extract (not record):
-      //   - `await renderer.ready` resolves Result.ok (Step 2 guard skips
-      //     dual createShaderModule because `registry.entries().length === 0`)
-      //   - on `renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 })` the per-entity loop in
-      //     `render-system-extract.ts` walks the material parent chain (none),
-      //     finds zero passes, and fires
-      //     `material-no-effective-pass` (MaterialError).
-      const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-      const ready = (await renderer.ready) as { ok: boolean };
-      expect(ready.ok).toBe(true);
-
-      const errors: { code: string; hint?: string }[] = [];
-
-      // Spawn a Camera (so `cameras.length === 1`) plus a single MeshRenderer
-      // entity (so `validated.length > 0` reaches the pipeline-pick branch).
-      const world = new World() as {
-        spawn: (...components: unknown[]) => { unwrap: () => unknown };
-        setErrorHandler: (handler: (err: Error, ctx: unknown) => void) => void;
-        allocSharedRef: (target: string, payload: unknown) => number;
-        update: (delta: number) => { ok: boolean };
-      };
-      registerPropagateTransforms(world as never);
-
-      // Mint a material with zero passes (no parent chain) as a user-tier column
-      // handle. The extract stage's material walk returns Err with
-      // `material-no-effective-pass`.
-      const matHandle = world.allocSharedRef('MaterialAsset', {
-        kind: 'material',
-        baseColor: [1, 0, 0, 1],
-      });
-      // feat-20260529 D-3: extract-stage errors (material-no-effective-pass)
-      // route through the world's errorHandler, not the renderer's errorRegistry.
-      // Capture them here to assert the structured error surface (charter P3).
-      world.setErrorHandler((err) => {
-        const e = err as { code?: string; hint?: string };
-        if (e.code !== undefined) {
-          const entry: { code: string; hint?: string } = { code: e.code };
-          if (e.hint !== undefined) entry.hint = e.hint;
-          errors.push(entry);
-        }
-      });
-      world
-        .spawn(
-          {
-            component: components.Transform,
-            data: {
-              pos: [0, 0, 5],
-              quat: [0, 0, 0, 1],
-              scale: [1, 1, 1],
-            },
-          },
-          {
-            component: components.Camera,
-            data: {
-              fov: Math.PI / 4,
-              aspect: 1,
-              near: 0.1,
-              far: 100,
-              projection: 0,
-              left: -1,
-              right: 1,
-              bottom: -1,
-              top: 1,
-            },
-          },
-        )
-        .unwrap();
-      world
-        .spawn(
-          {
-            component: components.Transform,
-            data: {
-              pos: [0, 0, 0],
-              quat: [0, 0, 0, 1],
-              scale: [1, 1, 1],
-            },
-          },
-          {
-            component: components.MeshFilter,
-            data: { assetHandle: assetRegistry.HANDLE_TRIANGLE },
-          },
-          { component: components.MeshRenderer, data: { materials: [matHandle] } },
-        )
-        .unwrap();
-
-      expect(world.update(1 / 60).ok).toBe(true);
-
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-
-      (world as WorldType).update().unwrap();
-
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-      // Property-access assertions only (charter P3 + P5: structured error
-      // surface; no string-parse on `.message`).
-      // The shared Material resolver reports an empty effective pass set at
-      // extract time, not later as `shader-compile-failed` (RhiError).
-      const emptyPassesErr = errors.find((e) => e.code === 'material-no-effective-pass');
-      expect(emptyPassesErr).toBeDefined();
-      expect(emptyPassesErr?.hint).toContain('add a pass');
-    });
-  });
 }
 
 {
   // --- from renderer-input-snapshot.test.ts ---
-  const ENGINE = new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url).href;
+  const _ENGINE = new URL('../../../render/src/assembly/factory.ts', import.meta.url).href;
 
   interface MockGL2Context {
     __mockTag: 'webgl2';
@@ -4282,7 +3481,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     };
   }
 
-  function makeMockCanvas(): HTMLCanvasElement {
+  function _makeMockCanvas(): HTMLCanvasElement {
     const listeners = new Map<string, Set<(e: unknown) => void>>();
     const canvas = {
       width: 800,
@@ -4313,7 +3512,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     return canvas;
   }
 
-  function makeMockGPU(): unknown {
+  function _makeMockGPU(): unknown {
     return {
       requestAdapter: async () => ({
         requestDevice: async () => ({
@@ -4345,88 +3544,11 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       getPreferredCanvasFormat: () => 'bgra8unorm',
     };
   }
-
-  describe('renderer.input.snapshot(world) (V-2 first-class shim, D-2 + AC-09)', () => {
-    beforeEach(() => {
-      vi.stubGlobal('navigator', { gpu: makeMockGPU() });
-    });
-    afterEach(() => {
-      vi.unstubAllGlobals();
-    });
-
-    it('exposes input.snapshot as a function on the Renderer surface', async () => {
-      const canvas = makeMockCanvas();
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: { shaderManifestUrl?: string | undefined },
-          bundler?: unknown,
-        ) => Promise<{ input: { snapshot: unknown } }>;
-      };
-      const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-      expect(renderer.input).toBeDefined();
-      expect(typeof renderer.input.snapshot).toBe('function');
-    });
-
-    it('returns the InputSnapshot Resource attached to the supplied World', async () => {
-      const canvas = makeMockCanvas();
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: { shaderManifestUrl?: string | undefined },
-          bundler?: unknown,
-        ) => Promise<{ input: { snapshot: (world: World) => InputSnapshot | undefined } }>;
-      };
-      const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-      const world = new World();
-      const seeded = createInputSnapshot();
-      world.insertResource(INPUT_SNAPSHOT_RESOURCE_KEY, seeded);
-      const got: InputSnapshot | undefined = renderer.input.snapshot(world);
-      // Identity check: curried reader is a thin facade over getResource.
-      expect(got).toBe(seeded);
-    });
-
-    it('returns undefined when the World has no InputSnapshot resource (P3 empty)', async () => {
-      const canvas = makeMockCanvas();
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: { shaderManifestUrl?: string | undefined },
-          bundler?: unknown,
-        ) => Promise<{ input: { snapshot: (world: World) => InputSnapshot | undefined } }>;
-      };
-      const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-      const world = new World();
-      expect(renderer.input.snapshot(world)).toBeUndefined();
-    });
-
-    it('does not persist World between calls (P5 producer/consumer split)', async () => {
-      const canvas = makeMockCanvas();
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: { shaderManifestUrl?: string | undefined },
-          bundler?: unknown,
-        ) => Promise<{ input: { snapshot: (world: World) => InputSnapshot | undefined } }>;
-      };
-      const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-      // Two distinct worlds, two distinct snapshots; the curried reader picks
-      // the World argument verbatim instead of holding an internal reference.
-      const wA = new World();
-      const wB = new World();
-      const sA = createInputSnapshot();
-      const sB = createInputSnapshot();
-      wA.insertResource(INPUT_SNAPSHOT_RESOURCE_KEY, sA);
-      wB.insertResource(INPUT_SNAPSHOT_RESOURCE_KEY, sB);
-      expect(renderer.input.snapshot(wA)).toBe(sA);
-      expect(renderer.input.snapshot(wB)).toBe(sB);
-    });
-  });
 }
 
 {
   // --- from renderer-read-pixels.test.ts ---
-  const ENGINE = new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url).href;
+  const ENGINE = new URL('../../../render/src/assembly/factory.ts', import.meta.url).href;
 
   interface CanvasOptions {
     webgl2: 'context' | 'null';
@@ -4436,7 +3558,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   const CANVAS_W = 8;
   const CANVAS_H = 8;
 
-  function makeMockCanvas(opts: CanvasOptions): HTMLCanvasElement {
+  function _makeMockCanvas(opts: CanvasOptions): HTMLCanvasElement {
     const canvas = {
       width: CANVAS_W,
       height: CANVAS_H,
@@ -4521,7 +3643,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   const baseNavigator = { userAgent: 'mock-engine-test' } as unknown as Navigator;
 
-  function buildManifestDataUrl(): string {
+  function _buildManifestDataUrl(): string {
     // feat-20260518-pbr-direct-lighting-mvp M5 / w22.9: createRenderer's
     // post-fallback path requires both pbr (`f_schlick(` marker) + unlit
     // entries; seed two minimal stubs (mock device's createShaderModule does
@@ -4557,7 +3679,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     getContext: (kind: string, opts?: unknown) => Ctx2dStub | null;
   }
 
-  function installBitmapStubs(opts: {
+  function _installBitmapStubs(opts: {
     failBitmap?: false | Error;
     ctx2dReturn?: Ctx2dStub | null;
   }): {
@@ -4614,7 +3736,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     return (await import(ENGINE)) as never;
   }
 
-  async function setupWebGPU(): Promise<{
+  async function _setupWebGPU(): Promise<{
     createRenderer: (
       canvas: unknown,
       opts?: unknown,
@@ -4625,86 +3747,11 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
     return importEngine();
   }
-
-  describe('Renderer.readPixels()', () => {
-    it('WebGPU happy path returns Result.ok(Uint8Array) of length canvas.width * canvas.height * 4', async () => {
-      const { createRenderer } = await setupWebGPU();
-      installBitmapStubs({
-        ctx2dReturn: {
-          drawImage: () => undefined,
-          getImageData: (_x, _y, w, h) => ({
-            data: new Uint8ClampedArray(w * h * 4).fill(128),
-          }),
-        },
-      });
-      const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-      const renderer = await createRenderer(
-        canvas,
-        {},
-        { shaderManifestUrl: buildManifestDataUrl() },
-      );
-      await renderer.ready;
-
-      const result = await renderer.readPixels();
-      expect(result.ok).toBe(true);
-      if (!result.ok) throw new Error('unreachable');
-      expect(result.value).toBeInstanceOf(Uint8Array);
-      expect(result.value.length).toBe(CANVAS_W * CANVAS_H * 4);
-      // Sample value is 128 (the fill we placed in the mock).
-      expect(result.value[0]).toBe(128);
-    });
-
-    it('OffscreenCanvas 2D ctx unavailable returns webgpu-runtime-error with detail.error message', async () => {
-      const { createRenderer } = await setupWebGPU();
-      installBitmapStubs({ ctx2dReturn: null });
-      const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-      const renderer = await createRenderer(
-        canvas,
-        {},
-        { shaderManifestUrl: buildManifestDataUrl() },
-      );
-      await renderer.ready;
-
-      const result = await renderer.readPixels();
-      expect(result.ok).toBe(false);
-      if (result.ok) throw new Error('unreachable');
-      expect(result.error.code).toBe('webgpu-runtime-error');
-      const detailErr = result.error.detail?.error;
-      expect(detailErr).toBeDefined();
-      // detail.error is widened to RhiError | { code: string; message: string; name?: string; };
-      // Both branches carry .message (RhiError has it via Error base class).
-      if (detailErr && typeof detailErr === 'object') {
-        expect((detailErr as { message: string }).message).toContain('null');
-      }
-    });
-
-    it('createImageBitmap throw surfaces as webgpu-runtime-error with thrown message in detail.error', async () => {
-      const { createRenderer } = await setupWebGPU();
-      installBitmapStubs({ failBitmap: new Error('mock: createImageBitmap rejected by canvas') });
-      const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-      const renderer = await createRenderer(
-        canvas,
-        {},
-        { shaderManifestUrl: buildManifestDataUrl() },
-      );
-      await renderer.ready;
-
-      const result = await renderer.readPixels();
-      expect(result.ok).toBe(false);
-      if (result.ok) throw new Error('unreachable');
-      expect(result.error.code).toBe('webgpu-runtime-error');
-      const detailErr = result.error.detail?.error;
-      expect(detailErr).toBeDefined();
-      if (detailErr && typeof detailErr === 'object') {
-        expect((detailErr as { message: string }).message).toContain('createImageBitmap rejected');
-      }
-    });
-  });
 }
 
 {
   // --- from renderer-ready.test.ts ---
-  const ENGINE = new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url).href;
+  const _ENGINE = new URL('../../../render/src/assembly/factory.ts', import.meta.url).href;
 
   // ─── Mock helpers (mirrors createRenderer.test.ts shape) ────────────────────
 
@@ -4729,7 +3776,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     webgpu?: 'context' | 'null';
   }
 
-  function makeMockCanvas(opts: CanvasOptions): HTMLCanvasElement {
+  function _makeMockCanvas(opts: CanvasOptions): HTMLCanvasElement {
     const canvas = {
       width: 800,
       height: 600,
@@ -4769,7 +3816,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     failWriteBuffer?: boolean;
   }
 
-  function makeMockGPUDevice(
+  function _makeMockGPUDevice(
     log: DeviceCallLog,
     overrides: DeviceOverrides = {},
   ): {
@@ -4863,7 +3910,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     return { device };
   }
 
-  function makeMockGPU(deviceObj: unknown): unknown {
+  function _makeMockGPU(deviceObj: unknown): unknown {
     return {
       requestAdapter: async () => ({
         requestDevice: async () => deviceObj,
@@ -4882,7 +3929,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   // createShaderModule does not parse WGSL syntax, the runtime test only
   // requires that two distinct entries with the right content markers
   // exist.
-  function buildManifestDataUrl(): string {
+  function _buildManifestDataUrl(): string {
     const manifest = {
       schemaVersion: '1.0.0',
       entries: [
@@ -4919,150 +3966,6 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   // ─── Tests ──────────────────────────────────────────────────────────────────
 
-  describe('Renderer.ready - WebGPU path three-step serial (D-S3)', () => {
-    it('exposes a readonly `ready: Promise<void>` property', async () => {
-      const log: DeviceCallLog = { order: [] };
-      const { device } = makeMockGPUDevice(log);
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
-      const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: unknown,
-          bundler?: unknown,
-        ) => Promise<{ ready: Promise<void> }>;
-      };
-
-      const renderer = await createRenderer(
-        canvas,
-        {},
-        { shaderManifestUrl: buildManifestDataUrl() },
-      );
-      expect(renderer.ready).toBeInstanceOf(Promise);
-    });
-
-    it('resolves only after manifest load -> pipeline compile -> asset upload (in order)', async () => {
-      const log: DeviceCallLog = { order: [] };
-      const { device } = makeMockGPUDevice(log);
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
-      const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: unknown,
-          bundler?: unknown,
-        ) => Promise<{ ready: Promise<void> }>;
-      };
-
-      const renderer = await createRenderer(
-        canvas,
-        {},
-        { shaderManifestUrl: buildManifestDataUrl() },
-      );
-      await renderer.ready;
-
-      // Order assertion: createShaderModule (manifest-driven pipeline step 1)
-      // must happen before createBuffer (asset upload step 3). Specifically,
-      // the very first create* call belongs to step 2 pipeline (after manifest
-      // load completes async), and createBuffer runs after every pipeline call.
-      const firstShader = log.order.indexOf('createShaderModule');
-      const firstBuffer = log.order.indexOf('createBuffer');
-      const firstWrite = log.order.indexOf('queue.writeBuffer');
-      expect(firstShader).toBeGreaterThanOrEqual(0);
-      expect(firstBuffer).toBeGreaterThan(firstShader);
-      expect(firstWrite).toBeGreaterThan(firstBuffer);
-
-      // Three BindGroupLayouts must be created (view / material / mesh-array)
-      // before createPipelineLayout aggregates them. (bug-20260519 merge:
-      // feat-20260519-tonemap-reinhard-mvp added a second createPipelineLayout
-      // call for the post-process tonemap pipeline whose own BGL is built
-      // *after* the geometry pipeline-layout has already been aggregated, so
-      // `lastIndexOf('createBindGroupLayout')` may now sit between the two
-      // PLs. Constrain to the geometry chain only — slice the prefix up to
-      // the first PL and assert the count of BGLs in that prefix is >= 3.)
-      const bglCount = log.order.filter((c) => c === 'createBindGroupLayout').length;
-      expect(bglCount).toBeGreaterThanOrEqual(3);
-      const firstPipelineLayout = log.order.indexOf('createPipelineLayout');
-      const bglCountBeforeFirstPL = log.order
-        .slice(0, firstPipelineLayout)
-        .filter((c) => c === 'createBindGroupLayout').length;
-      expect(bglCountBeforeFirstPL).toBeGreaterThanOrEqual(3);
-    });
-
-    it('settles with err shader-compile-failed when shader module creation fails (w24)', async () => {
-      const log: DeviceCallLog = { order: [] };
-      const { device } = makeMockGPUDevice(log, { failShaderModule: true });
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
-      const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: unknown,
-          bundler?: unknown,
-        ) => Promise<{ ready: Promise<unknown> }>;
-      };
-
-      const renderer = await createRenderer(
-        canvas,
-        {},
-        { shaderManifestUrl: buildManifestDataUrl() },
-      );
-      // w24 — Renderer.ready now resolves Result<void, RhiError>; AI users
-      // branch on `.ok` rather than try/catch the await.
-      const ready = (await renderer.ready) as { ok: boolean; error?: { code: string } };
-      expect(ready.ok).toBe(false);
-      expect(ready.error?.code).toMatch(
-        /shader-compile-failed|manifest-malformed|shader-not-found/,
-      );
-    });
-
-    it('settles with err when render pipeline creation fails (w24)', async () => {
-      const log: DeviceCallLog = { order: [] };
-      const { device } = makeMockGPUDevice(log, { failRenderPipeline: true });
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
-      const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: unknown,
-          bundler?: unknown,
-        ) => Promise<{ ready: Promise<unknown> }>;
-      };
-
-      const renderer = await createRenderer(
-        canvas,
-        {},
-        { shaderManifestUrl: buildManifestDataUrl() },
-      );
-      const ready = (await renderer.ready) as { ok: boolean; error?: { code: string } };
-      expect(ready.ok).toBe(false);
-      expect(ready.error?.code).toBeDefined();
-    });
-
-    it('settles with err when asset upload (createBuffer) fails (w24)', async () => {
-      const log: DeviceCallLog = { order: [] };
-      const { device } = makeMockGPUDevice(log, { failBuffer: true });
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
-      const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: unknown,
-          bundler?: unknown,
-        ) => Promise<{ ready: Promise<unknown> }>;
-      };
-
-      const renderer = await createRenderer(
-        canvas,
-        {},
-        { shaderManifestUrl: buildManifestDataUrl() },
-      );
-      const ready = (await renderer.ready) as { ok: boolean; error?: { code: string } };
-      expect(ready.ok).toBe(false);
-      expect(ready.error?.code).toBeDefined();
-    });
-  });
-
   // bug-20260519 AC-02: Camera-only world / clear-pass-only path must NOT
   // force shader-compile when the caller does not pass `shaderManifestUrl`.
   // The fix lands in `createRenderer.ts` Step 2 guard + `RendererOptions`
@@ -5072,35 +3975,6 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   // minimal LO 1.1 hello-window equivalent (Engine.create + clearColor +
   // no shader manifest) reach `Result.ok` without configuring vite-plugin-
   // shader. Plan-strategy D-1 + D-2 + D-3.
-  describe('Renderer.ready - bug-20260519 zero-manifest path (AC-02)', () => {
-    it('Camera-only world + no shaderManifestUrl -> ready ok + 0 createShaderModule', async () => {
-      const log: DeviceCallLog = { order: [] };
-      const { device } = makeMockGPUDevice(log);
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
-      const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: unknown,
-          bundler?: unknown,
-        ) => Promise<{ ready: Promise<unknown> }>;
-      };
-
-      // Explicit `shaderManifestUrl: undefined` opts into zero-entry mode
-      // (D-7: the AC-02 case is the "no manifest configured" path).
-      // ShaderRegistry yields zero entries -> Step 2 guard skips
-      // createShaderModule entirely.
-      const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-      const ready = (await renderer.ready) as { ok: boolean; error?: unknown };
-
-      expect(ready.ok).toBe(true);
-      // Spy log: zero createShaderModule invocations -- the dual-compile
-      // (PBR + unlit) block in `buildReadyWebGPU` Step 2 must be gated
-      // behind `registry.entries().length > 0` so the zero-entry manifest
-      // skips it entirely (charter P3 + D-3 nullable PipelineState).
-      expect(log.order).not.toContain('createShaderModule');
-    });
-  });
 }
 
 {
@@ -5365,33 +4239,6 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       expect(fragment.targets[0]?.blend).toEqual(blend);
     });
 
-    it('(d) AC-08: stencil reaches createRenderPipeline depthStencil descriptor', () => {
-      const mocks = makeMocks();
-      const ctx = makeMockContext(mocks);
-      const entry = makeMockEntry();
-
-      const stencilFace: StencilFaceState = {
-        compare: 'always',
-        failOp: 'keep',
-        depthFailOp: 'keep',
-        passOp: 'replace',
-      };
-      const rs: MaterialRenderState = { stencil: stencilFace };
-      buildPipelineForMaterialShader('test::stencil', entry, ctx, rs);
-
-      const desc = (mocks.createRenderPipeline.mock.calls as unknown[][])[0]?.[0] as Record<
-        string,
-        unknown
-      >;
-
-      const depthStencil = desc.depthStencil as {
-        stencilFront?: typeof stencilFace;
-        stencilBack?: typeof stencilFace;
-      };
-      expect(depthStencil.stencilFront).toEqual(stencilFace);
-      expect(depthStencil.stencilBack).toEqual(stencilFace);
-    });
-
     it('(d) AC-08: undefined renderState falls back to engine defaults', () => {
       const mocks = makeMocks();
       const ctx = makeMockContext(mocks);
@@ -5501,7 +4348,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 }
 
 {
-  // --- from gpu-resource-store.test.ts (__tests__/) ---
+  // --- from device/gpu-residency.test.ts (__tests__/) ---
   const okShim = <T>(v: T) => ({ ok: true as const, value: v });
 
   interface DeviceProbe {
@@ -5600,7 +4447,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       kind: 'mesh',
       vertices: new Float32Array(verts * 12),
       indices: new Uint16Array([0, 1, 2, 0, 2, 3]),
-      attributes: {},
+      attributes: buildMeshAttributeMapForUvSets(1),
       aabb: new Float32Array(6),
       submeshes: [
         {
@@ -5625,13 +4472,13 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     };
   }
 
-  function configured(probe: DeviceProbe): GpuResourceStore {
-    const store = new GpuResourceStore();
+  function configured(probe: DeviceProbe): GpuResidencyCache {
+    const store = new GpuResidencyCache();
     store.configureGpuDevice(makeMockDevice(probe), shaderFactory, makeRegisterCube(), mockCaps);
     return store;
   }
 
-  describe('GpuResourceStore residency', () => {
+  describe('GpuResidencyCache residency', () => {
     it('(1)+(2) mesh ensureResident miss builds buffers, hit is O(1) (same buffers)', () => {
       const probe = freshProbe();
       const store = configured(probe);
@@ -5652,100 +4499,8 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       }
     });
 
-    it('(3) texture ensureResident miss (mipmap=false) builds texture + view synchronously', () => {
-      const probe = freshProbe();
-      const store = configured(probe);
-      const handle = toShared<'TextureAsset'>(2048);
-      const pod = texturePod(false);
-
-      const res = store.ensureResident(handle, pod);
-      expect(res.ok).toBe(true);
-      expect(probe.textures).toBe(1);
-      expect(store.getTextureGpuView(handle)).toBeDefined();
-
-      // Hit: no second texture allocation.
-      const again = store.ensureResident(handle, pod);
-      expect(again.ok).toBe(true);
-      expect(probe.textures).toBe(1);
-    });
-
-    it('(4) accessors return cached entry; miss returns undefined', () => {
-      const probe = freshProbe();
-      const store = configured(probe);
-      const meshHandle = toShared<'MeshAsset'>(1024);
-      const texHandle = toShared<'TextureAsset'>(2048);
-
-      // Miss before residency.
-      expect(store.getMeshGpuHandles(meshHandle)).toBeUndefined();
-      expect(store.getTextureGpuView(texHandle)).toBeUndefined();
-      expect(store.getCubemapGpuView(toShared<'EquirectAsset'>(9))).toBeUndefined();
-      expect(store.getCubemapGpuTexture(toShared<'EquirectAsset'>(9))).toBeUndefined();
-      expect(store.getCubemapFaceViews(toShared<'EquirectAsset'>(9))).toBeUndefined();
-
-      store.ensureResident(meshHandle, meshPod());
-      store.ensureResident(texHandle, texturePod(false));
-      expect(store.getMeshGpuHandles(meshHandle)).toBeDefined();
-      expect(store.getTextureGpuView(texHandle)).toBeDefined();
-    });
-
-    it('(5) cubemapIdempotentMap: same source handle returns the same cube handle', async () => {
-      const probe = freshProbe();
-      const store = configured(probe);
-      const srcHandle = toShared<'EquirectAsset'>(2048);
-      const srcPod: EquirectAsset = {
-        kind: 'equirect',
-        width: 8,
-        height: 4,
-        format: 'rgba16float',
-        data: new Uint8Array(8 * 4 * 8),
-        colorSpace: 'linear',
-      };
-
-      // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
-      const r1 = await (store as any)._uploadCubemapFromEquirect(new World(), srcHandle, srcPod);
-      // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
-      const r2 = await (store as any)._uploadCubemapFromEquirect(new World(), srcHandle, srcPod);
-      expect(r1.ok && r2.ok).toBe(true);
-      if (r1.ok && r2.ok) {
-        // Second call is the idempotent cache hit -> identical cube handle.
-        expect(JSON.stringify(r1.value)).toBe(JSON.stringify(r2.value));
-        // getCubemapGpuTexture resolves the cube handle (D-3 single-call contract).
-        expect(store.getCubemapGpuTexture(r1.value)).toBeDefined();
-      }
-    });
-
-    it('(6) prewarmMipmapPipeline then mipmap=true texture ensureResident builds synchronously', async () => {
-      const probe = freshProbe();
-      const device = makeMockDevice(probe);
-      const store = new GpuResourceStore();
-      store.configureGpuDevice(device, shaderFactory, makeRegisterCube(), mockCaps);
-      // Prewarm so the sync blit reads the cached pipeline (no lazy await).
-      const prewarm = await store.prewarmMipmapPipeline(device, ['rgba8unorm-srgb']);
-      expect(prewarm.ok).toBe(true);
-
-      const handle = toShared<'TextureAsset'>(2048);
-      const pod = texturePod(true, 'rgba8unorm-srgb');
-      const res = store.ensureResident(handle, pod);
-      expect(res.ok).toBe(true);
-      // The synchronous mipmap blit submitted a command buffer.
-      expect(probe.submits).toBeGreaterThanOrEqual(1);
-    });
-
-    it('(7a) un-prewarmed mipmap format on the sync path returns structured RhiError (no lazy await)', () => {
-      const probe = freshProbe();
-      const store = configured(probe); // device wired, but NO prewarm
-      const handle = toShared<'TextureAsset'>(2048);
-      const pod = texturePod(true, 'rgba8unorm-srgb'); // mipmap=true, never prewarmed
-
-      const res = store.ensureResident(handle, pod);
-      expect(res.ok).toBe(false);
-      if (!res.ok) {
-        expect(res.error.code).toBe('rhi-not-available');
-      }
-    });
-
     it('(7b) no-device ensureResident returns a structured error (OOS-3 legacy degradation made explicit)', () => {
-      const store = new GpuResourceStore(); // configureGpuDevice never called
+      const store = new GpuResidencyCache(); // configureGpuDevice never called
       const meshRes = store.ensureResident(toShared<'MeshAsset'>(1024), meshPod());
       expect(meshRes.ok).toBe(false);
       const texRes = store.ensureResident(toShared<'TextureAsset'>(2048), texturePod(false));
@@ -5760,6 +4515,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   const GPU_BUFFER_USAGE_INDEX = 0x10;
   const GPU_BUFFER_USAGE_COPY_DST = 0x08;
   const TEXTURE_BINDING = 0x4;
+  const COPY_SRC = 0x1;
   const COPY_DST = 0x2;
   const RENDER_ATTACHMENT = 0x10;
 
@@ -5768,7 +4524,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       kind: 'mesh',
       vertices: new Float32Array(4 * 12),
       indices: new Uint16Array([0, 1, 2, 0, 2, 3]),
-      attributes: {},
+      attributes: buildMeshAttributeMapForUvSets(1),
       aabb: new Float32Array(6),
       ...overrides,
       submeshes: [
@@ -5827,7 +4583,13 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       expect(rd.indexByteLength).toBe(12);
       expect(rd.indexCount).toBe(6);
       expect(rd.indexFormat).toBe('uint16');
-      expect(rd.layout).toBe('12F');
+      expect(rd.layoutProjection.arrayStride).toBe(48);
+      expect(rd.layoutProjection.attributes.map((attribute) => attribute.key)).toEqual([
+        'position',
+        'normal',
+        'uv',
+        'tangent',
+      ]);
       expect(rd.vertexUsage).toBe(GPU_BUFFER_USAGE_VERTEX | GPU_BUFFER_USAGE_COPY_DST);
       expect(rd.indexUsage).toBe(GPU_BUFFER_USAGE_INDEX | GPU_BUFFER_USAGE_COPY_DST);
     });
@@ -5862,7 +4624,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       expect(rd.height).toBe(4);
       expect(rd.format).toBe('rgba8unorm-srgb');
       expect(rd.mipLevelCount).toBe(1);
-      expect(rd.usage).toBe(TEXTURE_BINDING | COPY_DST | RENDER_ATTACHMENT);
+      expect(rd.usage).toBe(TEXTURE_BINDING | COPY_SRC | COPY_DST | RENDER_ATTACHMENT);
       expect(rd.bytesPerRow).toBe(4 * 4);
     });
 
@@ -5887,6 +4649,47 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       expect(res.ok).toBe(true);
       if (!res.ok) return;
       expect(res.value.format).toBe('rgba8unorm');
+    });
+
+    it('derives the row pitch from an rgba16float source payload', () => {
+      const source = texturePod(false, 'rgba16float');
+      const res = deriveRenderDataTexture({
+        ...source,
+        data: new Uint8Array(source.width * source.height * 8),
+      });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.value.bytesPerRow).toBe(source.width * 8);
+    });
+
+    it('derives row pitch from format when an rgba8 decoder retains trailing bytes', () => {
+      const source = texturePod(false, 'rgba8unorm');
+      const res = deriveRenderDataTexture({
+        ...source,
+        data: new Uint8Array(source.width * source.height * 4 + source.width),
+      });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.value.bytesPerRow).toBe(source.width * 4);
+    });
+
+    it('derives the row pitch from an rgba32float source payload', () => {
+      const source = texturePod(false, 'rgba32float');
+      const res = deriveRenderDataTexture({
+        ...source,
+        data: new Uint8Array(source.width * source.height * 16),
+      });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.value.bytesPerRow).toBe(source.width * 16);
+    });
+
+    it('rejects an uncompressed payload shorter than its base mip', () => {
+      const source = texturePod(false, 'rgba16float');
+      const res = deriveRenderDataTexture({ ...source, data: new Uint8Array(1) });
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error.code).toBe('invalid-source-format');
     });
   });
 
@@ -6076,113 +4879,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 }
 
 {
-  // --- from hdrp-caps-gate.test.ts ---
-  describe('HdrpCapsInsufficientError class shape (AC-17/AC-18/AC-20)', () => {
-    it('has .code === hdrp-caps-insufficient', async () => {
-      const { HdrpCapsInsufficientError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpCapsInsufficientError('maxStorageBuffersPerShaderStage', 2, 4);
-      expect(err.code).toBe('hdrp-caps-insufficient');
-    });
-
-    it('.detail carries { capName, actual, required }', async () => {
-      const { HdrpCapsInsufficientError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpCapsInsufficientError('maxStorageBuffersPerShaderStage', 2, 4);
-      expect(err.detail).toBeDefined();
-      expect(err.detail.capName).toBe('maxStorageBuffersPerShaderStage');
-      expect(err.detail.actual).toBe(2);
-      expect(err.detail.required).toBe(4);
-    });
-
-    it('.hint contains fall-back-to-URP substring (AC-18)', async () => {
-      const { HdrpCapsInsufficientError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpCapsInsufficientError('maxStorageBuffersPerShaderStage', 2, 4);
-      expect(err.hint).toBeDefined();
-      expect(typeof err.hint).toBe('string');
-      expect(err.hint.length).toBeGreaterThan(0);
-      expect(err.hint).toMatch(/fall back to URP|do not call installPipeline/i);
-    });
-
-    it('.expected describes the capacity requirement', async () => {
-      const { HdrpCapsInsufficientError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpCapsInsufficientError('maxStorageBuffersPerShaderStage', 2, 4);
-      expect(err.expected).toBeDefined();
-      expect(typeof err.expected).toBe('string');
-      expect(err.expected.length).toBeGreaterThan(0);
-    });
-
-    it('extends Error', async () => {
-      const { HdrpCapsInsufficientError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpCapsInsufficientError('maxStorageBuffersPerShaderStage', 2, 4);
-      expect(err).toBeInstanceOf(Error);
-      expect(err.name).toBe('HdrpCapsInsufficientError');
-    });
-  });
-
   // ── Light budget error class shape ─────────────────────────────────────────────
 
-  describe('HdrpLightBudgetExceededError class shape (AC-07/AC-20)', () => {
-    it('has .code === hdrp-light-budget-exceeded', async () => {
-      const { HdrpLightBudgetExceededError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpLightBudgetExceededError(257, 256);
-      expect(err.code).toBe('hdrp-light-budget-exceeded');
-    });
-
-    it('.detail carries { actual, budget }', async () => {
-      const { HdrpLightBudgetExceededError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpLightBudgetExceededError(257, 256);
-      expect(err.detail).toBeDefined();
-      expect(err.detail.actual).toBe(257);
-      expect(err.detail.budget).toBe(256);
-    });
-
-    it('.hint is a non-empty actionable string', async () => {
-      const { HdrpLightBudgetExceededError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpLightBudgetExceededError(257, 256);
-      expect(err.hint).toBeDefined();
-      expect(typeof err.hint).toBe('string');
-      expect(err.hint.length).toBeGreaterThan(0);
-    });
-
-    it('extends Error', async () => {
-      const { HdrpLightBudgetExceededError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpLightBudgetExceededError(257, 256);
-      expect(err).toBeInstanceOf(Error);
-      expect(err.name).toBe('HdrpLightBudgetExceededError');
-    });
-  });
-
   // ── Index list overflow error class shape ─────────────────────────────────────
-
-  describe('HdrpIndexListOverflowError class shape (AC-24)', () => {
-    it('has .code === hdrp-index-list-overflow', async () => {
-      const { HdrpIndexListOverflowError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpIndexListOverflowError(65537, 65536);
-      expect(err.code).toBe('hdrp-index-list-overflow');
-    });
-
-    it('.detail carries { actual, capacity }', async () => {
-      const { HdrpIndexListOverflowError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpIndexListOverflowError(65537, 65536);
-      expect(err.detail).toBeDefined();
-      expect(err.detail.actual).toBe(65537);
-      expect(err.detail.capacity).toBe(65536);
-    });
-
-    it('.hint is a non-empty actionable string', async () => {
-      const { HdrpIndexListOverflowError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpIndexListOverflowError(65537, 65536);
-      expect(err.hint).toBeDefined();
-      expect(typeof err.hint).toBe('string');
-      expect(err.hint.length).toBeGreaterThan(0);
-    });
-
-    it('extends Error', async () => {
-      const { HdrpIndexListOverflowError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpIndexListOverflowError(65537, 65536);
-      expect(err).toBeInstanceOf(Error);
-      expect(err.name).toBe('HdrpIndexListOverflowError');
-    });
-  });
 
   // ── Caps gate 5 scenarios (AC-17) ─────────────────────────────────────────────
   // Note: the caps router lives in hdrp-pipeline.ts. These tests verify
@@ -6190,7 +4889,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   describe('HDRP caps gate 5 scenarios (AC-17)', () => {
     it('caps=0 (uniform fallback) yields ok(false)', async () => {
-      const { assertStorageBufferCap } = await import('@forgeax/engine-render/internal');
+      const { assertStorageBufferCap } = await import('../../../render/src/light-buffer-layout');
       const result = assertStorageBufferCap(0);
       expect(result.ok).toBe(true);
       if (result.ok) {
@@ -6199,19 +4898,19 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('caps=1 (insufficient, partial storage) yields err', async () => {
-      const { assertStorageBufferCap } = await import('@forgeax/engine-render/internal');
+      const { assertStorageBufferCap } = await import('../../../render/src/light-buffer-layout');
       const result = assertStorageBufferCap(1);
       expect(result.ok).toBe(false);
     });
 
     it('caps=3 (insufficient, below 4) yields err', async () => {
-      const { assertStorageBufferCap } = await import('@forgeax/engine-render/internal');
+      const { assertStorageBufferCap } = await import('../../../render/src/light-buffer-layout');
       const result = assertStorageBufferCap(3);
       expect(result.ok).toBe(false);
     });
 
     it('caps=4 (sufficient) yields ok(true)', async () => {
-      const { assertStorageBufferCap } = await import('@forgeax/engine-render/internal');
+      const { assertStorageBufferCap } = await import('../../../render/src/light-buffer-layout');
       const result = assertStorageBufferCap(4);
       expect(result.ok).toBe(true);
       if (result.ok) {
@@ -6220,7 +4919,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('caps=8 (sufficient, above minimum) yields ok(true)', async () => {
-      const { assertStorageBufferCap } = await import('@forgeax/engine-render/internal');
+      const { assertStorageBufferCap } = await import('../../../render/src/light-buffer-layout');
       const result = assertStorageBufferCap(8);
       expect(result.ok).toBe(true);
       if (result.ok) {
@@ -6230,32 +4929,6 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   });
 
   // ── RuntimeErrorCode union member count (12 -> 15) ───────────────────────────
-
-  describe('RuntimeErrorCode union 12 -> 15 (D-4)', () => {
-    it('HdrpCapsInsufficientError .code is recognized as RuntimeErrorCode literal', async () => {
-      const { HdrpCapsInsufficientError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpCapsInsufficientError('maxStorageBuffersPerShaderStage', 2, 4);
-      const code: string = err.code;
-      // If hdrp-caps-insufficient is not in the RuntimeErrorCode union,
-      // assigning err.code to a typed RuntimeErrorCode variable would fail.
-      // This is a runtime smoke: assert the literal is kebab-case and hdrp-prefixed.
-      expect(code).toMatch(/^hdrp-/);
-    });
-
-    it('HdrpLightBudgetExceededError .code is recognized as RuntimeErrorCode literal', async () => {
-      const { HdrpLightBudgetExceededError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpLightBudgetExceededError(257, 256);
-      const code: string = err.code;
-      expect(code).toMatch(/^hdrp-/);
-    });
-
-    it('HdrpIndexListOverflowError .code is recognized as RuntimeErrorCode literal', async () => {
-      const { HdrpIndexListOverflowError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpIndexListOverflowError(65537, 65536);
-      const code: string = err.code;
-      expect(code).toMatch(/^hdrp-/);
-    });
-  });
 }
 
 {
@@ -6403,18 +5076,6 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   // ── hdrp-index-list-overflow RuntimeError class shape ────────────────────────
 
-  describe('hdrp-index-list-overflow RuntimeError class shape (AC-24)', () => {
-    it('HdrpIndexListOverflowError has the expected shape', async () => {
-      const { HdrpIndexListOverflowError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpIndexListOverflowError(70000, 65536);
-      expect(err.code).toBe('hdrp-index-list-overflow');
-      expect(err.detail.actual).toBe(70000);
-      expect(err.detail.capacity).toBe(65536);
-      expect(err.hint.length).toBeGreaterThan(0);
-      expect(err.expected.length).toBeGreaterThan(0);
-    });
-  });
-
   // ── AC-03 guardrail: URP LIGHT_ARRAY_MAX_SLOTS=4 + 5 PointLights ─────────────
   //
   // This test verifies that the existing URP `render-system-multi-light` warn-once
@@ -6423,13 +5084,13 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   describe('URP light budget warn-once guardrail (AC-03)', () => {
     it('LIGHT_ARRAY_MAX_SLOTS is still 4 (URP first-slice cap)', async () => {
-      const { LIGHT_ARRAY_MAX_SLOTS } = await import('@forgeax/engine-render/internal');
+      const { LIGHT_ARRAY_MAX_SLOTS } = await import('../../../render/src/light-buffer-layout');
       expect(LIGHT_ARRAY_MAX_SLOTS).toBe(4);
     });
 
     it('POINT_LIGHT_STD430_BYTES and SPOT_LIGHT_STD430_BYTES still match URP specs', async () => {
       const { POINT_LIGHT_STD430_BYTES, SPOT_LIGHT_STD430_BYTES } = await import(
-        '@forgeax/engine-render/internal'
+        '../../../render/src/light-buffer-layout'
       );
       expect(POINT_LIGHT_STD430_BYTES).toBe(32);
       // feat-20260625-spot-light-shadow-mapping M2 / w8 (D-4): SpotLight grew
@@ -6441,39 +5102,6 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
 {
   // --- from hdrp-light-budget.test.ts ---
-  describe('HdrpLightBudgetExceededError class shape (AC-07)', () => {
-    it('has .code === hdrp-light-budget-exceeded', async () => {
-      const { HdrpLightBudgetExceededError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpLightBudgetExceededError(257, 256);
-      expect(err.code).toBe('hdrp-light-budget-exceeded');
-    });
-
-    it('.detail carries { actual, budget } with correct values', async () => {
-      const { HdrpLightBudgetExceededError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpLightBudgetExceededError(257, 256);
-      expect(err.detail.actual).toBe(257);
-      expect(err.detail.budget).toBe(256);
-    });
-
-    it('.detail budget is 256 (the D-scope limit)', async () => {
-      const { HdrpLightBudgetExceededError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpLightBudgetExceededError(300, 256);
-      expect(err.detail.budget).toBe(256);
-    });
-
-    it('.expected describes the budget constraint', async () => {
-      const { HdrpLightBudgetExceededError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpLightBudgetExceededError(257, 256);
-      expect(err.expected.length).toBeGreaterThan(0);
-      expect(err.expected).toMatch(/256/);
-    });
-
-    it('.hint is a non-empty actionable string', async () => {
-      const { HdrpLightBudgetExceededError } = await import('@forgeax/engine-render/internal');
-      const err = new HdrpLightBudgetExceededError(257, 256);
-      expect(err.hint.length).toBeGreaterThan(0);
-    });
-  });
 
   // ── Budget gate unit logic (the pure gate w23 will embed) ─────────────────────
 
@@ -6766,9 +5394,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   // --- from m7-hdrp-demo-shape.test.ts ---
   const HERE = dirname(fileURLToPath(import.meta.url));
   const REPO_ROOT = resolve(HERE, '..', '..', '..', '..');
-  const FIVE_METRIC_KINDS = ['bundle-size', 'fps', 'bench', 'gate', 'spike-report'] as const;
+  const _FIVE_METRIC_KINDS = ['bundle-size', 'fps', 'bench', 'gate', 'spike-report'] as const;
 
-  function readPkg(rel: string): {
+  function _readPkg(rel: string): {
     forgeax?: { metrics?: Record<string, unknown>; smokeInvocation?: string };
     name?: string;
     scripts?: Record<string, string>;
@@ -6783,70 +5411,6 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     expect(existsSync(path), `source missing: ${rel}`).toBe(true);
     return readFileSync(path, 'utf8');
   }
-
-  describe('M7 hello-hdrp-lighting demo shape (AC-21)', () => {
-    const pkgRel = 'apps/hello/hdrp-lighting/package.json';
-    const srcRel = 'apps/hello/hdrp-lighting/src/main.ts';
-
-    it('package.json exists with @forgeax/hello-hdrp-lighting name', () => {
-      const pkg = readPkg(pkgRel);
-      expect(pkg.name).toBe('@forgeax/hello-hdrp-lighting');
-    });
-
-    it('declares smoke invocation literal aligned with ci.yml', () => {
-      const pkg = readPkg(pkgRel);
-      expect(pkg.forgeax?.smokeInvocation).toBe('pnpm --filter @forgeax/hello-hdrp-lighting smoke');
-    });
-
-    it('declares all 5 forgeax.metrics kinds (plan-strategy §5.6)', () => {
-      const pkg = readPkg(pkgRel);
-      const metrics = pkg.forgeax?.metrics ?? {};
-      for (const kind of FIVE_METRIC_KINDS) {
-        expect(metrics, `metric kind '${kind}' missing`).toHaveProperty(kind);
-      }
-    });
-
-    it('exposes scripts.smoke = node scripts/smoke-dawn.mjs', () => {
-      const pkg = readPkg(pkgRel);
-      expect(pkg.scripts?.smoke).toBe('node scripts/smoke-dawn.mjs');
-    });
-
-    it('src/main.ts wires HDRP install seam (charter P1: installPipeline + HDRP_PIPELINE_ID)', () => {
-      const src = readSource(srcRel);
-      // AC-06: installPipeline + HDRP_PIPELINE_ID + 256-light spawn signal
-      expect(src).toMatch(/installPipeline\s*\(/);
-      expect(src).toMatch(/HDRP_PIPELINE_ID|forgeax::hdrp/);
-      expect(src).toMatch(/PointLight/);
-    });
-  });
-
-  describe('M7 parity-urp-vs-hdrp demo shape (AC-22)', () => {
-    const pkgRel = 'apps/parity/urp-vs-hdrp/package.json';
-    const srcRel = 'apps/parity/urp-vs-hdrp/src/main.ts';
-
-    it('package.json exists with @forgeax/parity-urp-vs-hdrp name', () => {
-      const pkg = readPkg(pkgRel);
-      expect(pkg.name).toBe('@forgeax/parity-urp-vs-hdrp');
-    });
-
-    it('declares all 5 forgeax.metrics kinds (plan-strategy §5.6)', () => {
-      const pkg = readPkg(pkgRel);
-      const metrics = pkg.forgeax?.metrics ?? {};
-      for (const kind of FIVE_METRIC_KINDS) {
-        expect(metrics, `metric kind '${kind}' missing`).toHaveProperty(kind);
-      }
-    });
-
-    it('src/main.ts wires both URP and HDRP install seams (AC-22)', () => {
-      const src = readSource(srcRel);
-      expect(src).toMatch(/URP_PIPELINE_ID|forgeax::urp/);
-      expect(src).toMatch(/HDRP_PIPELINE_ID|forgeax::hdrp/);
-      // Side-by-side comparison: both __captureLeft and __captureRight hooks
-      // mirror the existing parity/forgeax + parity/threejs idiom for the
-      // bench's single-page dual-capture pipeline.
-      expect(src).toMatch(/__captureLeft|__captureRight/);
-    });
-  });
 
   describe('M7 pixel-parity bench wires urp-vs-hdrp target', () => {
     it('scripts/bench/pixel-parity.mjs has urp-vs-hdrp target marker', () => {

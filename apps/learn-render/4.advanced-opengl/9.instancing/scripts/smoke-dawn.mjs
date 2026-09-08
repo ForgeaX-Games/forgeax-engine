@@ -169,8 +169,7 @@ if (
 
 const { World } = await import('@forgeax/engine-ecs');
 const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
-const enginePkg = await import('@forgeax/engine-runtime');
-const { createRenderer } = enginePkg;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Materials } = await import('@forgeax/engine-render');
 const { Camera, DirectionalLight, Instances, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
@@ -206,29 +205,27 @@ const EMPTY_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stri
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: EMPTY_MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: EMPTY_MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  var hostAssets = constructed.value.assets;
 } catch (err) {
-  console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
+  console.error(`[smoke] FAIL - constructRuntimeRendererHost failed: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[learn-render-instancing] backend=${renderer.backend}`);
+console.log(`[learn-render-instancing] backend=${renderer.inspect().capabilities.backendKind}`);
 
-const assets = renderer.assets;
+const assets = hostAssets;
 if (!assets) {
   console.error('[smoke] FAIL - AssetRegistry is null');
   process.exit(1);
 }
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => { if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint }); });
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code}`);
-  process.exit(1);
-}
 
 // LO 4.9 vendored GUIDs from src/index.ts.
 const PLANET_MESH_GUID = AssetGuid.parse('019ea6af-7084-75fd-bf77-de799946f4c9');
@@ -254,8 +251,9 @@ const mkTex = (decoded) => ({
 });
 // World must exist before allocSharedRef mints any column handle.
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const lease = worldAttachment1.value;
 
 // Texture handles feed material baseColorTexture fields (numeric slot ->
 // unwrapHandle); mesh handles feed MeshFilter.assetHandle (branded handle).
@@ -265,8 +263,12 @@ const rockTexHandle = unwrapHandle(world.allocSharedRef('TextureAsset', mkTex(ro
 // Bridge planet/rock mesh IRs to MeshAsset.
 const planetMeshIrs = planetDoc.meshes.filter((m) => m.meshIndex === 0);
 const rockMeshIrs = rockDoc.meshes.filter((m) => m.meshIndex === 0);
-const planetMeshAsset = meshIrToMeshAsset(planetMeshIrs);
-const rockMeshAsset = meshIrToMeshAsset(rockMeshIrs);
+const planetMeshResult = meshIrToMeshAsset(planetMeshIrs);
+if (!planetMeshResult.ok) throw planetMeshResult.error;
+const planetMeshAsset = planetMeshResult.value;
+const rockMeshResult = meshIrToMeshAsset(rockMeshIrs);
+if (!rockMeshResult.ok) throw rockMeshResult.error;
+const rockMeshAsset = rockMeshResult.value;
 const planetMeshHandle = world.allocSharedRef('MeshAsset', planetMeshAsset);
 const rockMeshHandle = world.allocSharedRef('MeshAsset', rockMeshAsset);
 
@@ -354,8 +356,13 @@ const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-  if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  const r = renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } });
+  if (!r.ok) {
+    console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  } else {
+    const completed = await r.value.completed;
+    if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+  }
   framesObserved++;
 }
 const device = sharedDevice;
@@ -443,8 +450,8 @@ const wallTotalMs = Date.now() - frameStart;
 console.log(`[smoke] wallTotalMs=${wallTotalMs} (budget=${SMOKE_WALL_BUDGET_MS})`);
 
 const failures = [];
-if (renderer.backend !== 'webgpu')
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (renderer.inspect().capabilities.backendKind !== 'webgpu')
+  failures.push(`(a) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES)
   failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (meshedRenderCount < 1) {

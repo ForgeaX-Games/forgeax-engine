@@ -1,7 +1,7 @@
 // Consolidated by feat-20260609-test-pool-startup-reduction-merge-tiny-test-files
 // biome-ignore-all lint/complexity/noUselessLoneBlockStatements: scope isolation between merged source files
 //
-// Source files (N=16):
+// Source files (N=18):
 //   - packages/gltf/src/__tests__/cli-gltf.test.ts
 //   - packages/gltf/src/__tests__/errors.test.ts
 //   - packages/gltf/src/__tests__/ext-mesh-gpu-instancing.test.ts
@@ -123,7 +123,7 @@ function unwrap(result: {
   return result.ok && result.value !== undefined ? result.value.assets : [];
 }
 
-import { meshIrToMeshAsset, toMaterialAsset } from '../bridge.js';
+import { toMaterialAsset } from '../bridge.js';
 import { checkExtensions, EXTENSION_ALLOWLIST } from '../check-extensions.js';
 import { runCliGltf } from '../cli-gltf.js';
 import {
@@ -143,6 +143,7 @@ import {
   reimportReuseMeta,
   subAssetKey,
 } from '../reimport-reuse-meta.js';
+import { unwrapMeshAsset as meshIrToMeshAsset } from './bridge-test-helpers.js';
 
 function unwrapAssetPack(result: ReturnType<typeof toAssetPack>) {
   if (!result.ok) throw new Error(`toAssetPack failed: ${result.error.code}`);
@@ -289,6 +290,12 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
     'gltf-image-extract-failed',
     'gltf-skin-attr-asymmetric',
     'gltf-animation-target-invalid',
+    'gltf-meshopt-decoder-required',
+    'gltf-meshopt-decode-failed',
+    'gltf-morph-invalid',
+    'gltf-color-accessor-unsupported',
+    'gltf-color-accessor-malformed',
+    'gltf-mesh-bridge-invalid',
   ];
 
   function classifyByExhaustiveSwitch(err: GltfError): string {
@@ -325,6 +332,18 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
         return 'skin-attr-asym';
       case 'gltf-animation-target-invalid':
         return 'animation-target';
+      case 'gltf-meshopt-decoder-required':
+        return 'meshopt-decoder';
+      case 'gltf-meshopt-decode-failed':
+        return 'meshopt-decode';
+      case 'gltf-morph-invalid':
+        return 'morph-invalid';
+      case 'gltf-color-accessor-unsupported':
+        return 'color-unsupported';
+      case 'gltf-color-accessor-malformed':
+        return 'color-malformed';
+      case 'gltf-mesh-bridge-invalid':
+        return 'mesh-bridge-invalid';
     }
   }
 
@@ -382,6 +401,42 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
           channelIndex: 0,
           nodeIndex: 0,
         });
+      case 'gltf-meshopt-decoder-required':
+        return gltfErr(code, {
+          bufferView: 0,
+          actual: 'required',
+          hasCoreFallback: false,
+        });
+      case 'gltf-meshopt-decode-failed':
+        return gltfErr(code, {
+          bufferView: 0,
+          actual: 'invalid declaration',
+          mode: 'ATTRIBUTES',
+          filter: 'NONE',
+        });
+      case 'gltf-morph-invalid':
+        return gltfErr(code, {
+          meshIndex: 0,
+          primitiveIndex: 0,
+          reason: 'target-count-exceeded',
+          targetCount: 9,
+          attributeCount: 9,
+          vertexCount: 3,
+        });
+      case 'gltf-color-accessor-unsupported':
+        return gltfErr(code, {
+          semantic: 'COLOR_0',
+          accessorIndex: 0,
+          reason: 'component',
+        });
+      case 'gltf-color-accessor-malformed':
+        return gltfErr(code, {
+          semantic: 'COLOR_0',
+          accessorIndex: 0,
+          reason: 'bounds',
+        });
+      case 'gltf-mesh-bridge-invalid':
+        return gltfErr(code, { reason: 'empty-input', primitiveCount: 0 });
     }
   }
 
@@ -391,8 +446,8 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
     });
 
     describe('GltfErrorCode roster', () => {
-      it('GLTF_ERROR_HINTS exposes exactly 16 keys', () => {
-        expect(Object.keys(GLTF_ERROR_HINTS).length).toBe(16);
+      it('GLTF_ERROR_HINTS exposes exactly 22 keys', () => {
+        expect(Object.keys(GLTF_ERROR_HINTS).length).toBe(22);
       });
 
       it.each(ALL_CODES)('hint for %s is a non-empty string', (code) => {
@@ -936,6 +991,13 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
         expect(pack.meta.subAssets.length).toBe(3);
         const kinds = pack.meta.subAssets.map((s) => s.kind).sort();
         expect(kinds).toEqual(['material', 'mesh', 'scene']);
+        expect(pack.meta.subAssets).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ kind: 'mesh', name: 'BoxMesh' }),
+            expect.objectContaining({ kind: 'material', name: 'BoxMat' }),
+            expect.objectContaining({ kind: 'scene', name: 'BoxScene' }),
+          ]),
+        );
       });
 
       it('toAssetPack reuses GUIDs byte-identically on second pass (AC-13)', async () => {
@@ -1037,6 +1099,7 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
   function normalize(value: unknown): unknown {
     if (
       value instanceof Float32Array ||
+      value instanceof Uint8Array ||
       value instanceof Uint16Array ||
       value instanceof Uint32Array
     ) {
@@ -1099,7 +1162,11 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
         const matIr = doc.materials[0];
         if (meshIr === undefined || matIr === undefined)
           throw new Error('fixture doc must carry one mesh + one material');
-        const baselineMesh = meshIrToMeshAsset([meshIr]);
+        const baselineMesh = meshIrToMeshAsset([meshIr], {
+          guidByIndex: new Map([[0, MAT_GUID]]),
+          sourceKeyByIndex: new Map([[0, 'material']]),
+          ...(matIr.name === undefined ? {} : { nameByIndex: new Map([[0, matIr.name]]) }),
+        });
         const baselineMat = toMaterialAsset(matIr);
 
         const importerMesh = importerPack.assets.find((a) => a.guid === MESH_GUID);
@@ -1108,20 +1175,23 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
         expect(serialize(importerMesh?.payload)).toBe(serialize(baselineMesh));
         const meshBody = importerMesh?.artifacts.body;
         expect(meshBody?.mediaType).toBe('application/x-forgeax-mesh');
-        expect(meshBody?.assetCodec).toEqual({ name: 'mesh-binary', version: '2' });
+        expect(meshBody?.assetCodec).toEqual({ name: 'mesh-binary', version: '4' });
         expect(meshBody?.bytes).toBeInstanceOf(Uint8Array);
         const meshHeader = new DataView(
           (meshBody?.bytes as Uint8Array).buffer,
           (meshBody?.bytes as Uint8Array).byteOffset,
           (meshBody?.bytes as Uint8Array).byteLength,
         );
-        expect(meshHeader.getUint32(0, true)).toBe(2);
+        expect(meshHeader.getUint32(0, true)).toBe(4);
         expect(meshHeader.getUint32(4, true)).toBe(1);
-        expect(meshHeader.getUint32(12, true)).toBe(baselineMesh.vertices.length);
-        expect(meshHeader.getUint32(16, true)).toBe(
+        expect(meshHeader.getUint32(12, true)).toBe(
+          baselineMesh.vertices.byteLength / (baselineMesh.vertices.length / 12),
+        );
+        expect(meshHeader.getUint32(16, true)).toBe(baselineMesh.vertices.length / 12);
+        expect(meshHeader.getUint32(24, true)).toBe(
           (baselineMesh.indices ?? new Uint16Array()).length,
         );
-        expect(meshHeader.getUint32(20, true)).toBe(
+        expect(meshHeader.getUint32(28, true)).toBe(
           (baselineMesh.indices ?? new Uint16Array()).BYTES_PER_ELEMENT,
         );
 
@@ -1431,6 +1501,7 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
     subAssets: readonly ImportSubAsset[];
     decodeCalls: GlbDecodeCall[];
     importSettings?: Readonly<Record<string, unknown>>;
+    sourceOverrides?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
     compressedArtifact?: boolean;
   }): ImportContext {
     return {
@@ -1471,6 +1542,7 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
       },
       subAssets: opts.subAssets,
       importSettings: opts.importSettings ?? {},
+      ...(opts.sourceOverrides === undefined ? {} : { sourceOverrides: opts.sourceOverrides }),
     };
   }
 
@@ -1480,6 +1552,103 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
   );
 
   describe('gltf-importer-texture-glb.test.ts', () => {
+    it('cooks an authored Mesh slot default from the source override', async () => {
+      const bytes = new Uint8Array(await readFile(FIXTURE_GLB));
+      const textureGuid = '019e2cc6-0c86-79da-aa76-b0984c86d470';
+      const sourceMaterialGuid = '019e2cc6-0c86-79da-aa76-b0984c86d471';
+      const authoredMaterialGuid = '019e2cc6-0c86-79da-aa76-b0984c86d472';
+      const meshGuid = '019e2cc6-0c86-79da-aa76-b0984c86d473';
+      const sceneGuid = '019e2cc6-0c86-79da-aa76-b0984c86d474';
+      const produced = unwrap(
+        await gltfImporter.import(
+          makeGlbCtx({
+            source: 'BoxTextured.glb',
+            bytes,
+            subAssets: [
+              { guid: textureGuid, sourceIndex: 0, sourceKey: 'texture/0', kind: 'texture' },
+              {
+                guid: sourceMaterialGuid,
+                sourceIndex: 0,
+                sourceKey: 'gltf:material:0',
+                kind: 'material',
+              },
+              { guid: meshGuid, sourceIndex: 0, sourceKey: 'mesh/0', kind: 'mesh' },
+              { guid: sceneGuid, sourceIndex: 0, sourceKey: 'scene/0', kind: 'scene' },
+            ],
+            sourceOverrides: {
+              'mesh/0': {
+                materialSlots: [
+                  {
+                    slotName: 'Material',
+                    sourceKey: 'gltf:material:0',
+                    defaultMaterialGuid: sourceMaterialGuid,
+                  },
+                ],
+                materialSlotDefaultOverrides: { 'gltf:material:0': authoredMaterialGuid },
+              },
+            },
+            decodeCalls: [],
+          }),
+        ),
+      );
+      const mesh = produced.find((asset) => asset.guid === meshGuid)?.payload;
+
+      expect(mesh?.kind).toBe('mesh');
+      if (mesh?.kind !== 'mesh') throw new Error('expected imported MeshAsset');
+      expect(AssetGuid.format(mesh.materialSlots[0]?.defaultMaterial as never)).toBe(
+        authoredMaterialGuid,
+      );
+    });
+
+    it('keeps a removed authored slot as a defaultless tombstone without a dependency ref', async () => {
+      const bytes = new Uint8Array(await readFile(FIXTURE_GLB));
+      const removedGuid = '019e2cc6-0c86-79da-aa76-b0984c86d499';
+      const meshGuid = '019e2cc6-0c86-79da-aa76-b0984c86d473';
+      const produced = unwrap(
+        await gltfImporter.import(
+          makeGlbCtx({
+            source: 'BoxTextured.glb',
+            bytes,
+            subAssets: [
+              {
+                guid: '019e2cc6-0c86-79da-aa76-b0984c86d470',
+                sourceIndex: 0,
+                sourceKey: 'texture/0',
+                kind: 'texture',
+              },
+              {
+                guid: '019e2cc6-0c86-79da-aa76-b0984c86d471',
+                sourceIndex: 0,
+                sourceKey: 'gltf:material:0',
+                kind: 'material',
+              },
+              { guid: meshGuid, sourceIndex: 0, sourceKey: 'mesh/0', kind: 'mesh' },
+              {
+                guid: '019e2cc6-0c86-79da-aa76-b0984c86d474',
+                sourceIndex: 0,
+                sourceKey: 'scene/0',
+                kind: 'scene',
+              },
+            ],
+            sourceOverrides: {
+              'mesh/0': {
+                materialSlots: [
+                  { slotName: 'Material', sourceKey: 'gltf:material:0' },
+                  { slotName: 'Removed', sourceKey: 'gltf:material:removed' },
+                ],
+                materialSlotDefaultOverrides: { 'gltf:material:removed': removedGuid },
+              },
+            },
+            decodeCalls: [],
+          }),
+        ),
+      );
+      const meshAsset = produced.find((asset) => asset.guid === meshGuid);
+      if (meshAsset?.payload.kind !== 'mesh') throw new Error('expected imported MeshAsset');
+      expect(meshAsset.payload.materialSlots[1]?.defaultMaterial).toBeUndefined();
+      expect(meshAsset.refs.map((ref) => ref.guid)).not.toContain(removedGuid);
+    });
+
     describe('gltfImporter texture extraction (a) bufferView path / GLB / AC-08', () => {
       it('extracts the bufferView image, decodes through ctx.decodeImage, and emits a kind:"texture" ImportedAsset', async () => {
         const bytes = new Uint8Array(await readFile(FIXTURE_GLB));
@@ -1573,13 +1742,7 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
       expect(meshRef?.sourceField?.componentName).toBe('MeshFilter');
       expect(meshRef?.sourceField?.fieldName).toBe('assetHandle');
       expect(meshRef?.sceneEntityId).toBeGreaterThanOrEqual(0);
-      const matRefs = scene?.refs.filter((r) => r.guid === MAT_GUID);
-      expect(matRefs?.length).toBeGreaterThanOrEqual(1);
-      const matRef = matRefs?.[0];
-      expect(matRef?.sourceField?.componentName).toBe('MeshRenderer');
-      expect(matRef?.sourceField?.fieldName).toBe('materials');
-      expect(matRef?.sourceField?.arrayIndex).toBeGreaterThanOrEqual(0);
-      expect(matRef?.sceneEntityId).toBeGreaterThanOrEqual(0);
+      expect(scene?.refs.some((ref) => ref.guid === MAT_GUID)).toBe(false);
     });
 
     it('(b) sceneEntityId matches entity localId for handle-field refs', async () => {
@@ -1606,7 +1769,7 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
       expect(meshRef?.sceneEntityId).toBeGreaterThanOrEqual(0);
     });
 
-    it('(c) texture edges in scene refs have sourceField=undefined (D-2)', async () => {
+    it('(c) transitive texture edges live on MaterialAsset, not SceneAsset', async () => {
       const bytes = new Uint8Array(await readFile(FIXTURE_GLB));
       const TEX_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d460';
       const MAT_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d461';
@@ -1626,10 +1789,7 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
       const produced = unwrap(await gltfImporter.import(ctx));
       const scene = produced.find((p) => p.guid === SCENE_GUID);
       expect(scene).toBeDefined();
-      const texRef = scene?.refs.find((r) => r.guid === TEX_GUID);
-      expect(texRef).toBeDefined();
-      expect(texRef?.sourceField).toBeUndefined();
-      expect(texRef?.sceneEntityId).toBeUndefined();
+      expect(scene?.refs.some((ref) => ref.guid === TEX_GUID)).toBe(false);
     });
 
     it('(d) material parent edge points at the injected standard root', async () => {
@@ -1853,7 +2013,7 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
       });
 
       it('v1 allowlist contains EXT_mesh_gpu_instancing (literal)', () => {
-        expect(EXTENSION_ALLOWLIST).toEqual(['EXT_mesh_gpu_instancing']);
+        expect(EXTENSION_ALLOWLIST).toEqual(['EXT_mesh_gpu_instancing', 'EXT_meshopt_compression']);
       });
 
       it('(a) rejects extensionsRequired entries outside the allowlist', () => {
@@ -2309,7 +2469,7 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
         expect(result.ok).toBe(false);
         if (result.ok) return;
         expect(result.error.code).toBe('duplicate-source-key');
-        expect(result.error.sourceIndices).toEqual([0, 1]);
+        expect(result.error.detail.sourceIndices).toEqual([0, 1]);
         expect(stderrSpy).not.toHaveBeenCalled();
       });
 

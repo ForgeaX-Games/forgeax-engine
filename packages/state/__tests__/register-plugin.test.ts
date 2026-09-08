@@ -129,4 +129,17 @@ describe('registerStatesPlugin', () => {
     expect(world.hasResource(stateResourceKey(TokenA))).toBe(true);
     expect(world.hasResource(stateResourceKey(TokenB))).toBe(true);
   });
+
+  it('owns late token registration and reverses the complete runtime', () => {
+    const world = new World();
+    const dispose = registerStatesPlugin(world);
+    const LateToken = defineState('RegisterPluginLateToken', ['cold', 'hot'] as const);
+
+    expect(world.hasResource(stateResourceKey(LateToken))).toBe(true);
+    expect(world.inspect().systems.some((system) => system.name === 'transitionStates')).toBe(true);
+
+    dispose();
+    expect(world.hasResource(stateResourceKey(LateToken))).toBe(false);
+    expect(world.inspect().systems.some((system) => system.name === 'transitionStates')).toBe(false);
+  });
 });

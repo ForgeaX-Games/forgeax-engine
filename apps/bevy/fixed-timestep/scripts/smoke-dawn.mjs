@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // bevy-fixed-timestep headless dawn smoke — structural-only.
 // Verifies webgpu backend, no RHI errors, and FixedUpdate runs alongside Update.
 
@@ -83,38 +84,33 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  renderer = await createSmokeRenderer(createRenderer, mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 }
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+subscribeSmokeErrors(renderer, (err) => errors.push({ code: err.code, hint: err.hint }));
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code}`);
-  process.exit(1);
-}
 
 const { buildFixedTimestepWorld } = await import(resolve(here, '..', 'src', 'fixed-timestep.ts'));
 const world = new World({
   time: { fixedDeltaSeconds: 0.5, maxStepsPerUpdate: 4, maxDeltaSeconds: 2.5 },
 });
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const { getState } = buildFixedTimestepWorld(world);
 
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   world.update(0.016);
-  await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  await drawSmokeFrame(renderer, world);
 }
 await delay(50);
 
 const state = getState();
 const checks = [
-  ['backend=webgpu', renderer.backend === 'webgpu'],
+  ['backend=webgpu', rendererBackend(renderer) === 'webgpu'],
   ['rhi-error-count=0', errors.length === 0],
   ['update-frames>0', state.updateFrames > 0],
   ['fixed-update-frames>0', state.fixedUpdateFrames > 0],
@@ -131,5 +127,5 @@ if (!allPass) {
   console.error(`[smoke] FAIL - ${checks.filter(([, ok]) => !ok).map(([n]) => n).join(', ')}`);
   process.exit(1);
 }
-console.log(`[smoke] PASS - ${SMOKE_MIN_FRAMES} frames, backend=${renderer.backend}, update=${state.updateFrames}, fixed=${state.fixedUpdateFrames}, overstep=${state.overstep}`);
+console.log(`[smoke] PASS - ${SMOKE_MIN_FRAMES} frames, backend=${rendererBackend(renderer)}, update=${state.updateFrames}, fixed=${state.fixedUpdateFrames}, overstep=${state.overstep}`);
 process.exit(0);

@@ -7,7 +7,7 @@
 // setViewport against atlas-sized target), so this browser test covers the
 // real GPU path.
 //
-// AC-05: atlas tile viewports; D-5: cascadeCount=4 → 4 addShadowPass calls;
+// AC-05: atlas tile viewports; D-5: cascadeCount=4 -> 4 typed shadow passes;
 // D-6: pass names shadowCascade0..3.
 
 import { describe, expect, it } from 'vitest';

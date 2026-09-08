@@ -3,7 +3,7 @@ import { err, ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { RenderFeatureStageFailedError } from '../errors/render';
 import { createRenderFeatureHost, runRenderFeatureFrame } from '../features/host';
-import type { RenderFeature, RenderFeatureResourceHandle } from '../features/types';
+import type { RenderFeature } from '../features/types';
 
 const caps = (compute: boolean): Readonly<RhiCaps> => ({ compute }) as unknown as RhiCaps;
 
@@ -13,16 +13,13 @@ describe('render feature retry rules', () => {
     const feature: RenderFeature<{ readonly frame: number }> = {
       identity: 'synthetic.retry',
       extract: ({ frameNumber }) => ok({ frame: frameNumber }),
-      prepare: () => {
+      plan: () => {
         attempts += 1;
         if (attempts === 1) {
-          return err(
-            new RenderFeatureStageFailedError('synthetic.retry', 0, 'prepare', 'next-frame'),
-          );
+          return err(new RenderFeatureStageFailedError('synthetic.retry', 0, 'plan', 'next-frame'));
         }
-        return ok(undefined);
+        return ok({ resources: [], passes: [] });
       },
-      contribute: () => ok(undefined),
     };
     const host = createRenderFeatureHost([feature], caps(true)).unwrap();
 
@@ -37,7 +34,7 @@ describe('render feature retry rules', () => {
     if (error?.code === 'render-feature-stage-failed') {
       expect(error.detail).toMatchObject({
         featureIdentity: 'synthetic.retry',
-        stage: 'prepare',
+        stage: 'plan',
         recovery: 'next-frame',
       });
     }
@@ -58,8 +55,7 @@ describe('render feature retry rules', () => {
       identity: 'synthetic.capability-retry',
       requiredCapabilities: ['compute'],
       extract: ({ frameNumber }) => ok({ frame: frameNumber }),
-      prepare: () => ok(undefined),
-      contribute: () => ok(undefined),
+      plan: () => ok({ resources: [], passes: [] }),
     };
     const host = createRenderFeatureHost([feature], caps(false)).unwrap();
 
@@ -86,43 +82,6 @@ describe('render feature retry rules', () => {
         frameNumber: 3,
         caps: caps(true),
       }).stageEvents,
-    ).toHaveLength(3);
-  });
-
-  it('does not release a feature-owned resource during retry or diagnostics', () => {
-    let releaseCount = 0;
-    const feature: RenderFeature<{ readonly frame: number }> = {
-      identity: 'synthetic.release-once',
-      extract: ({ frameNumber }) => ok({ frame: frameNumber }),
-      prepare: () => ok(undefined),
-      contribute: () => ok(undefined),
-    };
-    const host = createRenderFeatureHost([feature], caps(true)).unwrap();
-    host.registerResource('synthetic.release-once', {
-      handle: { __renderFeatureResource: Symbol('release-once') } as RenderFeatureResourceHandle,
-      release: () => {
-        releaseCount += 1;
-        return ok(undefined);
-      },
-    });
-
-    runRenderFeatureFrame(host, {
-      worlds: [],
-      owner: 0,
-      frameNumber: 1,
-      caps: caps(true),
-    });
-    host.diagnostics();
-    host.diagnostics();
-    runRenderFeatureFrame(host, {
-      worlds: [],
-      owner: 0,
-      frameNumber: 2,
-      caps: caps(true),
-    });
-    expect(releaseCount).toBe(0);
-    expect(host.dispose()).toEqual(ok(undefined));
-    expect(host.dispose()).toEqual(ok(undefined));
-    expect(releaseCount).toBe(1);
+    ).toHaveLength(2);
   });
 });

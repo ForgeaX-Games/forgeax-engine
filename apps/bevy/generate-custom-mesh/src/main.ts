@@ -3,7 +3,7 @@ import { Update } from '@forgeax/engine-ecs';
 import { FRAME_START_SCAN_SYSTEM_NAME, INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { unwrapHandle } from '@forgeax/engine-types';
-import { buildCustomMeshWorld, makeCustomMeshTexture, stepCustomMesh, type MeshGpuStore } from './generate-custom-mesh.js';
+import { buildCustomMeshWorld, makeCustomMeshTexture, stepCustomMesh } from './generate-custom-mesh.js';
 
 type EvidenceGlobal = typeof globalThis & {
   __bevyGenerateCustomMeshReady?: boolean;
@@ -20,18 +20,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const app = appResult.value;
   const texture = makeCustomMeshTexture();
   const textureHandle = app.world.allocSharedRef('TextureAsset', texture);
-  const upload = await app.renderer.store.uploadTexture(textureHandle, texture, {
-    bytes: texture.data,
-    width: texture.width,
-    height: texture.height,
-    mime: 'image/png',
-    colorSpace: 'srgb',
-    mipmap: false,
-  });
-  if (!upload.ok) {
-    console.error('[generate-custom-mesh] texture upload failed:', upload.error.code, upload.error.hint);
-    return;
-  }
   const state = buildCustomMeshWorld(app.world, unwrapHandle(textureHandle));
   app.world.addSystem(Update, {
     name: 'bevy-generate-custom-mesh-input',
@@ -40,7 +28,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     fn: (world) => stepCustomMesh(
       world,
       state,
-      app.renderer.store as MeshGpuStore,
       world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY),
     ),
   });
@@ -50,8 +37,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   evidenceGlobal.__prepareGenerateCustomMeshCapture = async () => {
     const updated = app.world.update(1 / 60);
     if (!updated.ok) throw updated.error;
-    const drawn = app.renderer.draw([app.world], { cameraOwner: 0, resourceOwner: 0 });
-    if (!drawn.ok) throw drawn.error;
   };
   Object.assign(evidenceGlobal, { __bevyGenerateCustomMeshReady: true, __bevyGenerateCustomMeshState: state });
 }

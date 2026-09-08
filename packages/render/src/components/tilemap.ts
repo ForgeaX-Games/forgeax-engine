@@ -7,7 +7,7 @@
 //                                feat-20260709 M3: collapsed from the tileSizeX
 //                                / tileSizeY scalar pair into one inline column)
 //   chunkSize  u32               per-chunk axis-length in cells (default 16)
-//   tileset    shared<TilesetAsset>  reference into AssetRegistry
+//   tileset    string                durable TilesetAsset GUID
 //
 // Naming: single-semantic Tilemap (AGENTS.md §Component naming drops
 // `Component` suffix). One Tilemap entity per grid; TileLayer entities
@@ -15,15 +15,15 @@
 // for a single render-layer.
 //
 // charter mapping: F1 (single-import barrel from `@forgeax/engine-runtime`),
-// P1 (progressive disclosure - defaults cover the common case), P4 (handle
-// schema-vocab consistent with other engine handle columns).
+// P1 (progressive disclosure - defaults cover the common case), P4 (durable
+// asset identity stays separate from World-local handles).
 
 import { defineComponent } from '@forgeax/engine-ecs';
 
 /**
  * Tilemap component (M0 baseline rebuild).
  *
- * A Tilemap entity carries grid metadata + a single `tileset` handle. The
+ * A Tilemap entity carries grid metadata + a single durable `tileset` GUID. The
  * actual per-cell tile id array lives on attached `TileLayer` entities
  * (one per render layer; ChildOf points back to the Tilemap entity).
  *
@@ -44,5 +44,5 @@ export const Tilemap = defineComponent('Tilemap', {
   // layer-3 fallback is all-zero, so the default MUST be explicit (D-5).
   tileSize: { type: 'array<f32, 2>', default: new Float32Array([1, 1]) },
   chunkSize: { type: 'u32', default: 16 },
-  tileset: { type: 'shared<TilesetAsset>' },
+  tileset: { type: 'string' },
 });

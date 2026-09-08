@@ -23,12 +23,12 @@
 // SSAO reads the deferred g-buffer (normal + depth), so EVERY surface that
 // should receive AO is drawn with `Materials.standard` (deferred + forward).
 //
-// SSAO is turned on by one literal field on the HDRP RenderPipelineAsset config
-// (`config.ssao = { enabled: true }`). `FALSIFY=ssao-off` disables it for A/B.
+// SSAO is selected by one literal field on the Standard profile
+// (`standardProfile.ssao = true`). `FALSIFY=ssao-off` disables it for A/B.
 //
 // Charter mapping:
 //   - F1 single-entry indexability: SSAO turn-on is one literal field.
-//   - P3 explicit failure: bad ssao.radius / ssao.bias raise PostProcessError.
+//   - P3 explicit failure: invalid feature plans return structured Render errors.
 //
 // GREP anchors for AI users:
 //   - "// 1. engine usage"    public engine API consumed
@@ -37,6 +37,7 @@
 
 // 1. engine usage
 
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { type App, createApp } from '@forgeax/engine-app';
 import type { CanvasAppError } from '@forgeax/engine-app';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
@@ -45,20 +46,20 @@ import { Transform } from '@forgeax/engine-scene';
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
-import { Materials, Skylight } from '@forgeax/engine-render';
-import { HDRP_PIPELINE_ID } from '@forgeax/engine-render/internal';
+import { DEFAULT_STANDARD_PROFILE, Materials, Skylight } from '@forgeax/engine-render';
 import { PointLight } from '@forgeax/engine-render';
 
-import { createStandaloneRuntimeAssetBinding, type MaterialAsset, type SceneAsset } from '@forgeax/engine-types';
+import { type MaterialAsset, type SceneAsset } from '@forgeax/engine-types';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
+import { captureCanvasPixels } from '@forgeax/apps-shared/canvas-capture';
+import {
+  exposeLearnRenderTestApp,
+  trackLearnRenderTestBootstrap,
+} from '../../../../shared/src/learn-render-test-lifecycle';
 
 // 2. scene constants — faithful LO 5.9 SSAO scene (room + model)
 
-const CLUSTER_GRID = { x: 16, y: 9, z: 24 } as const;
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-5-9-ssao',
-);
 
 // Enclosing room: floor + ceiling + back/left/right walls, each a thin slab
 // with inward-facing surfaces (default culling, all in the g-buffer). The box
@@ -97,15 +98,6 @@ const LIGHT_RANGE = 25.0;
 const SKYLIGHT_COLOR: [number, number, number] = [0.85, 0.85, 0.9];
 const SKYLIGHT_INTENSITY = 0.7;
 
-// SSAO tuning: LO 5.9 defaults radius=0.5, bias=0.025; intensity is the engine
-// dial for how strongly AO darkens ambient.
-const SSAO_CONFIG = {
-  enabled: true,
-  radius: 0.5,
-  bias: 0.025,
-  intensity: 0.9,
-} as const;
-
 const FALSIFY = (() => {
   if (typeof window !== 'undefined') {
     const url = new URL(window.location.href);
@@ -121,7 +113,8 @@ if (!canvas) {
   throw new Error("[learn-render 5.9 ssao] missing <canvas id='app'> in index.html");
 }
 
-bootstrap(canvas).catch((err: unknown) => {
+const bootstrapPromise = bootstrap(canvas);
+void bootstrapPromise.catch((err: unknown) => {
   if (err instanceof EngineEnvironmentError) {
     const inner = err.detail.webgpuError;
     const code = inner !== undefined && 'code' in inner ? inner.code : '<none>';
@@ -130,32 +123,38 @@ bootstrap(canvas).catch((err: unknown) => {
   }
   console.error('[learn-render 5.9 ssao] bootstrap error:', err);
 });
+trackLearnRenderTestBootstrap(bootstrapPromise, canvas);
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
+  const ssaoEnabled = FALSIFY !== 'ssao-off';
   const appRes = await createApp(
     target,
-    {},
-    forgeaxBundlerAdapter(),
+    {
+      standardProfile: {
+        ...DEFAULT_STANDARD_PROFILE,
+        lighting: 'clustered',
+        ssao: ssaoEnabled,
+      },
+    },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     reportAppError(appRes.error);
     return;
   }
   const app = appRes.value;
-  console.warn(`[learn-render 5.9 ssao] backend=${app.renderer.backend}`);
+  exposeLearnRenderTestApp(app, target);
+  console.warn(
+    `[learn-render 5.9 ssao] backend=${app.renderer.inspect().capabilities.backendKind}`,
+  );
 
-  const ready = await app.renderer.ready;
-  if (!ready.ok) {
-    console.error('[learn-render 5.9 ssao] renderer.ready failed:', ready.error.code, ready.error.hint);
-    return;
-  }
 
-  const assets = app.renderer.assets;
-  if (assets === null) {
+  const assets = app.assets;
+  if (assets === undefined) {
     console.error('[learn-render 5.9 ssao] AssetRegistry is null');
     return;
   }
-  assets.configureRuntimeBinding(runtimeBinding);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   // Wire the __learnRenderErrors bus for onerror-gate coverage.
   const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;
@@ -166,25 +165,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   const world = app.world;
-
-  // Install HDRP with config.ssao.
-  const ssaoEnabled = FALSIFY !== 'ssao-off';
-  const installRes = app.renderer.installPipeline({
-    kind: 'render-pipeline',
-    pipelineId: HDRP_PIPELINE_ID,
-    config: {
-      clusterGrid: CLUSTER_GRID,
-      ssao: ssaoEnabled ? { ...SSAO_CONFIG } : { enabled: false },
-    },
-  });
-  if (!installRes.ok) {
-    console.error(
-      '[learn-render 5.9 ssao] installPipeline failed:',
-      installRes.error.code,
-      installRes.error.hint,
-    );
-    return;
-  }
 
   // Skylight: the constant ambient term SSAO modulates.
   world.spawn({
@@ -297,27 +277,37 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   console.warn(
-    `[learn-render 5.9 ssao] running. SSAO=${ssaoEnabled ? 'enabled' : 'OFF'} (radius=${SSAO_CONFIG.radius}, bias=${SSAO_CONFIG.bias}, intensity=${SSAO_CONFIG.intensity}). Enclosing room + backpack.gltf model + Skylight ambient + 1 dim light (LO 5.9 SSAO scene).`,
+    `[learn-render 5.9 ssao] running. SSAO=${ssaoEnabled ? 'enabled' : 'OFF'}. Enclosing room + backpack.gltf model + Skylight ambient + 1 dim light (LO 5.9 SSAO scene).`,
   );
 
-  installCaptureHook(app, world);
+  installCaptureHook(app, world, target);
 }
 
 // RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives
-// one update + draw + readPixels so the live canvas read is anchored to the same
+// one update + draw + canvas capture so the live read is anchored to the same
 // frame the capture records. Only meaningful when the page is served with
 // FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
-function installCaptureHook(app: App, world: App['world']): void {
+function installCaptureHook(app: App, world: App['world'], canvas: HTMLCanvasElement): void {
   type CaptureHook = () => Promise<Uint8Array>;
   const win = window as unknown as { __captureSsao?: CaptureHook };
   const renderer = app.renderer;
+  const attached = renderer.attach(world);
+  if (!attached.ok) throw attached.error;
+  const lease = attached.value;
   win.__captureSsao = async (): Promise<Uint8Array> => {
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    const r = await renderer.readPixels();
+    const frame = renderer.draw({
+      leases: [lease],
+      camera: { lease },
+      environment: { lease },
+    });
+    if (!frame.ok) throw frame.error;
+    const observed = await renderer.observe(frame.value, { include: ['draws'] });
+    if (!observed.ok) throw observed.error;
+    const r = await captureCanvasPixels(canvas);
     if (!r.ok) {
       throw new Error(
-        `[learn-render 5.9 ssao] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
+        `[learn-render 5.9 ssao] canvas capture failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
       );
     }
     return r.value;

@@ -48,6 +48,7 @@
 //     real regression (plan-strategy D-P5 parallel-evidence stance).
 
 import { World } from '@forgeax/engine-ecs';
+import type { Renderer } from '@forgeax/engine-render';
 import { rhi as rhiWgpu } from '@forgeax/engine-rhi-wgpu';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -55,7 +56,7 @@ import { createRenderer } from '../src/createRenderer';
 
 describe.skip('renderer-wgpu-wasm.browser - chromium real path with rhi-wgpu escape hatch (M4(b))', () => {
   let canvas: HTMLCanvasElement | undefined;
-  let renderer: Awaited<ReturnType<typeof createRenderer>> | undefined;
+  let renderer: Renderer | undefined;
 
   afterEach(() => {
     renderer = undefined;
@@ -85,18 +86,28 @@ describe.skip('renderer-wgpu-wasm.browser - chromium real path with rhi-wgpu esc
     // would normally pick rhi-webgpu when navigator.gpu is available; the
     // explicit rhi parameter bypasses that and exercises the rhi-wgpu shim
     // through the chromium real path (charter proposition 5 + 6).
-    renderer = await createRenderer(canvas, {
+    const created = await createRenderer(canvas, {
             rhi: rhiWgpu,
     }, { shaderManifestUrl: 'data:application/json,{"entries":[]}' });
+    if (!created.ok) throw created.error;
+    renderer = created.value;
 
-    expect(renderer.backend).toBe('webgpu');
+    expect(renderer.inspect().capabilities.backendKind).toBe('webgpu');
 
-    await renderer.ready;
     const world = new World();
     // draw(world) must not throw under the wgpu-wasm escape hatch path
     // (charter proposition 6 enforced at the chromium V8 + lavapipe + wgpu
     // wasm boundary). RenderSystem fires onError for 0 Camera world via the
     // 'render-system-no-camera' code, but draw itself returns void.
-    expect(() => renderer?.draw([world], { cameraOwner: 0, resourceOwner: 0 })).not.toThrow();
+    const attached = renderer.attach(world);
+    expect(attached.ok).toBe(true);
+    if (!attached.ok) return;
+    expect(() =>
+      renderer?.draw({
+        leases: [attached.value],
+        camera: { lease: attached.value },
+        environment: { lease: attached.value },
+      }),
+    ).not.toThrow();
   });
 });

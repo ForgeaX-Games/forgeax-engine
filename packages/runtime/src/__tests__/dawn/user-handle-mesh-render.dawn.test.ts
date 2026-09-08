@@ -12,7 +12,7 @@
 //   cube was silently culled (charter P3 explicit failure: the structured
 //   error fired, but the frame still composited pure clearColor).
 //
-//   feat-20260601-gpu-resource-store-extraction M1 closed the engine path via
+//   feat-20260601-device/gpu-residency-extraction M1 closed the engine path via
 //   the pull model (the prior register-time auto-upload push was severed):
 //     - render-system-record.ts: a user-handle mesh (id >= 1024) misses the
 //       builtin `pipelineState.meshes` alias map, so the record stage pulls it
@@ -44,12 +44,12 @@ import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render/internal';
-import { createRenderer } from '@forgeax/engine-runtime';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { constructRuntimeRendererHost } from '../../renderer-host';
 import { drawPublished } from '../draw-published';
 
 const WIDTH = 256;
@@ -145,21 +145,23 @@ describe('T-M2-1 user-handle mesh render regression (AC-10 / AC-11, dawn)', () =
       removeEventListener() {},
     } as unknown as HTMLCanvasElement;
 
-    let renderer: Awaited<ReturnType<typeof createRenderer>>;
+    let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
     try {
-      renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+      host = await constructRuntimeRendererHost(
+        mockCanvas,
+        {},
+        {
+          shaderManifestUrl: ENGINE_MANIFEST_URL,
+        },
+      );
     } finally {
       globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
     }
-    expect(renderer.backend).toBe('webgpu');
-
-    const assets = renderer.assets;
-    if (assets === null) throw new Error('AssetRegistry null on dawn path');
+    expect(host.ok).toBe(true);
+    if (!host.ok) throw host.error;
+    const { renderer, assets } = host.value;
     expect(assets).toBeInstanceOf(AssetRegistry);
-
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
-    if (!ready.ok) return;
+    expect(renderer.inspect().state).toBe('alive');
 
     // 1. Mint a procedural cube MeshAsset, catalogue it under a fresh UUIDv7
     //    GUID in the AssetRegistry (GUID->payload SSOT, no handle), then mint a

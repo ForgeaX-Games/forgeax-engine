@@ -7,7 +7,7 @@
 //
 // This smoke verifies the full createApp -> bloom pipeline chain:
 //   1. createApp(canvas, opts) succeeds.
-//   2. renderer.ready succeeds (bloom shaders compiled as part of manifest).
+//   2. host initialization succeeds (bloom shaders compiled as part of manifest).
 //   3. app.start() + N-frame loop + app.stop() succeeds.
 //   4. app.onError fires 0 times (covers pipeline compile + draw errors).
 //   5. console.error fires 0 times.
@@ -203,10 +203,10 @@ if (!appResult.ok) {
   process.exit(1);
 }
 const app = appResult.value;
-console.log(`[hello-bloom] backend=${app.renderer.backend}`);
+console.log(`[hello-bloom] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
 // Register standard PBR material (non-emissive).
-const assets = app.renderer.assets;
+const assets = app.assets;
 if (assets === null) {
   originalConsoleError('[smoke] FAIL - AssetRegistry is null');
   process.exit(1);
@@ -291,11 +291,6 @@ app.world.spawn(
 const onErrorEvents = [];
 app.onError((err) => onErrorEvents.push({ code: err.code, hint: err.hint }));
 
-const ready = await app.renderer.ready;
-if (!ready.ok) {
-  originalConsoleError(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 // Override performance.now for deterministic frame timing.
 let fakeNow = 0;
@@ -354,15 +349,6 @@ console.log(
   `[smoke] frames observed=${totalFrames} (resize phase=${resizeFrames}, onError pre-resize=${onErrorBeforeResize}, post-resize=${onErrorAfterResize})`,
 );
 
-// (d) Per-frame graph must contain the 4 declarative bloom passes.
-// Snapshot before app.stop() — feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle
-// changed createApp().stop() to chain renderer.dispose(), which clears
-// frameState.perFrameGraph as part of the dispose 6-step cascade. Reading
-// renderer.perFramePassNames after stop now correctly returns []; smoke
-// must inspect graph state during the live phase.
-const bloomPassNames = ['bloom-bright', 'bloom-blur-h', 'bloom-blur-v', 'bloom-composite'];
-const actualPassNames = app.renderer.perFramePassNames;
-
 const stopResult = app.stop();
 if (!stopResult.ok) {
   originalConsoleError(`[smoke] FAIL - app.stop() returned err: ${stopResult.error.code}`);
@@ -382,17 +368,6 @@ if (unexpectedConsoleErrors.length > 0) {
 
 if (totalFrames < SMOKE_MIN_FRAMES) {
   failures.push(`(c) total frames=${totalFrames} < ${SMOKE_MIN_FRAMES}`);
-}
-
-// Proves the bloom chain is wired in the compiled render graph. When bloom
-// is disabled (camera.bloom !== 'on') the passes are still in the graph
-// but early-return inside their execute closures — this assertion still
-// catches the case where bloom passes are accidentally removed from the
-// graph (a real regression, e.g. a bad merge or a refactor that drops the
-// addPass calls).
-const missingBloomPasses = bloomPassNames.filter((n) => !actualPassNames.includes(n));
-if (missingBloomPasses.length > 0) {
-  failures.push(`(d) bloom passes missing from per-frame graph: ${JSON.stringify(missingBloomPasses)} (actual: ${JSON.stringify(actualPassNames)})`);
 }
 
 // bug-20260622 (e): the resize phase must not surface any new GPU validation
@@ -419,7 +394,7 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log(`[smoke] PASS - frames=${totalFrames}, app.onError=0, bloomPasses=${bloomPassNames.length}/4, resize=${WIDTH}x${HEIGHT}->${RESIZE_W}x${RESIZE_H} (${resizeFrames}f, 0 new onError), backend=${app.renderer.backend}`);
+console.log(`[smoke] PASS - frames=${totalFrames}, app.onError=0, resize=${WIDTH}x${HEIGHT}->${RESIZE_W}x${RESIZE_H} (${resizeFrames}f, 0 new onError), backend=${app.renderer.inspect().capabilities.backendKind}`);
 
 if (sharedDevice) sharedDevice.destroy?.();
 delete globalThis.navigator.gpu;

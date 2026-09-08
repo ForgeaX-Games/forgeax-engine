@@ -38,7 +38,7 @@ describe('remote profiler introspection projection', () => {
       assets: expect.any(Object),
     });
     expect('profiler' in doc.roots).toBe(false);
-    expect('debugAdapter' in doc.roots).toBe(false);
+    expect('rhiCapture' in doc.roots).toBe(false);
   });
 
   it('does not project a profiler-shaped root for a recorder stand-in', () => {

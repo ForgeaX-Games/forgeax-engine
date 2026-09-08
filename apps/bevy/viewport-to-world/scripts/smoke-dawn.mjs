@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,17 +54,15 @@ const { buildViewportToWorldWorld, stepViewportToWorld } = await import(
   resolve(here, '..', 'src', 'viewport-to-world.ts'),
 );
 const manifest = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
-const renderer = await createRenderer(mockCanvas, {}, {
+const renderer = await createSmokeRenderer(createRenderer, mockCanvas, {}, {
   shaderManifestUrl: `data:application/json,${encodeURIComponent(readFileSync(manifest, 'utf8'))}`,
 });
-console.log(`[bevy-viewport-to-world] backend=${renderer.backend}`);
+console.log(`[bevy-viewport-to-world] backend=${rendererBackend(renderer)}`);
 const errors = [];
-renderer.onError((error) => errors.push({ code: error.code, hint: error.hint }));
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`renderer.ready failed: ${ready.error.code}`);
+subscribeSmokeErrors(renderer, (error) => errors.push({ code: error.code, hint: error.hint }));
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const scene = buildViewportToWorldWorld(world);
 let early;
@@ -78,7 +77,7 @@ for (let i = 0; i < MIN_FRAMES; i++) {
   }
   propagateTransforms(world);
   world.update().unwrap();
-  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const draw = drawSmokeFrame(renderer, world);
   if (!draw.ok) throw new Error(`draw failed: ${draw.error.code}`);
   frames++;
   if (i === Math.min(10, MIN_FRAMES - 1)) {

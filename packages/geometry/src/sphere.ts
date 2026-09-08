@@ -8,8 +8,8 @@
 // Related: requirements §AC-06 / §AC-14; plan-strategy §M3 + D-P5;
 //          plan-tasks.json w8 acceptanceCheck.
 
-import { err, ok, type Result } from '@forgeax/engine-ecs';
 import type { AssetError, MeshAsset } from '@forgeax/engine-types';
+import { err, type Result } from '@forgeax/engine-types';
 import { degenerate, FACTORY_FLOATS_PER_VERTEX, meshFromInterleaved } from './box';
 
 export function createSphereGeometry(
@@ -78,5 +78,5 @@ export function createSphereGeometry(
 
   // trim unused tail (pole rows contribute fewer triangles than the prealloc estimate)
   const trimmed = indices.slice(0, iIdx);
-  return ok(meshFromInterleaved(vertices, trimmed));
+  return meshFromInterleaved(vertices, trimmed);
 }

@@ -8,6 +8,27 @@
 
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
 
+export function canonicalDefaultMaterialVariants(identifier: string) {
+  if (identifier !== 'forgeax::default-unlit') return [];
+  const variants = [
+    [true, true],
+    [true, false],
+    [false, true],
+    [false, false],
+  ] as const;
+  return variants.map(([storageBuffer, vertexColor]) => ({
+    definesKey:
+      storageBuffer && vertexColor
+        ? ''
+        : `STORAGE_BUFFER_AVAILABLE=${storageBuffer}+VERTEX_COLOR_AVAILABLE=${vertexColor}`,
+    defines: {
+      STORAGE_BUFFER_AVAILABLE: storageBuffer,
+      VERTEX_COLOR_AVAILABLE: vertexColor,
+    },
+    composedWgsl: '/* stub */',
+  }));
+}
+
 export function makeMockShaderRegistry(): ShaderRegistry {
   const mockDevice: ShaderRegistryDevice = {
     createShaderModule() {

@@ -1,10 +1,10 @@
-import { ImportError } from '@forgeax/engine-import';
-import { describe, expect, it } from 'vitest';
 import {
+  ImportError,
   normalizeSourcePackageError,
   type SourcePackageErrorContext,
   sourcePackageError,
-} from '../producer/source-package-errors.js';
+} from '@forgeax/engine-import';
+import { describe, expect, it } from 'vitest';
 
 const context: SourcePackageErrorContext = {
   sourceMeta: 'assets/scene.gltf.meta.json',
@@ -55,5 +55,68 @@ describe('source package structured failures', () => {
       affectedGuids: context.affectedGuids,
       stage,
     });
+  });
+
+  it('keeps generation provenance readable for every publication stage', () => {
+    const stages = [
+      ['source-package-meta-invalid', 'meta'],
+      ['source-package-importer-missing', 'importer'],
+      ['source-package-conversion-failed', 'conversion'],
+      ['source-package-guid-closure-mismatch', 'closure'],
+      ['source-package-ddc-failed', 'ddc'],
+      ['source-package-publication-invalid', 'route-integrity'],
+    ] as const;
+
+    for (const [code, stage] of stages) {
+      const error = sourcePackageError(code, context, {
+        stage,
+        reason: `generation failed at ${stage}`,
+      });
+      expect(error).toMatchObject({
+        code,
+        detail: {
+          stage,
+          sourceMeta: context.sourceMeta,
+          anchorGuid: context.anchorGuid,
+          affectedGuids: context.affectedGuids,
+        },
+      });
+      expect(error.hint).toMatch(/rebuild|cold-cook|repair/i);
+    }
+  });
+
+  it('preserves owner and recovery fields through browser JSON projection', () => {
+    const error = sourcePackageError('source-package-publication-invalid', context, {
+      stage: 'route-integrity',
+      missing: ['audio/source.bin'],
+    });
+    const response = JSON.parse(JSON.stringify(error));
+    expect(response).toMatchObject({
+      code: 'source-package-publication-invalid',
+      expected: expect.any(String),
+      hint: expect.stringMatching(/rebuild|cold-cook|repair/),
+      detail: {
+        sourceMeta: context.sourceMeta,
+        affectedGuids: context.affectedGuids,
+        stage: 'route-integrity',
+      },
+    });
+  });
+
+  it('normalizes unknown failures into the conversion stage with source provenance', () => {
+    const error = normalizeSourcePackageError(new Error('decoder stopped'), context);
+
+    expect(error).toMatchObject({
+      code: 'source-package-conversion-failed',
+      detail: {
+        sourceMeta: context.sourceMeta,
+        anchorGuid: context.anchorGuid,
+        affectedGuids: context.affectedGuids,
+        stage: 'conversion',
+        reason: 'decoder stopped',
+      },
+    });
+    expect(error.expected).not.toContain('decoder stopped');
+    expect(error.hint).toMatch(/rebuild|cold-cook/);
   });
 });

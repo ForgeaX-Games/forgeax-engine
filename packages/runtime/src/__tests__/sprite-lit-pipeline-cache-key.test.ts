@@ -113,7 +113,7 @@ describe('sprite-lit pipeline cache-key string isolation (D-11 remap, AC-08)', (
     // recognised material shader.
     const fs = await import('node:fs');
     const src = fs.readFileSync(
-      fileURLToPath(new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url)),
+      fileURLToPath(new URL('../../../render/src/assembly/factory.ts', import.meta.url)),
       'utf8',
     );
     // Once t7 wires it, both literals appear (sprite already in tree).

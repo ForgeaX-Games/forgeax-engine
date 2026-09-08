@@ -16,8 +16,9 @@ import { spawnSync } from 'node:child_process';
 //     need the harness; CI opts in only where required).
 //   - offline / clone or fetch unreachable -> warn, exit 0 (graceful: a missing
 //     harness must not break `pnpm install`).
-//   - LOUD failure (exit 1) ONLY when a local clone has diverged from origin and
-//     `pull --ff-only` would lose un-pushed loop state.
+//   - local clone divergence                    -> warn and skip by default;
+//     FORGEAX_HARNESS_STRICT=1 opts into a loud exit 1 for maintenance/CI
+//     callers that require a reconciled clone.
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
@@ -51,6 +52,7 @@ if (process.env.FORGEAX_SKIP_HARNESS_SYNC) {
 
 const token = resolveToken();
 const sparseDocs = process.env.FORGEAX_HARNESS_SPARSE_DOCS === '1';
+const strictDivergence = process.env.FORGEAX_HARNESS_STRICT === '1';
 
 function git(args, opts = {}) {
   // Git 2.34 on the self-hosted runner does not honor GIT_CONFIG_COUNT for
@@ -71,7 +73,7 @@ function git(args, opts = {}) {
 }
 
 function warnExit0(msg) {
-  process.stdout.write(`[harness:sync] ${msg} — continuing\n`);
+  process.stderr.write(`[harness:sync] warning: ${msg} — continuing\n`);
   process.exit(0);
 }
 
@@ -91,7 +93,9 @@ if (!existsSync(resolve(DIR, '.git'))) {
     '--depth=1',
     '--no-tags',
     '--single-branch',
-    ...(sparseDocs ? ['--filter=blob:none', '--sparse'] : []),
+    // Git checks out before a later sparse-checkout command; skip that first
+    // checkout so Windows never materializes an invalid harness path.
+    ...(sparseDocs ? ['--filter=blob:none', '--sparse', '--no-checkout'] : []),
     REPO,
     DIR,
   ];
@@ -108,6 +112,12 @@ if (!existsSync(resolve(DIR, '.git'))) {
     if (sparse.status !== 0) {
       warnExit0(
         `sparse docs checkout failed; .forgeax-harness not fully materialised:\n${(sparse.stderr || '').trim()}`,
+      );
+    }
+    const checkout = git(['read-tree', '-mu', 'HEAD'], { cwd: DIR });
+    if (checkout.status !== 0) {
+      warnExit0(
+        `sparse docs checkout failed; .forgeax-harness not fully materialised:\n${(checkout.stderr || '').trim()}`,
       );
     }
   }
@@ -136,11 +146,14 @@ if (ff.status === 0) {
 const ahead = git(['rev-list', '--count', 'origin/main..HEAD'], { cwd: DIR });
 const aheadN = Number.parseInt((ahead.stdout || '0').trim(), 10) || 0;
 if (aheadN > 0) {
-  failLoud(
+  const detail =
     `local .forgeax-harness has ${aheadN} commit(s) not on origin/main; ` +
-      'refusing to fast-forward (would not lose them, but the tree has ' +
-      'diverged). Push or reconcile manually:\n' +
-      '  git -C .forgeax-harness push   # or: git -C .forgeax-harness log origin/main..HEAD',
+    'leaving it untouched and skipping synchronization. Reconcile manually:\n' +
+    '  git -C .forgeax-harness push   # or: git -C .forgeax-harness log origin/main..HEAD';
+  if (strictDivergence) failLoud(`${detail}\n  (strict mode: FORGEAX_HARNESS_STRICT=1)`);
+  warnExit0(
+    `FORGEAX_HARNESS_DIVERGED: ${detail}\n` +
+      'Set FORGEAX_HARNESS_STRICT=1 to make divergence fatal.',
   );
 }
 warnExit0(

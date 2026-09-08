@@ -73,11 +73,12 @@ function deriveSidecarPath(sourcePath: string): string {
  *
  * Behaviour (left-to-right, fail-fast on first surfaced ImageError):
  *  1. Sniff extension -- not in `.png / .jpg / .jpeg` -> image-format-unsupported
- *  2. Stat sibling `<source>.meta.json` (importer: 'image') -- absent -> image-meta-missing
- *  3. Read source bytes + parse sidecar JSON
- *  4. Hand off to `parseImage(bytes, mime, opts)` -- surfaces image-decode-failed
+ *  2. Stat source -- absent -> image-decode-failed with the source path
+ *  3. Stat sibling `<source>.meta.json` (importer: 'image') -- absent -> image-meta-missing
+ *  4. Read source bytes + parse sidecar JSON
+ *  5. Hand off to `parseImage(bytes, mime, opts)` -- surfaces image-decode-failed
  *     / image-format-unsupported / image-dimension-out-of-bounds
- *  5. Compose DecodedImage POD + ImageMeta POD return envelope.
+ *  6. Compose DecodedImage POD + ImageMeta POD return envelope.
  *
  * AC-17 path (a) lock: when the sidecar is absent, the returned error
  * carries `detail.sourcePath` + `detail.expectedSidecarPath` so AI users
@@ -100,6 +101,18 @@ export async function decodeImageFromFile(
   }
 
   const sidecarPath = deriveSidecarPath(sourcePath);
+
+  try {
+    await stat(sourcePath);
+  } catch (e) {
+    return err(
+      imageError({
+        code: 'image-decode-failed',
+        reason: `failed to read source: ${e instanceof Error ? e.message : String(e)}`,
+        path: sourcePath,
+      }),
+    );
+  }
 
   try {
     await stat(sidecarPath);

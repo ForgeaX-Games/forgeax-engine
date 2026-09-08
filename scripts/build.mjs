@@ -7,7 +7,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 const root = resolve('.');
-const mode = process.argv.includes('--engine') ? 'engine' : 'full';
+const requestedModes = [
+  process.argv.includes('--engine') ? 'engine' : null,
+  process.argv.includes('--packages-only') ? 'packages-only' : null,
+].filter(Boolean);
+if (requestedModes.length > 1)
+  throw new Error(`build modes are mutually exclusive: ${requestedModes.join(', ')}`);
+const mode = requestedModes[0] ?? 'full';
 const clean = process.argv.includes('--clean');
 const summaryPath = join(root, 'node_modules/.cache/forgeax-build/summary.json');
 const packageFactsPath = join(root, 'node_modules/.cache/forgeax-build/package-facts.json');
@@ -15,7 +21,13 @@ mkdirSync(resolve(summaryPath, '..'), { recursive: true });
 
 const summary = {
   schemaVersion: 2,
-  command: clean ? 'pnpm build:clean' : mode === 'engine' ? 'pnpm build:engine' : 'pnpm build',
+  command: clean
+    ? 'pnpm build:clean'
+    : mode === 'engine'
+      ? 'pnpm build:engine'
+      : mode === 'packages-only'
+        ? 'pnpm build:packages'
+        : 'pnpm build',
   engineShaderCompileCount: 0,
   appShaderCompileCount: 0,
   assetCookHitCount: 0,
@@ -55,14 +67,17 @@ runStage('packages', process.execPath, ['scripts/build-packages.mjs'], {
   FORGEAX_PACKAGE_FACTS_PATH: packageFactsPath,
 });
 
-runStage('producer', process.execPath, ['scripts/build-shared-inputs.mjs', '--root', root]);
+let sharedManifest = null;
+if (mode !== 'packages-only') {
+  runStage('producer', process.execPath, ['scripts/build-shared-inputs.mjs', '--root', root]);
 
-const sharedManifest = resolve(root, 'shared-build-inputs/manifest.json');
-const producerFactsPath = resolve(root, 'shared-build-inputs/production-facts.json');
-if (!existsSync(sharedManifest) || !existsSync(producerFactsPath))
-  throw new Error('shared producer completed without its manifest and facts');
-const producerFacts = JSON.parse(readFileSync(producerFactsPath, 'utf8'));
-summary.engineShaderCompileCount = producerFacts.engineShaderCompileCount ?? 0;
+  sharedManifest = resolve(root, 'shared-build-inputs/manifest.json');
+  const producerFactsPath = resolve(root, 'shared-build-inputs/production-facts.json');
+  if (!existsSync(sharedManifest) || !existsSync(producerFactsPath))
+    throw new Error('shared producer completed without its manifest and facts');
+  const producerFacts = JSON.parse(readFileSync(producerFactsPath, 'utf8'));
+  summary.engineShaderCompileCount = producerFacts.engineShaderCompileCount ?? 0;
+}
 
 if (mode === 'full') {
   runStage(

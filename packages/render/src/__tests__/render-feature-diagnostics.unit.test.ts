@@ -12,8 +12,7 @@ function gatedFeature(): RenderFeature<{ readonly frame: number }> {
     identity: 'synthetic.gated',
     requiredCapabilities: ['compute'],
     extract: ({ frameNumber }) => ok({ frame: frameNumber }),
-    prepare: () => ok(undefined),
-    contribute: () => ok(undefined),
+    plan: () => ok({ resources: [], passes: [] }),
   };
 }
 
@@ -71,7 +70,7 @@ describe('render feature diagnostics and capability gate', () => {
         frameNumber: 1,
         caps: caps(true),
       }).stageEvents,
-    ).toHaveLength(3);
+    ).toHaveLength(2);
   });
 
   it('disables without a capability and re-enables only after recover re-evaluation', () => {
@@ -105,7 +104,7 @@ describe('render feature diagnostics and capability gate', () => {
         frameNumber: 3,
         caps: caps(true),
       }).stageEvents,
-    ).toHaveLength(3);
+    ).toHaveLength(2);
   });
 
   it('replaces the latest stage failure after retry and returns deep readonly snapshots', () => {
@@ -113,15 +112,14 @@ describe('render feature diagnostics and capability gate', () => {
     const feature: RenderFeature<{ readonly ready: true }> = {
       identity: 'synthetic.latest-error',
       extract: () => ok({ ready: true }),
-      prepare: () => {
+      plan: () => {
         if (shouldFail) {
           return err(
-            new RenderFeatureStageFailedError('synthetic.latest-error', 0, 'prepare', 'next-frame'),
+            new RenderFeatureStageFailedError('synthetic.latest-error', 0, 'plan', 'next-frame'),
           );
         }
-        return ok(undefined);
+        return ok({ resources: [], passes: [] });
       },
-      contribute: () => ok(undefined),
     };
     const host = createRenderFeatureHost([feature], caps(true)).unwrap();
 

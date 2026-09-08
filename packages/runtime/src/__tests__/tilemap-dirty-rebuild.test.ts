@@ -13,27 +13,23 @@
 // Anchors: plan-tasks m0-t9; charter F1.
 
 import { Entity, type EntityHandle, World } from '@forgeax/engine-ecs';
-import {
-  encodeSortScope,
-  markTileLayerDirty,
-  TileLayer,
-  Tilemap,
-  tilemapChunkExtractSystem,
-} from '@forgeax/engine-render/authoring';
+import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
+import { ChildOf, Children, Transform } from '@forgeax/engine-scene';
+import type { TilesetAsset } from '@forgeax/engine-types';
+import { describe, expect, it } from 'vitest';
+import { encodeSortScope, markTileLayerDirty } from '../../../render/src/components/tile-layer';
 import {
   resetTilemapChunkExtractCache,
   resetTilemapDerivedEntityTracker,
-} from '@forgeax/engine-render/internal';
-import { ChildOf, Children, Transform } from '@forgeax/engine-scene';
-import { type TilesetAsset, toShared } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
+  tilemapChunkExtractSystem,
+} from '../../../render/src/tilemap-chunk-extract-system';
+import { makeTilemapAssetLookup } from './helpers/tilemap-assets';
 
 function setup() {
   const world = new World();
   const tileset: TilesetAsset = {
     kind: 'tileset',
-    guid: 'test/tileset',
-    atlases: [toShared<'TextureAsset'>(101)],
+    atlases: ['test/atlas'],
     tileWidth: 16,
     tileHeight: 16,
     columns: 1,
@@ -41,10 +37,10 @@ function setup() {
     regions: [{ x: 0, y: 0, width: 16, height: 16 }],
     tiles: [{ regionIndex: 0 }],
   };
-  const tilesetHandle = world.allocSharedRef<'TilesetAsset', TilesetAsset>('TilesetAsset', tileset);
+  const lookup = makeTilemapAssetLookup(tileset);
   const tilemap = world
     .spawn(
-      { component: Tilemap, data: { cols: 2, rows: 2, tileset: tilesetHandle } },
+      { component: Tilemap, data: { cols: 2, rows: 2, tileset: 'test/tileset' } },
       { component: Transform, data: {} },
     )
     .unwrap();
@@ -60,7 +56,7 @@ function setup() {
     .unwrap();
   resetTilemapChunkExtractCache();
   resetTilemapDerivedEntityTracker();
-  return { world, tilemap, layer };
+  return { world, tilemap, layer, lookup };
 }
 
 function countDerived(world: World): number {
@@ -79,30 +75,30 @@ function countDerived(world: World): number {
 
 describe('tilemap dirty rebuild (M0 baseline)', () => {
   it('first frame: dirty=0 + never-built layer still spawns derived entities', () => {
-    const { world } = setup();
+    const { world, lookup } = setup();
     expect(countDerived(world)).toBe(0);
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
     expect(countDerived(world)).toBe(2);
   });
 
   it('idempotent: second pass without dirty flag does not duplicate entities', () => {
-    const { world } = setup();
-    tilemapChunkExtractSystem(world);
+    const { world, lookup } = setup();
+    tilemapChunkExtractSystem(world, lookup);
     const after1 = countDerived(world);
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
     const after2 = countDerived(world);
     expect(after2).toBe(after1);
   });
 
   it('markTileLayerDirty triggers a full rebuild on the next pass', () => {
-    const { world, layer } = setup();
-    tilemapChunkExtractSystem(world);
+    const { world, layer, lookup } = setup();
+    tilemapChunkExtractSystem(world, lookup);
     expect(countDerived(world)).toBe(2);
     // Mutate the tiles array in place + mark dirty.
     const tiles = world.get(layer, TileLayer).unwrap().tiles as Uint32Array;
     tiles[1] = 1; // adds a non-zero cell
     markTileLayerDirty(world, layer).unwrap();
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
     expect(countDerived(world)).toBe(3);
   });
 });
@@ -145,8 +141,7 @@ function setupTerrain() {
   const chunkSize = 4;
   const tileset: TilesetAsset = {
     kind: 'tileset',
-    guid: 'test/tileset-terrain',
-    atlases: [toShared<'TextureAsset'>(101)],
+    atlases: ['test/atlas'],
     tileWidth: 16,
     tileHeight: 16,
     columns: 1,
@@ -154,12 +149,12 @@ function setupTerrain() {
     regions: [{ x: 0, y: 0, width: 16, height: 16 }],
     tiles: [{ regionIndex: 0 }],
   };
-  const tilesetHandle = world.allocSharedRef<'TilesetAsset', TilesetAsset>('TilesetAsset', tileset);
+  const lookup = makeTilemapAssetLookup(tileset);
   const tilemap = world
     .spawn(
       {
         component: Tilemap,
-        data: { cols, rows, tileSize: [1, 1], chunkSize, tileset: tilesetHandle },
+        data: { cols, rows, tileSize: [1, 1], chunkSize, tileset: 'test/tileset' },
       },
       { component: Transform, data: {} },
     )
@@ -176,7 +171,7 @@ function setupTerrain() {
     .unwrap();
   resetTilemapChunkExtractCache();
   resetTilemapDerivedEntityTracker();
-  return { world, tilemap, layer };
+  return { world, tilemap, layer, lookup };
 }
 
 function readChildrenIds(world: World, parent: EntityHandle): EntityHandle[] {
@@ -201,8 +196,8 @@ describe('AC-05: terrain dirty-rebuild locates derived entities via Children.ent
   it("terrain path (sortScope='layer'): first pass populates Children.entities with the chunk-grouped SpriteInstances entities", () => {
     // 8x8 cells + chunkSize=4 → 4 chunks; one atlas → 1 SpriteInstances
     // entity per (chunk, atlas) group → 4 derived entities total.
-    const { world, layer } = setupTerrain();
-    tilemapChunkExtractSystem(world);
+    const { world, layer, lookup } = setupTerrain();
+    tilemapChunkExtractSystem(world, lookup);
 
     const kids = readChildrenIds(world, layer);
     expect(kids.length).toBe(4);
@@ -210,8 +205,8 @@ describe('AC-05: terrain dirty-rebuild locates derived entities via Children.ent
   });
 
   it("terrain path (sortScope='layer'): markTileLayerDirty + rebuild purges OLD entities via Children.entities snapshot, spawns NEW entities with ChildOf.parent = layer", () => {
-    const { world, layer } = setupTerrain();
-    tilemapChunkExtractSystem(world);
+    const { world, layer, lookup } = setupTerrain();
+    tilemapChunkExtractSystem(world, lookup);
 
     // Capture handles from the first build BEFORE dirty; these must be
     // despawned after the second pass. If purgeDerivedEntities were still
@@ -223,7 +218,7 @@ describe('AC-05: terrain dirty-rebuild locates derived entities via Children.ent
     for (const k of oldKids) expect(isAlive(world, k)).toBe(true);
 
     markTileLayerDirty(world, layer).unwrap();
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
 
     // Every OLD handle must now be dead — this is the load-bearing
     // observation that Children.entities was the source of truth used
@@ -254,13 +249,13 @@ describe('AC-05: terrain dirty-rebuild locates derived entities via Children.ent
     // stacked a fresh generation on top of un-purged ones (4 → 8 → 12) and
     // the mirror stayed empty. With I-1 fixed, every cycle purges the prior
     // N and re-attaches exactly N, and the mirror list reflects it.
-    const { world, layer } = setupTerrain();
-    tilemapChunkExtractSystem(world);
+    const { world, layer, lookup } = setupTerrain();
+    tilemapChunkExtractSystem(world, lookup);
     expect(readChildrenIds(world, layer).length).toBe(4);
 
     for (let cycle = 0; cycle < 3; cycle++) {
       markTileLayerDirty(world, layer).unwrap();
-      tilemapChunkExtractSystem(world);
+      tilemapChunkExtractSystem(world, lookup);
 
       // Children.entities repopulates to exactly N (never sticks at 0).
       const kids = readChildrenIds(world, layer);
@@ -279,12 +274,12 @@ describe('AC-05: terrain dirty-rebuild locates derived entities via Children.ent
     // stays byte-identical between passes. This is the Children-empty ⇔
     // never-built equivalence the plan-strategy §2 D-3 edge case 3 relies
     // on: populated Children + dirty=0 is the "skip" case.
-    const { world, layer } = setupTerrain();
-    tilemapChunkExtractSystem(world);
+    const { world, layer, lookup } = setupTerrain();
+    tilemapChunkExtractSystem(world, lookup);
     const kids1 = readChildrenIds(world, layer);
     expect(kids1.length).toBe(4);
 
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
     const kids2 = readChildrenIds(world, layer);
     expect(kids2.length).toBe(4);
     for (let i = 0; i < kids1.length; i++) expect(kids2[i]).toBe(kids1[i]);

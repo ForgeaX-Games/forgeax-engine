@@ -4,6 +4,8 @@
  * The five prepared kinds are declarative references only: the render owner
  * retains device, resource, graph, recording, and submission ownership.
  */
+
+import type { TextureFormat } from '@forgeax/engine-rhi';
 import {
   err,
   type MaterialRenderState,
@@ -14,14 +16,15 @@ import {
 import {
   type RenderError,
   RenderFeaturePreparationFailedError,
+  type RenderFeaturePreparedStateMismatchDetail,
   RenderFeaturePreparedStateMismatchError,
 } from '../errors/render';
 import type { RenderFeatureGpuBufferRef } from './prepared-gpu-work';
 import type { RenderFeatureTargetHandle } from './targets';
-import type { RenderFeaturePreparedStateMismatchDetail } from './types';
+import type { PreparedKind } from './vocabulary';
 
 /** Closed prepared kinds: pipeline, bindings, vertex/index data, and attachment. */
-export type PreparedKind = 'pipeline' | 'bindings' | 'vertex-data' | 'index-data' | 'attachment';
+export type { PreparedKind } from './vocabulary';
 
 /** Canonical vertex layouts owned by the prepared-graphics host. */
 export const RENDER_FEATURE_VERTEX_LAYOUTS = Object.freeze({
@@ -47,8 +50,8 @@ export interface RenderFeaturePreparedRef<Kind extends PreparedKind = PreparedKi
 export interface RenderFeaturePipelineDescriptor {
   readonly shader: string;
   readonly vertexLayout: string;
-  readonly colorFormats: readonly string[];
-  readonly depthFormat?: string;
+  readonly colorFormats: readonly TextureFormat[];
+  readonly depthFormat?: TextureFormat;
   /** Sample count of the target this pipeline will draw into. */
   readonly sampleCount?: 1 | 4;
   /** Primitive topology consumed by the prepared draw. */
@@ -69,6 +72,8 @@ export interface RenderFeatureBindingsDescriptor {
   readonly values: Readonly<Record<string, unknown>> & {
     readonly group?: number;
     readonly sceneDepth?: RenderFeatureTargetHandle;
+    /** Binding slot for a view-plus-scene-depth group (0 keeps legacy behavior). */
+    readonly sceneDepthBinding?: number;
   };
 }
 
@@ -129,7 +134,7 @@ export interface RenderFeatureGraphicsPrepare {
 /** A color target declared by a graphics pass. */
 export interface RenderFeatureColorAttachment {
   readonly resource: string | RenderFeatureTargetHandle;
-  readonly format: string;
+  readonly format: TextureFormat;
   readonly loadOp: 'load' | 'clear';
   readonly storeOp: 'store' | 'discard';
 }
@@ -137,7 +142,7 @@ export interface RenderFeatureColorAttachment {
 /** A depth/stencil target declared by a graphics pass. */
 export interface RenderFeatureDepthStencilAttachment {
   readonly resource: string | RenderFeatureTargetHandle;
-  readonly format: string;
+  readonly format: TextureFormat;
   readonly depthLoadOp: 'load' | 'clear';
   readonly depthStoreOp: 'store' | 'discard';
 }
@@ -233,16 +238,6 @@ export interface RenderFeatureGraphicsPassDescriptor {
   readonly draws: readonly RenderFeatureDrawRecord[];
 }
 
-/** Graph-owned staging entry for declarative graphics work. */
-export interface RenderFeatureGraphicsContributionStaging {
-  /** Add one declarative graphics pass while preserving graph ownership. */
-  addGraphicsPass(
-    name: string,
-    descriptor: RenderFeatureGraphicsPassDescriptor,
-    options?: import('./graph-contribution').RenderFeaturePassOptions,
-  ): Result<void, RenderError>;
-}
-
 /**
  * Prepared state projected by the render owner for pure descriptor validation.
  * The generation and opaque references are host facts, not producer-owned GPU
@@ -253,7 +248,7 @@ export interface RenderFeaturePreparedGraphicsState {
   readonly generation: number;
   readonly attachments: readonly {
     readonly resource: string | RenderFeatureTargetHandle;
-    readonly format: string;
+    readonly format: TextureFormat;
   }[];
   readonly pipeline: RenderFeaturePreparedRef | undefined;
   /** All prepared pipelines available to the current graphics pass. */
@@ -298,25 +293,6 @@ function invalid(
   return err(new RenderFeaturePreparedStateMismatchError(detail));
 }
 
-function preparationFailure(
-  featureIdentity: string,
-  order: number,
-  operation: string,
-  resourceKind: PreparedKind,
-): Result<never, RenderError> {
-  return err(
-    new RenderFeaturePreparationFailedError(
-      featureIdentity,
-      order,
-      operation,
-      resourceKind,
-      'unavailable',
-      'prepared-graphics-host-unavailable',
-      'next-frame',
-    ),
-  );
-}
-
 function validRef<Kind extends PreparedKind>(
   reference: RenderFeaturePreparedRef<Kind>,
   kind: Kind,
@@ -329,14 +305,14 @@ function hasAttachment(
   available: RenderFeaturePreparedGraphicsState['attachments'],
   required: RenderFeatureColorAttachment | RenderFeatureDepthStencilAttachment,
 ): boolean {
-  const requiredResource =
-    typeof required.resource === 'string' ? required.resource : required.resource.resource;
+  const identity = (resource: string | RenderFeatureTargetHandle): string =>
+    typeof resource === 'string'
+      ? `local:${resource}`
+      : `pipeline:${resource.kind}:${resource.format}:${resource.sampleCount}`;
+  const requiredResource = identity(required.resource);
   return available.some(
     (attachment) =>
-      (typeof attachment.resource === 'string'
-        ? attachment.resource
-        : attachment.resource.resource) === requiredResource &&
-      attachment.format === required.format,
+      identity(attachment.resource) === requiredResource && attachment.format === required.format,
   );
 }
 
@@ -441,21 +417,4 @@ export function validateRenderFeatureGraphicsPass(
     }
   }
   return ok({ acceptedDrawCount: descriptor.draws.length });
-}
-
-/** Create the explicit unavailable facade used until a Host owns prepared state. */
-export function createRenderFeatureGraphicsPrepare(
-  featureIdentity: string,
-  order: number,
-): RenderFeatureGraphicsPrepare {
-  return {
-    preparePipeline: () =>
-      preparationFailure(featureIdentity, order, 'prepare-pipeline', 'pipeline'),
-    prepareBindings: () =>
-      preparationFailure(featureIdentity, order, 'prepare-bindings', 'bindings'),
-    prepareVertexData: () =>
-      preparationFailure(featureIdentity, order, 'prepare-vertex-data', 'vertex-data'),
-    prepareIndexData: () =>
-      preparationFailure(featureIdentity, order, 'prepare-index-data', 'index-data'),
-  };
 }

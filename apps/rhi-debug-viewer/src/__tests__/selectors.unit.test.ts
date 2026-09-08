@@ -10,6 +10,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  capabilityAnchor,
   drawAnchor,
   LOAD_STATUS,
   loadStatus,
@@ -32,6 +33,7 @@ describe('data-forgeax-* naming convention', () => {
     expect(loadStatusAnchor()).toMatch(anchorPattern);
     expect(rtStatusAnchor()).toMatch(anchorPattern);
     expect(rtCanvasAnchor()).toMatch(anchorPattern);
+    expect(capabilityAnchor()).toMatch(anchorPattern);
   });
 
   it('no CamelCase in anchor names', () => {

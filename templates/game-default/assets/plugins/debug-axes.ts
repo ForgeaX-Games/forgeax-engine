@@ -3,6 +3,7 @@ import { mat4 } from '@forgeax/engine-math';
 import type { Mat4 } from '@forgeax/engine-math';
 import { Camera } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
+import type { Context } from '@forgeax/engine-plugin';
 import { activeScoringTargetEntities, type ScoringTargetQuery } from './scoring-target';
 
 export const GAME_DEFAULT_AXES_EVIDENCE_KEY = '__forgeaxGameDefaultAxesEvidence';
@@ -44,11 +45,11 @@ export type DebugAxesHandle = {
  * visible to the browser smoke.
  */
 export function installDebugAxes(args: {
+  readonly context: Context;
   readonly world: World;
   readonly camera: EntityHandle;
   readonly targetQuery: ScoringTargetQuery;
   readonly debugDraw: DebugDrawAxes | undefined;
-  readonly registerCleanup?: (cleanup: () => void) => void;
 }): DebugAxesHandle {
   const enabled = typeof location !== 'undefined' && new URLSearchParams(location.search).get('debug-axes') === '1';
   let axesCalls = 0;
@@ -123,9 +124,12 @@ export function installDebugAxes(args: {
     const host = globalThis as unknown as Record<string, unknown>;
     const evidence: GameDefaultAxesEvidence = { enabled, available, reset, snapshot };
     host[GAME_DEFAULT_AXES_EVIDENCE_KEY] = evidence;
-    args.registerCleanup?.(() => {
-      if (host[GAME_DEFAULT_AXES_EVIDENCE_KEY] === evidence) delete host[GAME_DEFAULT_AXES_EVIDENCE_KEY];
-    });
+    args.context.effect(
+      () => () => {
+        if (host[GAME_DEFAULT_AXES_EVIDENCE_KEY] === evidence) delete host[GAME_DEFAULT_AXES_EVIDENCE_KEY];
+      },
+      'game-default/debug-axes-evidence',
+    );
   }
   return handle;
 }

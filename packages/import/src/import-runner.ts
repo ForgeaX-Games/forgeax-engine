@@ -11,7 +11,7 @@
 // Error model (charter P3, ImportErrorCode 5 closed members):
 //   - importer-not-registered  : registry.get(meta.importer) === undefined
 //   - source-read-failed       : ctx.readSource() failed
-//   - import-internal-error    : importer.import threw (never bare-throws out)
+//   - import-internal-error    : importer conversion or CookProduct finalization threw (never bare-throws out)
 //   - guid-mismatch            : produced a GUID not declared in subAssets[]
 //   - import-produced-no-assets: produced [], or omitted a declared GUID
 //
@@ -22,11 +22,9 @@
 // for them so the caller can account for the sidecar without writing a DDC.
 
 import type {
-  AssetCodec,
   AssetRelation,
   CatalogDiagnostic,
   CookProduct,
-  ImageError,
   ImportContext,
   ImportDiagnostic,
   ImportError as ImportErrorType,
@@ -35,7 +33,6 @@ import type {
   ProviderProvenance,
   ResourceRevision,
   SourceOverrideMap,
-  TextureAsset,
 } from '@forgeax/engine-types';
 import {
   canonicalizeSourceOverrides,
@@ -43,7 +40,11 @@ import {
   ImportError,
   validateSourceOverrideMap,
 } from '@forgeax/engine-types';
-import { finalizeImportProducts } from './import-product.js';
+import {
+  createImportProduct,
+  finalizeImportProducts,
+  type TerminalImportProduct,
+} from './import-product.js';
 import type { ImporterRegistry } from './importer-registry.js';
 
 /** Reserved `meta.importer` key consumed by vite-plugin-shader, not the import runner. */
@@ -125,7 +126,7 @@ export type RunImportProductResult =
       readonly value:
         | { readonly skipped: 'shader' }
         | {
-            readonly product: ImportProduct;
+            readonly product: TerminalImportProduct;
             readonly cookProducts: readonly CookProduct[];
           };
     }
@@ -139,7 +140,7 @@ export type RunImportProductResult =
 export type RunImportOk =
   | { readonly skipped: 'shader' }
   | {
-      readonly product: ImportProduct;
+      readonly product: TerminalImportProduct;
       readonly cookProducts: readonly CookProduct[];
       readonly pack: DdcPack;
     };
@@ -169,6 +170,8 @@ export interface DdcPack {
 export interface RunImportMeta {
   readonly importer: string;
   readonly source: string;
+  /** Scanner-owned source declaration revision; avoids reopening validated Meta. */
+  readonly sourceRevision?: string;
   readonly packageId?: string;
   readonly provenance?: ProviderProvenance;
   readonly revision?: ResourceRevision;
@@ -228,22 +231,7 @@ export interface ImportRunnerFs {
     | { readonly ok: true; readonly value: Uint8Array }
     | { readonly ok: false; readonly error: unknown }
   >;
-  decodeImage?(
-    bytes: Uint8Array,
-    mimeType: 'image/png' | 'image/jpeg',
-    importSettings: Readonly<Record<string, unknown>>,
-  ): Promise<
-    | {
-        readonly ok: true;
-        readonly value: {
-          readonly texture: TextureAsset;
-          readonly bytes: Uint8Array;
-          readonly mediaType?: string;
-          readonly assetCodec?: AssetCodec;
-        };
-      }
-    | { readonly ok: false; readonly error: ImageError }
-  >;
+  decodeImage?: ImportContext['decodeImage'];
 }
 
 /**
@@ -282,6 +270,61 @@ function sourceKeyActual(value: unknown): string {
   if (typeof value === 'string') return JSON.stringify(value);
   if (value === undefined) return 'missing';
   return typeof value;
+}
+
+type SourceReaderErrorMetadata = {
+  readonly code?: unknown;
+  readonly name?: unknown;
+  readonly message?: unknown;
+  readonly detail?: unknown;
+};
+
+function sourceReadFailureReason(error: unknown): string {
+  if (typeof error !== 'object' || error === null) {
+    return typeof error === 'string' ? error : 'unknown';
+  }
+  const metadata = error as SourceReaderErrorMetadata;
+  const token =
+    typeof metadata.code === 'string'
+      ? metadata.code
+      : typeof metadata.name === 'string'
+        ? metadata.name
+        : undefined;
+  switch (token) {
+    case 'ENOENT':
+    case 'NotFoundError':
+      return 'not-found';
+    case 'EACCES':
+    case 'EPERM':
+    case 'PermissionDeniedError':
+    case 'NotAllowedError':
+    case 'SecurityError':
+      return 'permission-denied';
+    case 'EAGAIN':
+    case 'EBUSY':
+    case 'EINTR':
+    case 'ECONNABORTED':
+    case 'ECONNREFUSED':
+    case 'ECONNRESET':
+    case 'EHOSTUNREACH':
+    case 'ENETDOWN':
+    case 'ENETUNREACH':
+    case 'ETIMEDOUT':
+    case 'EPIPE':
+    case 'ABORT_ERR':
+    case 'AbortError':
+    case 'TimeoutError':
+      return 'transient';
+    default:
+      if (typeof metadata.detail === 'object' && metadata.detail !== null) {
+        const reason = (metadata.detail as { readonly reason?: unknown }).reason;
+        if (typeof reason === 'string' && reason.length > 0) return reason;
+      }
+      if (typeof metadata.message === 'string' && metadata.message.length > 0) {
+        return metadata.message;
+      }
+      return 'unknown';
+  }
 }
 
 /**
@@ -409,7 +452,11 @@ export async function runImport(
   const dependencies = new Set<string>();
   const readSource = async (sourcePath: string) => {
     dependencies.add(normalizeDependencyPath(sourcePath));
-    return fs.readSource(sourcePath);
+    try {
+      return await fs.readSource(sourcePath);
+    } catch (error) {
+      return { ok: false as const, error };
+    }
   };
 
   const readSibling = async (
@@ -422,11 +469,15 @@ export async function runImport(
       | { readonly ok: true; readonly value: Uint8Array }
       | { readonly ok: false; readonly error: unknown }
       | { readonly ok: false; readonly error: ImportErrorType };
-    if (fs.readSibling) {
-      dependencies.add(normalizeDependencyPath(joinSiblingPath(meta.source, uri)));
-      inner = await fs.readSibling(meta.source, uri);
-    } else {
-      inner = await readSource(joinSiblingPath(meta.source, uri));
+    try {
+      if (fs.readSibling) {
+        dependencies.add(normalizeDependencyPath(joinSiblingPath(meta.source, uri)));
+        inner = await fs.readSibling(meta.source, uri);
+      } else {
+        inner = await readSource(joinSiblingPath(meta.source, uri));
+      }
+    } catch (error) {
+      inner = { ok: false, error };
     }
     if (inner.ok) {
       return { ok: true, value: inner.value };
@@ -439,34 +490,19 @@ export async function runImport(
         hint: IMPORT_ERROR_HINTS['source-read-failed'],
         detail: {
           source: uri,
-          reason: inner.error instanceof Error ? inner.error.message : String(inner.error),
+          reason: sourceReadFailureReason(inner.error),
         },
       }),
     };
   };
 
-  const decodeImage = fs.decodeImage
-    ? fs.decodeImage
-    : async (
-        _bytes: Uint8Array,
-        _mimeType: 'image/png' | 'image/jpeg',
-        _importSettings: Readonly<Record<string, unknown>>,
-      ): Promise<
-        | {
-            readonly ok: true;
-            readonly value: {
-              readonly texture: TextureAsset;
-              readonly bytes: Uint8Array;
-              readonly mediaType?: string;
-              readonly assetCodec?: AssetCodec;
-            };
-          }
-        | { readonly ok: false; readonly error: ImageError }
-      > => {
-        throw new Error(
-          'ImportRunnerFs.decodeImage was not provided; gltfImporter texture extraction requires the host (vite-plugin-pack / cli-gltf / test) to bind decodeImage when constructing the ImportRunnerFs',
-        );
-      };
+  const decodeImage: ImportContext['decodeImage'] =
+    fs.decodeImage ??
+    (async () => {
+      throw new Error(
+        'ImportRunnerFs.decodeImage was not provided; gltfImporter texture extraction requires the host (vite-plugin-pack / cli-gltf / test) to bind decodeImage when constructing the ImportRunnerFs',
+      );
+    });
 
   const canonicalSourceOverrides = canonicalizeSourceOverrides(sourceOverridesResult.value);
   const ctx: ImportContext = {
@@ -498,10 +534,7 @@ export async function runImport(
         hint: IMPORT_ERROR_HINTS['source-read-failed'],
         detail: {
           source: meta.source,
-          reason:
-            sourceProbe.error instanceof Error
-              ? sourceProbe.error.message
-              : String(sourceProbe.error),
+          reason: sourceReadFailureReason(sourceProbe.error),
         },
       }),
     );
@@ -561,6 +594,7 @@ export async function runImport(
       product = value;
     }
   } catch (e) {
+    if (e instanceof ImportError) return errResult(e);
     const message = e instanceof Error ? e.message : String(e);
     // D-5: a module-LOAD failure rides `.detail.loadError`; a conversion THROW
     // rides `.detail.reason`. Same `import-internal-error` code (no new closed
@@ -627,11 +661,49 @@ export async function runImport(
     sourceDependencies: [...dependencies],
   };
   const inputFingerprint = `source:${[...dependencies].sort().join('|')}`;
-  const cookProducts = await finalizeImportProducts(productWithDependencies, inputFingerprint);
+  let cookProducts: readonly CookProduct[];
+  try {
+    cookProducts = await finalizeImportProducts(productWithDependencies, inputFingerprint);
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    return errResult(
+      new ImportError({
+        code: 'import-internal-error',
+        expected: `importer "${meta.importer}" finalization to produce complete CookProduct digests`,
+        hint: IMPORT_ERROR_HINTS['import-internal-error'],
+        detail: { reason: `finalization/digest: ${reason}` },
+      }),
+    );
+  }
+  const terminalProduct = createImportProduct({
+    ...productWithDependencies,
+    refs: productWithDependencies.assets.flatMap((asset) => asset.refs),
+    artifacts: Object.fromEntries(
+      productWithDependencies.assets.flatMap((asset) =>
+        Object.entries(asset.artifacts).map(([key, artifact]) => [
+          `${asset.guid}/${key}`,
+          artifact,
+        ]),
+      ),
+    ),
+    receipts: cookProducts.map((product) => product.receipt),
+    diagnostics: meta.diagnostics ?? [],
+    sourceRevision: inputFingerprint,
+  });
+  if (!terminalProduct.ok) {
+    return errResult(
+      new ImportError({
+        code: 'import-internal-error',
+        expected: 'the import product to retain complete terminal producer facts',
+        hint: 'preserve source identity and producer evidence when returning the import product',
+        detail: { reason: terminalProduct.error.detail.field },
+      }),
+    );
+  }
   if (meta.buildPack === false) {
     return {
       ok: true,
-      value: { product: productWithDependencies, cookProducts },
+      value: { product: terminalProduct.value, cookProducts },
     };
   }
 
@@ -669,9 +741,7 @@ export async function runImport(
   return {
     ok: true,
     value: {
-      product: {
-        ...productWithDependencies,
-      },
+      product: terminalProduct.value,
       cookProducts,
       pack,
     },

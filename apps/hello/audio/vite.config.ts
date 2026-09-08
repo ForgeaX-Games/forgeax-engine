@@ -5,13 +5,14 @@ import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
+import { optionalAssetPack } from '../../shared/src/optional-asset-pack.js';
 
 // hello-audio vite config (feat-20260529-hello-audio-demo-with-spacebar-one-shot-sfx-playba).
 //
 // Two-plugin stack mirrors the hello-sprite shape:
 //   - forgeaxShader -- compile the engine shader manifest (build-time naga_oil
 //     composer; same registration path as every other demo).
-//   - pluginPack    -- emit /pack-index.json (dev configureServer +
+//   - pluginPack    -- emit a scoped dev catalog (and /pack-index.json for
 //     build generateBundle) so the sfx GUID resolves via the pack pipeline.
 //
 // D-7: pluginPack roots points at the forgeax-engine-assets/sfx/ submodule
@@ -25,17 +26,20 @@ import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
 const sfxDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'sfx');
+const assetRoots = [sfxDir];
 const runtimeBinding = createStandaloneRuntimeAssetBinding('hello-audio');
 
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
-    pluginPack({
-      roots: [sfxDir],
-      importers: [audioImporter],
-      refresh: reloadAssetHost(),
-      runtimeBinding,
-    }),
+    ...optionalAssetPack(assetRoots, () =>
+      pluginPack({
+        roots: assetRoots,
+        importers: [audioImporter],
+        refresh: reloadAssetHost(),
+        runtimeBinding,
+      }),
+    ),
   ],
   server: {
     port: 5195,

@@ -37,13 +37,28 @@
 
 import type { AnimationTargetIdValue } from './animation-target';
 import type { AudioClipAsset } from './asset.js';
-import type { Handle } from './handle';
 import type { MaterialAsset } from './material/asset.js';
 import type { ParticleEffectAsset } from './vfx';
 
 export type { AnimationTargetIdValue } from './animation-target';
 export * from './asset.js';
 export * from './asset-errors.js';
+export type {
+  AssetArtifactReader,
+  AssetDecoder,
+  AssetDecoderContribution,
+  AssetDecoderContributionRef,
+  AssetDecoderInput,
+  AssetDecoderLease,
+  AssetDecoderResult,
+  AssetKind,
+  AssetKindPayload,
+  AssetRegistryAction,
+  AssetRuntimeApiGroups,
+  BuiltinAssetKind,
+  BuiltinAssetKindToken,
+  BuiltinAssetPayload,
+} from './asset-runtime.js';
 export * from './handle';
 export * from './material/index.js';
 
@@ -112,6 +127,10 @@ export interface MeshPod {
   readonly indices?: Uint16Array | Uint32Array;
   /** Per-vertex attributes keyed by semantic (POSITION/NORMAL/TEXCOORD_0/JOINTS_0/WEIGHTS_0). */
   readonly attributes: Record<string, Float32Array | Uint16Array | Uint32Array>;
+  /** Optional additive morph deltas, one entry per target. */
+  readonly morphTargets?: readonly MorphTarget[];
+  /** Optional default morph weights, one value per target. */
+  readonly morphWeights?: Float32Array;
   /** Per-submesh descriptors (>=1). */
   readonly submeshes: readonly MeshSubmeshPod[];
   /** Source mesh index within the original document (for diagnostic mapping). */
@@ -121,6 +140,26 @@ export interface MeshPod {
 // === AC-02: MaterialPod — PBR parameter values ===
 
 /** MaterialPod: pre-kind PBR material data IR shared across importers. */
+export const MATERIAL_TEXTURE_SLOTS = [
+  'baseColorTexture',
+  'normalTexture',
+  'specularTintTexture',
+  'metallicRoughnessTexture',
+  'emissiveTexture',
+  'occlusionTexture',
+] as const;
+
+export type MaterialTextureSlot = (typeof MATERIAL_TEXTURE_SLOTS)[number];
+
+export interface MaterialTextureBindingPod {
+  /** Standard material value slot receiving the texture reference. */
+  readonly slot: MaterialTextureSlot;
+  /** Index into the parent document's textures array. */
+  readonly textureIndex: number;
+  /** Optional source UV set. */
+  readonly texCoord?: number;
+}
+
 export interface MaterialPod {
   /** Optional debug name from source document. */
   readonly name?: string;
@@ -140,6 +179,10 @@ export interface MaterialPod {
   readonly occlusionTextureIndex?: number;
   /** Index for emissive map. */
   readonly emissiveTextureIndex?: number;
+  /** Index for a specular tint map. */
+  readonly specularTintTextureIndex?: number;
+  /** Engine-owned semantic texture bindings from the producer. */
+  readonly textureBindings?: readonly MaterialTextureBindingPod[];
 }
 
 // === AC-03: ScenePod — entity hierarchy ===
@@ -178,6 +221,14 @@ export interface TexturePod {
   readonly name?: string;
   /** Filesystem path relative to the source document, with '/' separators. */
   readonly filePath: string;
+  /** The producer-declared relative path before host resolution. */
+  readonly relativeFilePath?: string;
+  /** Parse-scope absolute hint; never persist this into project metadata. */
+  readonly absoluteFilePath?: string;
+  /** Embedded encoded image bytes, when the FBX contains the texture payload. */
+  readonly embeddedBytes?: Uint8Array;
+  /** Producer texture kind; only file/embedded textures are importable. */
+  readonly type?: 'file' | 'layered' | 'procedural' | 'shader' | 'unknown';
   /** Source texture index within the original document. */
   readonly sourceIndex: number;
 }
@@ -232,8 +283,8 @@ export interface AnimationSamplerPod {
 export interface AnimationChannelPod {
   /** Stable animation target identity. */
   readonly targetId: AnimationTargetIdValue;
-  /** Target property: 'translation' | 'rotation' | 'scale'. */
-  readonly property: 'translation' | 'rotation' | 'scale';
+  /** Target property: 'translation' | 'rotation' | 'scale' | 'weights'. */
+  readonly property: 'translation' | 'rotation' | 'scale' | 'weights';
   /** Sampler driving this channel. */
   readonly sampler: AnimationSamplerPod;
 }
@@ -252,7 +303,7 @@ export interface AnimationClipPod {
 //
 // Decision anchors:
 // - requirements §G7 + §2 row 8 + AC-09 / AC-15 / AC-21 (4-variant Asset
-//   discriminated union, 6-lowercase-key VertexAttributeMap closed set,
+//   discriminated union, 14-key VertexAttributeMap closed set,
 //   AssetErrorCode 4-member closed union elevated to TS alias)
 // - plan-strategy §2 D-P1 (@forgeax/engine-types single-file SSOT for
 //   Asset union + AssetErrorCode; 4-member AssetErrorCode independent from
@@ -276,8 +327,8 @@ export interface AnimationClipPod {
  * per WebGPU spec index format; `attributes` is the VertexAttributeMap
  * lowercase-key closed set.
  *
- * 6-key lowercase closed set (G7 / AC-15):
- * `'position' | 'normal' | 'uv' | 'tangent' | 'skinIndex' | 'skinWeight'`.
+ * Canonical lowercase keys include position, normal, uv, tangent, skinIndex,
+ * skinWeight, uv1..uv7 and optional linear RGBA color.
  *
  * Designed for M3 GLTF loader single-layer mapping
  * (`POSITION -> position` / `TEXCOORD_0 -> uv` etc.) without runtime rename.
@@ -329,6 +380,225 @@ export interface MeshAsset {
    * AssetError at register-time (fail-fast, charter P3 explicit failure).
    */
   readonly submeshes: readonly Submesh[];
+  /** Stable, mesh-owned material entry points shared by every instance. */
+  readonly materialSlots: readonly MeshMaterialSlot[];
+  /** Target-major dense morph deltas. */
+  readonly morphTargets?: readonly MorphTarget[];
+  /** Authored default weights, one value per morph target when present. */
+  readonly morphWeights?: Float32Array;
+}
+
+export interface MorphTarget {
+  readonly position?: Float32Array;
+  readonly normal?: Float32Array;
+  readonly tangent?: Float32Array;
+}
+
+/** Mesh-owned default binding for one stable material slot. */
+export interface MeshMaterialSlot {
+  /** Unique, non-empty display/tooling name within the mesh. */
+  readonly slotName: string;
+  /** Producer-owned stable identity used to preserve slot indices on reimport. */
+  readonly sourceKey?: string;
+  /** Missing means the slot intentionally inherits the neutral engine material. */
+  readonly defaultMaterial?: AssetGuid;
+}
+
+/** JSON-safe producer topology persisted beside an imported Mesh output. */
+export interface MeshMaterialSlotTopologyEntry {
+  readonly slotName: string;
+  readonly sourceKey?: string;
+  readonly defaultMaterialGuid?: string;
+  /** Persisted removed-slot identity; never participates in cooked bindings. */
+  readonly tombstone?: true;
+}
+
+/** Resolve the persisted source/authoring layers to the one runtime Mesh default. */
+export function resolveMeshMaterialSlotDefaultGuid(
+  slot: MeshMaterialSlotTopologyEntry,
+  authoredDefaultMaterialGuid?: string | null,
+): string | undefined {
+  if (authoredDefaultMaterialGuid !== undefined) {
+    return authoredDefaultMaterialGuid === null ? undefined : authoredDefaultMaterialGuid;
+  }
+  return slot.defaultMaterialGuid;
+}
+
+export interface MeshMaterialSlotTopologyChange {
+  readonly code: 'mesh-material-slot-topology-change';
+  readonly previousIndices: readonly number[];
+  readonly nextIndices: readonly number[];
+  readonly hint: string;
+}
+
+export type MeshMaterialSlotReconcileResult =
+  | {
+      readonly ok: true;
+      readonly slots: readonly MeshMaterialSlotTopologyEntry[];
+      /** New source-order slot index -> stable persisted slot index. */
+      readonly currentToStableSlot: readonly number[];
+    }
+  | { readonly ok: false; readonly error: MeshMaterialSlotTopologyChange };
+
+/**
+ * Preserve positional renderer overrides across source reimport.
+ *
+ * Stable sourceKey wins, then a unique slotName. A single remaining pair is
+ * the only unambiguous source-order fallback. Removed slots remain as
+ * defaultless tombstones; new slots append, so an old index never silently
+ * starts naming a different source material.
+ */
+export function reconcileMeshMaterialSlotTopology(
+  current: readonly MeshMaterialSlotTopologyEntry[],
+  previous: readonly MeshMaterialSlotTopologyEntry[] = [],
+): MeshMaterialSlotReconcileResult {
+  if (previous.length === 0) {
+    return { ok: true, slots: [...current], currentToStableSlot: current.map((_, index) => index) };
+  }
+
+  const stable: MeshMaterialSlotTopologyEntry[] = previous.map((slot) => ({
+    slotName: slot.slotName,
+    ...(slot.sourceKey === undefined ? {} : { sourceKey: slot.sourceKey }),
+    tombstone: true,
+  }));
+  const mapping = new Array<number>(current.length).fill(-1);
+  const usedPrevious = new Set<number>();
+
+  const uniqueIndex = (
+    slots: readonly MeshMaterialSlotTopologyEntry[],
+    read: (slot: MeshMaterialSlotTopologyEntry) => string | undefined,
+  ): Map<string, number> => {
+    const first = new Map<string, number>();
+    const duplicates = new Set<string>();
+    slots.forEach((slot, index) => {
+      const key = read(slot)?.trim();
+      if (!key) return;
+      if (first.has(key)) duplicates.add(key);
+      else first.set(key, index);
+    });
+    for (const duplicate of duplicates) first.delete(duplicate);
+    return first;
+  };
+
+  const match = (read: (slot: MeshMaterialSlotTopologyEntry) => string | undefined): void => {
+    const oldByKey = uniqueIndex(previous, read);
+    const nextByKey = uniqueIndex(current, read);
+    for (const [key, nextIndex] of nextByKey) {
+      if (mapping[nextIndex] !== -1) continue;
+      const oldIndex = oldByKey.get(key);
+      if (oldIndex === undefined || usedPrevious.has(oldIndex)) continue;
+      mapping[nextIndex] = oldIndex;
+      usedPrevious.add(oldIndex);
+    }
+  };
+
+  match((slot) => slot.sourceKey);
+  match((slot) => slot.slotName);
+
+  const unmatchedCurrent = mapping
+    .map((oldIndex, index) => (oldIndex === -1 ? index : -1))
+    .filter((index) => index !== -1);
+  const unmatchedPrevious = previous
+    .map((_, index) => (usedPrevious.has(index) ? -1 : index))
+    .filter((index) => index !== -1);
+  if (
+    unmatchedCurrent.length === 1 &&
+    unmatchedPrevious.length === 1 &&
+    current[unmatchedCurrent[0] as number]?.sourceKey === undefined &&
+    previous[unmatchedPrevious[0] as number]?.sourceKey === undefined
+  ) {
+    mapping[unmatchedCurrent[0] as number] = unmatchedPrevious[0] as number;
+    usedPrevious.add(unmatchedPrevious[0] as number);
+    unmatchedCurrent.length = 0;
+    unmatchedPrevious.length = 0;
+  }
+  const identityInsufficient =
+    unmatchedCurrent.some((index) => current[index]?.sourceKey === undefined) &&
+    unmatchedPrevious.some((index) => previous[index]?.sourceKey === undefined);
+  if (unmatchedCurrent.length > 0 && unmatchedPrevious.length > 0 && identityInsufficient) {
+    return {
+      ok: false,
+      error: {
+        code: 'mesh-material-slot-topology-change',
+        previousIndices: unmatchedPrevious,
+        nextIndices: unmatchedCurrent,
+        hint: 'name source materials uniquely or provide stable sourceKey values before reimport',
+      },
+    };
+  }
+
+  for (let currentIndex = 0; currentIndex < current.length; currentIndex++) {
+    let stableIndex = mapping[currentIndex] as number;
+    if (stableIndex === -1) {
+      stableIndex = stable.length;
+      mapping[currentIndex] = stableIndex;
+    }
+    stable[stableIndex] = current[currentIndex] as MeshMaterialSlotTopologyEntry;
+  }
+  return { ok: true, slots: stable, currentToStableSlot: mapping };
+}
+
+export interface MeshMaterialOverrideMigrationContext {
+  readonly meshGuid: string;
+  readonly sceneGuid: string;
+  readonly entityId: number;
+}
+
+export interface MeshMaterialOverrideConflict extends MeshMaterialOverrideMigrationContext {
+  readonly code: 'mesh-material-slot-override-conflict';
+  readonly materialSlot: number;
+  readonly submeshIndices: readonly number[];
+  readonly overrideHandles?: readonly number[];
+  readonly overrideGuids?: readonly string[];
+  readonly hint: string;
+}
+
+export type MeshMaterialOverrideMigrationResult<T extends number | string = number> =
+  | { readonly ok: true; readonly overrides: readonly T[] }
+  | { readonly ok: false; readonly error: MeshMaterialOverrideConflict };
+
+/**
+ * Collapse legacy per-submesh overrides into v3 per-slot overrides.
+ * Conflicting section overrides fail atomically with full dependency context.
+ */
+export function migrateLegacyMeshMaterialOverrides<T extends number | string>(
+  legacyOverrides: readonly T[],
+  submeshes: readonly Pick<Submesh, 'materialSlot'>[],
+  materialSlotCount: number,
+  context: MeshMaterialOverrideMigrationContext,
+): MeshMaterialOverrideMigrationResult<T> {
+  const inherited = (typeof legacyOverrides[0] === 'string' ? '' : 0) as T;
+  const overrides = new Array<T>(materialSlotCount).fill(inherited);
+  const sectionsBySlot = new Map<number, number[]>();
+  for (let submeshIndex = 0; submeshIndex < submeshes.length; submeshIndex++) {
+    const materialSlot = submeshes[submeshIndex]?.materialSlot;
+    if (materialSlot === undefined || materialSlot < 0 || materialSlot >= materialSlotCount)
+      continue;
+    const sections = sectionsBySlot.get(materialSlot) ?? [];
+    sections.push(submeshIndex);
+    sectionsBySlot.set(materialSlot, sections);
+  }
+  for (const [materialSlot, submeshIndices] of sectionsBySlot) {
+    const handles: T[] = submeshIndices.map((index) => legacyOverrides[index] ?? inherited);
+    const distinct = [...new Set(handles)];
+    if (distinct.length > 1) {
+      return {
+        ok: false,
+        error: {
+          code: 'mesh-material-slot-override-conflict',
+          ...context,
+          materialSlot,
+          submeshIndices,
+          ...(typeof handles[0] === 'string'
+            ? { overrideGuids: handles as string[] }
+            : { overrideHandles: handles as number[] }),
+          hint: 'split the source slot or choose one override explicitly before v2 to v3 recook',
+        },
+      };
+    }
+    overrides[materialSlot] = distinct[0] ?? inherited;
+  }
+  return { ok: true, overrides };
 }
 
 /**
@@ -354,6 +624,8 @@ export interface Submesh {
   readonly indexCount: number;
   readonly vertexCount: number;
   readonly topology: PrimitiveTopology;
+  /** Index into the owning MeshAsset.materialSlots table. */
+  readonly materialSlot: number;
 }
 
 /**
@@ -551,8 +823,31 @@ export interface StorageBindingParamSchemaEntry {
 // Re-export derive(schema) and its output shapes alongside the schema
 // type union so all downstream consumers (runtime / vite-plugin-shader /
 // shader-compiler) reach the SSOT through a single import surface (D-2).
-export type { DeriveOutput, UboFieldLayout, UboLayout } from './derive-paramschema.js';
-export { derive, findUndeclaredSampledTextures } from './derive-paramschema.js';
+export type {
+  DerivedMaterialInterface,
+  DerivedNumericMember,
+  DeriveOutput,
+  ImmutableParamSchemaProjection,
+  MaterialBindingSpan,
+  MaterialCoordinateRecordLayout,
+  MaterialParameterProjection,
+  MaterialParameterResourceProjection,
+  MaterialParameterTextureProjection,
+  MaterialResourceBindingLayout,
+  MaterialResourceKind,
+  ParamSchemaDeriveObservationKind,
+  ParamSchemaDeriveObserver,
+  ParamSchemaProjectionOwnerStats,
+  UboFieldLayout,
+  UboLayout,
+} from './derive-paramschema.js';
+export {
+  derive,
+  deriveObserved,
+  findUndeclaredSampledTextures,
+  inferMaterialParameterKind,
+  ParamSchemaProjectionOwner,
+} from './derive-paramschema.js';
 
 /**
  * Single material parameter schema entry — discriminated union over the
@@ -713,6 +1008,7 @@ export const KNOWN_PASS_KINDS: readonly string[] = [
   'deferred',
   'lighting',
   'shadow-caster',
+  'point-shadow-caster',
   'post-process',
   'skybox',
 ] as const;
@@ -1090,8 +1386,7 @@ export interface TilesetTileEntry {
  *
  * Nine fields:
  *   - `kind`         -- discriminator literal `'tileset'`.
- *   - `guid`         -- asset GUID (charter P5 identity SSOT).
- *   - `atlases`      -- one or more managed handles to atlas textures.
+ *   - `atlases`      -- one or more durable GUIDs for atlas textures.
  *                       `atlases.length >= 1` enforced at register time.
  *                       M0 reads `atlases[0]` exclusively (single-atlas form);
  *                       M1 adds `regions[].atlasIndex` for multi-atlas routing.
@@ -1116,11 +1411,10 @@ export interface TilesetTileEntry {
  *
  * @example Register a tileset and spawn a Tilemap + TileLayer pair:
  * ```ts
- * const atlas = registry.register<TextureAsset>(atlasTexture).unwrap();
+ * const atlasGuid = 'world/object_atlas';
  * const tileset = registry.register<TilesetAsset>({
  *   kind: 'tileset',
- *   guid: 'world/object_atlas',
- *   atlases: [atlas],
+ *   atlases: [atlasGuid],
  *   tileWidth: 16,
  *   tileHeight: 16,
  *   columns: 8,
@@ -1137,8 +1431,7 @@ export interface TilesetAtlasSize {
 
 export interface TilesetAsset {
   readonly kind: 'tileset';
-  readonly guid: string;
-  readonly atlases: readonly Handle<'TextureAsset', 'shared'>[];
+  readonly atlases: readonly string[];
   readonly tileWidth: number;
   readonly tileHeight: number;
   readonly columns: number;
@@ -1200,7 +1493,7 @@ export interface AssetRef {
  * this asset transitively depends on, with optional edge metadata
  * (``sourceField`` / ``sceneEntityId``). ``name`` is the per-asset display name
  * (may be undefined; ``resolveName`` derives the final name via a three-argument
- * XOR that also considers the package path).
+ * precedence rule that also considers the package path).
  */
 export interface AssetEnvelope<P = Asset> {
   readonly guid: string;
@@ -1208,7 +1501,7 @@ export interface AssetEnvelope<P = Asset> {
   // Per-GUID stored display name -- the `storedName` argument resolveName feeds
   // to deriveAssetName (the single home for the explicit name, replacing the
   // retired storedNameOf side table). `undefined` = no explicit name (resolveName
-  // then applies the multi-asset basename fallback / no-package '' branch).
+  // then applies the package-basename fallback / no-package '' branch).
   readonly name?: string;
   readonly payload: P;
   readonly refs: readonly AssetRef[];
@@ -1393,6 +1686,8 @@ export interface SceneInstanceMount {
   readonly parent?: LocalEntityId;
   readonly components?: Partial<ComponentValuesMap>;
   readonly overrides?: readonly MountOverride[];
+  /** Engine-owned publication identity for generated Scene mounts. */
+  readonly publicationFence?: import('./asset-producer').ScenePublicationFence;
 }
 
 /**
@@ -1453,8 +1748,8 @@ export interface SceneAsset {
 export interface AnimationChannel {
   /** Stable animation target identity. */
   readonly targetId: AnimationTargetIdValue;
-  /** Target transform property: 'translation' | 'rotation' | 'scale'. */
-  readonly property: 'translation' | 'rotation' | 'scale';
+  /** Target transform property: 'translation' | 'rotation' | 'scale' | 'weights'. */
+  readonly property: 'translation' | 'rotation' | 'scale' | 'weights';
   /** Sampler driving this channel. */
   readonly sampler: AnimationSampler;
 }
@@ -1466,6 +1761,7 @@ export interface AnimationChannel {
  * (`output.length = input.length * elementCount`) where elementCount is:
  *   - 3 for 'translation' / 'scale' (vec3)
  *   - 4 for 'rotation' (quat)
+ *   - targetCount for 'weights' (morph weights)
  *
  * `interpolation` is restricted to LINEAR and STEP per D-1 scope;
  * CUBICSPLINE is deferred to OOS-skin-cubicspline (fail-fast at importer).
@@ -1511,9 +1807,8 @@ export interface AnimationClip {
 // the AssetRegistry / shared-handle system when the graph is registered (like
 // AnimationClip / MaterialAsset / VideoAsset). Nodes are stored flat in `nodes[]`
 // and referenced by index; `root` is the index of the output node. Clip leaves
-// carry a `Handle<'AnimationClip', 'shared'>` (the same shared-handle abstraction
-// MeshRenderer.materials uses for MaterialAsset — charter P4); M4 serialization
-// rewrites those handles to GUIDs via the existing `refs` mechanism.
+// carry a durable GUID string; the runtime consumer resolves that GUID to a
+// World-local transient shared handle only at evaluation time.
 
 /**
  * Clip leaf node — samples a single `shared<AnimationClip>` at the node's
@@ -1523,7 +1818,7 @@ export interface AnimationClip {
  */
 export interface AnimationGraphClipNode {
   readonly type: 'clip';
-  readonly clip: Handle<'AnimationClip', 'shared'>;
+  readonly clip: string;
   readonly weight: number;
 }
 
@@ -1654,28 +1949,28 @@ export interface SkinAsset {
 }
 
 /**
- * VertexAttributeMap — 13-key closed set (feat-20260629-multi-uv-set-support D-7).
+ * VertexAttributeMap — 14-key closed set (feat-20260823 vertex-color asset closure).
  *
  * Canonical interleaved order (plan-strategy F-1, must match bridge + layout layers):
- *   position / normal / uv / tangent / skinIndex / skinWeight / uv1..uv7
+ *   position / normal / uv / tangent / skinIndex / skinWeight / uv1..uv7 / color
  *
  * @location mapping per plan-strategy D-4:
  *   position@0  normal@1  uv@2  tangent@3  skinIndex@4  skinWeight@5
- *   uv1@6  uv2@7  uv3@8  uv4@9  uv5@10  uv6@11  uv7@12
+ *   uv1@6  uv2@7  uv3@8  uv4@9  uv5@10  uv6@11  uv7@12  color@13
  *
  * Keys align with Three.js r184 `BufferGeometry.attributes` naming (D-P1 +
  * plan-strategy §7.2 mental migration stance). Importers rename at ingest
  * (`POSITION -> position` / `TEXCOORD_0 -> uv` / `JOINTS_0 -> skinIndex` /
  * `WEIGHTS_0 -> skinWeight`) so the runtime key space remains lowercase.
  *
- * All 13 keys are optional; a mesh with only `position` (static unlit) is
+ * All 14 keys are optional; a mesh with only `position` (static unlit) is
  * valid. Values accept the three common binary shapes:
  * `ArrayBuffer | Float32Array | Uint16Array` (extend only via minor add per
  * the closed-union evolution contract).
  *
  * AC-15 narrowing: consumer sites writing
  * `for (const [key, buffer] of Object.entries(attributes))` observe `key`
- * typed as the 13-member literal union without `as` casts; any typo (e.g.
+ * typed as the 14-member literal union without `as` casts; any typo (e.g.
  * `'POSITION'`) is a TS compile-time error.
  */
 export interface VertexAttributeMap {
@@ -1699,7 +1994,45 @@ export interface VertexAttributeMap {
   uv6?: ArrayBuffer | Float32Array | Uint16Array;
   /** UV set 7 */
   uv7?: ArrayBuffer | Float32Array | Uint16Array;
+  /** Optional per-vertex linear RGBA color, exactly four finite floats per vertex. */
+  color?: Float32Array;
 }
+
+/** Closed storage vocabulary used by the geometry pack boundary. */
+export type VertexAttributeStorage = 'array-buffer' | 'float32' | 'uint16' | 'other';
+
+/** Lossless detail for one rejected canonical vertex attribute pack. */
+export type VertexAttributePackDetail =
+  | {
+      readonly field: 'vertexCount';
+      readonly reason: 'vertex-count-invalid';
+      readonly actual: number;
+    }
+  | {
+      readonly field: 'attributes';
+      readonly reason: 'attributes-empty';
+      readonly actualCount: 0;
+    }
+  | {
+      readonly field: keyof VertexAttributeMap;
+      readonly reason: 'attribute-storage-invalid';
+      readonly expectedStorage: 'float32' | 'uint16';
+      readonly actualStorage: VertexAttributeStorage;
+    }
+  | {
+      readonly field: keyof VertexAttributeMap;
+      readonly reason: 'attribute-cardinality-mismatch';
+      readonly vertexCount: number;
+      readonly componentsPerVertex: number;
+      readonly expectedLength: number;
+      readonly actualLength: number;
+    }
+  | {
+      readonly field: keyof VertexAttributeMap;
+      readonly reason: 'attribute-non-finite';
+      readonly elementIndex: number;
+      readonly actual: 'nan' | 'positive-infinity' | 'negative-infinity';
+    };
 
 /**
  * Canonical UV attribute key order (set 0 = `uv`, sets 1..7 = `uv1..uv7`),
@@ -1845,8 +2178,10 @@ export type AssetErrorCode =
   // asset-not-imported so it never masks the parent-missing breadcrumb.
   | 'source-not-imported'
   // === 3 new codes (feat-20260608-mesh-multi-section-primitive-multi-material-slot M1 / w2) ===
-  | 'mesh-renderer-material-count-mismatch'
+  | 'mesh-renderer-material-override-invalid'
+  | 'mesh-renderer-material-override-overflow'
   | 'mesh-asset-submeshes-empty'
+  | 'mesh-asset-material-slot-index-out-of-range'
   | 'mesh-submesh-index-range-out-of-bounds'
   // === 1 new code (feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild) ===
   // Tileset region rectangle out of atlas extent OR tile entry regionIndex out of
@@ -1985,10 +2320,14 @@ export const ASSET_ERROR_HINTS: Readonly<Record<AssetErrorCode, string>> = {
   'source-not-imported':
     'this mesh/material/scene sub-asset row still points at the raw source container (.glb/.gltf/.fbx); wire createDevImportTransport() for dev lazy-import (POST /__import), or pre-import via the build-time pipeline. The runtime does not parse raw containers at load time.',
   // === 3 new hints (feat-20260608-mesh-multi-section-primitive-multi-material-slot M1 / w2) ===
-  'mesh-renderer-material-count-mismatch':
-    'materials.length must equal submeshes.length; got materials=N, submeshes=M, meshAssetGuid=...; ensure MeshRenderer.materials arrays are equal-length to MeshAsset.submeshes arrays',
+  'mesh-renderer-material-override-invalid':
+    'a MeshRenderer.materials slot is stale or does not resolve to a MaterialAsset; the renderer inherited the MeshAsset default for that slot',
+  'mesh-renderer-material-override-overflow':
+    'MeshRenderer.materials contains entries beyond MeshAsset.materialSlots; extra overrides are ignored',
   'mesh-asset-submeshes-empty':
     'MeshAsset.submeshes must have at least one entry; every mesh must declare at least one submesh; check MeshAsset registration payload for empty submeshes array',
+  'mesh-asset-material-slot-index-out-of-range':
+    'MeshAsset submesh materialSlot must index MeshAsset.materialSlots; re-cook the mesh and inspect the offending submesh/slot topology',
   'mesh-submesh-index-range-out-of-bounds':
     'submesh indexOffset + indexCount exceeds the parent mesh index buffer length; check submesh index range bounds against MeshAsset.indices and MeshAsset.vertices; err.detail carries submeshIndex, indexOffset, indexCount, indexBufferLength, and meshAssetGuid',
   // === 1 new hint (feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild) ===
@@ -2002,7 +2341,7 @@ export const ASSET_ERROR_HINTS: Readonly<Record<AssetErrorCode, string>> = {
     'The asset was invalidated during load; call loadByGuid(guid) again to retry with a fresh fetch',
   // === 1 new hint (feat-20260629-multi-uv-set-support M2 / m2-w5) ===
   'mesh-bin-contract-violation':
-    're-cook the asset via importer; the .bin sidecar header v2 contract is violated — check err.detail for version/uvSetCount/stride mismatch',
+    're-cook the asset via importer; the .bin sidecar v4 contract is violated — inspect err.detail.reason and its expected/actual projection, stride, cardinality, and byte-length facts',
   // === 1 new hint (feat-20260707-texture-block-compression M5 / w35, D-9) ===
   'mipgen-unsupported-compressed-format':
     'compressed-texture mips must be baked offline (the GPU cannot generate mips for a non-render-target block format); re-cook with an offline mip chain, or set the sidecar .meta.json compressionMode:"none" (or mipmap:false) to keep runtime mip generation on an uncompressed texture',
@@ -2200,22 +2539,62 @@ export interface AssetTilesetTileEntryMalformedDetail {
 }
 
 /**
- * Detail for `mesh-bin-contract-violation` (feat-20260629-multi-uv-set-support M2 / m2-w5).
+ * Detail for `mesh-bin-contract-violation`.
  *
- * Carries the three header v2 fields that failed contract validation:
- *   - version: always 2 for valid bins, stored so consumer sees what was rejected
- *   - uvSetCount: number of UV sets in header (1..8 valid)
- *   - stride: floatsPerVertex from header (12..26 valid)
- *
- * AI users inspect `detail.version` / `detail.uvSetCount` / `detail.stride`
- * to diagnose a corrupt .bin sidecar (charter P3 explicit failure: structured
- * detail > string parsing).
+ * The mesh-bin header is a projection of the canonical geometry layout. Keep
+ * the complete wire facts in the structured detail so recovery never depends
+ * on parsing the human-facing `expected` / `actual` strings. `sourceKey` and
+ * `reason` identify the owning payload and the failed invariant; the nested
+ * snapshots preserve the lossless expected/actual cardinality facts.
  */
+export type AssetMeshBinContractViolationReason =
+  | 'header-truncated'
+  | 'version-unsupported'
+  | 'header-invalid'
+  | 'projection-mismatch'
+  | 'payload-length-mismatch'
+  | 'metadata-invalid'
+  | 'attribute-invalid'
+  | 'payload-non-finite';
+
+export interface AssetMeshBinContractFacts {
+  readonly field?:
+    | 'byteLength'
+    | 'version'
+    | 'projectionVersion'
+    | 'mask'
+    | 'stride'
+    | 'digest'
+    | 'vertexBytes'
+    | 'indexBytes'
+    | 'jsonBytes'
+    | 'metadata'
+    | 'attribute';
+  readonly attribute?: keyof VertexAttributeMap;
+  readonly elementIndex?: number;
+  readonly expectedLength?: number;
+  readonly actualLength?: number;
+  readonly actualValue?: 'nan' | 'positive-infinity' | 'negative-infinity';
+  readonly version?: number;
+  readonly projectionVersion?: number;
+  readonly mask?: number;
+  readonly digest?: string;
+  readonly stride?: number;
+  readonly vertexCount?: number;
+  readonly vertexBytes?: number;
+  readonly indexCount?: number;
+  readonly indexWidth?: number;
+  readonly indexBytes?: number;
+  readonly jsonBytes?: number;
+  readonly byteLength?: number;
+}
+
 export interface AssetMeshBinContractViolationDetail {
   readonly code: 'mesh-bin-contract-violation';
-  readonly version: number;
-  readonly uvSetCount: number;
-  readonly stride: number;
+  readonly sourceKey: string;
+  readonly reason: AssetMeshBinContractViolationReason;
+  readonly expected: Readonly<AssetMeshBinContractFacts>;
+  readonly actual: Readonly<AssetMeshBinContractFacts>;
 }
 
 /**
@@ -2227,8 +2606,8 @@ export interface AssetMeshBinContractViolationDetail {
  *   missingShaderId.
  * - `asset-invalid-value` -- a register-time value failed validation;
  *   carries `{ field: string; got: unknown }`.
- * - `mesh-renderer-material-count-mismatch` -- materials.length !=
- *   submeshes.length; carries `{ expectedCount, actualCount, meshAssetGuid }`.
+ * - `mesh-renderer-material-override-overflow` -- override entries exceed
+ *   slot count; carries `{ expectedCount, actualCount, meshAssetGuid }`.
  * - `mesh-asset-submeshes-empty` -- MeshAsset.submeshes is empty array;
  *   carries `{ meshAssetGuid }`.
  * - `mesh-submesh-index-range-out-of-bounds` -- submesh index range exceeds
@@ -2236,13 +2615,30 @@ export interface AssetMeshBinContractViolationDetail {
  *   indexCount, indexBufferLength, meshAssetGuid }`.
  */
 export type AssetErrorDetail =
+  | import('./asset.js').AssetCodecFailureDetail
   | AssetMaterialShaderRefBrokenDetail
   | AssetTilesetRegionIndexOutOfRangeDetail
   | AssetTilesetTileEntryMalformedDetail
   | AssetMeshBinContractViolationDetail
+  | VertexAttributePackDetail
   | { readonly field: string; readonly got: unknown }
   | { readonly field: string; readonly value: unknown; readonly reason: string }
   | { readonly expectedCount: number; readonly actualCount: number; readonly meshAssetGuid: string }
+  | { readonly meshAssetGuid: string; readonly slotIndex: number; readonly handle: number }
+  | {
+      readonly meshAssetGuid: string;
+      readonly slotIndex: number;
+      readonly slotName: string;
+      readonly defaultMaterialGuid: string;
+      readonly actualKind: string;
+    }
+  | MeshMaterialOverrideConflict
+  | {
+      readonly meshAssetGuid: string;
+      readonly submeshIndex: number;
+      readonly materialSlot: number;
+      readonly materialSlotCount: number;
+    }
   | { readonly meshAssetGuid: string }
   | {
       readonly submeshIndex: number;
@@ -2384,7 +2780,7 @@ export const IMAGE_ERROR_HINTS: Readonly<Record<ImageErrorCode, string>> = {
   'image-decode-failed':
     'check file integrity; re-export from DCC tool (Photoshop / GIMP / Aseprite); dimensions > 0 + valid PNG / JPG header bytes',
   'image-format-unsupported':
-    'v1 supports PNG / JPG only; convert with: cwebp / magick convert <input> <output>.png; check importSettings.colorSpace consistency with format family if formatColorSpaceConflict present',
+    'supports PNG / JPG / TGA true-color sources; convert unsupported formats with: magick convert <input> <output>.png; check importSettings.colorSpace consistency with format family if formatColorSpaceConflict present',
   'image-dimension-out-of-bounds':
     'downscale source under device caps (typical maxTextureDimension2D = 8192 / 16384); use mipmap chain instead of larger source if lod is the goal',
   'image-meta-missing': 'run: forgeax-engine-remote-asset import <path>',
@@ -2460,7 +2856,7 @@ export interface ImageMeta {
  * - `width` / `height` -- pixel dimensions (must satisfy device caps
  *   `maxTextureDimension2D` floor; surfaced as `image-dimension-out-of-bounds`
  *   when exceeded).
- * - `mime` -- discriminator over the supported set (`'image/jpeg' | 'image/png'`);
+ * - `mime` -- discriminator over the supported set (`'image/jpeg' | 'image/png' | 'image/x-tga'`);
  *   keeps the runtime side from sniffing magic bytes.
  * - `colorSpace` -- carried over from `ImageMeta.colorSpace`; uploadTexture
  *   asserts `format <-> colorSpace` consistency at the GPU upload entry
@@ -2475,7 +2871,7 @@ export interface DecodedImage {
   readonly bytes: Uint8Array;
   readonly width: number;
   readonly height: number;
-  readonly mime: 'image/jpeg' | 'image/png';
+  readonly mime: 'image/jpeg' | 'image/png' | 'image/x-tga';
   readonly colorSpace: ImageColorSpace;
   readonly mipmap: boolean;
 }
@@ -3640,8 +4036,8 @@ export interface RemoteHandle {
 // === Remote error model SSOT (feat-20260629-inspector-two-layer-model) ====
 //
 // Decision anchors:
-// - requirements §10.1 + §10.2 + AC-05 (`RemoteErrorCode` 4-member
-//   closed union + 4-field `RemoteError` shape independent from RhiError /
+// - requirements §10.1 + §10.2 + AC-05 (`RemoteErrorCode` 5-member
+//   closed union + structured `RemoteError` shape independent from RhiError /
 //   ShaderError)
 // - plan-strategy §2 D-5 (rename InspectorErrorCode -> RemoteErrorCode,
 //   delete inspector-write-denied, delete script-timeout, rename
@@ -3650,14 +4046,14 @@ export interface RemoteHandle {
 //   proposition 4 (explicit failure — `switch (err.code)` is exhaustive
 //   without default fallback) + proposition 5 (consistent abstraction —
 //   structurally aligned with @forgeax/engine-rhi's RhiError surface)
-// - architecture-principles #1 SSOT (the 4 string literals + 4-field
+// - architecture-principles #1 SSOT (the 5 string literals + structured
 //   structural shape live here once; @forgeax/engine-remote's runtime `RemoteError`
 //   class implements this interface; consumers import the type
 //   alias without dragging the runtime class through static deps —
 //   parallel to the existing ShaderErrorCode pattern)
 
 /**
- * Closed `RemoteErrorCode` union — 4 members (feat-20260629-inspector-two-layer-model
+ * Closed `RemoteErrorCode` union — 5 members (feat-20260629-inspector-two-layer-model
  * D-5; requirements AC-05). Exhaustive `switch` needs no default
  * fallback — TypeScript guards union completeness at compile time
  * (charter proposition 4 explicit failure + proposition 3 machine-readable
@@ -3669,22 +4065,24 @@ export interface RemoteHandle {
  * | `'script-runtime-error'` | Script threw a non-syntax exception during execution (e.g. ReferenceError / TypeError). |
  * | `'server-startup-failed'` | The remote eval server failed to come up: WebSocketServer raised 'error' (EADDRINUSE / other listen failure), dynamic-import resolution failed, or the target package lacks the `startServer` factory. |
  * | `'server-not-running'` | CLI client's `new WebSocket('ws://localhost:<port>/inspector')` failed to connect (server not started; `app.remote` not wired in the demo). |
+ * | `'eval-result-not-serializable'` | A successful eval result cannot cross the JSON-RPC wire, such as a BigInt or cyclic object. |
  *
  * **Independence from `RhiError | ShaderError` union** — `RemoteErrorCode`
  * is **not** merged into the GPU / asset error union (charter proposition 5 +
  * architecture-principles #1 SSOT). Engine-side errors stream is OOS-1
- * (errors.subscribe v2 spinoff); remote callers only face these 4
+ * (errors.subscribe v2 spinoff); remote callers only face these 5
  * alternatives.
  */
 export type RemoteErrorCode =
   | 'script-syntax-error'
   | 'script-runtime-error'
   | 'server-startup-failed'
-  | 'server-not-running';
+  | 'server-not-running'
+  | 'eval-result-not-serializable';
 
 /**
  * Structural shape of a forgeax remote error (feat-20260629-inspector-two-layer-model
- * D-5). Four-field surface mirroring `@forgeax/engine-rhi` `RhiError`
+ * D-5). Structured surface mirroring `@forgeax/engine-rhi` `RhiError`
  * (charter proposition 5 consistent abstraction; AGENTS.md "Errors are
  * structured"):
  *
@@ -3724,49 +4122,37 @@ export interface RemoteError extends Error {
  * prose. Variants without payload are intentionally absent — the
  * `RemoteError.detail` slot is `undefined` for those codes.
  *
- * The `server-startup-failed` variant captures the historical narrative
- * tokens (`removedAt` + `docAnchor`) that previously lived inside the
- * `.hint` copy; AC-13 binary-form hint phrasing stays terse and
- * executable, while AI users that need provenance read it via
- * `err.detail.removedAt` / `err.detail.docAnchor` after a code-narrow.
+ * The `server-startup-failed` variant carries bounded startup provenance.
  */
-export type RemoteErrorDetail = ServerStartupFailedDetail;
+export type RemoteErrorDetail = ServerStartupFailedDetail | EvalResultNotSerializableDetail;
 
 /**
- * `server-startup-failed` discriminator variant. Carries the legacy
- * inspect-routing context plus historical narrative tokens.
- *
- * - `legacyInspectTarget`: when populated, the offending CLI subcommand
- *   chain matched the deleted `inspect <legacyInspectTarget>` built-in form
- *   and the `did you mean 'forgeax-engine-remote-ecs <legacyInspectTarget>'?`
- *   hint copy is the canonical recovery path (AC-12).
- * - `removedAt`: ISO date of the breaking change that deleted the inline
- *   `inspect <target>` built-in subcommand (the day the loop landed).
- * - `docAnchor`: relative anchor into AGENTS.md `#breaking-changes` row
- *   (so AI users that consume `.detail` JSON-RPC payloads can navigate
- *   straight to the row without parsing prose).
+ * `server-startup-failed` discriminator variant with bounded provenance.
  */
 export interface ServerStartupFailedDetail {
   readonly code: 'server-startup-failed';
-  readonly legacyInspectTarget?: string;
   readonly removedAt: string;
   readonly docAnchor: string;
 }
 
 /**
- * SSOT for the legacy-inspect routing hint template (feat-20260517 AC-12).
- * Producers (the CLI plugin-fallthrough path + any downstream tooling that
- * formats `server-startup-failed` for human consumption) should compose
- * the hint via this helper so the `did you mean` copy stays byte-identical
- * across producers.
- *
- * The phrasing is single-line + executable so AI users can grep the
- * stderr block, copy the suggested binary form, and re-run; charter P3
- * machine-readable hint > prose.
+ * SSOT for the legacy-inspect routing hint template. Keep the recovery copy
+ * executable and byte-stable for CLI and remote consumers.
  */
 export function legacyInspectHint(legacyInspectTarget: string): string {
   return `did you mean 'forgeax-engine-remote-ecs ${legacyInspectTarget}'?`;
 }
+
+/**
+ * `eval-result-not-serializable` discriminator variant. The shape is a
+ * bounded classification only; it carries no part of the returned object
+ * so failed transport cannot leak arbitrary engine state.
+ */
+export interface EvalResultNotSerializableDetail {
+  readonly code: 'eval-result-not-serializable';
+  readonly shape: 'bigint' | 'cyclic-object' | 'unsupported';
+}
+
 // === Metric registry error model SSOT (feat-20260512-threejs-pixel-parity-bench) ===
 //
 // Decision anchors:
@@ -4083,7 +4469,6 @@ export interface ImageMetadata {
 
 export type {
   AssetAuthoringCapability,
-  AssetAuthoringUnavailableCode,
   AssetAuthoringUnavailableReason,
   AssetBindingCapability,
   AssetBindingTarget,
@@ -4113,6 +4498,7 @@ export type {
   ProposedOutput,
   ProviderProvenance,
   ResourceRevision,
+  ScenePublicationFence,
   SourceOverrideDescriptor,
   SourceOverrideDiagnostic,
   SourceOverrideErrorCode,
@@ -4130,6 +4516,7 @@ export {
   canonicalizeSourceOverrides,
   catalogOperationsFor,
   isCatalogProjectionValid,
+  MESH_MATERIAL_SLOT_SOURCE_OVERRIDE_PAYLOAD_SCHEMA,
   validateSourceOverrideMap,
 } from './asset-producer';
 /**
@@ -4153,13 +4540,24 @@ export {
  *     undefined` before consumption (D-2 backward-compat strategy).
  */
 export type {
+  AssetPublicationEnvelope,
+  AssetPublicationEvidenceUsage,
+  AssetPublicationExternalEvidence,
+  AssetPublicationFailure,
+  AssetPublicationFailureStage,
+  AssetPublicationLocator,
+  AssetPublicationOutput,
+  AssetPublicationReceipt,
+  AssetPublicationRecovery,
   CatalogDelta,
+  CatalogDeltaValidationError,
   CatalogEntry,
   CatalogEntry as PackIndexEntry,
+  CatalogEntryV2,
   CatalogRevisionPoint,
   CatalogRevisionWindow,
 } from './catalog';
-export type { CatalogEntryV2 } from './catalog.js';
+export { catalogDeltaDigest, catalogEntryDigest, validateCatalogDelta } from './catalog';
 
 // === InspectEntry / InspectSnapshot (feat-20260618-asset-and-pack-name-fields M1 / w3) ===
 //
@@ -4364,6 +4762,7 @@ export interface Loader<P = Asset> {
               readonly mediaType: string;
               readonly assetCodec?: {
                 readonly name: string;
+                readonly container?: 'ktx2' | 'basis';
                 readonly profile?: string;
                 readonly version?: string;
               };
@@ -4391,7 +4790,11 @@ export type {
   ImportedArtifactBody,
   ImportedAsset,
   Importer,
+  ImporterCapabilities,
   ImportProduct,
+  ImportProductFinalizeArtifact,
+  ImportProductFinalizeOptions,
+  ImportProductFinalizeResult,
   ImportResult,
   ImportSourceRange,
   ImportSubAsset,

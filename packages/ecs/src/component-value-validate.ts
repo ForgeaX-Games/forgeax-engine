@@ -20,7 +20,9 @@
 // numeric handle vs a non-handle.
 
 import type { Component, ComponentSchema } from './component';
-import { SharedFieldInvalidValueError } from './errors';
+import { componentSchema } from './component';
+import { componentDefinition } from './component-schema';
+import { ManagedArrayInvalidValueError, SharedFieldInvalidValueError } from './errors';
 
 /** A resolved shared handle is a plain number (the branded Handle bit pattern). */
 function isNumericHandle(v: unknown): boolean {
@@ -46,6 +48,44 @@ function isSharedArrayType(fieldType: string): boolean {
   return head.startsWith('shared<') && head.endsWith('>');
 }
 
+function isArrayPayload(value: unknown): boolean {
+  if (Array.isArray(value)) return true;
+  // DataView and ArrayBuffer are views/buffers without an element `length`;
+  // the storage writer cannot interpret them as a managed array payload.
+  return ArrayBuffer.isView(value) && typeof (value as { length?: unknown }).length === 'number';
+}
+
+/**
+ * Validate the outer value shape for every managed `array<T>` field present in
+ * a write payload. This is deliberately a preflight-only check: element
+ * coercion remains owned by the column writer, while arbitrary objects are
+ * rejected before any row, buffer slot, retain, or epoch mutation can occur.
+ */
+export function validateManagedArrayValues<S extends ComponentSchema>(
+  token: Component<string, S>,
+  raw: Partial<Record<string, unknown>> | undefined,
+): ManagedArrayInvalidValueError | null {
+  if (raw === undefined) return null;
+  const fields = componentDefinition(token).fields as Readonly<
+    Record<string, { readonly type: string; readonly arrayMeta?: unknown }>
+  >;
+  const rawObj = raw as Record<string, unknown>;
+  for (const fieldName of Object.keys(rawObj)) {
+    const reflection = fields[fieldName];
+    if (reflection?.arrayMeta === undefined) continue;
+    const value = rawObj[fieldName];
+    // `fillComponentDefaults` deliberately uses numeric zero as the layer-3
+    // raw sentinel for every non-entity array vocabulary. The column writer
+    // owns translating that sentinel into an empty variable slot or a
+    // zero-filled fixed row, so it must pass this preflight just like an
+    // omitted/null value. Other scalar/object values remain invalid.
+    if (value === 0) continue;
+    if (value === undefined || value === null || isArrayPayload(value)) continue;
+    return new ManagedArrayInvalidValueError(token.name, fieldName, reflection.type, value);
+  }
+  return null;
+}
+
 /**
  * Validate that every `shared<T>` scalar / `array<shared<T>>` element present in
  * `raw` is a resolved numeric Handle. Returns the FIRST offending field's
@@ -69,7 +109,7 @@ export function validateSharedFieldValues<S extends ComponentSchema>(
   raw: Partial<Record<string, unknown>> | undefined,
 ): SharedFieldInvalidValueError | null {
   if (raw === undefined) return null;
-  const schema = token.schema as Record<string, string>;
+  const schema = componentSchema(token) as Record<string, string>;
   const rawObj = raw as Record<string, unknown>;
   for (const fieldName of Object.keys(rawObj)) {
     const fieldType = schema[fieldName];

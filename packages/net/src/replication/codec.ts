@@ -1,26 +1,21 @@
 import { err, ok, type Result } from '@forgeax/engine-types';
-import { REPLICATION_PROTOCOL_VERSION } from './constants';
+import { REPLICATION_PROTOCOL_PREFIX, REPLICATION_PROTOCOL_VERSION } from './constants';
 import { NetError } from './errors';
 import type { ReplicationLimits } from './profile';
+import type { ReplicationDataPacket, ReplicationEntityRecord, ReplicationPacket } from './protocol';
 
-export type NetEntityId = number & { readonly __netEntityId: unique symbol };
-export interface ReplicationComponentRecord {
-  readonly name: string;
-  readonly operation?: 'replace' | 'remove';
-  readonly data: Record<string, unknown>;
-}
-export interface ReplicationEntityRecord {
-  readonly id: number;
-  readonly kind: 'upsert' | 'despawn';
-  readonly components: readonly ReplicationComponentRecord[];
-}
-export interface ReplicationBatch {
-  readonly version: number;
-  readonly fingerprint: string;
-  readonly tick: number;
-  readonly full: boolean;
-  readonly entities: readonly ReplicationEntityRecord[];
-}
+export type { ReplicationComponentRecord, ReplicationEntityRecord } from './protocol';
+
+type PortableTypedArray =
+  | Float32Array
+  | Float64Array
+  | Int8Array
+  | Int16Array
+  | Int32Array
+  | Uint8Array
+  | Uint8ClampedArray
+  | Uint16Array
+  | Uint32Array;
 
 const TYPED_ARRAYS = {
   Float32Array,
@@ -33,8 +28,38 @@ const TYPED_ARRAYS = {
   Uint16Array,
   Uint32Array,
 } as const;
+
 type TypedArrayName = keyof typeof TYPED_ARRAYS;
-type PortableTypedArray = InstanceType<(typeof TYPED_ARRAYS)[TypedArrayName]>;
+
+const PACKET_KINDS = [
+  'session-open',
+  'session-resume',
+  'baseline',
+  'delta',
+  'ack',
+  'rejection',
+] as const satisfies readonly ReplicationPacket['kind'][];
+
+const REPLICATION_ENTITY_KINDS = [
+  'upsert',
+  'despawn',
+] as const satisfies readonly ReplicationEntityRecord['kind'][];
+
+function isPacketKind(value: unknown): value is ReplicationPacket['kind'] {
+  return PACKET_KINDS.some((kind) => kind === value);
+}
+
+function isReplicationEntityKind(value: unknown): value is ReplicationEntityRecord['kind'] {
+  return REPLICATION_ENTITY_KINDS.some((kind) => kind === value);
+}
+
+function isSafeNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isSessionId(value: unknown): boolean {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
 
 function typedArrayName(value: unknown): TypedArrayName | undefined {
   for (const [name, typedArrayConstructor] of Object.entries(TYPED_ARRAYS) as [
@@ -51,13 +76,12 @@ function canonicalize(value: unknown): unknown {
   if (name !== undefined)
     return { $typedArray: name, values: Array.from(value as PortableTypedArray) };
   if (Array.isArray(value)) return value.map(canonicalize);
-  if (value !== null && typeof value === 'object') {
+  if (value !== null && typeof value === 'object')
     return Object.fromEntries(
       Object.keys(value)
         .sort()
         .map((key) => [key, canonicalize((value as Record<string, unknown>)[key])]),
     );
-  }
   return value;
 }
 
@@ -75,7 +99,7 @@ function reviveTypedArrays(
   }
   if (value === null || typeof value !== 'object') return { value };
   const record = value as Record<string, unknown>;
-  if ('$typedArray' in record || 'values' in record) {
+  if ('$typedArray' in record) {
     if (
       Object.keys(record).length !== 2 ||
       typeof record.$typedArray !== 'string' ||
@@ -98,6 +122,7 @@ function reviveTypedArrays(
   }
   return { value: revived };
 }
+
 function limitError(limit: string, actual: number, maximum: number): NetError {
   return new NetError({
     code: 'decode-limit-exceeded',
@@ -106,15 +131,86 @@ function limitError(limit: string, actual: number, maximum: number): NetError {
     detail: { limit, actual, maximum },
   });
 }
+
+function invalid(reason: string): NetError {
+  return new NetError({
+    code: 'decode-invalid-payload',
+    expected: `a version ${REPLICATION_PROTOCOL_VERSION} ${REPLICATION_PROTOCOL_PREFIX} packet`,
+    hint: 'send bytes produced by the protocol-v2 replication codec',
+    detail: { reason },
+  });
+}
+
+function validateEntities(entities: readonly ReplicationEntityRecord[]): string | undefined {
+  const ids = new Set<number>();
+  for (const [entityIndex, entity] of entities.entries()) {
+    if (
+      entity === null ||
+      typeof entity !== 'object' ||
+      !isSafeNonNegativeInteger(entity.id) ||
+      !isReplicationEntityKind(entity.kind) ||
+      !Array.isArray(entity.components) ||
+      ids.has(entity.id)
+    )
+      return `entity record ${entityIndex} has an invalid or duplicate identity`;
+    ids.add(entity.id);
+    for (const [componentIndex, component] of entity.components.entries()) {
+      if (
+        component === null ||
+        typeof component !== 'object' ||
+        typeof component.name !== 'string' ||
+        component.name.length === 0 ||
+        (component.operation !== undefined &&
+          component.operation !== 'replace' &&
+          component.operation !== 'remove') ||
+        component.data === null ||
+        typeof component.data !== 'object' ||
+        Array.isArray(component.data) ||
+        (component.operation === 'remove' && Object.keys(component.data).length !== 0)
+      )
+        return `component record ${entityIndex}:${componentIndex} has invalid fields`;
+    }
+  }
+  return undefined;
+}
+
+function validatePacket(packet: ReplicationPacket): string | undefined {
+  if (packet.version !== REPLICATION_PROTOCOL_VERSION)
+    return 'packet protocol version is unsupported';
+  if (!isPacketKind(packet.kind)) return 'packet kind is unsupported';
+  if (!isSessionId(packet.sessionId)) return 'sessionId must be a positive safe integer';
+  if (!isSafeNonNegativeInteger(packet.epoch)) return 'epoch must be a non-negative safe integer';
+  if (packet.kind === 'session-open' || packet.kind === 'session-resume')
+    return packet.sequence === 0 ? undefined : 'session control sequence must be zero';
+  if (packet.kind === 'ack')
+    return isSafeNonNegativeInteger(packet.acknowledgedSequence)
+      ? undefined
+      : 'acknowledgedSequence must be a non-negative safe integer';
+  if (!isSafeNonNegativeInteger(packet.sequence) || packet.sequence === 0)
+    return 'sequence must be a positive safe integer';
+  if (packet.kind === 'baseline' && packet.sequence !== 1) return 'baseline sequence must be one';
+  if (packet.kind === 'rejection') {
+    if (!isPacketKind(packet.rejectedKind) || typeof packet.reason !== 'string')
+      return 'rejection details are invalid';
+    return undefined;
+  }
+  if (packet.kind !== 'baseline' && packet.kind !== 'delta')
+    return 'packet kind does not carry a data payload';
+  if (typeof packet.tick !== 'number' || !Number.isSafeInteger(packet.tick))
+    return 'tick must be a safe integer';
+  if (typeof packet.fingerprint !== 'string') return 'fingerprint must be a string';
+  return validateEntities(packet.entities);
+}
+
 function validateLimits(
-  batch: ReplicationBatch,
+  packet: ReplicationDataPacket,
   bytes: Uint8Array | undefined,
   limits: ReplicationLimits,
 ): NetError | null {
   if (bytes !== undefined && bytes.byteLength > limits.maxMessageBytes)
     return limitError('maxMessageBytes', bytes.byteLength, limits.maxMessageBytes);
-  if (batch.entities.length > limits.maxEntities)
-    return limitError('maxEntities', batch.entities.length, limits.maxEntities);
+  if (packet.entities.length > limits.maxEntities)
+    return limitError('maxEntities', packet.entities.length, limits.maxEntities);
   let operations = 0;
   const visit = (value: unknown): NetError | null => {
     if (
@@ -150,7 +246,7 @@ function validateLimits(
       }
     return null;
   };
-  for (const entity of batch.entities) {
+  for (const entity of packet.entities) {
     operations += entity.components.length;
     for (const component of entity.components) {
       const problem = visit(component.data);
@@ -161,88 +257,67 @@ function validateLimits(
     ? limitError('maxComponentOperations', operations, limits.maxComponentOperations)
     : null;
 }
+
 function parse(
   bytes: Uint8Array,
-): { readonly batch: ReplicationBatch } | { readonly reason: string } {
+): { readonly packet: ReplicationPacket } | { readonly error: NetError } {
+  const text = new TextDecoder().decode(bytes);
+  const separator = text.indexOf('\n');
+  if (separator < 0 || text.slice(0, separator) !== REPLICATION_PROTOCOL_PREFIX)
+    return { error: invalid('packet prefix does not match protocol-v2') };
   try {
-    const decoded: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    const decoded: unknown = JSON.parse(text.slice(separator + 1));
     const revived = reviveTypedArrays(decoded);
-    if ('reason' in revived) return revived;
+    if ('reason' in revived) return { error: invalid(revived.reason) };
     if (revived.value === null || typeof revived.value !== 'object')
-      return { reason: 'batch must be an object' };
-    const batch = revived.value as Partial<ReplicationBatch>;
-    if (
-      !Array.isArray(batch.entities) ||
-      typeof batch.fingerprint !== 'string' ||
-      !Number.isSafeInteger(batch.tick) ||
-      !Number.isSafeInteger(batch.version) ||
-      typeof batch.full !== 'boolean'
-    )
-      return { reason: 'batch envelope has an invalid field type' };
-    for (const [entityIndex, entity] of batch.entities.entries()) {
-      if (entity === null || typeof entity !== 'object')
-        return { reason: `entity record ${entityIndex} must be an object` };
-      const record = entity as Partial<ReplicationEntityRecord>;
-      if (
-        !Number.isSafeInteger(record.id) ||
-        (record.kind !== 'upsert' && record.kind !== 'despawn') ||
-        !Array.isArray(record.components)
-      )
-        return { reason: `entity record ${entityIndex} has an invalid field type` };
-      for (const [componentIndex, component] of record.components.entries()) {
-        if (component === null || typeof component !== 'object')
-          return { reason: `component record ${entityIndex}:${componentIndex} must be an object` };
-        const entry = component as Partial<ReplicationComponentRecord>;
-        if (
-          typeof entry.name !== 'string' ||
-          entry.name.length === 0 ||
-          (entry.operation !== undefined &&
-            entry.operation !== 'replace' &&
-            entry.operation !== 'remove') ||
-          entry.data === null ||
-          typeof entry.data !== 'object' ||
-          Array.isArray(entry.data) ||
-          (entry.operation === 'remove' && Object.keys(entry.data).length !== 0)
-        )
-          return {
-            reason: `component record ${entityIndex}:${componentIndex} has an invalid field type`,
-          };
-      }
+      return { error: invalid('packet must be an object') };
+    const packet = revived.value as ReplicationPacket;
+    const reason = validatePacket(packet);
+    if (reason !== undefined) {
+      if (typeof packet.version === 'number' && packet.version !== REPLICATION_PROTOCOL_VERSION)
+        return {
+          error: new NetError({
+            code: 'protocol-unsupported-version',
+            expected: `protocol version ${REPLICATION_PROTOCOL_VERSION}`,
+            hint: 'upgrade the peer before sending replicated bytes',
+            detail: {
+              receivedVersion: packet.version,
+              supportedVersion: REPLICATION_PROTOCOL_VERSION,
+            },
+          }),
+        };
+      return { error: invalid(reason) };
     }
-    return { batch: batch as ReplicationBatch };
+    return { packet };
   } catch {
-    return { reason: 'payload is not valid JSON' };
+    return { error: invalid('payload is not valid JSON') };
   }
 }
-export function encodeReplicationBatch(
-  batch: ReplicationBatch,
+
+function isDataPacket(packet: ReplicationPacket): packet is ReplicationDataPacket {
+  return packet.kind === 'baseline' || packet.kind === 'delta';
+}
+
+export function encodeReplicationPacket(
+  packet: ReplicationPacket,
   limits: ReplicationLimits,
 ): Result<Uint8Array, NetError> {
-  const bytes = new TextEncoder().encode(JSON.stringify(canonicalize(batch)));
-  const failure = validateLimits(batch, bytes, limits);
+  const reason = validatePacket(packet);
+  if (reason !== undefined) return err(invalid(reason));
+  const body = JSON.stringify(canonicalize(packet));
+  const bytes = new TextEncoder().encode(`${REPLICATION_PROTOCOL_PREFIX}\n${body}`);
+  const failure = isDataPacket(packet) ? validateLimits(packet, bytes, limits) : null;
   return failure ? err(failure) : ok(bytes);
 }
-export function decodeReplicationBatch(
+
+export function decodeReplicationPacket(
   bytes: Uint8Array,
   limits: ReplicationLimits,
-): Result<ReplicationBatch, NetError> {
+): Result<ReplicationPacket, NetError> {
   if (bytes.byteLength > limits.maxMessageBytes)
     return err(limitError('maxMessageBytes', bytes.byteLength, limits.maxMessageBytes));
   const parsed = parse(bytes);
-  if ('reason' in parsed || parsed.batch.version !== REPLICATION_PROTOCOL_VERSION)
-    return err(
-      new NetError({
-        code: 'decode-invalid-payload',
-        expected: `a version ${REPLICATION_PROTOCOL_VERSION} canonical replication batch`,
-        hint: 'send bytes produced by the replication codec for the negotiated protocol',
-        detail: {
-          reason:
-            'reason' in parsed
-              ? parsed.reason
-              : 'batch protocol version does not match the decoder',
-        },
-      }),
-    );
-  const failure = validateLimits(parsed.batch, bytes, limits);
-  return failure ? err(failure) : ok(parsed.batch);
+  if ('error' in parsed) return err(parsed.error);
+  const failure = isDataPacket(parsed.packet) ? validateLimits(parsed.packet, bytes, limits) : null;
+  return failure ? err(failure) : ok(parsed.packet);
 }

@@ -1,3 +1,4 @@
+import { ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { installKeyboardInput } from '../client';
 import {
@@ -23,7 +24,7 @@ describe('Snake direction commands', () => {
     const ready = encodeCommand({ kind: 'ready' });
     if (!ready.ok) throw ready.error;
     expect(decodeCommand(ready.value)).toEqual({ ok: true, value: { kind: 'ready' } });
-    expect(processJoinCommands([{ peerId: 1, data: ready.value }], new Set([1]))).toEqual(
+    expect(processJoinCommands([{ sessionId: 1, data: ready.value }], new Set([1]))).toEqual(
       new Set(),
     );
   });
@@ -36,9 +37,25 @@ describe('Snake direction commands', () => {
       removeEventListener: () => {},
       listener: undefined as ((event: KeyboardEvent) => void) | undefined,
     };
-    const endpoint = { send: (_peer: number, data: Uint8Array) => sent.push(data) };
+    const session = {
+      getRecoverySnapshot: () => ({
+        sessionId: 1 as never,
+        state: { kind: 'active', sessionId: 1 as never, epoch: 0, sequence: 1 } as const,
+        pendingPackets: 0,
+        maxPendingPackets: 32,
+        acknowledgedSequence: 1,
+        reconnectAttempts: 0,
+        epoch: 0,
+        sequence: 1,
+        ownedResources: { pendingConnects: 0, timers: 0, ledgers: 0, callbacks: 0 },
+      }),
+      sendToAuthority: (_sessionId: never, data: Uint8Array) => {
+        sent.push(data);
+        return ok(undefined);
+      },
+    };
     const evidence = { directionCommandSendCount: 0 };
-    installKeyboardInput(endpoint as never, target as never, evidence);
+    installKeyboardInput(session, target as never, evidence);
     target.listener?.({ key: 'q' } as KeyboardEvent);
     expect(evidence.directionCommandSendCount).toBe(0);
     target.listener?.({ key: 'ArrowUp' } as KeyboardEvent);
@@ -88,9 +105,9 @@ describe('Snake direction commands', () => {
     expect(
       processCommands(
         [
-          { peerId: 1, data: command('left') },
-          { peerId: 1, data: command('down') },
-          { peerId: 2, data: command('down') },
+          { sessionId: 1, data: command('left') },
+          { sessionId: 1, data: command('down') },
+          { sessionId: 2, data: command('down') },
         ],
         new Map([
           [1, 'up'],
@@ -106,7 +123,7 @@ describe('Snake direction commands', () => {
     const decoded = decodeDirectionCommand(encoded.value);
     expect(decoded.ok).toBe(true);
     if (decoded.ok) expect(decoded.value).not.toHaveProperty('peerId');
-    expect(processCommands([{ peerId: 7, data: encoded.value }], new Map([[7, 'up']]))).toEqual(
+    expect(processCommands([{ sessionId: 7, data: encoded.value }], new Map([[7, 'up']]))).toEqual(
       new Map([[7, 'right']]),
     );
   });

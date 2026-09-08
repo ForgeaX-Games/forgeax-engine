@@ -1,9 +1,18 @@
-import type { BindGroupLayoutDescriptor, ParticleEffectAsset } from '@forgeax/engine-types';
+import type {
+  BindGroupLayoutDescriptor,
+  ParticleEffectAsset,
+  ParticleEffectProgram,
+  ParticleEffectProgramEmitter,
+} from '@forgeax/engine-types';
 import type {
   ParticleChannelSource,
   ParticleEmitterSourceV2,
   ParticleEventSource,
+  ParticleRendererOverflowPolicy,
+  ParticleRendererSorting,
   ParticleRendererSource,
+  ParticleStageDomain,
+  ParticleStageResourceAccess,
 } from './code-source.js';
 import type { VfxDataInterfaceRequirement } from './data-interface.js';
 import type { VfxEffectReflection } from './effect-contract.js';
@@ -15,10 +24,10 @@ export interface VfxGpuStageReflection {
   readonly id: string;
   readonly entry: string;
   readonly entryPoint: string;
-  readonly domain: 'particle';
+  readonly domain: ParticleStageDomain;
   readonly resources: readonly {
     readonly name: string;
-    readonly access: 'read' | 'write' | 'read-write';
+    readonly access: ParticleStageResourceAccess;
   }[];
   readonly dependsOn: readonly string[];
   readonly iterationBudget: number;
@@ -28,7 +37,7 @@ export interface VfxGpuRendererReflection {
   readonly topology: ParticleRendererSource['kind'];
   readonly resource: string;
   readonly capacity: number;
-  readonly overflow: 'drop-newest' | 'drop-oldest';
+  readonly overflow: ParticleRendererOverflowPolicy;
   readonly enabled: boolean;
   readonly shaderInputs: readonly string[];
   readonly textureSheet?: {
@@ -39,7 +48,7 @@ export interface VfxGpuRendererReflection {
   };
   readonly pivot?: readonly [number, number];
   readonly softParticle?: { readonly fadeDistance: number; readonly requiresDepth: true };
-  readonly sorting?: 'none' | 'emitter' | 'back-to-front';
+  readonly sorting?: ParticleRendererSorting;
   readonly stripKey?: 'alive-index';
   readonly historyLength?: number;
   readonly endpointField?: 'velocity';
@@ -60,7 +69,11 @@ export interface VfxGpuProgramReflection {
   readonly renderers?: readonly VfxGpuRendererReflection[];
 }
 
-export interface VfxGpuEmitterProgram {
+export interface VfxGpuEmitterProgram
+  extends Omit<
+    ParticleEffectProgramEmitter,
+    'schedule' | 'bounds' | 'renderers' | 'reflection' | 'channels' | 'events'
+  > {
   readonly id: string;
   readonly module: string;
   readonly capacity: number;
@@ -71,12 +84,12 @@ export interface VfxGpuEmitterProgram {
   readonly renderers: ParticleEmitterSourceV2['renderers'];
   readonly channels?: readonly ParticleChannelSource[];
   readonly events?: readonly ParticleEventSource[];
-  readonly simulationWhenCulled: 'continue' | 'pause' | 'restart-on-visible';
+  readonly simulationWhenCulled: NonNullable<ParticleEmitterSourceV2['simulationWhenCulled']>;
   readonly wgsl: string;
   readonly reflection: VfxGpuProgramReflection;
 }
 
-export interface VfxGpuProgram {
+export interface VfxGpuProgram extends Omit<ParticleEffectProgram, 'emitters'> {
   readonly format: typeof VFX_GPU_PROGRAM_FORMAT;
   readonly fingerprint: string;
   readonly emitters: readonly VfxGpuEmitterProgram[];

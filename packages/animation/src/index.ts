@@ -24,6 +24,7 @@ export {
   type BindAnimationTargetsErrorCode,
   bindAnimationTargets,
 } from './animation-target';
+export { animationClipContribution, animationGraphContribution } from './assets/animation-decoder';
 /** Build the existing graph-to-player slot path; this is not an animation FSM. */
 export {
   type AnimationGraphNodeRef,
@@ -32,7 +33,7 @@ export {
 } from './graph/define-animation-graph';
 export { describeAnimationGraph } from './graph/describe-animation-graph';
 export { serializeAnimationGraph } from './graph/serialize-animation-graph';
-export { animationPlugin } from './plugin';
+export { animationPayloadsPlugin, animationPlugin, animationRuntimePlugin } from './plugin';
 export {
   AnimationAssetError,
   type AnimationAssetErrorCode,
@@ -47,6 +48,7 @@ export {
   advanceAnimationPlayer,
   registerAdvanceAnimationPlayer,
 } from './systems/advance-animation-player';
+export type { AnimationPayloadLookup } from './systems/evaluate-animation-graph';
 export {
   EvaluateAnimationGraph,
   evaluateAnimationGraph,

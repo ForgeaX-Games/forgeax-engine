@@ -6,9 +6,6 @@
   "license": "Apache-2.0",
   "sideEffects": false,
   "description": "Archetype ECS with SoA queries, shared numeric storage, QuerySpan Kernels, schedules, World health, and remote inspection.",
-  "bin": {
-    "forgeax-engine-remote-ecs": "./dist/cli-ecs.mjs"
-  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -18,6 +15,18 @@
     "./externalization": {
       "types": "./dist/externalization/index.d.ts",
       "import": "./dist/externalization/index.mjs"
+    },
+    "./internal": {
+      "types": "./dist/component.d.ts",
+      "import": "./dist/internal.mjs"
+    },
+    "./projection": {
+      "types": "./dist/projection/index.d.ts",
+      "import": "./dist/projection/index.mjs"
+    },
+    "./shared": {
+      "types": "./dist/shared.d.ts",
+      "import": "./dist/shared.mjs"
     }
   },
   "main": "./dist/index.mjs",
@@ -34,6 +43,7 @@
   },
   "dependencies": {
     "@forgeax/engine-math": "workspace:*",
+    "@forgeax/engine-plugin": "workspace:*",
     "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {

@@ -27,13 +27,13 @@
 // occlude them).
 
 import { World } from '@forgeax/engine-ecs';
-import type { TransparentEntry } from '@forgeax/engine-render/internal';
+import { describe, expect, it } from 'vitest';
+import type { TransparentEntry } from '../../../render/src/systems/transparent-sort-config';
 import {
-  effectivePivotYForTilemapFlip,
   setTransparentSortConfig,
   TRANSPARENT_SORT_MODE_LAYER_Y,
-} from '@forgeax/engine-render/internal';
-import { describe, expect, it } from 'vitest';
+} from '../../../render/src/systems/transparent-sort-config';
+import { effectivePivotYForTilemapFlip } from '../../../render/src/tilemap-chunk-extract-system';
 import { transparentSortEntries } from '../systems/transparent-sort';
 
 const FALSIFY = process.env.FORGEAX_FALSIFY_TILEMAP_SORT;

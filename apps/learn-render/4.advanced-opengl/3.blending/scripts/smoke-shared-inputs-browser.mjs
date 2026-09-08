@@ -39,6 +39,17 @@ async function buildSharedInputs(sharedRoot) {
   return resolve(sharedRoot, 'manifest.json');
 }
 
+async function resolveSharedInputs(sharedRoot) {
+  const injected = process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
+  if (injected === undefined) return buildSharedInputs(sharedRoot);
+  const manifest = resolve(injected);
+  const parsed = JSON.parse(await readFile(manifest, 'utf8'));
+  if (parsed.schemaVersion !== 1 || typeof parsed.inputFingerprint !== 'string') {
+    throw new Error(`shared input manifest is incompatible: ${manifest}`);
+  }
+  return manifest;
+}
+
 async function buildApp(manifest) {
   // The shared-inputs producer job owns full payload generation; this probe only needs catalog/manifest data.
   const env = {
@@ -69,7 +80,13 @@ async function browserCheck(origin) {
     }));
     const catalog = JSON.parse(payloads[0]);
     const manifest = JSON.parse(payloads[1]);
-    if (!Array.isArray(catalog) || !catalog.some((entry) => typeof entry.packageUrl === 'string' && entry.packageUrl.startsWith('/assets/'))) throw new Error('catalog omitted shared asset URL');
+    const originUrl = new URL(origin);
+    const hasSharedAsset = Array.isArray(catalog) && catalog.some((entry) => {
+      if (typeof entry.packageUrl !== 'string') return false;
+      const packageUrl = new URL(entry.packageUrl, originUrl);
+      return packageUrl.origin === originUrl.origin && packageUrl.pathname.includes('/assets/');
+    });
+    if (!hasSharedAsset) throw new Error('catalog omitted shared asset URL');
     const source = JSON.stringify(manifest);
     if (!source.includes('alpha-test.wgsl') || !source.includes('discard')) throw new Error('shader manifest omitted alpha-test marker/discard');
     assertApplicationBootstrap(applicationErrors, `${origin}/blending/`);
@@ -115,7 +132,7 @@ async function main() {
   const tempRoot = await mkdtemp(resolve(tmpdir(), 'forgeax-blending-probe-'));
   try {
     const sharedRoot = resolve(tempRoot, 'shared-app-inputs');
-    const manifest = await buildSharedInputs(sharedRoot);
+    const manifest = await resolveSharedInputs(sharedRoot);
     await buildApp(manifest);
     await withServerLifecycle(startViteServer({ mode: 'preview', root: appRoot, base: '/blending/', port: 0 }), async ({ origin, server }) => {
       await pollHttpReady(`${origin}/blending/`, { stage: 'preview-readiness' });

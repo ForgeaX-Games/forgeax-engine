@@ -35,15 +35,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     mipmap: false,
   };
   const textureHandle = app.world.allocSharedRef('TextureAsset', texture);
-  const upload = await app.renderer.store.uploadTexture(textureHandle, texture, {
-    bytes: pixels,
-    width: TEXTURE_SIZE,
-    height: TEXTURE_SIZE,
-    mime: 'image/png',
-    colorSpace: 'srgb',
-    mipmap: false,
-  });
-  if (!upload.ok) return console.error('[bevy-rotate-to-cursor] texture upload failed:', upload.error);
   const scene = buildRotateToCursorWorld(app.world, unwrapHandle(textureHandle));
   const cursor = { x: target.width * 0.5, y: target.height * 0.5 };
   app.world.addSystem(Update, {

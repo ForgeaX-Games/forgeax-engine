@@ -15,6 +15,7 @@ import { createRequire } from 'node:module';
 import { dirname, join, relative, resolve } from 'node:path';
 import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
+import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { build } from 'vite';
@@ -40,6 +41,7 @@ Options:
   --asset-root <dir>   LearnOpenGL source root
   --shader-root <dir>  Engine shader source root
   --catalog-only       Emit catalog metadata without serialized asset payload bytes
+  --projection-out <d> Also emit a catalog-only projection from the full build
   --github-output <p>  Write the trusted producer fingerprint to this output file
 `;
 
@@ -58,6 +60,8 @@ const output = resolve(root, option('--out', 'shared-app-inputs'));
 const assetRoot = resolve(root, option('--asset-root', 'forgeax-engine-assets/learn-opengl'));
 const shaderRoot = resolve(root, option('--shader-root', 'packages/shader/src'));
 const githubOutput = option('--github-output', null);
+const projectionOption = option('--projection-out', null);
+const projectionOutput = projectionOption === null ? null : resolve(root, projectionOption);
 const catalogOnly = process.argv.includes('--catalog-only');
 const staging = join(output, '.build');
 const VIRTUAL_ENTRY = 'virtual:forgeax/shared-app-inputs-entry';
@@ -105,37 +109,30 @@ if (realpathSync(shaderRoot) !== realpathSync(engineShaderRoot)) {
 rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });
 
-const previousSharedMode = process.env.FORGEAX_SHARED_APP_INPUTS_MODE;
-if (catalogOnly) process.env.FORGEAX_SHARED_APP_INPUTS_MODE = 'catalog-only';
-try {
-  await build({
-    configFile: false,
-    root,
-    logLevel: 'warn',
-    plugins: [
-      {
-        name: 'forgeax:shared-app-inputs-entry',
-        resolveId(id) {
-          return id === VIRTUAL_ENTRY ? id : null;
-        },
-        load(id) {
-          return id === VIRTUAL_ENTRY ? 'export {};' : null;
-        },
+await build({
+  configFile: false,
+  root,
+  logLevel: 'warn',
+  plugins: [
+    {
+      name: 'forgeax:shared-app-inputs-entry',
+      resolveId(id) {
+        return id === VIRTUAL_ENTRY ? id : null;
       },
-      forgeaxShader(),
-      pluginPack({ roots: [assetRoot], base: '', importers: [audioImporter, gltfImporter] }),
-    ],
-    build: {
-      emptyOutDir: true,
-      outDir: staging,
-      assetsInlineLimit: 0,
-      rollupOptions: { input: VIRTUAL_ENTRY },
+      load(id) {
+        return id === VIRTUAL_ENTRY ? 'export {};' : null;
+      },
     },
-  });
-} finally {
-  if (previousSharedMode === undefined) delete process.env.FORGEAX_SHARED_APP_INPUTS_MODE;
-  else process.env.FORGEAX_SHARED_APP_INPUTS_MODE = previousSharedMode;
-}
+    forgeaxShader(),
+    pluginPack({ roots: [assetRoot], importers: [audioImporter, gltfImporter, imageImporter] }),
+  ],
+  build: {
+    emptyOutDir: true,
+    outDir: staging,
+    assetsInlineLimit: 0,
+    rollupOptions: { input: VIRTUAL_ENTRY },
+  },
+});
 
 const catalogPath = join(staging, 'pack-index.json');
 const shaderManifestPath = join(staging, 'shaders', 'manifest.json');
@@ -174,6 +171,31 @@ const manifest = {
       }),
 };
 writeFileSync(join(output, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+if (projectionOutput !== null) {
+  if (catalogOnly) throw new Error('--projection-out requires a full shared-input build');
+  if (projectionOutput === output) throw new Error('--projection-out must differ from --out');
+  rmSync(projectionOutput, { recursive: true, force: true });
+  mkdirSync(join(projectionOutput, 'assets'), { recursive: true });
+  cpSync(join(output, 'assets', 'catalog.json'), join(projectionOutput, 'assets', 'catalog.json'));
+  cpSync(join(output, 'shaders'), join(projectionOutput, 'shaders'), { recursive: true });
+  writeFileSync(
+    join(projectionOutput, 'manifest.json'),
+    `${JSON.stringify(
+      {
+        schemaVersion: manifest.schemaVersion,
+        producer: manifest.producer,
+        inputFingerprint: manifest.inputFingerprint,
+        inventory: manifest.inventory,
+        payload: {
+          assetCatalog: manifest.payload.assetCatalog,
+          engineShaderManifest: manifest.payload.engineShaderManifest,
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
 // These counters describe work this producer actually performed. Compressed artifact
 // bytes and whole-job duration are deliberately left to the reporter, which reads
 // GitHub's artifact and job records after upload.

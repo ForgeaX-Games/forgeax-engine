@@ -1,3 +1,4 @@
+export { skeletonContribution, skinContribution } from './assets/skin-decoder';
 export {
   JointCountMismatchError,
   JointEntityDanglingError,
@@ -9,9 +10,6 @@ export {
   SkinJointDespawnedError,
   SkinJointPathUnresolvedError,
 } from './errors';
-export {
-  resolveSkinJoints,
-  type SkinBindingError,
-  type SkinJointPathUnresolved,
-} from './resolve-skin-joints';
+export { skinningPlugin } from './plugin';
+export { resolveSkinJoints } from './resolve-skin-joints';
 export { Skin } from './skin';

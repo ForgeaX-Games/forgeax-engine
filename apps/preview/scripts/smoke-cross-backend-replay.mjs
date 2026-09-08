@@ -3,7 +3,7 @@
 // the documented inspection front door, then replay that exact tape on Dawn for
 // pixel readback and on structural rhi-null. This keeps the game world and
 // renderer owner in Preview while exercising the cross-backend transport boundary.
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -78,19 +78,18 @@ try {
   }
 
   const capture = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.captureFrame(1));
-  if (!capture.ok || typeof capture.value?.runId !== 'string') {
+  if (
+    !capture.ok ||
+    capture.value?.kind !== 'rhi-tape' ||
+    typeof capture.value.path !== 'string' ||
+    typeof capture.value.digest !== 'string'
+  ) {
     throw new Error(`Preview capture failed: ${JSON.stringify(capture)}`);
   }
-  const runId = capture.value.runId;
-  const tapeResponse = await fetch(`http://127.0.0.1:${PORT}/__forgeax-debug/artifact?runId=${encodeURIComponent(runId)}&file=frame-0.tape.bin`);
-  const reportResponse = await fetch(`http://127.0.0.1:${PORT}/__forgeax-debug/artifact?runId=${encodeURIComponent(runId)}&file=frame-0.report.json`);
-  if (!tapeResponse.ok || !reportResponse.ok) {
-    throw new Error(`capture artifacts unavailable: tape=${tapeResponse.status} report=${reportResponse.status}`);
-  }
-  const tapePath = resolve(ARTIFACT_DIR, 'frame-0.tape.bin');
-  const reportPath = resolve(ARTIFACT_DIR, 'frame-0.report.json');
-  writeFileSync(tapePath, Buffer.from(await tapeResponse.arrayBuffer()));
-  writeFileSync(reportPath, await reportResponse.text());
+  const tapeSource = [capture.value.path, resolve(ROOT, capture.value.path)].find((path) => existsSync(path));
+  if (tapeSource === undefined) throw new Error(`single Preview tape artifact is missing: ${capture.value.path}`);
+  const artifactPath = resolve(ARTIFACT_DIR, 'frame.rhitape');
+  copyFileSync(tapeSource, artifactPath);
   const livePngPath = resolve(ARTIFACT_DIR, 'live.png');
   const liveCanvasPng = await page.evaluate(() => {
     const canvas = document.querySelector('#app');
@@ -105,8 +104,7 @@ try {
       'exec',
       'node',
       'apps/hello/m7-backend-recovery/scripts/cross-backend-replay.mjs',
-      tapePath,
-      reportPath,
+      artifactPath,
       livePngPath,
     ],
     { cwd: ROOT, encoding: 'utf8', env: { ...process.env, INIT_CWD: ROOT } },
@@ -119,7 +117,7 @@ try {
 
   const after = await page.evaluate(async () => globalThis.__forgeaxPreviewInspection.read('game-default.snapshot'));
   const captureMode = 'pixel';
-  const report = { mode: 'pixel', before, capture, runId, after, replayOutput, pageErrors, consoleErrors, badResponses, serverOutput };
+  const report = { mode: 'pixel', before, capture, artifactPath, after, replayOutput, pageErrors, consoleErrors, badResponses, serverOutput };
   writeFileSync(resolve(ARTIFACT_DIR, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
   if (pageErrors.length > 0) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
   if (badResponses.length > 0) throw new Error(`bad responses: ${badResponses.join(' | ')}`);
@@ -127,7 +125,7 @@ try {
     (line) => !line.includes('favicon') && !line.includes('Failed to load resource'),
   );
   if (actionableConsoleErrors.length > 0) throw new Error(`console errors: ${actionableConsoleErrors.join(' | ')}`);
-  console.log(`[cross-backend-replay] PASS mode=${captureMode} backend=${before.health.reason} capture=${runId} dawnPixelReplay=true nullReplay=true pageErrors=0 badResponses=0`);
+  console.log(`[cross-backend-replay] PASS mode=${captureMode} backend=${before.health.reason} artifact=${artifactPath} dawnPixelReplay=true nullReplay=true pageErrors=0 badResponses=0`);
   console.log(`[cross-backend-replay] artifacts=${ARTIFACT_DIR}`);
 } finally {
   await browser.close();

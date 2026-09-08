@@ -1,7 +1,8 @@
 import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import { ChildOf } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import { resolveVisibility, Visibility, VisibilityStateValue } from '../index';
+import { resolveVisibility } from '../extract/visibility';
+import { Visibility, VisibilityStateValue } from '../index';
 
 function spawn(
   world: World,

@@ -1,12 +1,67 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   allowsUnlitPreparedFallback,
+  normalizeMaterialShaderVariantSet,
   resolveMaterialShaderBindingContract,
   resolveMaterialShaderVertexInputContract,
   shouldDeferMissingPreparedMaterialShader,
-} from '../renderer/renderer-factory';
+} from '../assembly/factory';
+
+describe('material shader variant identity', () => {
+  it('keeps single-source manifests on the canonical module key', () => {
+    const singleSourceManifest = {
+      identifier: 'forgeax::points-lines',
+      sourcePath: 'points-lines.wgsl',
+      composedWgsl: 'shader',
+      paramSchema: '{}',
+      variants: [],
+    };
+
+    expect(
+      normalizeMaterialShaderVariantSet('VERTEX_COLOR_AVAILABLE=false', singleSourceManifest),
+    ).toBeUndefined();
+  });
+
+  it('preserves variant requests for manifests that actually declare variants', () => {
+    const variantManifest = {
+      identifier: 'forgeax::default-standard-pbr',
+      sourcePath: 'standard-pbr.wgsl',
+      composedWgsl: 'shader',
+      paramSchema: '{}',
+      variants: [
+        {
+          definesKey: 'STORAGE_BUFFER_AVAILABLE=true',
+          defines: { STORAGE_BUFFER_AVAILABLE: true },
+          composedWgsl: 'shader',
+        },
+      ],
+    };
+
+    expect(
+      normalizeMaterialShaderVariantSet('STORAGE_BUFFER_AVAILABLE=true', variantManifest),
+    ).toBe('STORAGE_BUFFER_AVAILABLE=true');
+    expect(normalizeMaterialShaderVariantSet('CUSTOM=true', undefined)).toBe('CUSTOM=true');
+  });
+});
 
 describe('material shader binding contract', () => {
+  it('keeps record binding on the cooked projection contract', () => {
+    const recordSource = readFileSync(
+      resolve(import.meta.dirname, '../record/main-pass-material.ts'),
+      'utf8',
+    );
+    const projectionSource = readFileSync(
+      resolve(import.meta.dirname, '../assembly/material/pipeline-projection.ts'),
+      'utf8',
+    );
+    expect(projectionSource).toContain('routeMaterialPipeline');
+    expect(recordSource).not.toMatch(/internals\.assets\.get<MaterialAsset>/);
+    expect(recordSource).not.toMatch(/firstMaterial as \{/);
+    expect(recordSource).not.toContain('baseColorHandle');
+  });
+
   it('recognizes a world-space shader that reads only the canonical view uniform', () => {
     const source = `
       struct View { worldViewProj: mat4x4<f32> }
@@ -24,6 +79,19 @@ describe('material shader binding contract', () => {
     `;
 
     expect(resolveMaterialShaderBindingContract(source)).toBe('view-only');
+  });
+
+  it('recognizes the VFX view plus sampled scene-depth contract', () => {
+    const source = `
+      struct View { worldViewProj: mat4x4<f32> }
+      @group(0) @binding(0) var<uniform> view: View;
+      @group(0) @binding(1) var scene_depth: texture_depth_2d;
+      @fragment fn fs_main() -> @location(0) vec4<f32> {
+        return vec4<f32>(textureLoad(scene_depth, vec2<i32>(0, 0), 0));
+      }
+    `;
+
+    expect(resolveMaterialShaderBindingContract(source)).toBe('view-and-scene-depth');
   });
 
   it('keeps shaders with material groups on the full render-material layout', () => {

@@ -1,14 +1,17 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CatalogReplica } from '@forgeax/engine-assets-runtime';
-import { DdcEntryStore, DdcLifecycle, ddcOutputDigest } from '@forgeax/engine-ddc';
+import {
+  type BuildDdcInput,
+  DdcEntryStore,
+  DdcLifecycle,
+  ddcOutputDigest,
+  semanticBuildKey,
+} from '@forgeax/engine-ddc';
 import { ImporterRegistry, type RunImportMeta, runImport } from '@forgeax/engine-import';
-import type { Asset, CatalogDelta, ImportContext, ImportedAsset } from '@forgeax/engine-types';
+import { projectCookedPackageEntry } from '@forgeax/engine-pack/build';
+import type { Asset, ImportContext, ImportedAsset } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it } from 'vitest';
-import { type SemanticDdcInput, semanticDdcKey } from '../ddc-cache.js';
-import { projectPublishedCatalog } from '../dev/import-publication.js';
-import { preserveInvalidatedCatalogLkg } from '../index.js';
 
 const GUID = '11111111-1111-4111-8111-111111111111';
 const roots: string[] = [];
@@ -22,7 +25,7 @@ function meta(sourceOverrides?: Record<string, Record<string, unknown>>): RunImp
   } as RunImportMeta;
 }
 
-function semantic(sourceOverrides?: Record<string, unknown>): SemanticDdcInput {
+function semantic(sourceOverrides?: Record<string, unknown>): BuildDdcInput {
   return {
     schemaVersion: '2.0.0',
     importerVersion: 'fixture@1',
@@ -32,7 +35,7 @@ function semantic(sourceOverrides?: Record<string, unknown>): SemanticDdcInput {
     declaredGuids: [GUID],
     cookProfile: 'dev',
     ...(sourceOverrides === undefined ? {} : { sourceOverrides }),
-  } as SemanticDdcInput;
+  } as BuildDdcInput;
 }
 
 function asset(): ImportedAsset {
@@ -90,7 +93,7 @@ afterEach(async () => {
 });
 
 describe('source override Engine consumer chain', () => {
-  it('consumes producer Meta through ImportContext, DDC current, and Catalog replica', async () => {
+  it('consumes producer Meta through ImportContext, DDC current, and Pack Catalog projection', async () => {
     const root = await mkdtemp(join(tmpdir(), 'forgeax-engine-chain-'));
     roots.push(root);
     const received: { value?: unknown } = {};
@@ -100,7 +103,7 @@ describe('source override Engine consumer chain', () => {
     expect(received.value).toEqual(override);
     if (!imported.ok || 'skipped' in imported.value) return;
 
-    const desiredKey = semanticDdcKey(semantic(override));
+    const desiredKey = semanticBuildKey(semantic(override));
     await writeEntry(root, desiredKey, imported.value.pack);
     const lifecycle = new DdcLifecycle(root);
     const lease = await lifecycle.begin(GUID, desiredKey);
@@ -117,20 +120,18 @@ describe('source override Engine consumer chain', () => {
       lifecycle: 'current' as const,
       diagnostics: [],
     };
-    const replica = new CatalogReplica({
-      enumerate: async () => ({ ok: true as const, value: [row] }),
-      subscribe: () => () => {},
-    } as never);
-    await replica.start();
     expect(await lifecycle.inspect(GUID, desiredKey)).toMatchObject({ state: 'current' });
-    expect(replica.snapshot().entries).toEqual([row]);
+    expect(row).toMatchObject({
+      packageUrl: `/preview/${desiredKey}`,
+      revision: { digest: desiredKey },
+    });
   });
 
   it('keeps LKG when the same producer chain fails validation', async () => {
     const root = await mkdtemp(join(tmpdir(), 'forgeax-engine-chain-'));
     roots.push(root);
-    const oldKey = semanticDdcKey(semantic());
-    const desiredKey = semanticDdcKey(semantic({ 'mesh/main': { lod: 3 } }));
+    const oldKey = semanticBuildKey(semantic());
+    const desiredKey = semanticBuildKey(semantic({ 'mesh/main': { lod: 3 } }));
     await writeEntry(root, oldKey, { version: 'old' });
     const lifecycle = new DdcLifecycle(root);
     const oldLease = await lifecycle.begin(GUID, oldKey);
@@ -144,110 +145,27 @@ describe('source override Engine consumer chain', () => {
     });
   });
 
-  it('reconciles a degraded Catalog gap without changing the Meta/DDC identity', async () => {
-    const desiredKey = semanticDdcKey(semantic({ 'mesh/main': { lod: 4 } }));
-    let emit: ((delta: CatalogDelta) => void) | undefined;
-    const replica = new CatalogReplica({
-      enumerate: async () => ({
-        ok: true as const,
-        value: [
-          {
-            guid: GUID,
-            packageUrl: `/preview/${desiredKey}`,
-            kind: 'mesh',
-            sourcePath: 'fixture.source',
-            lifecycle: 'current' as const,
-          },
-        ],
-      }),
-      subscribe: (listener: (delta: CatalogDelta) => void) => {
-        emit = listener;
-        return () => {};
+  it('projects a current cooked row without changing the Meta/DDC identity', async () => {
+    const desiredKey = semanticBuildKey(semantic({ 'mesh/main': { lod: 4 } }));
+    const projected = projectCookedPackageEntry(
+      {
+        guid: GUID,
+        packageUrl: 'fixture.source.meta.json',
+        kind: 'mesh',
+        sourcePath: 'fixture.source',
       },
-    } as never);
-    await replica.start();
-    emit?.({
-      added: [],
-      changed: [],
-      removed: [],
-      authority: 'degraded',
-      diagnostics: [{ code: 'catalog-gap', severity: 'blocking', hint: 'reconcile' }],
-    });
-    expect(replica.snapshot().stale).toBe(true);
-    await expect(replica.reconcile()).resolves.toMatchObject({ ok: true });
-    expect(replica.snapshot().stale).toBe(false);
-    expect(replica.snapshot().entries[0]?.packageUrl).toContain(desiredKey);
-  });
-
-  it('preserves the published package as LKG on source invalidation', () => {
-    const oldPackageUrl = '/__forgeax-ddc/old.pack.json';
-    const previous = {
+      {
+        packageUrl: `/preview/${desiredKey}`,
+        revision: { digest: desiredKey, observedAt: 4, rootId: 'fixture-root' },
+        refs: [],
+      },
+    );
+    expect(projected).toMatchObject({
       guid: GUID,
-      packageUrl: oldPackageUrl,
-      kind: 'mesh',
-      sourcePath: 'fixture.source',
-      sourceKey: 'mesh/main',
-      lifecycle: 'current' as const,
-      projection: {
-        subject: 'imported-output' as const,
-        execution: 'cooked' as const,
-        lifecycle: 'current' as const,
-        operations: {} as never,
-        lastKnownGood: { packageUrl: oldPackageUrl },
-      },
-    };
-    const missing = {
-      ...previous,
-      packageUrl: 'fixture.source.meta.json',
-      lifecycle: 'missing' as const,
-      projection: {
-        subject: previous.projection.subject,
-        execution: previous.projection.execution,
-        lifecycle: 'missing' as const,
-        operations: previous.projection.operations,
-      },
-    };
-
-    const invalidated = preserveInvalidatedCatalogLkg([previous], [missing], new Set([GUID]));
-    expect(invalidated[0]).toMatchObject({
-      lifecycle: 'missing',
-      packageUrl: 'fixture.source.meta.json',
-      projection: { lifecycle: 'missing', lastKnownGood: { packageUrl: oldPackageUrl } },
-    });
-
-    const restored = preserveInvalidatedCatalogLkg(
-      invalidated,
-      [{ ...previous, packageUrl: '/__forgeax-ddc/restored.pack.json' }],
-      new Set(),
-    );
-    expect(restored[0]).toMatchObject({
+      packageUrl: `/preview/${desiredKey}`,
+      revision: { digest: desiredKey },
       lifecycle: 'current',
-      packageUrl: '/__forgeax-ddc/restored.pack.json',
-      projection: { lastKnownGood: { packageUrl: oldPackageUrl } },
-    });
-
-    const published = projectPublishedCatalog(
-      {
-        root: '/tmp/fixture',
-        guid: GUID,
-        desiredKey: 'new-key',
-        pack: {},
-        previousCatalog: invalidated,
-        nextCatalog: [{ ...previous, packageUrl: '/__forgeax-ddc/new.pack.json' }],
-        publishedGuids: [GUID],
-      },
-      {
-        guid: GUID,
-        desiredKey: 'new-key',
-        state: 'current',
-        currentKey: 'new-key',
-        lastKnownGoodKey: undefined,
-      },
-      1,
-    );
-    expect(published.catalog[0]).toMatchObject({
-      packageUrl: '/__forgeax-ddc/new.pack.json',
-      projection: { lastKnownGood: { packageUrl: oldPackageUrl } },
+      projection: { lifecycle: 'current' },
     });
   });
 });

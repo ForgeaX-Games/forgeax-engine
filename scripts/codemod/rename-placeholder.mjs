@@ -81,7 +81,7 @@ publishes nothing on its own. To use the engine, install the runtime entry
 \`@forgeax/engine-runtime\` and the family members you need.
 
 \`\`\`ts
-import { Engine } from '@forgeax/engine-runtime'
+import { createRenderer } from '@forgeax/engine-runtime'
 import { World } from '@forgeax/engine-ecs'
 \`\`\`
 
@@ -131,6 +131,24 @@ function listEngineDirEntries() {
   return fs.readdirSync(ENGINE_DIR, { withFileTypes: true });
 }
 
+function hasCurrentPublicEngineFacade() {
+  const packagePath = path.join(ENGINE_DIR, 'package.json');
+  if (!fs.existsSync(packagePath) || !fs.existsSync(path.join(RUNTIME_DIR, 'package.json'))) {
+    return false;
+  }
+  try {
+    const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+    return (
+      pkg.name === '@forgeax/engine' &&
+      pkg.private === false &&
+      pkg.scripts?.build === 'node scripts/build.mjs' &&
+      pkg.exports?.['.'] !== undefined
+    );
+  } catch {
+    return false;
+  }
+}
+
 function moveOut(name) {
   const src = path.join('packages', 'engine', name);
   const dst = path.join('packages', 'runtime', name);
@@ -164,6 +182,11 @@ function main() {
   if (!fs.existsSync(ENGINE_DIR)) {
     console.error(`[fatal] ${path.relative(REPO_ROOT, ENGINE_DIR)} not found`);
     process.exit(1);
+  }
+
+  if (hasCurrentPublicEngineFacade()) {
+    console.warn('[rename-placeholder] current public engine facade already owns packages/engine');
+    return;
   }
 
   // Move all runtime artefacts from packages/engine/ to packages/engine-runtime/,

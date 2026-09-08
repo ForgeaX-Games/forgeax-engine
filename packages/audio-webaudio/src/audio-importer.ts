@@ -24,7 +24,14 @@
 //
 // GUID import-stable iron law: every produced GUID comes from `ctx.subAssets[]`.
 
-import type { ImportContext, ImportedAsset, Importer, ImportResult } from '@forgeax/engine-types';
+import {
+  IMPORT_ERROR_HINTS,
+  type ImportContext,
+  ImportError,
+  type ImportedAsset,
+  type Importer,
+  type ImportResult,
+} from '@forgeax/engine-types';
 
 /** Audio output identity is semantic and independent of source path/index. */
 export function sourceKeyForAudioOutput(kind = 'audio'): string | undefined {
@@ -40,15 +47,58 @@ function audioMediaType(source: string): string {
   if (lower.endsWith('.flac')) return 'audio/flac';
   return 'application/octet-stream';
 }
+
+function validateAudioOutputTopology(ctx: ImportContext): ImportError | undefined {
+  if (ctx.subAssets.length === 1 && ctx.subAssets[0]?.kind === 'audio') return undefined;
+
+  const actual =
+    ctx.subAssets.length === 0
+      ? 'subAssets[] is empty'
+      : ctx.subAssets.map((sub, index) => `subAssets[${index}]=${sub.kind}:${sub.guid}`).join(', ');
+
+  return new ImportError({
+    code: 'source-validation-failed',
+    expected: 'exactly one subAssets[] entry with kind "audio"',
+    actual,
+    hint: IMPORT_ERROR_HINTS['source-validation-failed'],
+    detail: {
+      diagnostics: [
+        {
+          code: 'audio-subasset-topology',
+          severity: 'error',
+          sourcePath: `${ctx.source}#subAssets`,
+          sourceRange: { start: 0, end: 0, line: 1, column: 1 },
+          rule: 'audio-required-single-output',
+          expected: 'exactly one subAssets[] entry with kind "audio"',
+          actual,
+          hint: 'declare exactly one audio sub-asset and remove foreign or duplicate entries',
+        },
+      ],
+    },
+  });
+}
+
 async function importAudio(ctx: ImportContext): Promise<ImportResult> {
+  const topologyError = validateAudioOutputTopology(ctx);
+  if (topologyError !== undefined) return { ok: false, error: topologyError };
+
   // Probe the source is readable so a missing file fails the build (the runner
   // already probes, but this keeps the importer self-validating, P3). No decode
   // happens here -- decodeAudioData is the runtime loader's job.
   const read = await ctx.readSource();
   if (!read.ok) {
-    throw new Error(
-      `audioImporter: readSource failed: ${read.error instanceof Error ? read.error.message : String(read.error)}`,
-    );
+    return {
+      ok: false,
+      error: new ImportError({
+        code: 'source-read-failed',
+        expected: `readable source file at meta.source "${ctx.source}"`,
+        hint: IMPORT_ERROR_HINTS['source-read-failed'],
+        detail: {
+          source: ctx.source,
+          reason: read.error instanceof Error ? read.error.message : String(read.error),
+        },
+      }),
+    };
   }
 
   const out: ImportedAsset[] = [];
@@ -58,7 +108,12 @@ async function importAudio(ctx: ImportContext): Promise<ImportResult> {
     // URL and decodes via the browser, so the build-time payload carries only
     // the source reference (no AudioBuffer; cast through the Asset slot like the
     // other importers' build-time POD-vs-runtime-handle bridges).
-    const payload = { kind: 'audio', source: ctx.source } as unknown as ImportedAsset['payload'];
+    const payload = {
+      kind: 'audio',
+      mediaType: audioMediaType(ctx.source),
+      source: ctx.source,
+      bytes: read.value,
+    } as unknown as ImportedAsset['payload'];
     out.push({
       guid: sub.guid,
       kind: 'audio',

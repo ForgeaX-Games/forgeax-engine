@@ -5,7 +5,7 @@ export interface GridCell {
   readonly y: number;
 }
 export interface SnakeState {
-  readonly peerId: number;
+  readonly sessionId: number;
   direction: Direction;
   score: number;
   cells: GridCell[];
@@ -45,22 +45,22 @@ export function tickSimulation(
   if (shouldMove) state.movementAccumulatorSeconds -= state.movementIntervalSeconds;
 
   const next = new Map<number, GridCell>();
-  for (const [peerId, snake] of state.snakes) {
+  for (const [sessionId, snake] of state.snakes) {
     if (snake.respawnAt !== null) {
       if (snake.respawnAt <= state.tick) respawn(state, snake);
       continue;
     }
     if (!shouldMove) continue;
-    next.set(peerId, advance(snake.cells[0] as GridCell, snake.direction));
+    next.set(sessionId, advance(snake.cells[0] as GridCell, snake.direction));
   }
   if (!shouldMove) return;
 
   const occupied = new Set([...state.snakes.values()].flatMap((snake) => snake.cells.map(key)));
   const targets = new Map<string, number[]>();
-  for (const [peerId, cell] of next)
-    targets.set(key(cell), [...(targets.get(key(cell)) ?? []), peerId]);
-  for (const [peerId, cell] of next) {
-    const snake = state.snakes.get(peerId) as SnakeState;
+  for (const [sessionId, cell] of next)
+    targets.set(key(cell), [...(targets.get(key(cell)) ?? []), sessionId]);
+  for (const [sessionId, cell] of next) {
+    const snake = state.snakes.get(sessionId) as SnakeState;
     const collide =
       cell.x < 0 ||
       cell.y < 0 ||

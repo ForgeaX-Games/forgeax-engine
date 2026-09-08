@@ -19,7 +19,7 @@ const IMAGE_ERROR_EXPECTED_LOCAL: Readonly<
   Record<UnsupportedMimeImageErrorDetail['code'], string>
 > = {
   'image-format-unsupported':
-    "mime is one of ['image/png', 'image/jpeg']; texture format <-> colorSpace family agrees",
+    "mime is one of ['image/png', 'image/jpeg', 'image/x-tga']; texture format <-> colorSpace family agrees",
 };
 
 class RuntimeImageError extends Error implements UnsupportedMimeImageError {

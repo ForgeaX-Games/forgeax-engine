@@ -1,3 +1,8 @@
+import {
+  configureRuntimeAssetCatalog,
+  createRuntimeAssetImportTransport,
+  runtimeBinding,
+} from '@forgeax/apps-shared/asset-runtime-config';
 import { Update } from '@forgeax/engine-ecs';
 // apps/collectathon — 3D third-person collectathon showcase game.
 //
@@ -6,15 +11,15 @@ import { Update } from '@forgeax/engine-ecs';
 // dev import transport lets pluginPack dispatch humanoid.fbx through fbxImporter
 // at dev time, mirroring apps/hello/fbx-skin).
 //
-// GameState four-state machine (Title / Play / Win / Lose) via defineState +
-// registerStatesPlugin (which registers the transitionStates system so OnEnter
-// callbacks actually fire). M2 fills the Play state: ground + light + camera +
+// GameState four-state machine (Title / Play / Win / Lose) runs through the
+// App-owned state plugin. M2 fills the Play state: ground + light + camera +
 // the player parent/child pair, with player-move / player-anim systems gated to
 // run only in Play (inState runIf).
 
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { createApp } from '@forgeax/engine-app';
 import { AudioListener, audioPlugin } from '@forgeax/engine-audio';
+import { webAudioPlugin } from '@forgeax/engine-audio-webaudio';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { physicsPlugin } from '@forgeax/engine-physics';
@@ -29,9 +34,9 @@ import {
   Skylight,
   TONEMAP_REINHARD_EXTENDED,
 } from '@forgeax/engine-render';
-import { createDevImportTransport } from '@forgeax/engine-runtime';
-import { Transform } from '@forgeax/engine-scene';
 
+import { Transform } from '@forgeax/engine-scene';
+import { skinningPlugin } from '@forgeax/engine-skinning';
 import {
   addOnEnter,
   addOnExit,
@@ -39,7 +44,6 @@ import {
   despawnOnExit,
   getState,
   inState,
-  registerStatesPlugin,
   setNextState,
   setNextStateForce,
 } from '@forgeax/engine-state';
@@ -50,7 +54,7 @@ import type {
   Handle,
   SceneAsset,
 } from '@forgeax/engine-types';
-import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
+
 import { createHUD, hideHUD, showHUD } from './hud';
 import { createGameProgress, GAME_PROGRESS_KEY, resetProgress } from './resources';
 import { CORE_POSITIONS, spawnCore } from './spawn/spawn-core';
@@ -92,9 +96,6 @@ const BOOT_TRANSITION_PUMP_LIMIT = 8;
 
 // humanoid.fbx GUIDs (reused from apps/hello/fbx-skin per D-3). Scene + the run
 // clip used as both locomotion (speed 1) and idle (speed 0) slots.
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'collectathon',
-);
 const HUMANOID_SCENE_GUID = '019ecd87-179b-7eb3-a37d-391f05c61e52';
 const RUN_CLIP_GUID = '019ecd87-179b-71f7-b9f8-4c8518326b65';
 
@@ -141,29 +142,25 @@ function resizeCanvasToDisplaySize(c: HTMLCanvasElement): void {
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appResult = await createApp(
     target,
-    { plugins: [physicsPlugin('rapier-3d'), audioPlugin()] },
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
+    { plugins: [physicsPlugin('rapier-3d'), webAudioPlugin(), audioPlugin(), skinningPlugin()] },
+    {
+      ...forgeaxBundlerAdapter(),
+      importTransport: createRuntimeAssetImportTransport(runtimeBinding),
+    },
   );
   if (!appResult.ok) {
     throw new Error(`collectathon: createApp failed: ${JSON.stringify(appResult.error)}`);
   }
   const app = appResult.value;
-  const { world, renderer } = app;
-
-  // Register the state machine system so transitions + OnEnter callbacks run.
-  registerStatesPlugin(world);
-
-  renderer.onError(() => {
-    // Errors are collected by the smoke harness; no console spam.
-  });
+  const { world } = app;
 
   // Resolve the humanoid scene + run clip up front (Fail Fast, AC-21): the Play
   // state must not be entered until the player asset is loadable.
-  const assets = renderer.assets;
-  if (assets === null) {
-    throw new Error('collectathon: AssetRegistry is null (bundler adapter missing?)');
+  const assets = app.assets;
+  if (assets === undefined) {
+    throw new Error('collectathon: asset owner unavailable (bundler adapter missing?)');
   }
-  assets.configureRuntimeBinding(runtimeBinding);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   const sceneHandle = await loadSceneHandle(world, assets);
   const runClip = await loadClipHandle(world, assets);
@@ -371,7 +368,7 @@ function wireStates(
     const signal = createPlayerMoveSignal();
     const playOnly = inState(GameState, 'Play');
     w.addSystem(Update, {
-      ...createMoveSystem(app, player.parent, camera, signal),
+      ...createMoveSystem(player.parent, camera, signal),
       runIf: playOnly,
     });
     w.addSystem(Update, {

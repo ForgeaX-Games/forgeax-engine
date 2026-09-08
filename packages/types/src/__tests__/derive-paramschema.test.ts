@@ -168,35 +168,35 @@ describe('derive(schema) — numeric merging (D-3)', () => {
 describe('derive(schema) — texture-binding family + sampler auto-pair (D-4)', () => {
   it('texture2d auto-pairs filtering sampler FIRST (binding N), then texture (binding N+1)', () => {
     const out = derive([{ name: 'mainTex', type: 'texture2d' }]);
-    expect(out.bglEntries.length).toBe(2);
-    // sampler-first per §D-4
-    expect(out.bglEntries[0]?.binding).toBe(0);
-    expect(out.bglEntries[0]?.sampler?.type).toBe('filtering');
+    expect(out.bglEntries.length).toBe(3);
+    expect(out.bglEntries[0]?.buffer?.type).toBe('uniform');
     expect(out.bglEntries[1]?.binding).toBe(1);
-    expect(out.bglEntries[1]?.texture?.sampleType).toBe('float');
-    expect(out.bglEntries[1]?.texture?.viewDimension).toBe('2d');
+    expect(out.bglEntries[1]?.sampler?.type).toBe('filtering');
+    expect(out.bglEntries[2]?.binding).toBe(2);
+    expect(out.bglEntries[2]?.texture?.sampleType).toBe('float');
+    expect(out.bglEntries[2]?.texture?.viewDimension).toBe('2d');
     expect(out.textureFieldNames.has('mainTex')).toBe(true);
     expect(out.samplerForTexture.get('mainTex')).toBe('mainTex_sampler');
-    expect(out.userRegionBindingEnd).toBe(2);
+    expect(out.userRegionBindingEnd).toBe(3);
   });
 
   it('texture_cube auto-pairs filtering sampler (sampler-first) with viewDimension=cube', () => {
     const out = derive([{ name: 'envMap', type: 'texture_cube' }]);
-    expect(out.bglEntries[0]?.sampler?.type).toBe('filtering');
-    expect(out.bglEntries[1]?.texture?.viewDimension).toBe('cube');
+    expect(out.bglEntries[1]?.sampler?.type).toBe('filtering');
+    expect(out.bglEntries[2]?.texture?.viewDimension).toBe('cube');
   });
 
   it('texture_depth_2d uses sampleType=depth + filtering sampler auto-pair (sampler-first)', () => {
     const out = derive([{ name: 'shadowMap', type: 'texture_depth_2d' }]);
-    expect(out.bglEntries[0]?.sampler?.type).toBe('filtering');
-    expect(out.bglEntries[1]?.texture?.sampleType).toBe('depth');
-    expect(out.bglEntries[1]?.texture?.viewDimension).toBe('2d');
+    expect(out.bglEntries[1]?.sampler?.type).toBe('filtering');
+    expect(out.bglEntries[2]?.texture?.sampleType).toBe('depth');
+    expect(out.bglEntries[2]?.texture?.viewDimension).toBe('2d');
   });
 
   it('texture_cube_array sampleType=float viewDimension=cube-array (sampler-first)', () => {
     const out = derive([{ name: 'cubeArr', type: 'texture_cube_array' }]);
-    expect(out.bglEntries[0]?.sampler?.type).toBe('filtering');
-    expect(out.bglEntries[1]?.texture?.viewDimension).toBe('cube-array');
+    expect(out.bglEntries[1]?.sampler?.type).toBe('filtering');
+    expect(out.bglEntries[2]?.texture?.viewDimension).toBe('cube-array');
   });
 
   it('sampler_comparison is declared explicitly (no auto-pair)', () => {
@@ -233,12 +233,11 @@ describe('derive(schema) — texture-binding family + sampler auto-pair (D-4)', 
       { name: 'a', type: 'texture2d' },
       { name: 'b', type: 'texture2d' },
     ]);
-    expect(out.bglEntries.map((e) => e.binding)).toEqual([0, 1, 2, 3]);
-    // bindings: 0=a_sampler, 1=a, 2=b_sampler, 3=b
-    expect(out.bglEntries[0]?.sampler?.type).toBe('filtering');
-    expect(out.bglEntries[1]?.texture?.sampleType).toBe('float');
-    expect(out.bglEntries[2]?.sampler?.type).toBe('filtering');
-    expect(out.bglEntries[3]?.texture?.sampleType).toBe('float');
+    expect(out.bglEntries.map((e) => e.binding)).toEqual([0, 1, 2, 3, 4]);
+    expect(out.bglEntries[1]?.sampler?.type).toBe('filtering');
+    expect(out.bglEntries[2]?.texture?.sampleType).toBe('float');
+    expect(out.bglEntries[3]?.sampler?.type).toBe('filtering');
+    expect(out.bglEntries[4]?.texture?.sampleType).toBe('float');
     expect(out.samplerForTexture.get('a')).toBe('a_sampler');
     expect(out.samplerForTexture.get('b')).toBe('b_sampler');
   });
@@ -253,19 +252,17 @@ describe('derive(schema) — storage-binding family', () => {
     expect(out.userRegionBindingEnd).toBe(1);
   });
 
-  it('storage_buffer between numeric runs forces independent binding', () => {
+  it('storage_buffer between numeric entries keeps one derived uniform binding', () => {
     const out = derive([
       { name: 'tint', type: 'color', default: [1, 1, 1, 1] },
       { name: 'palette', type: 'storage_buffer' },
       { name: 'k', type: 'f32' },
     ]);
-    // numeric run [tint] -> binding 0 uniform UBO
-    // storage_buffer -> binding 1
-    // numeric run [k] -> binding 2 uniform UBO (separate run)
-    expect(out.bglEntries.map((e) => e.binding)).toEqual([0, 1, 2]);
+    // The numeric members share one continuous derived payload across the resource.
+    expect(out.bglEntries.map((e) => e.binding)).toEqual([0, 1]);
     expect(out.bglEntries[0]?.buffer?.type).toBe('uniform');
     expect(out.bglEntries[1]?.buffer?.type).toBe('read-only-storage');
-    expect(out.bglEntries[2]?.buffer?.type).toBe('uniform');
+    expect(out.numericMembers.map((member) => member.name)).toEqual(['tint', 'k']);
   });
 });
 
@@ -332,9 +329,9 @@ describe('derive(schema) — bgl visibility = FRAGMENT', () => {
   });
   it('texture/sampler entries are FRAGMENT visible (sampler-first ordering)', () => {
     const out = derive([{ name: 't', type: 'texture2d' }]);
-    // bglEntries[0] is the auto-paired sampler, bglEntries[1] is the texture
     expect(out.bglEntries[0]?.visibility).toBe(FRAGMENT);
     expect(out.bglEntries[1]?.visibility).toBe(FRAGMENT);
+    expect(out.bglEntries[2]?.visibility).toBe(FRAGMENT);
   });
 });
 

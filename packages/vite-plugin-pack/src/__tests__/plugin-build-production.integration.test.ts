@@ -3,7 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Importer } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it } from 'vitest';
-import { pluginPack } from '../index.js';
+import { createPluginPackInternal as pluginPack } from '../plugin-pack.js';
 
 const GUID = '00000000-0000-4000-8000-000000000003';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -40,7 +40,6 @@ describe('production Pack bundle contract', () => {
     const root = await mkdtemp('/tmp/forgeax-pack-build-');
     roots.push(root);
     const assets = resolve(root, 'assets');
-    const dist = resolve(root, 'dist');
     await mkdir(assets);
     await writeFile(resolve(assets, 'fixture.scene'), 'fixture');
     await writeFile(
@@ -61,6 +60,9 @@ describe('production Pack bundle contract', () => {
     try {
       const emitted: Array<{ fileName?: string; name?: string; source?: string | Uint8Array }> = [];
       const plugin = pluginPack({ roots: [assets], importers: [fixtureImporter] });
+      plugin.configResolved?.({ base: '/preview/' } as Parameters<
+        NonNullable<typeof plugin.configResolved>
+      >[0]);
       await plugin.generateBundle.call({
         emitFile(asset) {
           emitted.push(asset);
@@ -70,16 +72,13 @@ describe('production Pack bundle contract', () => {
           return `assets/${referenceId}-hash`;
         },
       });
-      await mkdir(dist, { recursive: true });
-      await plugin.writeBundle({ dir: dist });
-
       const catalog = JSON.parse(
         String(emitted.find((asset) => asset.fileName === 'pack-index.json')?.source),
       ) as Array<{ guid: string; packageUrl: string }>;
       const row = catalog.find((entry) => entry.guid.toLowerCase() === GUID);
-      expect(row?.packageUrl).toMatch(/^\/assets\/.*-hash$/);
-      expect(await readFile(resolve(dist, 'assets', `${GUID}-body.bin`))).toEqual(
-        Buffer.from([4, 5, 6]),
+      expect(row?.packageUrl).toMatch(/^\/preview\/assets\/.*-hash$/);
+      expect(emitted.find((asset) => asset.fileName === `assets/${GUID}-body.bin`)?.source).toEqual(
+        new Uint8Array([4, 5, 6]),
       );
       expect(
         emitted.some((asset) => asset.source?.toString().includes('createDevImportTransport')),
@@ -91,7 +90,12 @@ describe('production Pack bundle contract', () => {
 
   it('keeps the build owner on the semantic producer and outside runtime transport', async () => {
     const source = await readFile(resolve(ROOT, 'src', 'build', 'plugin-build.ts'), 'utf8');
-    expect(source).toContain('produceSourcePackage');
+    const ownerSource = await readFile(
+      resolve(ROOT, '..', 'import', 'src', 'build-production.ts'),
+      'utf8',
+    );
+    expect(source).toContain('produceBuildAssets');
+    expect(ownerSource).toContain('produceSourcePackage');
     expect(source).not.toMatch(/createDevImportTransport|@forgeax\/engine-runtime/);
   });
 });

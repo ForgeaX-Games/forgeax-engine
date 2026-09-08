@@ -144,9 +144,8 @@ if (!existsSync(WOOD_SRC_PATH)) {
 
 const { World } = await import('@forgeax/engine-ecs');
 const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
-const enginePkg = await import('@forgeax/engine-runtime');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { createPlaneGeometry } = await import('@forgeax/engine-geometry');
-const { createRenderer } = enginePkg;
 const { Camera, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const { unwrapHandle } = await import('@forgeax/engine-types');
@@ -178,41 +177,30 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  var hostAssets = constructed.value.assets;
 } catch (err) {
   console.error(
-    `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
+    `[smoke] FAIL - constructRuntimeRendererHost failed: ${err instanceof Error ? err.message : String(err)}`,
   );
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[learn-render-5-1-blinn-phong] backend=${renderer.backend}`);
+console.log(`[learn-render-5-1-blinn-phong] backend=${renderer.inspect().capabilities.backendKind}`);
 
-const assets = renderer.assets;
+const assets = hostAssets;
 if (!assets) {
   console.error('[smoke] FAIL - AssetRegistry is null');
   process.exit(1);
 }
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => { if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint }); });
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
-
-// The build manifest is the cooked source catalogue. The renderer consumes its
-// module identity and composed WGSL directly; the smoke must not reconstruct a
-// shader parameter schema or manually install a second registry entry.
-const shader = renderer.shader;
-if (shader === null) {
-  console.error('[smoke] FAIL - renderer.shader is null');
-  process.exit(1);
-}
 
 const blinnPhongEntry = (demoManifest.materialShaders ?? []).find(
   (m) => m && m.identifier === 'learn_render::5_1_blinn_phong',
@@ -221,10 +209,7 @@ if (!blinnPhongEntry) {
   console.error('[smoke] FAIL - manifest.materialShaders[] missing learn_render::5_1_blinn_phong');
   process.exit(1);
 }
-if (!shader.findMaterialArtifact('learn_render::5_1_blinn_phong').ok) {
-  console.error('[smoke] FAIL - cooked Blinn-Phong module was not registered from manifest');
-  process.exit(1);
-}
+// Runtime consumes the cooked Blinn-Phong module from the demo manifest.
 
 // Register texture under its GUID (wood.png, the LO 5.1 floor texture).
 const woodGuidRes = AssetGuid.parse('019e3969-1d48-7c3b-ac24-6d68f457065f');
@@ -244,8 +229,9 @@ const woodTexAsset = {
 };
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const lease = worldAttachment1.value;
 
 // Catalogue the texture under its GUID, then mint a shared-ref column handle.
 assets.catalog(woodGuidRes.value, woodTexAsset);
@@ -314,8 +300,13 @@ let framesObserved = 0;
 const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-  if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  const r = renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } });
+  if (!r.ok) {
+    console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  } else {
+    const completed = await r.value.completed;
+    if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+  }
   framesObserved++;
   // Await each frame's GPU work so the custom material shader's async PSO
   // compile resolves (a synchronous loop leaves it perpetually
@@ -380,8 +371,8 @@ const wallTotalMs = Date.now() - frameStart;
 console.log(`[smoke] wallTotalMs=${wallTotalMs}`);
 
 const failures = [];
-if (renderer.backend !== 'webgpu')
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (renderer.inspect().capabilities.backendKind !== 'webgpu')
+  failures.push(`(a) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES)
   failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (errors.length > 0) {

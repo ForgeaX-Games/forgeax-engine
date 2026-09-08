@@ -144,8 +144,7 @@ const mockCanvas = {
 // --- 3. Engine imports + renderer bootstrap ---------------------------------
 
 const { World } = await import('@forgeax/engine-ecs');
-const enginePkg = await import('@forgeax/engine-runtime');
-const { createRenderer } = enginePkg;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } = await import('@forgeax/engine-render');
 const {
   ChildOf,
@@ -164,7 +163,10 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  var hostAssets = constructed.value.assets;
 } catch (err) {
   console.error(
     `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
@@ -174,27 +176,18 @@ try {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
 
-console.log(`[hello-transform-hierarchy] backend=${renderer.backend}`);
+console.log(`[hello-transform-hierarchy] backend=${renderer.inspect().capabilities.backendKind}`);
 
-const assets = renderer.assets;
+const assets = hostAssets;
 if (!assets) {
   console.error('[smoke] FAIL - AssetRegistry is null');
   process.exit(1);
 }
 
-if (!renderer.ready) {
-  console.error('[smoke] FAIL - renderer.ready is null');
-  process.exit(1);
-}
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 // Mint standard PBR material as a user-tier shared ref (same as demo main.ts).
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const materialHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
@@ -382,12 +375,14 @@ function countDiff(a, b) {
 // --- 6. Error tracker -----------------------------------------------------
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint });
+});
 
 // --- 7. Frame A (parent at rest) -------------------------------------------
 
 world.update(1 / 60).unwrap(); // runs propagateTransforms so child Transform.world is composed
-const drawARes = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+const drawARes = renderer.draw({ leases: [worldAttachment1.value], camera: { lease: worldAttachment1.value }, environment: { lease: worldAttachment1.value } });
 if (!drawARes.ok) {
   console.error(`[smoke] FAIL - draw (frame A) failed: ${drawARes.error.code}`);
   process.exit(1);
@@ -400,13 +395,16 @@ const pixelsA = await doReadPixels();
 const baselineHierarchy = projectHierarchy(world);
 const baselineChildWorld = readWorld(child);
 const baselineStaticWorld = readWorld(staticSphere);
-const staleParent = 0xffffffff;
+// 0xffffffff is the ECS null-entity sentinel, not a stale handle. Allocate
+// and retire a real entity so the hierarchy projection exercises liveness.
+const staleParent = world.spawn({ component: Transform, data: {} }).unwrap();
+world.despawn(staleParent).unwrap();
 const staleSet = world.set(child, ChildOf, { parent: staleParent });
 const firstCycleEdge = world.set(cycleA, ChildOf, { parent: cycleB });
 const secondCycleEdge = world.set(cycleB, ChildOf, { parent: cycleA });
 const faultHierarchy = projectHierarchy(world);
 const faultPropagation = propagateTransforms(world, faultHierarchy);
-const drawFaultRes = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+const drawFaultRes = renderer.draw({ leases: [worldAttachment1.value], camera: { lease: worldAttachment1.value }, environment: { lease: worldAttachment1.value } });
 if (!drawFaultRes.ok) {
   console.error(`[smoke] FAIL - draw (fault frame) failed: ${drawFaultRes.error.code}`);
   process.exit(1);
@@ -425,7 +423,7 @@ const repairEdges = [
 ];
 const repairedHierarchy = projectHierarchy(world);
 const repairedPropagation = propagateTransforms(world, repairedHierarchy);
-const drawRepairedRes = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+const drawRepairedRes = renderer.draw({ leases: [worldAttachment1.value], camera: { lease: worldAttachment1.value }, environment: { lease: worldAttachment1.value } });
 if (!drawRepairedRes.ok) {
   console.error(`[smoke] FAIL - draw (repaired frame) failed: ${drawRepairedRes.error.code}`);
   process.exit(1);
@@ -459,7 +457,7 @@ console.log(
 // --- 9. Stability re-render (parent still at rest) -------------------------
 
 world.update(1 / 60).unwrap();
-const drawAARes = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+const drawAARes = renderer.draw({ leases: [worldAttachment1.value], camera: { lease: worldAttachment1.value }, environment: { lease: worldAttachment1.value } });
 if (!drawAARes.ok) {
   console.error(`[smoke] FAIL - draw (stability frame) failed: ${drawAARes.error.code}`);
   process.exit(1);
@@ -475,7 +473,7 @@ if (!setRes.ok) {
   process.exit(1);
 }
 world.update(1 / 60).unwrap(); // re-runs propagateTransforms; child Transform.world follows parent
-const drawBRes = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+const drawBRes = renderer.draw({ leases: [worldAttachment1.value], camera: { lease: worldAttachment1.value }, environment: { lease: worldAttachment1.value } });
 if (!drawBRes.ok) {
   console.error(`[smoke] FAIL - draw (frame B) failed: ${drawBRes.error.code}`);
   process.exit(1);
@@ -488,8 +486,8 @@ const pixelsB = await doReadPixels();
 const failures = [];
 
 // (a) Backend must be webgpu.
-if (renderer.backend !== 'webgpu') {
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (renderer.inspect().capabilities.backendKind !== 'webgpu') {
+  failures.push(`(a) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
 }
 
 // (b) All frames must produce valid buffers.

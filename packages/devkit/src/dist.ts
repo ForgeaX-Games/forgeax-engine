@@ -42,8 +42,12 @@ async function filesUnder(root: string, directory = root): Promise<string[]> {
   return result;
 }
 
-export async function writeDistManifest(facts: ProjectFacts, base: string): Promise<DistManifest> {
-  const root = resolve(facts.root, 'dist');
+export async function writeDistManifest(
+  facts: ProjectFacts,
+  base: string,
+  rootInput = resolve(facts.root, 'dist'),
+): Promise<DistManifest> {
+  const root = resolve(rootInput);
   const artifacts = await Promise.all(
     (await filesUnder(root)).map(async (path): Promise<DistArtifact> => {
       const bytes = await readFile(path);

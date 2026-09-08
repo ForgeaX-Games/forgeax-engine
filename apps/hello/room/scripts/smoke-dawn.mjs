@@ -16,7 +16,7 @@
 //      root Cube (MeshRenderer + standard MaterialAsset) + Sphere child
 //      (MeshRenderer + unlit MaterialAsset, ChildOf -> root) + Plane child
 //      (MeshRenderer + standard MaterialAsset, ChildOf -> root) + Camera + Light.
-//   4. await renderer.ready + 300x renderer.draw(world).
+//   4. await runtime host initialization + 300x lease-bound renderer.draw(...).
 //   5. copyTextureToBuffer + mapAsync multi-pixel grid sample; verdict =
 //      4 criteria (a) backend=webgpu (b) frames>=300
 //      (c) per-pixel distance to baseline <= SMOKE_PIXEL_THRESHOLD on at
@@ -139,10 +139,10 @@ const mockCanvas = {
 
 import { readFileSync as readFileSyncFs } from 'node:fs';
 
-const { World } = await import('@forgeax/engine-ecs');
-  const enginePkg = await import('@forgeax/engine-runtime');
-  const { createRenderer } = enginePkg;
-const { Materials } = await import('@forgeax/engine-render');
+const { createWorldContext, World } = await import('@forgeax/engine-ecs');
+  const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
+const { Materials, renderComponentsPlugin } = await import('@forgeax/engine-render');
+const { scenePlugin } = await import('@forgeax/engine-scene');
   const {
     Camera,
     DirectionalLight,
@@ -161,24 +161,22 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(
 )}`;
 
 let renderer;
+let assets;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  assets = constructed.value.assets;
 } catch (err) {
   console.error(
-    `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
+    `[smoke] FAIL - renderer host construction failed: ${err instanceof Error ? err.message : String(err)}`,
   );
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[hello-room] backend=${renderer.backend}`);
-
-const assets = renderer.assets;
-if (!assets) {
-  console.error('[smoke] FAIL - AssetRegistry is null');
-  process.exit(1);
-}
+console.log('[hello-room] pipeline=Standard');
 
 // The cube mesh GUID (cbe42beb-...) in room.pack.json refs is a builtin:
 // the AssetRegistry constructor pre-registers HANDLE_CUBE under it
@@ -188,14 +186,9 @@ if (!assets) {
 // createBoxGeometry(1,1,1) under the same GUID -- now redundant and a
 // collision, since the builtin already owns it.)
 
-// renderer.ready must complete before material registration — shader
+// host initialization must complete before material registration — shader
 // manifest loading (Step 1b) registers materialShaders which
 // validateMaterialPasses requires.
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 const stdMatGuidResult = AssetGuid.parse('f6af7007-158f-4d92-9e47-93bf2f213e1f');
 if (!stdMatGuidResult.ok) {
@@ -226,7 +219,7 @@ if (!unlitMatGuidResult.ok) {
 // Pass-based unlit MaterialAsset via the Materials.unlit factory (mirrors
 // apps/hello/room/src/index.ts). The legacy hand-written unlit-discriminant
 // shape carried no `passes` array and resolved to empty passes at draw time,
-// firing `material-resolved-empty-passes` through renderer.onError.
+// firing `material-resolved-empty-passes` through the Renderer error event stream.
 const unlitCatalogResult = assets.catalog(
   unlitMatGuidResult.value,
   Materials.unlit([0.2, 0.3, 0.9, 1]),
@@ -314,8 +307,17 @@ const sceneAsset = {
 };
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldContext = await createWorldContext(world, [
+  renderComponentsPlugin(),
+  scenePlugin(),
+]);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const frameRequest = {
+  leases: [worldAttachment1.value],
+  camera: { lease: worldAttachment1.value },
+  environment: { lease: worldAttachment1.value },
+};
 
 const sceneGuid = AssetGuid.parse(ROOM_SCENE_GUID);
 if (!sceneGuid.ok) {
@@ -329,7 +331,9 @@ if (!sceneHandleRes.ok) {
   process.exit(1);
 }
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint });
+});
 
 // loadByGuid returns the payload (D-17); mint a user-tier column handle.
 const sceneHandle = world.allocSharedRef('SceneAsset', sceneHandleRes.value);
@@ -344,7 +348,7 @@ const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = renderer.draw(frameRequest);
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
 }
@@ -468,9 +472,8 @@ console.log(
 );
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES)
-  failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
+  failures.push(`(a) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (meshedRenderCount < 1) {
   failures.push(
     `(c) multi-mesh sample - 0 of ${meshSiteNames.length} meshed sites exceed threshold=${SMOKE_PIXEL_THRESHOLD} linear distance from clear color; frame drew nothing above clear. perSiteDistance=${JSON.stringify(perSiteDistance)}`,
@@ -516,7 +519,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 4 criteria GREEN: backend=webgpu, frames=${framesObserved}, meshed sites above threshold=${meshedRenderCount}/${meshSiteNames.length}, RhiError count=0`,
+  `[smoke] PASS - 3 criteria GREEN: pipeline=Standard, frames=${framesObserved}, meshed sites above threshold=${meshedRenderCount}/${meshSiteNames.length}, RhiError count=0`,
 );
 
 device.destroy?.();

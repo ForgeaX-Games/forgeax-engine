@@ -10,17 +10,35 @@ export interface MaterialSourceInput {
 export interface MaterialSourceRecord extends MaterialSourceInput {
   readonly moduleId: string;
   readonly provenance: 'engine' | 'project';
+  readonly slots: readonly string[];
 }
 
 export interface MaterialSourceCatalogInput {
+  readonly roots?: readonly string[];
   readonly engine: readonly MaterialSourceInput[];
   readonly project: readonly MaterialSourceInput[];
 }
 
 const MODULE_ID_RE = /^\s*#define_import_path\s+([A-Za-z0-9_-]+(?:::[A-Za-z0-9_-]+)*)\s*$/m;
+const SLOT_RE = /^\s*#pragma\s+material_slot\s+([A-Za-z0-9_-]+)\s*$/gm;
 
 function moduleIdOf(source: MaterialSourceInput): string | undefined {
   return MODULE_ID_RE.exec(source.source)?.[1];
+}
+
+function slotsOf(source: MaterialSourceInput): readonly string[] {
+  return [...source.source.matchAll(SLOT_RE)]
+    .map((match) => match[1])
+    .filter((slot): slot is string => slot !== undefined)
+    .sort();
+}
+
+function slotError(source: string, slot: string, module: string): MaterialError {
+  return createMaterialError('shader-module-not-found', {
+    code: 'shader-module-not-found',
+    module: `${source}::${slot}=${module}`,
+    source,
+  });
 }
 
 function namespaceOf(moduleId: string): string {
@@ -62,9 +80,11 @@ function moduleIdError(
 
 export class MaterialSourceCatalog {
   readonly #modules: ReadonlyMap<string, MaterialSourceRecord>;
+  readonly roots: readonly string[];
 
-  constructor(records: readonly MaterialSourceRecord[]) {
+  constructor(records: readonly MaterialSourceRecord[], roots: readonly string[] = []) {
     this.#modules = new Map(records.map((record) => [record.moduleId, record]));
+    this.roots = [...roots];
   }
 
   get(moduleId: string): Result<MaterialSourceRecord, MaterialError> {
@@ -77,6 +97,24 @@ export class MaterialSourceCatalog {
     const record = this.#modules.get(moduleId);
     if (record !== undefined) return ok(record);
     return missingModule(moduleId, source);
+  }
+
+  resolveSlot(
+    sourceModuleId: string,
+    slotName: string,
+    moduleId: string,
+  ): Result<MaterialSourceRecord, MaterialError> {
+    const source = this.#modules.get(sourceModuleId);
+    if (source === undefined) return missingModule(sourceModuleId, sourceModuleId);
+    if (!source.slots.includes(slotName)) {
+      return err(slotError(sourceModuleId, slotName, moduleId));
+    }
+    const selected = this.#modules.get(moduleId);
+    if (selected === undefined) return missingModule(moduleId, sourceModuleId);
+    if (!source.source.includes(`forgeax_material::slot::${slotName}`)) {
+      return err(slotError(sourceModuleId, slotName, moduleId));
+    }
+    return ok(selected);
   }
 
   entries(): readonly MaterialSourceRecord[] {
@@ -102,11 +140,11 @@ export function buildMaterialSourceCatalog(
       const locations = seen.get(moduleId) ?? [];
       locations.push(source.path);
       seen.set(moduleId, locations);
-      records.push({ ...source, moduleId, provenance });
+      records.push({ ...source, moduleId, provenance, slots: slotsOf(source) });
     }
   }
   for (const [moduleId, sources] of seen) {
     if (sources.length > 1) return err(duplicateModule(moduleId, sources));
   }
-  return ok(new MaterialSourceCatalog(records));
+  return ok(new MaterialSourceCatalog(records, input.roots));
 }

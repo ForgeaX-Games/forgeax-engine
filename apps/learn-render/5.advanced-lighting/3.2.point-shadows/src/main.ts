@@ -170,7 +170,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
   ).unwrap();
 
-  addFirstPersonSystem(app.world, app.renderer, {
+  addFirstPersonSystem(app.world, {
     name: 'learn-render-5.3.2-point-shadows-first-person',
     overrideBackend: undefined,
   });
@@ -201,7 +201,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     world.set(cameraEntity, Camera, { aspect: window.innerWidth / window.innerHeight });
   });
 
-  console.warn(`[learn-render 5.3.2 point-shadows] backend=${renderer.backend}`);
+  console.warn(`[learn-render 5.3.2 point-shadows] backend=${renderer.inspect().capabilities.backendKind}`);
 }
 
 declare global {

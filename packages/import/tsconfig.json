@@ -12,5 +12,11 @@
     "types": ["node"]
   },
   "include": ["src/**/*"],
-  "references": [{ "path": "../types" }]
+  "references": [
+    { "path": "../ddc" },
+    { "path": "../geometry" },
+    { "path": "../pack" },
+    { "path": "../scene" },
+    { "path": "../types" }
+  ]
 }

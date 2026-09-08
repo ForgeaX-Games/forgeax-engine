@@ -1,4 +1,4 @@
-// @forgeax/engine-app -- loadGame(slug, resolver) -> Result<BootstrapEntry, LoadGameError>
+// @forgeax/engine-app -- loadGame(slug, resolver) -> Result<Plugin, LoadGameError>
 //
 // Pure-function load helper that validates a dynamically-imported game
 // template module. The resolver is an injection point so loadGame is
@@ -7,8 +7,8 @@
 // Shape:
 //   1. Call resolver(slug). If resolver throws, distinguish module-not-found
 //      (slug in detail) from import-failed (cause in detail).
-//   2. If resolver returns a module, check typeof module.bootstrap === 'function'.
-//   3. On success, return Result.ok(module.bootstrap).
+//   2. Validate the module's `default` export as a Cordis plugin.
+//   3. On success, return that plugin without creating a parallel entry lifecycle.
 //
 // Constraints from upstream:
 //   - requirements D-3: loadGame does NOT depend on Vite specifics
@@ -20,18 +20,16 @@
 //   - P3 explicit failure: all 3 error paths return structured Result.err
 //   - F1 context-limited: the function is one screen (no hidden state)
 
-import { err, ok, type Result } from '@forgeax/engine-ecs';
+import type { Plugin } from '@forgeax/engine-plugin';
+import { err, ok, type Result } from '@forgeax/engine-types';
 
-import type { BootstrapEntry } from './game-context';
 import { LOAD_GAME_ERROR_HINTS, LOAD_GAME_EXPECTED, LoadGameError } from './load-game-errors';
 
 /**
- * The shape of a module that the resolver returns. loadGame checks
- * `typeof module.bootstrap === 'function'` before treating it as a valid
- * BootstrapEntry.
+ * The shape of a module that the resolver returns.
  */
 interface GameEntryModule {
-  readonly bootstrap?: unknown;
+  readonly default?: unknown;
   readonly [key: string]: unknown;
 }
 
@@ -43,13 +41,23 @@ interface GameEntryModule {
  * e.g. `(slug) => import(\`../../templates/\${slug}/src/main.ts\`)`.
  * loadGame does not hardcode any import path.
  */
-export type GameEntryResolver = (slug: string) => Promise<GameEntryModule>;
+export type GamePluginResolver = (slug: string) => Promise<GameEntryModule>;
+
+function isPlugin(value: unknown): value is Plugin {
+  return (
+    typeof value === 'function' ||
+    (typeof value === 'object' &&
+      value !== null &&
+      'apply' in value &&
+      typeof value.apply === 'function')
+  );
+}
 
 /**
  * Load and validate a game template module.
  *
- * Returns `Result.ok<BootstrapEntry>` when the resolver returns a module
- * whose `bootstrap` export is a function. Returns `Result.err<LoadGameError>`
+ * Returns `Result.ok<Plugin>` when the resolver returns a module
+ * whose default export is a native Cordis plugin. Returns `Result.err<LoadGameError>`
  * with one of 3 error codes on failure.
  *
  * @param slug - The game identifier (e.g. 'game-default'). Passed
@@ -59,8 +67,8 @@ export type GameEntryResolver = (slug: string) => Promise<GameEntryModule>;
  */
 export async function loadGame(
   slug: string,
-  resolver: GameEntryResolver,
-): Promise<Result<BootstrapEntry, LoadGameError>> {
+  resolver: GamePluginResolver,
+): Promise<Result<Plugin, LoadGameError>> {
   let module: GameEntryModule;
   try {
     module = await resolver(slug);
@@ -91,9 +99,7 @@ export async function loadGame(
     );
   }
 
-  // Validate bootstrap named export: must be a function. null / undefined /
-  // non-function values are all invalid-format.
-  if (typeof module.bootstrap !== 'function') {
+  if (!isPlugin(module.default)) {
     const exportKeys = Object.keys(module);
     return err(
       new LoadGameError({
@@ -105,5 +111,5 @@ export async function loadGame(
     );
   }
 
-  return ok(module.bootstrap as BootstrapEntry);
+  return ok(module.default);
 }

@@ -99,12 +99,14 @@ async function readEvidence() {
       : await globalThis.__forgeaxPreviewInspection.read('game-default.snapshot');
     const renderEvidence = globalThis.__forgeaxGameDefaultRenderEvidence;
     const audioEvidence = globalThis.__forgeaxGameDefaultAudioEvidence;
+    const renderInspection = renderEvidence?.renderer.inspect();
     return {
       inspection,
       render: renderEvidence?.snapshot() ?? null,
       renderer: renderEvidence === undefined ? null : {
-        backend: renderEvidence.renderer.backend,
-        health: renderEvidence.renderer.health(),
+        backend: renderInspection?.capabilities.backendKind ?? null,
+        state: renderInspection?.state ?? null,
+        surface: renderInspection?.surface ?? null,
       },
       audio: audioEvidence?.snapshot() ?? null,
     };
@@ -376,7 +378,7 @@ try {
       deviceScaleFactor: 1,
       url: URL,
       backend: fresh[0]?.evidence.renderer?.backend ?? null,
-      rendererHealth: fresh[0]?.evidence.renderer?.health ?? null,
+      rendererState: fresh[0]?.evidence.renderer?.state ?? null,
       hitPoint: HIT_POINT,
       matchedControlPoint: CONTROL_POINT,
       scene: 'templates/game-default/assets/scene.pack.json RedBox at (3, 0.5, -2)',

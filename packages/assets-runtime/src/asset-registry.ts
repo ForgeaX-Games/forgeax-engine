@@ -35,7 +35,7 @@
 // both dual-impl shim backends through the @forgeax/engine-rhi interface
 // SSOT at the consumer site.
 
-import type { EcsError, EntityHandle, World } from '@forgeax/engine-ecs';
+import type { Component, EcsError, EntityHandle, World } from '@forgeax/engine-ecs';
 import type { PackError } from '@forgeax/engine-pack/errors';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { deriveAssetName } from '@forgeax/engine-pack/name';
@@ -61,11 +61,14 @@ import {
   type InspectSnapshot,
   type Loader,
   type MaterialAsset,
+  type MountOverride,
+  migrateLegacyMeshMaterialOverrides,
   type Package,
   type ParseErrorDetail,
   type RuntimeAssetBinding,
   type SceneAsset,
   type SceneEntity,
+  type SceneInstanceMount,
   type TagOf,
   type TilesetAsset,
   type TranscodeCaps,
@@ -106,6 +109,8 @@ import {
   HANDLE_SPHERE,
   HANDLE_TRIANGLE,
 } from './handles';
+import type { MaterialLoadError, MaterialReady } from './material/loader';
+import { installMaterialReadyShaders } from './material/runtime-shader';
 import { inferAtlasExtent, validateMeshPayload, validateTilesetPayload } from './payload-validate';
 import { ArtifactReadCache } from './registry/artifact-io';
 import {
@@ -129,6 +134,10 @@ import {
   registerPackagesFromIndex,
 } from './registry/load-by-guid';
 import { LoadStateStore } from './registry/load-state';
+import type {
+  ScenePublicationFence,
+  ScenePublicationFenceError,
+} from './registry/scene-publication-fence';
 import {
   detectTileNeedsRepeatSampler,
   materialShaderTextureFieldNames as materialShaderTextureFieldNamesImpl,
@@ -291,13 +300,16 @@ export class AssetRegistry {
   // lint-compliant exposure (D-internal R-internal-C ties `@internal` to `_`).
   readonly assetCatalog: Map<string, AssetEnvelope<Asset>> = new Map();
 
+  /** Owner-injected component catalog used for scene breadcrumb projection. */
+  readonly componentCatalog: ReadonlyMap<string, Component>;
+
   // feat-20260618-asset-and-pack-name-fields M3 (D-1): the package index that
   // backs the two-segment asset identity `<packagePath>.<name>`. `packages`
   // maps a lowercased GUID key to its `MutablePackage` (a shared object every
   // GUID of the same import path points at), or `null` for assets with no
   // package (catalog() inline + builtin, D-5). All three registration entry
   // points (catalog / loadByGuid / builtin) funnel through the single
-  // `registerPackage` primitive so the XOR name invariant lands once (#1 SSOT).
+  // `registerPackage` primitive so the display-name invariant lands once (#1 SSOT).
   private readonly packages: Map<string, MutablePackage | null> = new Map();
 
   // Secondary index path -> shared MutablePackage so every GUID of the same
@@ -342,6 +354,12 @@ export class AssetRegistry {
   readonly packFileInFlight: Map<string, Promise<ParsedPackFile>> = new Map();
   readonly artifactCache = new ArtifactReadCache();
   readonly loadState = new LoadStateStore();
+  /**
+   * Render-facing material readiness owned by the production GUID loader.
+   * The map stores the complete tuple result, including structured failures,
+   * so record code cannot silently fall back to a generic MaterialAsset.
+   */
+  readonly materialReadiness = new Map<string, MaterialReady | MaterialLoadError>();
   private assetEvidenceAdapter: RuntimeAssetEvidenceAdapter = createRuntimeAssetEvidenceAdapter();
 
   // feat-20260621-asset-registry-robustness-invalidate-inflight-cach F17c:
@@ -429,9 +447,8 @@ export class AssetRegistry {
   // internally built by `createDefaultLoaderRegistry()` (public readonly field)
   // so host apps can reach `engine.assets.loaders.register(...)` without a
   // constructor-injection slot or a phantom passthrough wrapper.
-  // The loader set is wired at construction from the 10 engine-owned defaults
-  // (including videoLoader) plus caller-supplied loaders. createRenderer injects
-  // the concrete Web Audio catalog-entry loader to complete the 11-kind set.
+  // The loader set is wired at construction from the complete ordinary Asset
+  // vocabulary (including video and audio) plus caller-supplied extensions.
   // Assigned here so the optional loaders cannot appear after a load begins.
   readonly loaders: LoaderRegistry;
 
@@ -462,19 +479,21 @@ export class AssetRegistry {
     // `@internal` tag would require a `_` prefix per D-internal R-internal-C).
     readonly shaderRegistry: ShaderRegistry,
     importTransport?: ImportTransport | undefined,
-    // Caller-supplied loaders append after the 10 engine defaults. createRenderer
-    // supplies the Web Audio catalog-entry loader; standalone/test registries
-    // retain the 10-kind default set unless they choose a concrete extra loader.
+    // Caller-supplied loaders extend the ordinary default set. Duplicate kinds
+    // are rejected by LoaderRegistry so no consumer can observe replacement
+    // order as an accidental ownership rule.
     extraLoaders?: readonly Loader[] | undefined,
     // feat-20260705-runtime-tier2-decomposition M1 / w9 (D-1): optional
     // post-spawn hook; createRenderer injects `postSpawnResolveJoints`.
     postSpawnHook?: PostSpawnHook | undefined,
     runtimeBinding?: RuntimeAssetBinding | undefined,
+    componentCatalog: ReadonlyMap<string, Component> = new Map(),
   ) {
     void this.shaderRegistry;
     this.importTransport = importTransport;
     this.postSpawnHook = postSpawnHook;
     this.runtimeBinding = runtimeBinding;
+    this.componentCatalog = componentCatalog;
     this.loaders = createDefaultLoaderRegistry(extraLoaders);
     this.registerBuiltins();
   }
@@ -592,12 +611,32 @@ export class AssetRegistry {
     return this._originIndex.get(asset as object);
   }
 
+  /** Public identity projection consumed by scene collection boundaries. */
+  guidOf(asset: Asset): string | undefined {
+    return this._guidForAsset(asset);
+  }
+
+  /** Return the production MaterialReady/Error result for one material GUID. */
+  getMaterialReadiness(guid: string): MaterialReady | MaterialLoadError | undefined {
+    return this.materialReadiness.get(guid.toLowerCase());
+  }
+
+  /** Record the canonical result produced by the production material loader. */
+  recordMaterialReadiness(guid: string, readiness: MaterialReady | MaterialLoadError): void {
+    this.materialReadiness.set(guid.toLowerCase(), readiness);
+    if (readiness.status === 'Ready') {
+      installMaterialReadyShaders(this.shaderRegistry, readiness);
+    }
+  }
+
   /**
-   * Configure the production pack-index URL for `loadByGuid`.
+   * Configure a catalog URL for `loadByGuid`.
    *
    * Call this once during engine initialization with the URL where
    * `pack-index.json` is served (emitted by `@forgeax/engine-vite-plugin-pack`
-   * during `vite build`). The index is also the canonical base URL for every
+   * during `vite build`). In a Vite dev host, use `configureRuntimeBinding`
+   * instead so the catalog remains bound to its scope and generation. The
+   * index is also the canonical base URL for every
    * catalog entry: relative, root-relative, and absolute entry URLs are resolved
    * against it before the registry fetches a pack body. After configuration,
    * `loadByGuid` will fetch the catalog on its first invocation and cache it for
@@ -651,10 +690,13 @@ export class AssetRegistry {
     // (the `packages` mapping survives, so resolveName must still see the name
     // until a re-load's registerPackage overwrites it) by parking it on
     // pendingNames -- the next catalog() of this GUID drains it back.
-    const survivingName = this.assetCatalog.get(guidKey)?.name;
+    const survivingEnvelope = this.assetCatalog.get(guidKey);
+    const survivingName = survivingEnvelope?.name;
     if (survivingName !== undefined) this.pendingNames.set(guidKey, survivingName);
+    if (survivingEnvelope !== undefined) this._originIndex.set(survivingEnvelope.payload, guidKey);
     this.assetCatalog.delete(guidKey);
     this.loadState.remove(guidKey);
+    this.materialReadiness.delete(guidKey);
     // R-1 hard fix (research-decisions.md): delete inFlight entry so the
     // next loadByGuid does not hit the old Promise whose generation no
     // longer matches (AC-04 requires a fresh fetch, not asset-invalidated).
@@ -669,6 +711,57 @@ export class AssetRegistry {
     this.packIndexCache?.delete(guidKey);
     this.generations.set(guidKey, (this.generations.get(guidKey) ?? 0) + 1);
     this.catalogEpoch++;
+  }
+
+  /**
+   * Adopt freshly loaded Mesh material slots into an object that is already
+   * pinned by live World shared refs. Geometry and GPU-backed fields deliberately
+   * remain untouched: this primitive is only for a default-material source
+   * override, never a general Mesh reimport. This is the atomic cutover: Catalog,
+   * Ready load state, and payload-to-GUID provenance must all name the same
+   * object after the call. Call only after invalidate(guid) + loadByGuid(guid)
+   * has completed successfully.
+   */
+  adoptReloadedMeshMaterialSlots(guid: string, livePayload: Asset): Result<Asset, AssetError> {
+    const key = guid.toLowerCase();
+    const envelope = this.assetCatalog.get(key);
+    const freshPayload = this.loadState.getReady<Asset>(key);
+    if (envelope === undefined || freshPayload === undefined || envelope.payload !== freshPayload) {
+      return err(
+        new AssetError({
+          code: 'asset-not-found',
+          expected: `GUID ${key} to have one freshly loaded Ready payload`,
+          hint: 'complete invalidate + loadByGuid before adopting a live Mesh identity',
+        }),
+      );
+    }
+    if (livePayload.kind !== 'mesh' || freshPayload.kind !== 'mesh') {
+      return err(
+        new AssetError({
+          code: 'asset-parse-failed',
+          expected: `GUID ${key} live and fresh payloads to both be MeshAsset`,
+          hint: 'use Mesh identity adoption only for a recooked MeshAsset',
+        }),
+      );
+    }
+    if (this._guidForAsset(livePayload) !== key) {
+      return err(
+        new AssetError({
+          code: 'asset-not-found',
+          expected: `live Mesh payload to retain GUID provenance for ${key}`,
+          hint: 'capture the catalogued live payload before invalidating and reloading the same GUID',
+        }),
+      );
+    }
+    if (livePayload === freshPayload) return ok(livePayload);
+
+    (livePayload as unknown as { materialSlots: TypesMeshAsset['materialSlots'] }).materialSlots =
+      freshPayload.materialSlots;
+    this._originIndex.set(freshPayload as object, key);
+    this.assetCatalog.set(key, { ...envelope, payload: livePayload });
+    this.loadState.registerReady(key, livePayload);
+    this.catalogEpoch++;
+    return ok(livePayload);
   }
 
   /**
@@ -689,6 +782,7 @@ export class AssetRegistry {
     const count = this.assetCatalog.size;
     this.assetCatalog.clear();
     this.loadState.clear();
+    this.materialReadiness.clear();
     this.inFlight.clear();
     this.globalGeneration++;
     // Round-2 M-A: wholesale clear of the shared body cache, and reset the
@@ -827,7 +921,25 @@ export class AssetRegistry {
     world: World,
     parent?: EntityHandle,
   ): Result<EntityHandle, AssetError | PackError | EcsError> {
-    return instantiateImpl(this, handle, world, parent);
+    return instantiateImpl(this, handle, world, parent) as Result<
+      EntityHandle,
+      AssetError | PackError | EcsError
+    >;
+  }
+
+  instantiateWithPublicationFence<T extends SceneAsset>(
+    handle: Handle<TagOf<T>, 'shared'>,
+    world: World,
+    parent: EntityHandle | undefined,
+    expectedPublication: ScenePublicationFence,
+  ): Result<EntityHandle, AssetError | PackError | EcsError | ScenePublicationFenceError>;
+  instantiateWithPublicationFence<T extends SceneAsset>(
+    handle: Handle<TagOf<T>, 'shared'>,
+    world: World,
+    parent: EntityHandle | undefined,
+    expectedPublication: ScenePublicationFence,
+  ): Result<EntityHandle, AssetError | PackError | EcsError | ScenePublicationFenceError> {
+    return instantiateImpl(this, handle, world, parent, expectedPublication);
   }
 
   /**
@@ -842,7 +954,299 @@ export class AssetRegistry {
     handle: Handle<TagOf<T>, 'shared'>,
     world: World,
   ): Result<EntityHandle[], AssetError | PackError | EcsError> {
-    return instantiateFlatImpl(this, handle, world);
+    return instantiateFlatImpl(this, handle, world) as Result<
+      EntityHandle[],
+      AssetError | PackError | EcsError
+    >;
+  }
+
+  instantiateFlatWithPublicationFence<T extends SceneAsset>(
+    handle: Handle<TagOf<T>, 'shared'>,
+    world: World,
+    expectedPublication: ScenePublicationFence,
+  ): Result<EntityHandle[], AssetError | PackError | EcsError | ScenePublicationFenceError> {
+    return instantiateFlatImpl(this, handle, world, expectedPublication);
+  }
+
+  private sceneMeshGuidBySlot(
+    scene: SceneAsset,
+    visited: Set<string> = new Set(),
+  ): Map<number, string> {
+    const result = new Map<number, string>();
+    for (const entity of scene.entities) {
+      const components = entity.components as Record<string, Record<string, unknown>>;
+      const meshGuid = components.MeshFilter?.assetHandle;
+      if (typeof meshGuid === 'string') result.set(entity.localId as number, meshGuid);
+    }
+    for (const mount of scene.mounts ?? []) {
+      const mountComponents = mount.components as
+        | Record<string, Record<string, unknown>>
+        | undefined;
+      const mountMeshGuid = mountComponents?.MeshFilter?.assetHandle;
+      if (typeof mountMeshGuid === 'string') result.set(mount.localId as number, mountMeshGuid);
+      if (typeof mount.source !== 'string') continue;
+      const childKey = mount.source.toLowerCase();
+      if (visited.has(childKey)) continue;
+      const child = this.assetCatalog.get(childKey)?.payload;
+      if (child?.kind !== 'scene') continue;
+      const childVisited = new Set(visited);
+      childVisited.add(childKey);
+      const childSlots = this.sceneMeshGuidBySlot(child, childVisited);
+      const first = mount.memberFirst as unknown as number;
+      for (const [childSlot, meshGuid] of childSlots) result.set(first + childSlot, meshGuid);
+      for (const override of mount.overrides ?? []) {
+        if (override.comp !== 'MeshFilter') continue;
+        const nextMeshGuid =
+          override.field === 'assetHandle'
+            ? override.value
+            : override.field === undefined &&
+                typeof override.value === 'object' &&
+                override.value !== null &&
+                !Array.isArray(override.value)
+              ? (override.value as Record<string, unknown>).assetHandle
+              : undefined;
+        if (typeof nextMeshGuid === 'string') {
+          result.set(override.localId as unknown as number, nextMeshGuid);
+        }
+      }
+    }
+    return result;
+  }
+
+  private migrateLegacySceneMaterialOverrides(
+    scene: SceneAsset,
+    sceneGuidKey?: string,
+  ): Result<{ readonly scene: SceneAsset; readonly changed: boolean }, AssetError> {
+    const nodes: SceneEntity[] = [];
+    let changed = false;
+    for (const node of scene.entities) {
+      const components = node.components as Record<string, Record<string, unknown>>;
+      const rawMeshGuid = components.MeshFilter?.assetHandle;
+      const meshGuid = typeof rawMeshGuid === 'string' ? rawMeshGuid : undefined;
+      const legacyOverrides = components.MeshRenderer?.materials;
+      const mesh =
+        meshGuid === undefined ? undefined : this.assetCatalog.get(meshGuid.toLowerCase())?.payload;
+      if (
+        mesh?.kind !== 'mesh' ||
+        meshGuid === undefined ||
+        !Array.isArray(legacyOverrides) ||
+        legacyOverrides.length < mesh.submeshes.length ||
+        mesh.submeshes.length <= mesh.materialSlots.length ||
+        !legacyOverrides.every((value) => typeof value === 'string')
+      ) {
+        nodes.push(node);
+        continue;
+      }
+      const migrated = migrateLegacyMeshMaterialOverrides(
+        legacyOverrides as string[],
+        mesh.submeshes,
+        mesh.materialSlots.length,
+        {
+          meshGuid: meshGuid.toLowerCase(),
+          sceneGuid: sceneGuidKey ?? '<unregistered-scene>',
+          entityId: node.localId as number,
+        },
+      );
+      if (!migrated.ok) {
+        return err(
+          new AssetError({
+            code: 'asset-parse-failed',
+            expected:
+              'legacy per-submesh material overrides to collapse unambiguously onto Mesh v3 slots',
+            hint: migrated.error.hint,
+            detail: migrated.error as unknown as import('@forgeax/engine-types').AssetErrorDetail,
+          }),
+        );
+      }
+      changed = true;
+      nodes.push({
+        ...node,
+        components: {
+          ...components,
+          MeshRenderer: { ...components.MeshRenderer, materials: migrated.overrides },
+        },
+      } as SceneEntity);
+    }
+
+    const mounts: SceneInstanceMount[] = [];
+    for (const mount of scene.mounts ?? []) {
+      const child =
+        typeof mount.source === 'string'
+          ? this.assetCatalog.get(mount.source.toLowerCase())?.payload
+          : undefined;
+      let nextMount = mount;
+      let mountChanged = false;
+      const mountComponents = mount.components as
+        | Record<string, Record<string, unknown>>
+        | undefined;
+      const mountMeshGuid = mountComponents?.MeshFilter?.assetHandle;
+      const mountMaterials = mountComponents?.MeshRenderer?.materials;
+      const mountMesh =
+        typeof mountMeshGuid === 'string'
+          ? this.assetCatalog.get(mountMeshGuid.toLowerCase())?.payload
+          : undefined;
+      if (
+        mountMesh?.kind === 'mesh' &&
+        typeof mountMeshGuid === 'string' &&
+        Array.isArray(mountMaterials) &&
+        mountMaterials.length >= mountMesh.submeshes.length &&
+        mountMesh.submeshes.length > mountMesh.materialSlots.length &&
+        mountMaterials.every((value) => typeof value === 'string')
+      ) {
+        const migrated = migrateLegacyMeshMaterialOverrides(
+          mountMaterials as string[],
+          mountMesh.submeshes,
+          mountMesh.materialSlots.length,
+          {
+            meshGuid: mountMeshGuid.toLowerCase(),
+            sceneGuid: sceneGuidKey ?? '<unregistered-scene>',
+            entityId: mount.localId as unknown as number,
+          },
+        );
+        if (!migrated.ok) {
+          return err(
+            new AssetError({
+              code: 'asset-parse-failed',
+              expected:
+                'legacy mount-entity materials to collapse unambiguously onto Mesh v3 slots',
+              hint: migrated.error.hint,
+              detail: migrated.error as unknown as import('@forgeax/engine-types').AssetErrorDetail,
+            }),
+          );
+        }
+        mountChanged = true;
+        nextMount = {
+          ...mount,
+          components: {
+            ...mountComponents,
+            MeshRenderer: { ...mountComponents?.MeshRenderer, materials: migrated.overrides },
+          },
+        } as SceneInstanceMount;
+      }
+      if (child?.kind !== 'scene' || mount.overrides === undefined) {
+        if (mountChanged) changed = true;
+        mounts.push(nextMount);
+        continue;
+      }
+      const meshByMember = this.sceneMeshGuidBySlot(child);
+      const nextOverrides: MountOverride[] = [];
+      for (const override of mount.overrides) {
+        const childLocalId =
+          (override.localId as unknown as number) - (mount.memberFirst as unknown as number);
+        if (override.comp === 'MeshFilter') {
+          const nextMeshGuid =
+            override.field === 'assetHandle'
+              ? override.value
+              : override.field === undefined &&
+                  typeof override.value === 'object' &&
+                  override.value !== null &&
+                  !Array.isArray(override.value)
+                ? (override.value as Record<string, unknown>).assetHandle
+                : undefined;
+          if (typeof nextMeshGuid === 'string') meshByMember.set(childLocalId, nextMeshGuid);
+          nextOverrides.push(override);
+          continue;
+        }
+        const legacyMaterials =
+          override.comp === 'MeshRenderer' && override.field === 'materials'
+            ? override.value
+            : override.comp === 'MeshRenderer' &&
+                override.field === undefined &&
+                typeof override.value === 'object' &&
+                override.value !== null &&
+                !Array.isArray(override.value)
+              ? (override.value as Record<string, unknown>).materials
+              : undefined;
+        const meshGuid = meshByMember.get(childLocalId);
+        const mesh =
+          meshGuid === undefined
+            ? undefined
+            : this.assetCatalog.get(meshGuid.toLowerCase())?.payload;
+        if (
+          mesh?.kind !== 'mesh' ||
+          meshGuid === undefined ||
+          !Array.isArray(legacyMaterials) ||
+          legacyMaterials.length < mesh.submeshes.length ||
+          mesh.submeshes.length <= mesh.materialSlots.length ||
+          !legacyMaterials.every((value) => typeof value === 'string')
+        ) {
+          nextOverrides.push(override);
+          continue;
+        }
+        const migrated = migrateLegacyMeshMaterialOverrides(
+          legacyMaterials as string[],
+          mesh.submeshes,
+          mesh.materialSlots.length,
+          {
+            meshGuid: meshGuid.toLowerCase(),
+            sceneGuid: sceneGuidKey ?? '<unregistered-scene>',
+            entityId: override.localId as unknown as number,
+          },
+        );
+        if (!migrated.ok) {
+          return err(
+            new AssetError({
+              code: 'asset-parse-failed',
+              expected:
+                'legacy mount material overrides to collapse unambiguously onto Mesh v3 slots',
+              hint: migrated.error.hint,
+              detail: migrated.error as unknown as import('@forgeax/engine-types').AssetErrorDetail,
+            }),
+          );
+        }
+        mountChanged = true;
+        nextOverrides.push(
+          override.field === 'materials'
+            ? { ...override, value: migrated.overrides }
+            : {
+                ...override,
+                value: {
+                  ...(override.value as Record<string, unknown>),
+                  materials: migrated.overrides,
+                },
+              },
+        );
+      }
+      if (mountChanged) {
+        changed = true;
+        mounts.push({ ...nextMount, overrides: nextOverrides });
+      } else {
+        mounts.push(nextMount);
+      }
+    }
+    return ok({
+      scene: changed
+        ? {
+            ...scene,
+            entities: nodes,
+            ...(scene.mounts === undefined ? {} : { mounts }),
+          }
+        : scene,
+      changed,
+    });
+  }
+
+  private preflightSceneMaterialGraph(
+    scene: SceneAsset,
+    sceneGuidKey?: string,
+    visited: Set<string> = new Set(),
+  ): Result<void, AssetError> {
+    const key = sceneGuidKey?.toLowerCase();
+    if (key !== undefined) {
+      if (visited.has(key)) return ok(undefined);
+      visited.add(key);
+    }
+    const local = this.migrateLegacySceneMaterialOverrides(scene, sceneGuidKey);
+    if (!local.ok) return local;
+    for (const mount of scene.mounts ?? []) {
+      if (typeof mount.source !== 'string') continue;
+      const childKey = mount.source.toLowerCase();
+      const child = this.assetCatalog.get(childKey)?.payload;
+      if (child?.kind !== 'scene') continue;
+      const nested = this.preflightSceneMaterialGraph(child, childKey, visited);
+      if (!nested.ok) return nested;
+    }
+    return ok(undefined);
   }
 
   /**
@@ -871,21 +1275,33 @@ export class AssetRegistry {
     _visitedMountGuids?: Set<string>,
     _guidToHandle?: Map<string, number>,
     _resolvedSceneHandles?: Map<string, number>,
+    _materialGraphPreflighted = false,
   ): Result<SceneAsset, AssetError> {
     // feat-20260622 M3 / w8: reverse-decode from envelope.refs edges when
     // sceneGuidKey is provided and the catalog holds an envelope for this
     // scene. Each edge with sceneEntityId+sourceField.componentName carries
     // the (entityLocalId, componentName, fieldName, arrayIndex) triple —
-    // no need to walk entities with resolveComponent reflection.
+    // no need to walk entities with a process-global component reflection table.
     // D-15/D-17 dedup contract: the same catalogued payload referenced from
     // multiple nodes must resolve to ONE user-tier handle. The local GUID map
     // avoids repeat lookups inside this traversal; World interning preserves
     // payload identity across separate scene-resolution calls.
+    if (!_materialGraphPreflighted) {
+      const graph = this.preflightSceneMaterialGraph(scene, sceneGuidKey);
+      if (!graph.ok) return graph;
+    }
+    const localMigration = this.migrateLegacySceneMaterialOverrides(scene, sceneGuidKey);
+    if (!localMigration.ok) return localMigration;
+    const sceneForResolution = localMigration.value.scene;
+    const preflightChanged = localMigration.value.changed;
+
     const resolvedMap = new Map<string, number>();
     const guidToHandle = _guidToHandle ?? new Map<string, number>();
     const resolvedSceneHandles = _resolvedSceneHandles ?? new Map<string, number>();
     const sceneEnvelope =
-      sceneGuidKey !== undefined ? this.assetCatalog.get(sceneGuidKey) : undefined;
+      !preflightChanged && sceneGuidKey !== undefined
+        ? this.assetCatalog.get(sceneGuidKey)
+        : undefined;
     // Did the structured-edge branch actually resolve anything? Prod-loaded
     // packs catalogue refs[] as GUID-only edges (sourceField / sceneEntityId
     // stripped at the w7 D-10 serialization boundary), so the rich-edge loop
@@ -945,7 +1361,8 @@ export class AssetRegistry {
       // (localId, componentName, fieldName, arrayIndex) triple the bare edge
       // dropped, so GUID strings resolve to live handles before spawn.
       const entries = extractSceneEntityHandleGuids(
-        scene.entities as unknown as ReadonlyArray<{
+        world.components.entries(),
+        sceneForResolution.entities as unknown as ReadonlyArray<{
           readonly localId: number;
           readonly components: Record<string, Record<string, unknown>>;
         }>,
@@ -975,7 +1392,7 @@ export class AssetRegistry {
     // Build the resolved copy. Handle-type fields (detected above) are
     // reconstructed from the resolvedMap; all other fields pass through as-is.
     const resolvedNodes: SceneEntity[] = [];
-    for (const node of scene.entities) {
+    for (const node of sceneForResolution.entities) {
       const rawComponents = node.components as Record<string, Record<string, unknown>>;
       const resolvedComponents: Record<string, Record<string, unknown>> = {};
 
@@ -1028,12 +1445,12 @@ export class AssetRegistry {
     // as world.ts does for its PackError exits.
     const mountVisited = _visitedMountGuids ?? new Set<string>();
     if (sceneGuidKey !== undefined) mountVisited.add(sceneGuidKey.toLowerCase());
-    if (scene.mounts !== undefined && scene.mounts.length > 0) {
+    if (sceneForResolution.mounts !== undefined && sceneForResolution.mounts.length > 0) {
       // feat-20260713 M3 / w13: share the entity-field dedup map so an override
       // value GUID that also appears as an entity field mints one handle (D-15/D-17).
       const resolvedMounts = resolveMountsRec(
         this,
-        scene.mounts,
+        sceneForResolution.mounts,
         world,
         mountVisited,
         guidToHandle,
@@ -1162,7 +1579,7 @@ export class AssetRegistry {
   /**
    * @internal feat-20260618-asset-and-pack-name-fields M3 (D-1): the single
    * package-mapping write primitive. All three registration entry points funnel
-   * here so the XOR name invariant is implemented once (#1 SSOT):
+   * here so the display-name invariant is implemented once (#1 SSOT):
    *   - catalog() inline path -> registerPackage(null, [guid])          (no package)
    *   - loadByGuid disk path  -> registerPackage(packageUrl, [g1,g2,...], names)
    *   - constructor builtin    -> registerPackage(null, [...guids])      (D-5 null)
@@ -1192,19 +1609,15 @@ export class AssetRegistry {
     const pkg = this.packageByPath.get(path) ?? { path, assetGuids: new Set<string>() };
     this.packageByPath.set(path, pkg);
 
-    // D-3: 1->N promotion. When this path already holds exactly one asset and a
-    // new member is arriving, freeze the original asset's derived basename as its
-    // stored name so it joins the multi-asset branch with a stable name. The
-    // freeze is idempotent: an original that already carries a stored name (the
-    // abnormal single-asset-with-name state, D-4) is left untouched and the
-    // soft-violation counter records it (charter P3 machine-readable signal).
+    // D-3: 1->N promotion. When this path already holds exactly one unnamed
+    // asset and a new member is arriving, freeze the original asset's derived
+    // basename as its stored name. An explicitly authored name is already the
+    // stable identity and must be preserved without reporting a violation.
     const addsNewMember = guids.some((g) => !pkg.assetGuids.has(g.toLowerCase()));
     if (pkg.assetGuids.size === 1 && addsNewMember) {
       const [originalKey] = pkg.assetGuids;
       if (originalKey !== undefined) {
-        if (this.hasStoredName(originalKey)) {
-          this.metrics?.increment('package.xor-invariant-violated');
-        } else {
+        if (!this.hasStoredName(originalKey)) {
           this.setStoredName(originalKey, deriveAssetName(pkg.path, 1));
         }
       }
@@ -1223,7 +1636,7 @@ export class AssetRegistry {
    * Read the per-GUID stored display name (D-6 home: the envelope's `name`
    * field, with `pendingNames` covering the prod-disk ordering where the name is
    * known before the body is catalogued). Single read point for resolveName /
-   * the 1->N promotion XOR check.
+   * the 1->N promotion stability check.
    */
   private storedNameFor(key: string): string | undefined {
     return this.assetCatalog.get(key)?.name ?? this.pendingNames.get(key);
@@ -1271,12 +1684,13 @@ export class AssetRegistry {
    * Resolve an asset's human-readable display name -- the single source of truth
    * for the two-segment identity's `name` segment (D-6). Every name consumer
    * (inspect / catalog builder / CLI) reads this or the same `deriveAssetName`
-   * pure function it delegates to (AC-04); no consumer re-implements the XOR
-   * rule. Returns a deterministic fallback rather than throwing on a missing
-   * name (AC-15): `basename(path)` for a multi-asset entry that lacks a stored
-   * name, or `''` for a no-package asset with no self name (the detectable
-   * "genuinely no name" signal, charter P3). An unregistered GUID is treated as
-   * the no-package branch.
+   * pure function it delegates to (AC-04); no consumer re-implements the
+   * display-name rule. Returns a deterministic fallback rather than throwing on a missing
+   * name (AC-15): an explicit stored name wins for any packaged or no-package
+   * asset; otherwise a packaged asset falls back to `basename(path)`, and a
+   * no-package asset resolves to `''` (the detectable "genuinely no name"
+   * signal, charter P3). An unregistered GUID is treated as the no-package
+   * branch.
    */
   resolveName(guid: AssetGuid | string): string {
     const key =
@@ -1420,6 +1834,9 @@ export class AssetRegistry {
 
   /**
    * Load an asset and all its transitively referenced sub-assets by GUID.
+   * The result is a durable Asset payload. Consumer owners may narrow the
+   * success type, then call their own World/Host projection; this registry does
+   * not create a generic GUID-to-handle materializer.
    * Delegates to the load-by-guid collaboration module (w7 / D-4); see
    * registry/load-by-guid.ts for the full DDC / pack-fetch pipeline.
    */
@@ -1512,6 +1929,8 @@ export class AssetRegistry {
     revision?: CatalogEntry['revision'];
     sourceKey?: CatalogEntry['sourceKey'];
     sourceIndex?: CatalogEntry['sourceIndex'];
+    sourceOverrides?: CatalogEntry['sourceOverrides'];
+    sourceOverrideDescriptors?: CatalogEntry['sourceOverrideDescriptors'];
     authoring?: CatalogEntry['authoring'];
     relations?: CatalogEntry['relations'];
     diagnostics?: CatalogEntry['diagnostics'];
@@ -1540,6 +1959,8 @@ export class AssetRegistry {
       revision?: CatalogEntry['revision'];
       sourceKey?: CatalogEntry['sourceKey'];
       sourceIndex?: CatalogEntry['sourceIndex'];
+      sourceOverrides?: CatalogEntry['sourceOverrides'];
+      sourceOverrideDescriptors?: CatalogEntry['sourceOverrideDescriptors'];
       authoring?: CatalogEntry['authoring'];
       relations?: CatalogEntry['relations'];
       diagnostics?: CatalogEntry['diagnostics'];
@@ -1566,6 +1987,12 @@ export class AssetRegistry {
           ...(entry.revision !== undefined ? { revision: entry.revision } : {}),
           ...(entry.sourceKey !== undefined ? { sourceKey: entry.sourceKey } : {}),
           ...(entry.sourceIndex !== undefined ? { sourceIndex: entry.sourceIndex } : {}),
+          ...(entry.sourceOverrides !== undefined
+            ? { sourceOverrides: entry.sourceOverrides }
+            : {}),
+          ...(entry.sourceOverrideDescriptors !== undefined
+            ? { sourceOverrideDescriptors: entry.sourceOverrideDescriptors }
+            : {}),
           authoring: entry.authoring ?? authoringCapabilityForAssetKind(entry.kind),
           ...(entry.relations !== undefined ? { relations: entry.relations } : {}),
           ...(entry.diagnostics !== undefined ? { diagnostics: entry.diagnostics } : {}),

@@ -15,7 +15,6 @@
 import { defineAnimationGraph } from '@forgeax/engine-animation';
 import { defineComponent, World } from '@forgeax/engine-ecs';
 import type { AnimationClip } from '@forgeax/engine-types';
-import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
 // A test-only component carrying a single shared<AnimationGraph> handle. M2 does
@@ -27,16 +26,16 @@ const GraphHolder = defineComponent('AnimationGraphHolderW9', {
   graph: 'shared<AnimationGraph>',
 });
 
-function clipHandle(id: number) {
-  return toShared<'AnimationClip'>(id);
+function clipGuid(id: number) {
+  return `test/animation-clip-${id}`;
 }
 
 describe('AnimationGraph — legal build + multi-entity rc (M2 / w9)', () => {
   it('constructs a nested Clip/Blend/Add graph without error', () => {
-    const walk = clipHandle(1);
-    const run = clipHandle(2);
-    const survey = clipHandle(3);
-    const overlay = clipHandle(4);
+    const walk = clipGuid(1);
+    const run = clipGuid(2);
+    const survey = clipGuid(3);
+    const overlay = clipGuid(4);
 
     const result = defineAnimationGraph((b) => {
       const walkNode = b.clip(walk);
@@ -59,7 +58,7 @@ describe('AnimationGraph — legal build + multi-entity rc (M2 / w9)', () => {
 
   it('mints a GUID-addressable shared handle with rc=1 (alloc grant)', () => {
     const world = new World();
-    const result = defineAnimationGraph((b) => b.clip(clipHandle(1)));
+    const result = defineAnimationGraph((b) => b.clip(clipGuid(1)));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
@@ -74,8 +73,8 @@ describe('AnimationGraph — legal build + multi-entity rc (M2 / w9)', () => {
     clipMap.set(1, { kind: 'animation-clip', duration: 10, channels: [] });
 
     const result = defineAnimationGraph((b) => {
-      const a = b.clip(clipHandle(1));
-      const c = b.clip(clipHandle(1));
+      const a = b.clip(clipGuid(1));
+      const c = b.clip(clipGuid(1));
       return b.blend([a, c]);
     });
     expect(result.ok).toBe(true);

@@ -145,10 +145,7 @@ const mockCanvas = {
 // --- 3. Drive engine ECS path --------------------------------------------
 
 const { World } = await import('@forgeax/engine-ecs');
-const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  createRenderer,
-} = enginePkg;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const {
   Camera,
   DirectionalLight,
@@ -205,7 +202,9 @@ const SPRITE_SLOTS = [
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
 } catch (err) {
   console.error(
     `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
@@ -214,13 +213,8 @@ try {
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
-console.log(`[hello-sprite-lit] backend=${renderer.backend}`);
+console.log(`[hello-sprite-lit] backend=${renderer.inspect().capabilities.backendKind}`);
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 const checker = buildCheckerboardRgba(8);
 const synthPod = {
@@ -243,17 +237,6 @@ function expectOk(r, label) {
 async function buildWorld({ includePoint, includeSpot }) {
   const world = new World();
   const textureHandle = world.allocSharedRef('TextureAsset', synthPod);
-  const upRes = await renderer.store.uploadTexture(textureHandle, synthPod, {
-    bytes: checker.data,
-    width: checker.width,
-    height: checker.height,
-    mime: 'image/png',
-    colorSpace: 'srgb',
-    mipmap: false,
-  });
-  if (!upRes.ok) {
-    return { ok: false, error: upRes.error };
-  }
   const samplerHandle = world.allocSharedRef('SamplerAsset', {
     kind: 'sampler',
     magFilter: 'linear',
@@ -415,13 +398,17 @@ async function renderCase({ includePoint, includeSpot, label }) {
     return { ok: false, error: `world build (${label}): ${buildRes.error.code}` };
   }
   const world = buildRes.world;
-  const attached = renderer.attachWorld(world);
+  const attached = renderer.attach(world);
   if (!attached.ok) return { ok: false, error: `world attach (${label}): ${attached.error.code}` };
   let draws = 0;
   let drawErrors = 0;
   for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
     world.update().unwrap();
-    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const r = renderer.draw({
+      leases: [attached.value],
+      camera: { lease: attached.value },
+      environment: { lease: attached.value },
+    });
     if (!r.ok) drawErrors++;
     draws++;
   }
@@ -564,7 +551,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - backend=${renderer.backend}; three-lights + directional-only rendered ${SMOKE_MIN_FRAMES} frames; AC-06 center>0; falsifier delta > ${SMOKE_PIXEL_THRESHOLD}`,
+  `[smoke] PASS - backend=${renderer.inspect().capabilities.backendKind}; three-lights + directional-only rendered ${SMOKE_MIN_FRAMES} frames; AC-06 center>0; falsifier delta > ${SMOKE_PIXEL_THRESHOLD}`,
 );
 sharedDevice?.destroy?.();
 delete globalThis.navigator.gpu;

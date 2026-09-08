@@ -18,6 +18,7 @@ import type {
   CommandBuffer,
   ComputePassDescriptor,
   QuerySet,
+  RenderPassDescriptor,
   Result,
   RhiCommandEncoder,
   RhiComputePassEncoder,
@@ -43,6 +44,10 @@ class DeviceCounter implements PassCounter {
     this.device.totalDrawCount++;
   }
 
+  recordDispatch(): void {
+    this.device.totalDispatchCount++;
+  }
+
   recordBindGroup(): void {
     this.device.totalBindGroupCount++;
   }
@@ -58,7 +63,7 @@ class DeviceCounter implements PassCounter {
  * compile path doesn't always thread a per-pass label, so we fall back to the
  * RenderPassDescriptor's generic label (or '<unnamed>').
  */
-function readPassLabel(desc: Record<string, unknown> | undefined): string {
+function readPassLabel(desc: { readonly label?: string | undefined } | undefined): string {
   if (desc && typeof desc.label === 'string' && desc.label.length > 0) {
     return desc.label as string;
   }
@@ -79,13 +84,13 @@ export class RhiNullCommandEncoder implements RhiCommandEncoder {
     this.counter = new DeviceCounter(device);
   }
 
-  beginRenderPass(desc: GPURenderPassDescriptor): RhiRenderPassEncoder {
-    const label = readPassLabel(desc as unknown as Record<string, unknown>);
+  beginRenderPass(desc: RenderPassDescriptor): RhiRenderPassEncoder {
+    const label = readPassLabel(desc);
     return new RhiNullRenderPassEncoder(this.bookkeeper, this.counter, label);
   }
 
   beginComputePass(desc?: ComputePassDescriptor | undefined): RhiComputePassEncoder {
-    const label = readPassLabel(desc as unknown as Record<string, unknown> | undefined);
+    const label = readPassLabel(desc);
     return new RhiNullComputePassEncoder(this.bookkeeper, this.counter, label);
   }
 

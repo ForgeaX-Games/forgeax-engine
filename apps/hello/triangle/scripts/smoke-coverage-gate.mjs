@@ -23,8 +23,8 @@
 //       - from '@forgeax/engine-ecs'  (or with double quotes)
 //       - from '@forgeax/engine-runtime'
 //       - HANDLE_TRIANGLE
-//       - await renderer.ready
-//       - renderer.draw(world)
+//       - await host initialization
+//       - renderer.draw({ leases: [attachment.value], ... })
 //     AND must contain ZERO occurrences of inline parallel implementation
 //     tokens that would re-introduce the deleted hand-rolled WGSL path:
 //       - TRIANGLE_WGSL
@@ -102,10 +102,7 @@ const REQUIRED_TOKENS = [
     ],
   },
   { name: 'HANDLE_TRIANGLE', patterns: ['HANDLE_TRIANGLE'] },
-  { name: 'await renderer.ready', patterns: ['await renderer.ready'] },
-  // feat-20260708-composited-multi-world-rendering M3: draw signature migrated
-  // to renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }) (AC-01/AC-02); track the new literal.
-  { name: 'renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 })', patterns: ['renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 })'] },
+  { name: 'lease-bound renderer.draw request', patterns: ['renderer.draw({', 'leases: [attachment.value]'] },
 ];
 
 // delta layer: forbidden tokens (each must appear 0 times).

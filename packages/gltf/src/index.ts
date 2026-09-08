@@ -30,6 +30,18 @@ export type {
   SkinVertexInfluencePod,
   TexturePod,
 } from '@forgeax/engine-types';
+export type {
+  AccessorJson,
+  AccessorRole,
+  BufferViewJson,
+  ComponentTypeId,
+  DecodeAccessorInput,
+  DecodedAccessor,
+} from './accessor/decode-accessor.js';
+// Accessor decoder (w9).
+export { COMPONENT_TYPE, decodeAccessor } from './accessor/decode-accessor.js';
+export type { DecodeColorAccessorInput } from './accessor/decode-color.js';
+export { decodeColorAccessor } from './accessor/decode-color.js';
 export type { GltfBridgeContext, MaterialBridgeContext } from './bridge.js';
 // Bridge: gltfDocToSceneAsset + toMaterialAsset + meshIrToMeshAsset (SSOT for
 // hello-gltf + hello-gltf-instancing, feat-20260518 M3 w9; M3 Tier-C material
@@ -40,19 +52,11 @@ export type { ExtensionsCheckResult, GltfExtensionsJson } from './check-extensio
 // KHR extensions gate (w14).
 export { checkExtensions, EXTENSION_ALLOWLIST } from './check-extensions.js';
 export type {
-  AccessorJson,
-  AccessorRole,
-  BufferViewJson,
-  ComponentTypeId,
-  DecodeAccessorInput,
-  DecodedAccessor,
-} from './decode-accessor.js';
-// Accessor decoder (w9).
-export { COMPONENT_TYPE, decodeAccessor } from './decode-accessor.js';
-export type {
   GltfAccessorTypeMismatchDetail,
   GltfAnimationCubicsplineUnsupportedDetail,
   GltfBufferOutOfBoundsDetail,
+  GltfColorAccessorMalformedDetail,
+  GltfColorAccessorUnsupportedDetail,
   GltfError,
   GltfErrorCode,
   GltfErrorDetail,
@@ -62,6 +66,7 @@ export type {
   GltfInstancingCountMismatchDetail,
   GltfMalformedHeaderDetail,
   GltfMetaMissingDetail,
+  GltfMorphInvalidDetail,
   GltfMorphUnsupportedDetail,
   GltfSkinAttrAsymmetricDetail,
   GltfSkinJointCountExceededDetail,
@@ -126,6 +131,7 @@ export {
 // Byte-stable meta JSON serialization (D-3; AC-04).
 export { serializeMetaJson } from './serialize-meta.js';
 export type {
+  GltfSourceKeyConflictEntry,
   GltfSourceKeyError,
   GltfSourceKeyErrorCode,
   GltfSourceKeyResult,

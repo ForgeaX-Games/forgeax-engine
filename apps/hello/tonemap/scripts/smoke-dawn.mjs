@@ -12,7 +12,7 @@
 //      sphere + 1 Camera with `tonemap = 'reinhard-extended'` /
 //      `exposure = 1.0` / `whitePoint = 8.0` + 1 intensity-2
 //      DirectionalLight.
-//   4. await renderer.ready + 300 frames of renderer.draw(world).
+//   4. await runtime host initialization + 300 frames of lease-bound renderer.draw(...).
 //   5. copyTextureToBuffer + mapAsync; full-frame scan for AC-07
 //      (no integer-white burn anywhere); highlight site readback for
 //      AC-08 (per channel ∈ (0.3, 1.0)). AC-09 (reference-png ε ≤ 0.05)
@@ -138,12 +138,10 @@ const mockCanvas = {
 
 // --- 3. Drive engine ECS path ---------------------------------------------
 
-const { ok: okResult, World } = await import('@forgeax/engine-ecs');
-const enginePkg = await import('@forgeax/engine-runtime');
+const { World } = await import('@forgeax/engine-ecs');
+const { ok: okResult } = await import('@forgeax/engine-types');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { createSphereGeometry } = await import('@forgeax/engine-geometry');
-const {
-  createRenderer,
-} = enginePkg;
 const {
   Camera,
   DirectionalLight,
@@ -158,7 +156,9 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
 } catch (err) {
   console.error(
     `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
@@ -168,7 +168,7 @@ try {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
 
-console.log(`[hello-tonemap] backend=${renderer.backend}`);
+console.log(`[hello-tonemap] backend=${renderer.inspect().capabilities.backendKind}`);
 
 const sphereRes = createSphereGeometry(0.6, 32, 24);
 if (!sphereRes.ok) {
@@ -177,7 +177,7 @@ if (!sphereRes.ok) {
 }
 // w64: mint sphere + material as user-tier shared refs (register deleted M8).
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const sphereHandle = world.allocSharedRef('MeshAsset', sphereRes.value);
 
@@ -240,20 +240,21 @@ void okResult(
 );
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint });
+});
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = renderer.draw({
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
 }
@@ -348,7 +349,7 @@ console.log(`[smoke] pixelSamples=${JSON.stringify(pixelSamples)}`);
 // --- 5. Verdict (AC-07 / AC-08 / AC-09) -----------------------------------
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (renderer.inspect().capabilities.backendKind !== 'webgpu') failures.push(`(a) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (errors.length > 0) {
   const codes = errors.map((e) => e.code).join(', ');

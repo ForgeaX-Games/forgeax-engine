@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,24 +25,20 @@ const { createRenderer } = await import('@forgeax/engine-runtime');
 const { unwrapHandle } = await import('@forgeax/engine-types');
 const { buildSpriteSliceWorld, makeSlicePixels, TEXTURE_SIZE } = await import(resolve(here, '..', 'src', 'sprite-slice.ts'));
 const manifestPath = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
-const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}` });
+const renderer = await createSmokeRenderer(createRenderer, canvas, {}, { shaderManifestUrl: `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}` });
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 gpu.requestAdapter = originalRequestAdapter;
 const errors = [];
-renderer.onError((error) => errors.push(error));
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
+subscribeSmokeErrors(renderer, (error) => errors.push(error));
 const pixels = makeSlicePixels();
 const texture = { kind: 'texture', width: TEXTURE_SIZE, height: TEXTURE_SIZE, format: 'rgba8unorm-srgb', data: pixels, colorSpace: 'srgb', mipmap: false };
 const textureHandle = world.allocSharedRef('TextureAsset', texture);
-const upload = await renderer.store.uploadTexture(textureHandle, texture, { bytes: pixels, width: TEXTURE_SIZE, height: TEXTURE_SIZE, mime: 'image/png', colorSpace: 'srgb', mipmap: false });
-if (!upload.ok) throw new Error(`${upload.error.code}: ${upload.error.hint}`);
 buildSpriteSliceWorld(world, unwrapHandle(textureHandle));
 for (let i = 0; i < frames; i += 1) {
   world.update().unwrap();
-  const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const result = drawSmokeFrame(renderer, world);
   if (!result.ok) throw new Error(`${result.error.code}: ${result.error.hint}`);
 }
 await device.queue.onSubmittedWorkDone();
@@ -61,6 +58,6 @@ const outDir = process.env.SMOKE_PNG_DIR ?? resolve(here, '..', 'artifacts');
 mkdirSync(outDir, { recursive: true });
 writeFileSync(resolve(outDir, 'sprite-slice.png'), writeReferencePng(tight, width, height));
 console.log(`[smoke] frames=${frames} coloredPixels=${coloredPixels} errors=${errors.length}`);
-if (renderer.backend !== 'webgpu' || frames < 100 || coloredPixels < 1000 || errors.length > 0) { console.error('[smoke] FAIL - visible 9-slice panels and zero RHI errors required'); process.exit(1); }
+if (rendererBackend(renderer) !== 'webgpu' || frames < 100 || coloredPixels < 1000 || errors.length > 0) { console.error('[smoke] FAIL - visible 9-slice panels and zero RHI errors required'); process.exit(1); }
 console.log('[smoke] PASS - backend=webgpu, visible stretch/tile 9-slice panels, errors=0');
 device.destroy?.();

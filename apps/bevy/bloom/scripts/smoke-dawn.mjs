@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // bevy-bloom headless dawn smoke (pixel falsifier + structural gate).
 // Strategy: the shared Bevy-faithful 10x10 emissive sphere field is rendered
 // with bloom off and on; the two readbacks must differ.
@@ -103,26 +104,21 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  renderer = await createSmokeRenderer(createRenderer, mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 
-console.log(`[bloom] backend=${renderer.backend}`);
+console.log(`[bloom] backend=${rendererBackend(renderer)}`);
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+subscribeSmokeErrors(renderer, (err) => errors.push({ code: err.code, hint: err.hint }));
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 const { buildBloomWorld } = await import(resolve(here, '..', 'src', 'bloom.ts'));
 const scene = buildBloomWorld(world, WIDTH / HEIGHT);
@@ -164,7 +160,7 @@ let drawErrors = 0;
 const drawPhase = (count) => {
   for (let i = 0; i < count; i += 1) {
     world.update().unwrap();
-    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const r = drawSmokeFrame(renderer, world);
     if (!r.ok) { drawErrors += 1; console.error(`[smoke] draw frame ${framesObserved} error: ${r.error.code}`); }
     framesObserved += 1;
   }
@@ -176,7 +172,7 @@ const bloomOffPixels = await capturePixels();
 world.set(scene.camera, Camera, { bloom: BLOOM_ENABLED });
 drawPhase(phaseFrames);
 const bloomOnPixels = await capturePixels();
-const passNames = renderer.perFramePassNames;
+const passNames = renderer.inspect().perFramePassNames;
 drawPhase(TARGET_FRAMES - phaseFrames * 2);
 
 const artifactDir = resolve(here, '..', 'artifacts');
@@ -192,7 +188,7 @@ const diff = meanByteDiff(bloomOffPixels, bloomOnPixels);
 console.log(`[smoke] frames observed=${framesObserved} bloomDiffMean=${diff.mean.toFixed(4)} changedPixels=${diff.changedPixels} passes=${passNames.join(',')} off=${offPng} on=${onPng}`);
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (rendererBackend(renderer) !== 'webgpu') failures.push(`(a) backend=${rendererBackend(renderer)} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (errors.length > 0) {
   failures.push(`(c) Renderer.onError fired ${errors.length} times: [${errors.map((e) => e.code).join(', ')}]`);

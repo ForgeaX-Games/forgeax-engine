@@ -1,12 +1,14 @@
-import {
-  type HealthSnapshot,
-  RecoverError,
-  RenderFeatureCapabilityMissingError,
-  type RenderFeatureErrorDescriptor,
-  RenderFeatureStageFailedError,
-  type RenderFeatureStatus,
-} from '@forgeax/engine-render';
 import { describe, expect, it } from 'vitest';
+import { RecoverError } from '../../../render/src/errors/recover';
+import {
+  RenderFeatureCapabilityMissingError,
+  RenderFeatureStageFailedError,
+} from '../../../render/src/errors/render';
+import type {
+  RenderFeatureErrorDescriptor,
+  RenderFeatureStatus,
+} from '../../../render/src/features/types';
+import type { HealthSnapshot } from '../../../render/src/lifecycle';
 
 interface RecoveryRow {
   readonly status: RenderFeatureStatus;

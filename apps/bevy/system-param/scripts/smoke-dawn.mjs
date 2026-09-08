@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,20 +42,18 @@ gpu.requestAdapter = async (options) => {
   adapter.requestDevice = async (descriptor) => { device = await requestDevice(descriptor); return device; };
   return adapter;
 };
-const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: manifestUrl });
-if (renderer.backend !== 'webgpu') throw new Error(`[smoke] backend=${renderer.backend}`);
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`[smoke] renderer.ready=${ready.error.code}`);
+const renderer = await createSmokeRenderer(createRenderer, canvas, {}, { shaderManifestUrl: manifestUrl });
+if (rendererBackend(renderer) !== 'webgpu') throw new Error(`[smoke] backend=${rendererBackend(renderer)}`);
 const { buildSystemParamWorld, readSystemParamState } = await import(resolve(here, '..', 'src', 'system-param.ts'));
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const state = buildSystemParamWorld(world);
 const errors = [];
-renderer.onError((error) => errors.push(error.code));
+subscribeSmokeErrors(renderer, (error) => errors.push(error.code));
 for (let frame = 0; frame < 180; frame++) {
   world.update(0.016).unwrap();
-  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const draw = drawSmokeFrame(renderer, world);
   if (!draw.ok) throw new Error(`[smoke] draw=${draw.error.code}`);
 }
 const finalState = readSystemParamState(world, state);

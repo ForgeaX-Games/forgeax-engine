@@ -17,7 +17,8 @@ import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import { acquireCanvasContext, createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { Materials } from '@forgeax/engine-render';
 
 import type { MaterialAsset } from '@forgeax/engine-runtime';
@@ -38,31 +39,15 @@ bootstrap(canvas).catch((err: unknown) => {
 });
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
-  const renderer = await createRenderer(target, {}, forgeaxBundlerAdapter());
+  const constructed = await constructRuntimeRendererHost(target, {}, forgeaxBundlerAdapter());
+  if (!constructed.ok) throw constructed.error;
+  const renderer = constructed.value.renderer;
 
-  const ctxResult = acquireCanvasContext(target);
-  if (ctxResult.ok) {
-    const cfgResult = ctxResult.value.configure({
-      device: renderer.device,
-      format: 'rgba8unorm',
-      usage: 0x10 | 0x01,
-    });
-    if (!cfgResult.ok) {
-      console.error('[shadow-opt-out] canvasContext.configure failed:', cfgResult.error);
-    }
-  } else {
-    console.warn('[shadow-opt-out] acquireCanvasContext failed:', ctxResult.error);
-  }
-  console.warn(`[shadow-opt-out] backend=${renderer.backend}`);
+  console.warn('[shadow-opt-out] Standard pipeline active');
 
-  const ready = await renderer.ready;
-  if (!ready.ok) {
-    console.error('[shadow-opt-out] renderer.ready failed:', ready.error);
-    return;
-  }
 
   const world = new World();
-  const worldAttachment1 = renderer.attachWorld(world);
+  const worldAttachment1 = renderer.attach(world);
   if (!worldAttachment1.ok) throw worldAttachment1.error;
 
   // ── Light + shadow ────────────────────────────────────────────────────
@@ -92,9 +77,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // (Identity quat would point straight down -z and miss the entire scene
   // sitting at y≈0..1.25 — manifest of memory
   // [[smoke-camera-pose-untested-misses-cube-with-onerror-zero]]: dawn
-  // smoke samples shadow map directly via debugSampleShadowFactor and
-  // never reads swap-chain pixels, so a wrong camera pose stays green
-  // there but blacks out the browser preview.)
+  // dawn smoke renders the same scene on the real shadow path, so a wrong
+  // camera pose can still leave the browser preview black.
   world.spawn(
     {
       component: Transform,
@@ -108,9 +92,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // path (`MeshRenderer { data: {} }`) resolves to an unlit shadingModel that
   // does NOT read the shadow map, so cast shadows from the cubes would
   // never appear on the floor in the browser. dawn smoke missed this
-  // because `debugSampleShadowFactor` reads the shadow map directly,
-  // bypassing the forward fragment shader entirely
-  // ([[m4-structural-smoke-masks-pso-variant-mismatch]]).
+  // because the browser and Dawn smokes exercise the same forward fragment
+  // shadow path ([[m4-structural-smoke-masks-pso-variant-mismatch]]).
   const floorMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
     'MaterialAsset',
     Materials.standard({ baseColor: [0.85, 0.85, 0.85, 1] }),
@@ -177,7 +160,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   const frame = (): void => {
     world.update().unwrap();
-    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const r = renderer.draw({
+      leases: [worldAttachment1.value],
+      camera: { lease: worldAttachment1.value },
+      environment: { lease: worldAttachment1.value },
+    });
     if (!r.ok) console.error('[shadow-opt-out] draw error:', r.error);
     requestAnimationFrame(frame);
   };

@@ -1,12 +1,14 @@
 import { err, ok, type Result } from '@forgeax/engine-types';
 import type { CompileResult } from '../index.js';
+import { lowerMaterialVariantContext, type MaterialVariantContext } from './variant-context.js';
 
 export interface MaterialComposeRequest {
   readonly material: string;
   readonly pass: string;
   readonly source: string;
   readonly imports?: Readonly<Record<string, string>>;
-  readonly defines?: Readonly<Record<string, boolean>>;
+  readonly moduleSlots?: Readonly<Record<string, string>>;
+  readonly context?: MaterialVariantContext;
 }
 
 export interface MaterialComposedSource {
@@ -44,7 +46,9 @@ export async function composeMaterial(
       const options = {
         id: `${input.material}::${input.pass}`,
         ...(input.imports === undefined ? {} : { imports: { ...input.imports } }),
-        ...(input.defines === undefined ? {} : { defines: { ...input.defines } }),
+        ...(input.context === undefined
+          ? {}
+          : { defines: { ...lowerMaterialVariantContext(input.context) } }),
       };
       const result = await compileShader(input.source, options);
       if (!result.ok) return result as never;

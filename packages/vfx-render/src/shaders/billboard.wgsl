@@ -1,6 +1,8 @@
 #define_import_path forgeax::vfx-render.particles.billboard
+#import forgeax_view::common::{View, FogViewParams, FogRay, view}
+#import forgeax_view::fog::{apply_fog}
 
-@group(0) @binding(0) var scene_depth: texture_depth_2d;
+@group(0) @binding(1) var scene_depth: texture_depth_2d;
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
@@ -11,6 +13,7 @@ struct VertexOutput {
   @location(4) sheet_uv: vec2<f32>,
   @location(5) sheet_frame: f32,
   @location(6) fade_distance: f32,
+  @location(7) clip_position: vec3<f32>,
 };
 
 fn textureSheetFrame(age: f32, frameRate: f32, frameCount: u32) -> u32 {
@@ -48,6 +51,29 @@ fn softParticle(position: vec4<f32>, alpha: f32, fadeDistance: f32) -> f32 {
   return alpha * softParticleFactor(position.z, sceneDepth, fadeDistance);
 }
 
+fn fogWorldPoint(ndc: vec3<f32>) -> vec3<f32> {
+  let homogeneous = view.inverseViewProj * vec4<f32>(ndc, 1.0);
+  let divisor = select(1.0, homogeneous.w, abs(homogeneous.w) > 0.000001);
+  return homogeneous.xyz / divisor;
+}
+
+fn fogRayFromNdc(ndc: vec3<f32>) -> FogRay {
+  let worldPosition = fogWorldPoint(ndc);
+  let nearPosition = fogWorldPoint(vec3<f32>(ndc.xy, 0.0));
+  let farPosition = fogWorldPoint(vec3<f32>(ndc.xy, 1.0));
+  let perspective = view.temporalProjection.z < 0.5;
+  let perspectiveVector = worldPosition - view.cameraPos;
+  let orthographicVector = farPosition - nearPosition;
+  let direction = normalize(select(orthographicVector, perspectiveVector, perspective));
+  let origin = select(nearPosition, view.cameraPos, perspective);
+  let ray_distance = select(
+    max(dot(worldPosition - nearPosition, direction), 0.0),
+    length(perspectiveVector),
+    perspective,
+  );
+  return FogRay(origin, direction, ray_distance);
+}
+
 struct VertexInput {
   @location(0) position: vec3<f32>,
   @location(1) right: vec2<f32>,
@@ -68,11 +94,12 @@ fn vs_main(input: VertexInput, @builtin(vertex_index) vertex_index: u32) -> Vert
   );
   let corner = billboardPivot(corners[vertex_index], input.advanced.xy);
   var output: VertexOutput;
-  output.position = vec4<f32>(
+  let clipPosition = vec3<f32>(
     input.position.xy + input.right * corner.x + input.up * corner.y,
     input.position.z,
-    1.0,
   );
+  output.position = vec4<f32>(clipPosition, 1.0);
+  output.clip_position = clipPosition;
   output.color = input.particle_color * input.base_color;
   output.local = corner;
   output.emissive_intensity = input.emissive_intensity;
@@ -100,5 +127,6 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
   let alpha = softParticle(input.position, input.color.a * edge, input.fade_distance);
   let sheetPulse = 0.82 + 0.18 * fract(input.sheet_frame * 0.618 + input.sheet_uv.x + input.sheet_uv.y);
   let rgb = (input.color.rgb + emissive * (0.35 + core * 0.65) + vec3<f32>(highlight)) * sheetPulse;
-  return vec4<f32>(rgb * alpha, alpha);
+  let fogged = apply_fog(view.fog, fogRayFromNdc(input.clip_position), vec4<f32>(rgb, alpha));
+  return vec4<f32>(fogged.rgb * fogged.a, fogged.a);
 }

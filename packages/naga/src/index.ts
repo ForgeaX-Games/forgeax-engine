@@ -18,7 +18,16 @@
 //   (plan-strategy §S-1 opaque handle invariant).
 
 import { ensureReady } from '@forgeax/engine-wgpu-wasm';
-import { err, ok, type Result, type ShaderError, wrapShaderError } from './errors.js';
+import {
+  err,
+  initFailed,
+  manifestMalformed,
+  ok,
+  type Result,
+  ShaderError,
+  type ShaderError as ShaderErrorType,
+  wrapShaderError,
+} from './errors.js';
 
 export {
   compileFailed,
@@ -54,6 +63,172 @@ export type ParsedModule = unknown;
  * `emit_reflection` for the reflection JSON emit.
  */
 export type ValidatedModule = unknown;
+
+export interface ShaderReflectionMember {
+  readonly name: string;
+  readonly type: string;
+  readonly offset: number;
+  readonly size: number;
+  readonly alignment: number;
+}
+
+export interface ShaderReflectionBoundGlobal {
+  readonly group: number;
+  readonly binding: number;
+  readonly addressSpace: string;
+  readonly resourceKind: string;
+  readonly visibility: number;
+  readonly name?: string;
+  readonly members?: readonly ShaderReflectionMember[];
+  readonly span?: number;
+}
+
+export interface ShaderReflection {
+  readonly schemaVersion: 'shader-reflection/2';
+  readonly boundGlobals: readonly ShaderReflectionBoundGlobal[];
+  readonly uvSetCount: number;
+}
+
+type ReflectionRecord = Record<string, unknown>;
+
+function reflectionMalformed(reason: string): ShaderError {
+  return manifestMalformed({
+    message: `shader-reflection/2 is malformed: ${reason}`,
+    hint: 'rebuild the shader with the current Naga/WASM producer and preserve every bound-global fact',
+    reason,
+  });
+}
+
+function isRecord(value: unknown): value is ReflectionRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function requiredNonNegativeInteger(record: ReflectionRecord, key: string): number {
+  const value = record[key];
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw reflectionMalformed(`boundGlobals entry requires non-negative integer '${key}'`);
+  }
+  return value;
+}
+
+function readMember(value: unknown, index: number): ShaderReflectionMember {
+  if (!isRecord(value)) throw reflectionMalformed(`member ${index} is not an object`);
+  const name = value.name;
+  const type = value.type;
+  if (
+    typeof name !== 'string' ||
+    name.length === 0 ||
+    typeof type !== 'string' ||
+    type.length === 0
+  ) {
+    throw reflectionMalformed(`member ${index} requires name and type`);
+  }
+  return {
+    name,
+    type,
+    offset: requiredNonNegativeInteger(value, 'offset'),
+    size: requiredNonNegativeInteger(value, 'size'),
+    alignment: requiredNonNegativeInteger(value, 'alignment'),
+  };
+}
+
+function readBoundGlobal(value: unknown, index: number): ShaderReflectionBoundGlobal {
+  if (!isRecord(value)) throw reflectionMalformed(`boundGlobals entry ${index} is not an object`);
+  const addressSpace = value.addressSpace;
+  const resourceKind = value.resourceKind;
+  if (typeof addressSpace !== 'string' || addressSpace.length === 0) {
+    throw reflectionMalformed(`boundGlobals entry ${index} requires addressSpace`);
+  }
+  if (typeof resourceKind !== 'string' || resourceKind.length === 0) {
+    throw reflectionMalformed(`boundGlobals entry ${index} requires resourceKind`);
+  }
+  const visibility = requiredNonNegativeInteger(value, 'visibility');
+  const membersValue = value.members;
+  const hasMembers = membersValue !== undefined;
+  if (hasMembers && !Array.isArray(membersValue)) {
+    throw reflectionMalformed(`boundGlobals entry ${index} members must be an array`);
+  }
+  const hasSpan = value.span !== undefined;
+  if (resourceKind === 'buffer' || resourceKind === 'storage-buffer') {
+    if (!hasMembers || !hasSpan) {
+      throw reflectionMalformed(`buffer boundGlobals entry ${index} requires members and span`);
+    }
+  } else if (hasMembers !== hasSpan) {
+    throw reflectionMalformed(`boundGlobals entry ${index} members and span must be paired`);
+  }
+  if (value.name !== undefined && typeof value.name !== 'string') {
+    throw reflectionMalformed(`boundGlobals entry ${index} diagnostic name must be a string`);
+  }
+  return {
+    group: requiredNonNegativeInteger(value, 'group'),
+    binding: requiredNonNegativeInteger(value, 'binding'),
+    addressSpace,
+    resourceKind,
+    visibility,
+    ...(value.name !== undefined ? { name: value.name as string } : {}),
+    ...(hasMembers
+      ? {
+          members: (membersValue as unknown[]).map((member, memberIndex) =>
+            readMember(member, memberIndex),
+          ),
+          span: requiredNonNegativeInteger(value, 'span'),
+        }
+      : {}),
+  };
+}
+
+/** Parse and validate the business-neutral shader-reflection/2 wire. */
+export function parseReflectionWire(json: string): ShaderReflection {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch (cause) {
+    throw reflectionMalformed(cause instanceof Error ? cause.message : 'JSON.parse failed');
+  }
+  if (!isRecord(parsed) || parsed.schemaVersion !== 'shader-reflection/2') {
+    throw reflectionMalformed("schemaVersion must equal 'shader-reflection/2'");
+  }
+  if ('material' in parsed) throw reflectionMalformed('legacy material projection is not accepted');
+  if (!Array.isArray(parsed.boundGlobals)) {
+    throw reflectionMalformed('boundGlobals must be an array');
+  }
+  if (
+    typeof parsed.uvSetCount !== 'number' ||
+    !Number.isSafeInteger(parsed.uvSetCount) ||
+    parsed.uvSetCount < 0
+  ) {
+    throw reflectionMalformed('uvSetCount must be a non-negative integer');
+  }
+  const boundGlobals = parsed.boundGlobals.map((global, index) => readBoundGlobal(global, index));
+  const coordinates = new Set<string>();
+  for (const global of boundGlobals) {
+    const coordinate = `${global.group}:${global.binding}`;
+    if (coordinates.has(coordinate))
+      throw reflectionMalformed(`duplicate bound-global coordinate ${coordinate}`);
+    coordinates.add(coordinate);
+  }
+  return { schemaVersion: 'shader-reflection/2', boundGlobals, uvSetCount: parsed.uvSetCount };
+}
+
+/** Result-form reader for callers that need an explicit unavailable/malformed branch. */
+export function readReflectionWire(
+  json: string | undefined,
+): Result<ShaderReflection, ShaderErrorType> {
+  if (json === undefined) {
+    return err(
+      initFailed({
+        message: 'shader-reflection/2 is unavailable before the Naga producer emits a wire',
+        hint: 'run the validated compose -> reflect path and retain its raw reflection bytes',
+        reason: 'reflection wire unavailable',
+      }),
+    );
+  }
+  try {
+    return ok(parseReflectionWire(json));
+  } catch (error) {
+    return err(error instanceof ShaderError ? error : reflectionMalformed(String(error)));
+  }
+}
 
 // === Phase 1: parse =================================================================
 

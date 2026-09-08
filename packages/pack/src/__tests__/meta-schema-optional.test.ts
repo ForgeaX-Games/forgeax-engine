@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { validateMeta } from '../schema-compiled.js';
+import { SCRIPTABLE_PACK_ASSET_KINDS } from '../scriptable-pack.js';
 
 describe('meta.schema.json source optional (w8 / AC-4)', () => {
   const minimalMeta = {
@@ -74,6 +75,12 @@ describe('meta.schema.json subAssets[].kind open-string (w6 / D-1 scheme A)', ()
     it(`(b) known kind '${kind}' passes validation (zero-regression)`, () => {
       const valid = validateMeta(metaWithSubKind(kind));
       expect(valid).toBe(true);
+    });
+  }
+
+  for (const kind of SCRIPTABLE_PACK_ASSET_KINDS) {
+    it(`published durable kind '${kind}' remains valid in open Meta schema`, () => {
+      expect(validateMeta(metaWithSubKind(kind))).toBe(true);
     });
   }
 

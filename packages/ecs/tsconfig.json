@@ -12,6 +12,7 @@
   "include": ["src/**/*"],
   "references": [
     { "path": "../math" },
+    { "path": "../plugin" },
     { "path": "../types" }
   ]
 }

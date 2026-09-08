@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { NativeCooker } from '@forgeax/engine-pack/native-cooker';
 import type { Importer } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it } from 'vitest';
-import { pluginPack } from '../index.js';
+import { createPluginPackInternal as pluginPack } from '../plugin-pack.js';
 
 const EFFECT_GUID = 'f7b169a1-73cc-4cc4-b0c1-6f93d8db44a1';
 const MATERIAL_GUID = 'cc0c6eaf-086b-4a02-b0d3-ea068b178105';
@@ -59,7 +59,11 @@ describe('roots-scoped native catalog publication', () => {
         },
       }),
     };
-    const plugin = pluginPack({ roots: [active, brokenSibling], cookers: [cooker] });
+    const plugin = pluginPack({
+      roots: [active, brokenSibling],
+      cookers: [cooker],
+      ddc: { projectDdcRoot: join(root, 'ddc') },
+    });
     const middlewares: Middleware[] = [];
     plugin.configureServer({
       middlewares: { use: (middleware) => middlewares.push(middleware as never) },
@@ -76,18 +80,35 @@ describe('roots-scoped native catalog publication', () => {
       kind: 'test-effect',
       packageUrl: `/__pack/scopes/active/1/asset/__forgeax-ddc/${EFFECT_GUID}.pack.json`,
       refs: [MATERIAL_GUID],
+      publication: {
+        schemaVersion: 'asset-publication/1',
+        generation: expect.any(Number),
+        digest: expect.stringMatching(/^sha256:/),
+        outputSetDigest: expect.stringMatching(/^sha256:/),
+      },
     });
     const entry = entries[0];
     if (entry === undefined) throw new Error('expected the active scoped catalog entry');
+    if (entry.publication === undefined) throw new Error('expected cooked Pack publication');
 
     const packResponse = await request(middlewares, entry.packageUrl);
     expect(packResponse.statusCode).toBe(200);
     const pack = JSON.parse(packResponse.body) as {
+      scopeId: string;
+      generation: number;
+      digest: string;
+      outputSetDigest: string;
       assets: Array<{
         payload: { compiled: boolean };
         artifacts: Record<string, { path: string }>;
       }>;
     };
+    expect(pack).toMatchObject({
+      scopeId: binding.scopeId,
+      generation: entry.publication.generation,
+      digest: entry.publication.digest,
+      outputSetDigest: entry.publication.outputSetDigest,
+    });
     expect(pack.assets[0]?.payload.compiled).toBe(true);
     const artifactPath = pack.assets[0]?.artifacts.program?.path;
     expect(artifactPath).toBeDefined();
@@ -97,8 +118,14 @@ describe('roots-scoped native catalog publication', () => {
     expect(artifactResponse.body).toBe('{"program":"native"}');
 
     await writeFile(activePack, '{broken-after-success');
-    const degraded = await plugin.rebind(runtimeBinding('active', 2), [active]);
-    expect(degraded.status).toBe('degraded');
+    await expect(plugin.rebind(runtimeBinding('active', 2), [active])).rejects.toMatchObject({
+      code: 'scan-failed',
+    });
+    expect(plugin.runtimeBinding()).toMatchObject({
+      scopeId: binding.scopeId,
+      generation: binding.generation,
+      status: 'degraded',
+    });
     await plugin.closeBundle();
   });
 
@@ -150,6 +177,7 @@ describe('roots-scoped native catalog publication', () => {
       roots: [active, brokenSibling],
       importers: [importer],
       producerReadiness: 'on-demand',
+      ddc: { projectDdcRoot: join(root, 'ddc') },
     });
     const middlewares: Middleware[] = [];
     plugin.configureServer({
@@ -232,7 +260,11 @@ describe('roots-scoped native catalog publication', () => {
         };
       },
     };
-    const plugin = pluginPack({ roots: [active, sibling], cookers: [cooker] });
+    const plugin = pluginPack({
+      roots: [active, sibling],
+      cookers: [cooker],
+      ddc: { projectDdcRoot: join(root, 'ddc') },
+    });
     const emitted = new Map<
       string,
       {
@@ -283,6 +315,12 @@ interface PackEntry {
   kind?: string;
   refs?: string[];
   lifecycle?: string;
+  publication?: {
+    schemaVersion: string;
+    generation: number;
+    digest: string;
+    outputSetDigest: string;
+  };
 }
 
 function runtimeBinding(scopeId: string, generation: number) {

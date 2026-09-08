@@ -14,12 +14,10 @@
 // carrier never gets evaluated, so weights[] stays empty; after them the default
 // plugin fills it automatically.
 
-import { AnimationPlayer, defineAnimationGraph } from '@forgeax/engine-animation';
-import type { EntityHandle } from '@forgeax/engine-ecs';
-import { World } from '@forgeax/engine-ecs';
+import { AnimationPlayer, animationPlugin, defineAnimationGraph } from '@forgeax/engine-animation';
+import { createWorldContext, type EntityHandle, World } from '@forgeax/engine-ecs';
 import type { AnimationClip } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { animationPlugin } from '../plugin-factories';
 
 function registerClip(world: World, duration: number) {
   const clip: AnimationClip = { kind: 'animation-clip', duration, channels: [] };
@@ -33,20 +31,18 @@ describe('DAG eval — default animationPlugin path (M3 / w23, AC-09)', () => {
     // Build the DEFAULT animation capability onto a bare host World (assemble
     // form) — this is exactly what createApp's default plugin set does for the
     // animation subsystem.
-    const res = await animationPlugin().build(world);
-    expect(res.ok).toBe(true);
-
-    let captured: unknown;
-    world.setErrorHandler((error) => {
-      captured = error;
-    });
-
     // Declare a normalizing Blend(Walk@1, Run@1) graph and register it + its
-    // clips as shared assets in this World (resolved via the SharedRefStore, the
-    // same path the plugin's self-owned resolver uses).
-    const walk = registerClip(world, 10);
-    const run = registerClip(world, 10);
-    const built = defineAnimationGraph((b) => b.blend([b.clip(walk), b.clip(run)]));
+    // clips as ordinary payloads retained by the host-owned lookup.
+    const clips = new Map<string, AnimationClip>([
+      ['test/animation-clip-walk', { kind: 'animation-clip', duration: 10, channels: [] }],
+      ['test/animation-clip-run', { kind: 'animation-clip', duration: 10, channels: [] }],
+    ]);
+    registerClip(world, 10);
+    registerClip(world, 10);
+    await createWorldContext(world, [animationPlugin((guid) => clips.get(guid))]);
+    const built = defineAnimationGraph((b) =>
+      b.blend([b.clip('test/animation-clip-walk'), b.clip('test/animation-clip-run')]),
+    );
     expect(built.ok).toBe(true);
     if (!built.ok) return;
     const graphH = world.allocSharedRef('AnimationGraph', built.value);
@@ -57,7 +53,7 @@ describe('DAG eval — default animationPlugin path (M3 / w23, AC-09)', () => {
 
     // Drive ONE frame through the default schedule. No manual eval call.
     world.update();
-    expect(captured).toBeUndefined();
+    expect(world.execution.health).toBe('healthy');
 
     // The default plugin's evaluateAnimationGraph ran before advance and filled
     // the derived weights[] with the normalized [0.5, 0.5] distribution.

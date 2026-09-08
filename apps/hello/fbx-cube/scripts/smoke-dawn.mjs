@@ -125,7 +125,7 @@ const mockCanvas = {
 const { World } = await import('@forgeax/engine-ecs');
 const { Transform } = await import('@forgeax/engine-scene');
 const { MeshFilter, DirectionalLight } = await import('@forgeax/engine-render');
-const { createRenderer } = await import('@forgeax/engine-runtime');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { MeshRenderer, Camera } = await import('@forgeax/engine-render');
 const { fbxImporter } = await import('@forgeax/engine-fbx');
 
@@ -144,8 +144,12 @@ function manifestExists(p) {
 }
 
 let renderer;
+let assets;
 try {
-  renderer = await createRenderer(mockCanvas, {}, MANIFEST_URL ? { shaderManifestUrl: MANIFEST_URL } : {});
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, MANIFEST_URL ? { shaderManifestUrl: MANIFEST_URL } : {});
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  assets = constructed.value.assets;
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
@@ -153,9 +157,7 @@ try {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[hello-fbx-cube] backend=${renderer.backend}`);
-
-const assets = renderer.assets;
+console.log('[hello-fbx-cube] Standard pipeline active');
 if (!assets) { console.error('[smoke] FAIL - AssetRegistry null'); process.exit(1); }
 
 // Import cube.fbx via fbxImporter. The importer honours the GUID import-stable
@@ -200,7 +202,7 @@ if (!meshAsset || !matAsset) {
 console.log(`[smoke] mesh vertices=${meshAsset.payload.vertices.length} submeshes=${meshAsset.payload.submeshes.length}`);
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 // feat-20260614 M8: AssetRegistry register* deleted; mint user-tier column
@@ -222,18 +224,19 @@ world.spawn({
 });
 
 const errors = [];
-renderer.onError((err) => errors.push(err.code));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') errors.push(event.error.code);
+});
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code}`);
-  process.exit(1);
-}
 
 let framesObserved = 0;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = renderer.draw({
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  });
   if (!r.ok) {
     const code = r.error && typeof r.error === 'object' && 'code' in r.error ? r.error.code : 'unknown';
     errors.push(code);
@@ -298,7 +301,7 @@ const cornerDist = distance(corner, BLACK);
 // --- 5. Verdict ---
 const failures = [];
 // Structural (not weakened by the pixel layer).
-if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend}`);
+if (!sharedDevice) failures.push('(a) Dawn device was not created by the host-owned Standard pipeline');
 if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (errors.length > 0) failures.push(`(c) errors=${errors.join(',')}`);
 // Pixel readback (T17 / AC-14 / AC-18).

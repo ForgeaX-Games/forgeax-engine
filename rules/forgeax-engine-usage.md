@@ -18,6 +18,9 @@ adding a new package surface.
 |:--|:--|
 | 引导 app / 跑游戏循环 / 读输入快照 | `forgeax-engine-app` |
 | 定义组件 / 写查询与系统 / 关系 / 反射 | `forgeax-engine-ecs` |
+| `NetSession` / replication / protocol-v2 / reconnect / resync / ACK / `SessionId` vs `PeerId` | `@forgeax/engine-net`（见 `packages/net/README.md`） |
+| WebSocket endpoint / browser 或 Node connector / binary frame | `@forgeax/engine-net-websocket`（见 `packages/net-websocket/README.md`） |
+| multiplayer Snake consumer / reconnect browser journey / visual falsifier evidence | `forgeax-visual` + `apps/multiplayer-snake/README.md` |
 | 场景身份 / hierarchy / Transform propagation / `scenePlugin` | `@forgeax/engine-scene`（见 `packages/scene/README.md`） |
 | Skin / joint binding / skeletal errors | `@forgeax/engine-skinning`（见 `packages/skinning/README.md`） |
 | Animation graph / player / clip lookup / playback | `@forgeax/engine-animation`（见 `packages/animation/README.md`） |

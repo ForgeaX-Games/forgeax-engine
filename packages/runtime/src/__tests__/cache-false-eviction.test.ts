@@ -14,8 +14,9 @@
 //   plan-strategy D-1a #4
 //   requirements AC-13
 
-import { cleanPerEntityCache, worldEntityKey } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
+import { worldEntityKey } from '../../../render/src/record/frame-snapshot';
+import { cleanPerEntityCache } from '../../../render/src/record/mesh-ssbo';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 

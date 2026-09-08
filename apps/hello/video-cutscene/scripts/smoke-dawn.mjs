@@ -156,7 +156,7 @@ if (!appResult.ok) {
   process.exit(1);
 }
 const app = appResult.value;
-console.log(`[hello-video-cutscene] backend=${app.renderer.backend}`);
+console.log(`[hello-video-cutscene] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
 const world = app.world;
 const cubeMatHandle = world.allocSharedRef('MaterialAsset', Materials.unlit([0.9, 0.3, 0.25, 1]));
@@ -203,11 +203,6 @@ world
 const onErrorEvents = [];
 app.onError((err) => onErrorEvents.push({ code: err.code }));
 
-const ready = await app.renderer.ready;
-if (!ready.ok) {
-  originalConsoleError(`[smoke] FAIL - renderer.ready: ${ready.error.code}`);
-  process.exit(1);
-}
 
 // Deterministic clock.
 let fakeNow = 0;

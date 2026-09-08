@@ -1,8 +1,5 @@
-import {
-  type EntityHandle,
-  projectComponentData,
-  type World,
-} from '@forgeax/engine-ecs';
+import { type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { projectComponentData } from '@forgeax/engine-ecs/externalization';
 import type { AuthorityCoordinator } from '../../src/replication/authority';
 import type { ReplicaCoordinator } from '../../src/replication/replica';
 import type { ReplicationProfile } from '../../src/replication/profile';

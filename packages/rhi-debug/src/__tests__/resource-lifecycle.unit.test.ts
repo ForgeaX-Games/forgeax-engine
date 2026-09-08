@@ -1,26 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { buildFrameModel } from '../frame-model';
-import { buildResourceLifecycle } from '../resource-lifecycle';
-import { deserializeTape, serializeTape, TAPE_FORMAT_VERSION } from '../tape-format';
-import type { RhiCallEvent, Tape } from '../types';
-
-function makeTape(events: readonly RhiCallEvent[]): Tape {
-  return {
-    formatVersion: TAPE_FORMAT_VERSION,
-    rhiCapsRecorded: {
-      canvasFormat: 'bgra8unorm' as GPUTextureFormat,
-      rgba16floatRenderable: false,
-      float32Filterable: false,
-      textureCompressionBc: false,
-      textureCompressionEtc2: false,
-      textureCompressionAstc: false,
-      storageBuffer: false,
-      timestampQuery: false,
-    },
-    events,
-    blobPool: new Map(),
-  };
-}
+import { buildFrameModel, buildResourceLifecycle } from '../frame-model';
+import { decodeTape, encodeTape } from '../protocol/codec';
+import type { RhiCallEvent, Tape } from '../protocol/types';
 
 const events: readonly RhiCallEvent[] = [
   { kind: 'createBuffer', handleId: 'buf:1', desc: { size: 64, usage: 4 } },
@@ -29,7 +10,7 @@ const events: readonly RhiCallEvent[] = [
     handleId: 'tex:1',
     desc: {
       size: { width: 4, height: 4, depthOrArrayLayers: 2 },
-      format: 'rgba16float' as GPUTextureFormat,
+      format: 'rgba16float',
       mipLevelCount: 2,
       usage: 1,
     },
@@ -37,11 +18,20 @@ const events: readonly RhiCallEvent[] = [
   {
     kind: 'createTexture',
     handleId: 'depth:1',
-    desc: { size: { width: 4, height: 4 }, format: 'depth24plus' as GPUTextureFormat, usage: 4 },
+    desc: { size: { width: 4, height: 4 }, format: 'depth24plus', usage: 4 },
   },
   { kind: 'createTextureView', sourceHandleId: 'tex:1', resultHandleId: 'view:1', desc: {} },
   { kind: 'destroyBuffer', handleId: 'buf:1' },
 ];
+
+function makeTape(tapeEvents: readonly RhiCallEvent[] = events): Tape {
+  return {
+    header: { formatVersion: 7, rhiCaps: {}, eventCount: tapeEvents.length, blobCount: 0 },
+    bootstrap: [],
+    events: tapeEvents,
+    blobs: [],
+  };
+}
 
 describe('resource lifecycle attribution', () => {
   it('joins create/destroy events and keeps unavailable bytes explicit', () => {
@@ -82,21 +72,19 @@ describe('resource lifecycle attribution', () => {
   });
 
   it('is part of the same FrameModel used by the public summary', () => {
-    const model = buildFrameModel(makeTape(events));
-    const texture = model.resources.get('tex:1');
-    expect(texture?.kind).toBe('createTexture');
-    if (texture?.kind === 'createTexture') expect(texture.size).toEqual([4, 4, 2]);
+    const model = buildFrameModel(makeTape());
     expect(model.resourceLifecycle.counts.live).toBe(3);
     expect(model.resourceLifecycle.resources).toHaveLength(4);
   });
 
-  it('round-trips destroy events in the tape format', () => {
-    const serialized = serializeTape(makeTape(events));
-    const result = deserializeTape(serialized.json, serialized.blob);
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.events.at(-1)).toEqual({ kind: 'destroyBuffer', handleId: 'buf:1' });
-    }
+  it('round-trips destroy events in the v7 tape format', () => {
+    const encoded = encodeTape(makeTape());
+    expect(encoded.ok).toBe(true);
+    if (!encoded.ok) return;
+    const decoded = decodeTape(encoded.value);
+    expect(decoded.ok).toBe(true);
+    if (decoded.ok)
+      expect(decoded.value.events.at(-1)).toEqual({ kind: 'destroyBuffer', handleId: 'buf:1' });
   });
 
   it('keeps swapchain textures out of engine-owned attribution', () => {
@@ -107,7 +95,7 @@ describe('resource lifecycle attribution', () => {
         origin: 'swapchain',
         desc: {
           size: { width: 1280, height: 720, depthOrArrayLayers: 1 },
-          format: 'bgra8unorm' as GPUTextureFormat,
+          format: 'bgra8unorm',
           usage: 1,
         },
       },

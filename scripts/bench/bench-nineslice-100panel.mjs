@@ -271,11 +271,13 @@ async function main() {
 
   // 3. Drive engine ECS + 100 panel grid path.
   let engineMod;
+  let renderMod;
   let ecsMod;
   let manifestMod;
   try {
     ecsMod = await import('@forgeax/engine-ecs');
     engineMod = await import('@forgeax/engine-runtime');
+    renderMod = await import('@forgeax/engine-render/internal/construct-renderer');
     manifestMod = await import('@forgeax/engine-vite-plugin-shader');
   } catch (err) {
     const payload = errPayload('pixel-parity-capture-failed', {
@@ -287,15 +289,7 @@ async function main() {
     return;
   }
   const { World } = ecsMod;
-  const {
-    Camera,
-    createRenderer,
-    HANDLE_NINESLICE_QUAD,
-    Layer,
-    MeshFilter,
-    MeshRenderer,
-    Transform,
-  } = engineMod;
+  const { Camera, HANDLE_NINESLICE_QUAD, Layer, MeshFilter, MeshRenderer, Transform } = engineMod;
   let ENGINE_MANIFEST;
   try {
     ENGINE_MANIFEST = await manifestMod.buildEngineShaderManifest();
@@ -311,11 +305,16 @@ async function main() {
   const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
 
   let renderer;
+  let assets;
   try {
-    renderer = await createRenderer(mockCanvas, {
-      clearColor: [0.07, 0.07, 0.09, 1],
-      shaderManifestUrl: ENGINE_MANIFEST_URL,
-    });
+    const host = await renderMod.constructRendererHost(
+      mockCanvas,
+      {},
+      { shaderManifestUrl: ENGINE_MANIFEST_URL },
+    );
+    if (!host.ok) throw host.error;
+    renderer = host.value.renderer;
+    assets = host.value.assets;
   } catch (err) {
     const payload = errPayload('pixel-parity-capture-failed', {
       stage: 'createRenderer',
@@ -326,15 +325,6 @@ async function main() {
     return;
   } finally {
     globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
-  }
-  const assets = renderer.assets;
-  if (!assets) {
-    const payload = errPayload('pixel-parity-capture-failed', {
-      stage: 'asset-registry-null',
-    });
-    writeReport(payload);
-    process.exitCode = dispatchExit(payload);
-    return;
   }
 
   // Synthetic 8x8 RGBA texture (mirrors smoke-dawn.mjs to avoid PNG load).
@@ -364,23 +354,6 @@ async function main() {
     process.exitCode = dispatchExit(payload);
     return;
   }
-  const uploadRes = await renderer.store.uploadTexture(texHandleRes.value, synthPod, {
-    bytes: synthBytes,
-    width: 8,
-    height: 8,
-    mime: 'image/png',
-    colorSpace: 'srgb',
-    mipmap: false,
-  });
-  if (!uploadRes.ok) {
-    const payload = errPayload('pixel-parity-capture-failed', {
-      stage: 'texture-upload',
-      cause: uploadRes.error.code,
-    });
-    writeReport(payload);
-    process.exitCode = dispatchExit(payload);
-    return;
-  }
   const samplerHandleRes = assets.register({
     kind: 'sampler',
     magFilter: 'linear',
@@ -392,16 +365,6 @@ async function main() {
     const payload = errPayload('pixel-parity-capture-failed', {
       stage: 'sampler-register',
       cause: samplerHandleRes.error.code,
-    });
-    writeReport(payload);
-    process.exitCode = dispatchExit(payload);
-    return;
-  }
-  const ready = await renderer.ready;
-  if (!ready.ok) {
-    const payload = errPayload('pixel-parity-capture-failed', {
-      stage: 'renderer-ready',
-      cause: ready.error.code,
     });
     writeReport(payload);
     process.exitCode = dispatchExit(payload);
@@ -493,16 +456,24 @@ async function main() {
   const WARM_UP = 30;
   const measureFrames = FRAMES - WARM_UP;
   let drawErrors = 0;
-  renderer.attachWorld(world).unwrap();
+  const lease = renderer.attach(world).unwrap();
   for (let i = 0; i < WARM_UP; i++) {
     world.update().unwrap();
-    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const r = renderer.draw({
+      leases: [lease],
+      camera: { lease },
+      environment: { lease },
+    });
     if (!r.ok) drawErrors++;
   }
   const t0 = process.hrtime.bigint();
   for (let i = 0; i < measureFrames; i++) {
     world.update().unwrap();
-    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const r = renderer.draw({
+      leases: [lease],
+      camera: { lease },
+      environment: { lease },
+    });
     if (!r.ok) drawErrors++;
   }
   await sharedDevice?.queue.onSubmittedWorkDone();

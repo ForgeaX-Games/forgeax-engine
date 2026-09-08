@@ -3,7 +3,7 @@ import { baseTsupConfig } from '../../tsup.base';
 
 export default defineConfig({
   ...baseTsupConfig,
-  entry: ['src/index.ts', 'src/geometry/index.ts'],
+  entry: ['src/index.ts', 'src/geometry/index.ts', 'src/renderer-host.ts'],
   external: [
     '@forgeax/engine-ecs',
     '@forgeax/engine-math',

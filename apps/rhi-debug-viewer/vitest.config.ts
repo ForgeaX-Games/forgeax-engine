@@ -3,8 +3,8 @@ import { defineProject } from 'vitest/config';
 export default defineProject({
   test: {
     environment: 'jsdom',
-    // jsdom only exposes localStorage when an origin is set; the layout-persistence
-    // tests (dockview-layout.test.tsx) call localStorage.clear() in beforeEach.
+    // jsdom only exposes localStorage when an origin is set; the viewer tests
+    // use localStorage for deterministic browser-like state.
     environmentOptions: { jsdom: { url: 'http://localhost' } },
     // Pin globalThis.localStorage to jsdom's (Node 22+ ships a conflicting
     // experimental global); see setup.ts.

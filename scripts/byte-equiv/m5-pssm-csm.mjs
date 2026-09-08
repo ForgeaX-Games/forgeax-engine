@@ -18,7 +18,7 @@
 // **where the shadow texture view comes from** (graph getter vs ECS-managed
 // perPassResources field). PSO descriptors are independent of that wiring;
 // the shadow caster pass shape (vertex layout, depth format, viewport) is
-// driven by `addShadowPass(graph, name, { depth, selector, viewport })`,
+// driven by the typed shadow graph, preserving { depth, selector, viewport },
 // which is unchanged.
 //
 // Strategy: run hello-cube + hello-shadow-opt-out smokes (the full shadow

@@ -12,14 +12,25 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { err, ok, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { Transform } from '@forgeax/engine-scene';
-import { Camera, DirectionalLight } from '@forgeax/engine-render';
-import { createRenderer } from '@forgeax/engine-runtime';
+import {
+  ChildOf,
+  Children,
+  Transform,
+  worldInstantiateScene,
+  worldSetSceneAssetResolver,
+} from '@forgeax/engine-scene';
+import {
+  Camera,
+  DirectionalLight,
+  MeshFilter,
+  MeshRenderer,
+} from '@forgeax/engine-render';
 import { Materials, SceneInstance } from '@forgeax/engine-render';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
 import type { Handle, SceneAsset, SceneInstanceMount } from '@forgeax/engine-types';
-import { toShared, type LocalEntityId } from '@forgeax/engine-types';
+import { err, ok, toShared, type LocalEntityId } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -39,6 +50,21 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(
 
 function registerManagedRef(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
   return world.allocSharedRef('SceneAsset', asset);
+}
+
+function registerSceneComponents(world: World): void {
+  for (const component of [
+    Camera,
+    ChildOf,
+    Children,
+    DirectionalLight,
+    MeshFilter,
+    MeshRenderer,
+    SceneInstance,
+    Transform,
+  ]) {
+    world.components.register(component).unwrap();
+  }
 }
 
 function distance(
@@ -151,29 +177,24 @@ describe('hello-scene-nesting w34 - dawn draw scene with mount (AC-33)', () => {
       removeEventListener() {},
     } as unknown as HTMLCanvasElement;
 
-    let renderer: Awaited<ReturnType<typeof createRenderer>>;
+    let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
     try {
-      renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+      host = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
     } finally {
       globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
     }
-    expect(renderer.backend).toBe('webgpu');
-
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
-    if (!ready.ok) return;
+    if (!host.ok) throw host.error;
+    const { renderer, assets } = host.value;
+    expect(renderer.inspect().capabilities.backendKind).toBe('webgpu');
 
     // ── 3. Register inner scene in World + wire resolver ─────────────────
 
     const world = new World();
-    const worldAttachment1 = renderer.attachWorld(world);
+    registerSceneComponents(world);
+    const worldAttachment1 = renderer.attach(world);
     if (!worldAttachment1.ok) throw worldAttachment1.error;
 
     // Catalog a material (unlit) so the scene's GUID ref resolves.
-    const assets = renderer.assets;
-    expect(assets).not.toBeNull();
-    if (assets === null) return;
-
     const unlitMatGuidResult = AssetGuid.parse('008e4f75-e7a3-4715-b05b-b93a9ec12074');
     if (!unlitMatGuidResult.ok) return;
     assets.catalog(unlitMatGuidResult.value, Materials.unlit([0.8, 0.4, 0.2, 1]));
@@ -185,7 +206,7 @@ describe('hello-scene-nesting w34 - dawn draw scene with mount (AC-33)', () => {
     // Outer scene is instantiated first; its mount.source=0 resolves to
     // the inner handle.
     let outerHandleVal: number | undefined;
-    world._setSceneAssetResolver?.((sourceIdx: number, parentHandle: Handle<'SceneAsset', 'shared'>) => {
+    worldSetSceneAssetResolver(world, (sourceIdx: number, parentHandle: Handle<'SceneAsset', 'shared'>) => {
       void sourceIdx;
       const parentRaw = parentHandle as unknown as number;
       if (outerHandleVal !== undefined && parentRaw === outerHandleVal) {
@@ -215,7 +236,7 @@ describe('hello-scene-nesting w34 - dawn draw scene with mount (AC-33)', () => {
 
     // ── 5. Instantiate outer scene ──────────────────────────────────────
 
-    const instRes = world.instantiateScene(outerHandle);
+    const instRes = worldInstantiateScene(world, outerHandle);
     expect(instRes.ok).toBe(true);
     if (!instRes.ok) return;
     const root = instRes.value.root;
@@ -226,16 +247,22 @@ describe('hello-scene-nesting w34 - dawn draw scene with mount (AC-33)', () => {
     if (!inst.ok) return;
 
     const renderErrors: unknown[] = [];
-    renderer.onError((err) => {
-      renderErrors.push(err);
+    renderer.subscribe((event) => {
+      if (event.kind === 'error') renderErrors.push(event.error);
     });
+
+    const frameRequest = {
+      leases: [worldAttachment1.value],
+      camera: { lease: worldAttachment1.value },
+      environment: { lease: worldAttachment1.value },
+    };
 
     // ── 6. Render 300 frames ────────────────────────────────────────────
 
     let framesObserved = 0;
     for (let i = 0; i < TARGET_FRAMES; i++) {
       world.update().unwrap();
-      const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      const r = renderer.draw(frameRequest);
       if (!r.ok) {
         console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
       }

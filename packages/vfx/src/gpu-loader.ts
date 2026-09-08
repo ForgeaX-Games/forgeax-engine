@@ -1,5 +1,14 @@
-import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import type { LoadContext, Result } from '@forgeax/engine-types';
+import type {
+  AssetRegistry as LegacyAssetRegistry,
+  RuntimeAssetRegistry,
+} from '@forgeax/engine-assets-runtime';
+import type {
+  AssetDecoderContribution,
+  AssetKind,
+  AssetLoadError,
+  LoadContext,
+  Result,
+} from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
 import {
   VFX_GPU_PROGRAM_ARTIFACT_KEY,
@@ -56,7 +65,7 @@ async function fingerprint(bytes: Uint8Array): Promise<string> {
     bytes.byteOffset,
     bytes.byteOffset + bytes.byteLength,
   ) as ArrayBuffer;
-  return hex(await globalThis.crypto.subtle.digest('SHA-256', source));
+  return `sha256:${hex(await globalThis.crypto.subtle.digest('SHA-256', source))}`;
 }
 
 function validReflectionLayout(value: unknown): boolean {
@@ -112,13 +121,14 @@ export const vfxGpuEffectPackLoader = {
       input.payload.kind !== 'particle-effect' ||
       input.payload.schemaVersion !== 2 ||
       !Array.isArray(input.payload.emitters) ||
-      typeof input.payload.programFingerprint !== 'string'
+      typeof input.payload.programFingerprint !== 'string' ||
+      !record(input.payload.program)
     ) {
       return failure(
         'vfx-asset-v2-invalid',
         input.guid,
         'payload',
-        'a schemaVersion 2 particle payload with its program fingerprint',
+        'a schemaVersion 2 particle payload with its complete program and fingerprint',
         'migrate behavior to WGSL and recook; the runtime does not interpret v1',
       );
     }
@@ -160,6 +170,19 @@ export const vfxGpuEffectPackLoader = {
       );
     }
     const decodedEmitters = decoded.emitters as VfxGpuEmitterProgram[];
+    if (
+      input.payload.program.format !== VFX_GPU_PROGRAM_FORMAT ||
+      input.payload.program.fingerprint !== input.payload.programFingerprint ||
+      !Array.isArray(input.payload.program.emitters)
+    ) {
+      return failure(
+        'vfx-asset-v2-invalid',
+        input.guid,
+        'payload.program',
+        'the complete canonical program matching payload.programFingerprint',
+        'recook the particle effect atomically',
+      );
+    }
     const actualFingerprint = await fingerprint(artifact.bytes);
     if (actualFingerprint !== input.payload.programFingerprint) {
       return failure(
@@ -210,11 +233,55 @@ export const vfxGpuEffectPackLoader = {
   },
 };
 
+/** VFX owner decoder contribution for the core registry's typed map. */
+export const vfxGpuEffectContribution: AssetDecoderContribution<
+  VfxGpuEffectAsset,
+  'particle-effect'
+> = {
+  kind: { kind: 'particle-effect' } as AssetKind<VfxGpuEffectAsset, 'particle-effect'>,
+  consumer: 'VfxGpuRuntime',
+  decoder: {
+    async decode({ envelope, artifacts }) {
+      const descriptor = envelope.artifacts[VFX_GPU_PROGRAM_ARTIFACT_KEY];
+      const bytes = descriptor === undefined ? undefined : await artifacts.read(descriptor);
+      if (bytes !== undefined && !bytes.ok) return bytes;
+      const result = await vfxGpuEffectPackLoader.load(
+        {
+          guid: envelope.guid,
+          kind: envelope.kind,
+          payload: envelope.payload as unknown as Record<string, unknown>,
+          artifacts:
+            bytes === undefined || descriptor === undefined
+              ? {}
+              : {
+                  [VFX_GPU_PROGRAM_ARTIFACT_KEY]: {
+                    descriptor: { path: descriptor.path, mediaType: descriptor.mediaType },
+                    bytes: bytes.value,
+                  },
+                },
+        },
+        {} as LoadContext,
+      );
+      if (result.ok) return result;
+      const error: AssetLoadError = {
+        code: 'asset-package-invalid',
+        expected: result.error.expected,
+        hint: result.error.hint,
+        detail: { guid: envelope.guid, reason: result.error.code },
+      };
+      return err(error);
+    },
+  },
+};
+
 export async function loadVfxGpuEffect(
-  registry: AssetRegistry,
+  registry: LegacyAssetRegistry | RuntimeAssetRegistry,
   guid: string,
 ): Promise<Result<VfxGpuEffectAsset, unknown>> {
-  let parsed: ReturnType<AssetRegistry['parseGuid']>;
+  if ('load' in registry) {
+    return registry.load(guid, vfxGpuEffectContribution.kind);
+  }
+  let parsed: ReturnType<LegacyAssetRegistry['parseGuid']>;
   try {
     parsed = registry.parseGuid(guid);
   } catch (error) {

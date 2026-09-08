@@ -1,3 +1,4 @@
+import * as SceneOwner from '@forgeax/engine-scene';
 // collect-scene-mount-collapse.test.ts — M2 mount-collapse tests
 // (feat-20260703-collect-nested-sceneinstance-to-mount-roundtrip).
 //
@@ -9,17 +10,17 @@
 //   and preserved by the new transient check. No test modification required.
 
 import type { Asset } from '@forgeax/engine-assets-runtime';
-import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { type EntityHandle, err, ok, World } from '@forgeax/engine-ecs';
+import { AssetRegistry, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
+import { defineComponent, type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { SceneInstance } from '@forgeax/engine-render';
+import { ChildOf, Children } from '@forgeax/engine-scene';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
+import { err, ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { rootsToSceneAsset } from '../collect-scene-asset';
-import '@forgeax/engine-render/internal';
-import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
-import { SceneInstance } from '@forgeax/engine-render/internal';
-import { ChildOf, Children } from '@forgeax/engine-scene';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+import { registerSceneComponents } from './helpers/register-scene-components';
 
 function mkReg() {
   return new AssetRegistry(makeMockShaderRegistry());
@@ -33,10 +34,11 @@ function soi(reg: AssetRegistry, p: SceneAsset, g: string) {
   (reg as unknown as { _originIndex: WeakMap<SceneAsset, string> })._originIndex.set(p, g);
 }
 function rs(w: World, a: SceneAsset) {
+  registerSceneComponents(w);
   return w.allocSharedRef('SceneAsset', a);
 }
 function wr(w: World, ph: Handle<'SceneAsset', 'shared'>, ch: Handle<'SceneAsset', 'shared'>) {
-  w._setSceneAssetResolver?.((_s, pH) =>
+  SceneOwner.worldSetSceneAssetResolver(w, (_s, pH) =>
     (pH as unknown as number) === (ph as unknown as number)
       ? ok(ch)
       : err({ code: 'asset-not-found' }),
@@ -45,7 +47,7 @@ function wr(w: World, ph: Handle<'SceneAsset', 'shared'>, ch: Handle<'SceneAsset
 function rcoAll(reg: AssetRegistry, w: World, root: EntityHandle) {
   for (const e of w.iterDescendants(root)) {
     if (!w.get(e, SceneInstance).ok) continue;
-    const s = w.getSceneAssetForInstance(e);
+    const s = SceneOwner.worldGetSceneAssetForInstance(w, e);
     if (!s.ok) continue;
     const c = resolveAssetHandle<SceneAsset>(w, s.value as unknown as Handle<string, 'shared'>);
     if (!c.ok) continue;
@@ -77,7 +79,7 @@ describe('m2-t1 — Form 2: root itself is SceneInstance', () => {
     const ph = rs(w, parent);
     wr(w, ph, ch);
 
-    const inst = w.instantiateScene(ph);
+    const inst = SceneOwner.worldInstantiateScene(w, ph);
     expect(inst.ok).toBe(true);
     if (!inst.ok) return;
     rcoAll(reg, w, inst.value.root);
@@ -122,7 +124,7 @@ describe('m2-t2 — Form 1: deep anchor with ChildOf parent', () => {
     if (!outerRes.ok) return;
     const outerE = outerRes.value;
 
-    const ci = w.instantiateScene(ch, outerE);
+    const ci = SceneOwner.worldInstantiateScene(w, ch, outerE);
     expect(ci.ok).toBe(true);
     if (!ci.ok) return;
     rcoAll(reg, w, ci.value.root);
@@ -168,7 +170,7 @@ describe('m2-t3 — AC-03 window invariants', () => {
     };
     const ph = rs(w, pa);
     wr(w, ph, ch);
-    const inst = w.instantiateScene(ph);
+    const inst = SceneOwner.worldInstantiateScene(w, ph);
     expect(inst.ok).toBe(true);
     if (!inst.ok) return;
     rcoAll(reg, w, inst.value.root);
@@ -199,7 +201,7 @@ describe('m2-t3 — AC-03 window invariants', () => {
     };
     const ph = rs(w, pa);
     wr(w, ph, ch);
-    const inst = w.instantiateScene(ph);
+    const inst = SceneOwner.worldInstantiateScene(w, ph);
     expect(inst.ok).toBe(true);
     if (!inst.ok) return;
     rcoAll(reg, w, inst.value.root);
@@ -245,7 +247,7 @@ describe('m2-t3 — AC-03 window invariants', () => {
       ],
     };
     const ph = rs(w, pa);
-    w._setSceneAssetResolver?.((sIdx, pH) =>
+    SceneOwner.worldSetSceneAssetResolver(w, (sIdx, pH) =>
       (pH as unknown as number) !== (ph as unknown as number)
         ? err({ code: 'asset-not-found' })
         : sIdx === 0
@@ -253,12 +255,12 @@ describe('m2-t3 — AC-03 window invariants', () => {
           : ok(hB),
     );
 
-    const inst = w.instantiateScene(ph);
+    const inst = SceneOwner.worldInstantiateScene(w, ph);
     expect(inst.ok).toBe(true);
     if (!inst.ok) return;
     for (const e of w.iterDescendants(inst.value.root)) {
       if (!w.get(e, SceneInstance).ok) continue;
-      const s = w.getSceneAssetForInstance(e);
+      const s = SceneOwner.worldGetSceneAssetForInstance(w, e);
       if (!s.ok) continue;
       const c = resolveAssetHandle<SceneAsset>(w, s.value as unknown as Handle<string, 'shared'>);
       if (!c.ok) continue;
@@ -305,7 +307,7 @@ describe('m2-t4 — graft preservation', () => {
     };
     const ph = rs(w, pa);
     wr(w, ph, ch);
-    const inst = w.instantiateScene(ph);
+    const inst = SceneOwner.worldInstantiateScene(w, ph);
     expect(inst.ok).toBe(true);
     if (!inst.ok) return;
     const root = inst.value.root;
@@ -357,7 +359,7 @@ describe('m2-t4 — graft preservation', () => {
     };
     const ph = rs(w, pa);
     wr(w, ph, ch);
-    const inst = w.instantiateScene(ph);
+    const inst = SceneOwner.worldInstantiateScene(w, ph);
     expect(inst.ok).toBe(true);
     if (!inst.ok) return;
     const root = inst.value.root;
@@ -375,14 +377,14 @@ describe('m2-t4 — graft preservation', () => {
     expect(outside.ok).toBe(true);
     if (!outside.ok) return;
 
-    const graft = w.spawn({ component: ChildOf, data: { parent: outside.value } });
+    const CrossWindowRef = defineComponent('CrossWindowRef', { target: 'entity' });
+    registerSceneComponents(w, [CrossWindowRef]);
+    const graft = w.spawn(
+      { component: ChildOf, data: { parent: member as EntityHandle } },
+      { component: CrossWindowRef, data: { target: outside.value } },
+    );
     expect(graft.ok).toBe(true);
     if (!graft.ok) return;
-    w.addComponent(
-      member as EntityHandle,
-      { component: Children, data: { entities: [graft.value] } } as never,
-    );
-
     const res = rootsToSceneAsset(reg, w, [root]);
     expect(res.ok).toBe(false); // fail-fast
   });

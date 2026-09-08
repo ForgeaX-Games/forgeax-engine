@@ -98,7 +98,7 @@ export interface SkylightDevice {
 export interface SkylightQueue {
   writeTexture(
     destination: {
-      texture: unknown;
+      texture: Texture;
       mipLevel?: number;
       origin?: { x: number; y: number; z: number };
     },
@@ -434,7 +434,7 @@ export function createSkylightFallback(
   for (const face of [0, 1, 2, 3, 4, 5]) {
     queue.writeTexture(
       {
-        texture: irradianceTexture as unknown,
+        texture: irradianceTexture,
         mipLevel: 0,
         origin: { x: 0, y: 0, z: face },
       },
@@ -444,7 +444,7 @@ export function createSkylightFallback(
     );
     queue.writeTexture(
       {
-        texture: prefilterTexture as unknown,
+        texture: prefilterTexture,
         mipLevel: 0,
         origin: { x: 0, y: 0, z: face },
       },
@@ -455,7 +455,7 @@ export function createSkylightFallback(
   }
   queue.writeTexture(
     {
-      texture: brdfLutTexture as unknown,
+      texture: brdfLutTexture,
       mipLevel: 0,
       origin: { x: 0, y: 0, z: 0 },
     },

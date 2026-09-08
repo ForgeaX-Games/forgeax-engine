@@ -7,20 +7,65 @@
 
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import type { World as WorldType } from '@forgeax/engine-ecs';
-import { type EcsErrorCode, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import type { Renderer as RendererType } from '@forgeax/engine-render';
 import {
   Camera,
   DirectionalLight,
-  extractFrame,
   Instances,
   MeshFilter,
   MeshRenderer,
-  prepareExtractContext,
-} from '@forgeax/engine-render/internal';
+} from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import type { Handle } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
+import { drawWithOwners } from './renderer-test-utils';
+
+type RendererErrorObservation = {
+  readonly code: string;
+  readonly detail?: unknown;
+  readonly hint?: string;
+};
+
+type RendererLike = RendererType;
+
+function unwrapRendererError(value: unknown): RendererErrorObservation {
+  let current = value as RendererErrorObservation;
+  while (
+    current.detail !== undefined &&
+    typeof current.detail === 'object' &&
+    current.detail !== null
+  ) {
+    const cause = (current.detail as { cause?: unknown }).cause;
+    if (
+      cause === undefined ||
+      typeof cause !== 'object' ||
+      cause === null ||
+      typeof (cause as { code?: unknown }).code !== 'string'
+    ) {
+      break;
+    }
+    current = cause as RendererErrorObservation;
+  }
+  return current;
+}
+
+function subscribeRendererErrors(
+  renderer: RendererType,
+  listener: (error: RendererErrorObservation) => void,
+): () => void {
+  return renderer.subscribe((event) => {
+    if (event.kind === 'error') listener(unwrapRendererError(event.error));
+  });
+}
+
+function drawPublished(renderer: RendererType, world: WorldType) {
+  const attached = renderer.attach(world);
+  if (!attached.ok) throw attached.error;
+  world.update().unwrap();
+  return drawWithOwners(renderer, world);
+}
 
 // ─── from render-system.test.ts ───
 {
@@ -35,11 +80,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
   //
   // Charter proposition 4 mapping:
   //   case A (entity missing Transform / MeshRenderer): default
-  //          values used; no onError fired (D-Q7 softening point).
+  //          values used; no error event fired (D-Q7 softening point).
   //   case B (world has 0 Camera entity): fires
   //          'render-system-no-camera' + frame skipped.
   //   case C (world has 0 DirectionalLight): unlit fallback
-  //          (intensity = 0); no onError fired (D-Q7 softening point).
+  //          (intensity = 0); no error event fired (D-Q7 softening point).
   //   case D (world has N>1 Camera / Light): fires
   //          'render-system-multi-camera' / 'render-system-multi-light' +
   //          uses first archetype hit.
@@ -146,6 +191,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
           log.writeBufferCount++;
         },
         writeTexture: () => undefined,
+        onSubmittedWorkDone: () => Promise.resolve(undefined),
       },
       createShaderModule: () => ({ getCompilationInfo: async () => ({ messages: [] }) }),
       createBindGroupLayout: () => ({}),
@@ -279,19 +325,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
   // Type-only import imports the public surface so we can assert RenderSystem
   // is re-exported by `@forgeax/engine-runtime` (F-1 single-import contract part 3/3).
   async function importEngine(): Promise<{
-    createRenderer: (
-      canvas: unknown,
-      opts?: unknown,
-      bundler?: unknown,
-    ) => Promise<{
-      backend: string;
-      ready: Promise<void>;
-      draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
-      onError: (cb: (err: { code: string; detail?: unknown; hint?: string }) => void) => () => void;
-      assets: {
-        register: (asset: unknown) => { ok: boolean; value: unknown };
-      };
-    }>;
+    createRenderer: (...args: unknown[]) => Promise<{ unwrap(): RendererLike }>;
   }> {
     return (await import(ENGINE)) as never;
   }
@@ -322,26 +356,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
   }> {
     return {
-      ...(await import('@forgeax/engine-render/internal')),
+      ...(await import('@forgeax/engine-render')),
       ...(await import('@forgeax/engine-scene')),
       ...(await import('@forgeax/engine-assets-runtime')),
     } as never;
   }
 
   interface TestSetup {
-    createRenderer: (
-      canvas: unknown,
-      opts?: unknown,
-      bundler?: unknown,
-    ) => Promise<{
-      backend: string;
-      ready: Promise<void>;
-      draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
-      onError: (cb: (err: { code: string; detail?: unknown; hint?: string }) => void) => () => void;
-      assets: {
-        register: (asset: unknown) => { ok: boolean; value: unknown };
-      };
-    }>;
+    createRenderer: (...args: unknown[]) => Promise<RendererType>;
     log: DeviceCallLog;
   }
 
@@ -350,7 +372,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     const { device } = makeMockGPUDevice(log);
     vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
     const engine = await importEngine();
-    return { createRenderer: engine.createRenderer, log };
+    return {
+      createRenderer: async (...args: unknown[]) => (await engine.createRenderer(...args)).unwrap(),
+      log,
+    };
   }
 
   // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -364,7 +389,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {},
         { shaderManifestUrl: buildManifestDataUrl() },
       );
-      await renderer.ready;
       const { World } = await importEcs();
       const C = await importComponents();
       const world = new World();
@@ -402,24 +426,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       );
 
       const errors: { code: string }[] = [];
-      renderer.onError((e) => errors.push(e));
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      subscribeRendererErrors(renderer, (e) => errors.push(e));
+      drawPublished(renderer, world as WorldType);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      Object.assign(log, makeLog());
+      drawPublished(renderer, world as WorldType);
 
       // DirectionalLight with merged shadow fields.
       expect(errors).toHaveLength(0);
-      // feat-20260612-point-light-shadows-urp-hdrp Round-2 F-1: cube_array
-      // fallback adds 6 per-face boot clears (1.0/far) so the cube atlas
-      // BGL binding always has a valid view. 1 shadow fallback + 6 cube
-      // fallback faces + 1 main = 8.
+      // The current typed graph owns one shadow fallback, six cube fallback
+      // faces, and the frame attachment pass.
       expect(log.beginRenderPassCount).toBe(8);
       expect(log.setPipelineCount).toBe(1);
       expect(log.drawIndexedCount).toBe(1);
-      expect(log.encoderFinishCount).toBe(8); // shadow fallback + 6 cube fallback faces + frame
-      expect(log.queueSubmitCount).toBe(8); // shadow fallback + 6 cube fallback faces + frame
+      expect(log.encoderFinishCount).toBe(1); // one typed graph command encoder
+      expect(log.queueSubmitCount).toBe(1); // one submission for the frame graph
       // Three BindGroups recorded per entity (view / material / mesh-array).
       expect(log.setBindGroupCount).toBeGreaterThanOrEqual(3);
     });
@@ -432,18 +453,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {},
         { shaderManifestUrl: buildManifestDataUrl() },
       );
-      await renderer.ready;
       const { World } = await importEcs();
       const world = new World();
       // RenderSystem must NOT be auto-attached: world.update(1 / 60).unwrap() does not run
       // it (engine internal phase, plan-strategy D-S2).
       expect(world.inspect().systemCount).toBe(0);
       expect(world.inspect().systemCount).toBe(0);
+      await renderer.dispose();
     });
   });
 
   describe('RenderSystem error tier table (D-S4..D-S8)', () => {
-    it('case A: entity missing Transform / MeshRenderer uses defaults; does NOT fire onError', async () => {
+    it('case A: entity missing Transform / MeshRenderer uses defaults; does NOT fire an error event', async () => {
       const { createRenderer } = await setupWebGPU();
       const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
       const renderer = await createRenderer(
@@ -451,7 +472,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {},
         { shaderManifestUrl: buildManifestDataUrl() },
       );
-      await renderer.ready;
       const { World } = await importEcs();
       const C = await importComponents();
       const world = new World();
@@ -478,12 +498,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       world.spawn({ component: C.MeshFilter, data: { assetHandle: C.HANDLE_CUBE } });
 
       const errors: { code: string }[] = [];
-      renderer.onError((e) => errors.push(e));
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      subscribeRendererErrors(renderer, (e) => errors.push(e));
+      drawPublished(renderer, world as WorldType);
       expect(errors).toHaveLength(0);
     });
 
@@ -502,7 +518,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {},
         { shaderManifestUrl: buildManifestDataUrl() },
       );
-      await renderer.ready;
       const { World } = await importEcs();
       const C = await importComponents();
       const world = new World();
@@ -514,12 +529,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       );
 
       const errors: { code: string }[] = [];
-      renderer.onError((e) => errors.push(e));
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      subscribeRendererErrors(renderer, (e) => errors.push(e));
+      drawPublished(renderer, world as WorldType);
 
       expect(errors.some((e) => e.code === 'render-system-no-camera')).toBe(true);
       // Clear pass executed under the synthetic camera path; the frame is
@@ -528,13 +539,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       // through the identity projection — that's an acceptable AI-user
       // signal (something paints + diagnostic fires) over the previous
       // "blank canvas + console error" silent skip. Assert at least one
-      // additional submit landed beyond the renderer.ready baseline
+      // additional submit landed beyond the renderer construction baseline
       // (shadowFallback).
       expect(log.queueSubmitCount).toBeGreaterThanOrEqual(2);
       expect(log.beginRenderPassCount).toBeGreaterThanOrEqual(2);
     });
 
-    it('case E: world has Camera + 0 renderables emits clear-pass-only frame; does NOT fire onError', async () => {
+    it('case E: world has Camera + 0 renderables emits clear-pass-only frame; does NOT fire an error event', async () => {
       // LO §1.1 hello-window minimum semantic: `Engine.create({ clearColor })`
       // must paint the swap-chain even when no entity carries MeshFilter +
       // MeshRenderer. The engine softens the empty-renderables case (Case E,
@@ -549,7 +560,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {},
         { shaderManifestUrl: buildManifestDataUrl() },
       );
-      await renderer.ready;
       const { World } = await importEcs();
       const C = await importComponents();
       const world = new World();
@@ -575,24 +585,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       );
 
       const errors: { code: string }[] = [];
-      renderer.onError((e) => errors.push(e));
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      subscribeRendererErrors(renderer, (e) => errors.push(e));
+      drawPublished(renderer, world as WorldType);
 
       // Soft path: no error fired (D-Q7 mirroring; LO §1.1 minimum semantic).
       expect(errors).toHaveLength(0);
-      // Shadow-fallback clear (1) + cube_array fallback faces (6) + main
-      // clear (1) = 8 (Round-2 F-1 cube fallback boot pre-clears).
-      expect(log.beginRenderPassCount).toBe(8);
+      // Empty geometry does not remove graph-owned shadow and output passes.
+      expect(log.beginRenderPassCount).toBe(12);
       expect(log.queueSubmitCount).toBe(8); // shadow fallback + 6 cube faces + frame
       // No geometry submitted.
       expect(log.drawIndexedCount).toBe(0);
     });
 
-    it('case C: world has 0 DirectionalLight renders unlit; does NOT fire onError', async () => {
+    it('case C: world has 0 DirectionalLight renders unlit; does NOT fire an error event', async () => {
       const { createRenderer, log } = await setupWebGPU();
       const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
       const renderer = await createRenderer(
@@ -600,7 +605,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {},
         { shaderManifestUrl: buildManifestDataUrl() },
       );
-      await renderer.ready;
       const { World } = await importEcs();
       const C = await importComponents();
       const world = new World();
@@ -629,12 +633,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       // No DirectionalLight.
 
       const errors: { code: string }[] = [];
-      renderer.onError((e) => errors.push(e));
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      subscribeRendererErrors(renderer, (e) => errors.push(e));
+      drawPublished(renderer, world as WorldType);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      Object.assign(log, makeLog());
+      drawPublished(renderer, world as WorldType);
 
       expect(errors).toHaveLength(0);
       expect(log.drawIndexedCount).toBe(1);
@@ -648,7 +651,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {},
         { shaderManifestUrl: buildManifestDataUrl() },
       );
-      await renderer.ready;
       const { World } = await importEcs();
       const C = await importComponents();
       const world = new World();
@@ -693,12 +695,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       );
 
       const errors: { code: string; hint?: string }[] = [];
-      renderer.onError((e) => errors.push(e));
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      subscribeRendererErrors(renderer, (e) => errors.push(e));
+      drawPublished(renderer, world as WorldType);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      Object.assign(log, makeLog());
+      drawPublished(renderer, world as WorldType);
 
       expect(errors.some((e) => e.code === 'render-system-multi-camera')).toBe(true);
       // First archetype hit still rendered.
@@ -719,7 +720,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {},
         { shaderManifestUrl: buildManifestDataUrl() },
       );
-      await renderer.ready;
       const { World } = await importEcs();
       const C = await importComponents();
       const world = new World();
@@ -752,11 +752,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       );
 
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      drawPublished(renderer, world as WorldType);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      Object.assign(log, makeLog());
+      drawPublished(renderer, world as WorldType);
 
       const multiLightCalls = warnSpy.mock.calls.filter(
         (c) =>
@@ -770,7 +769,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
   });
 
   describe('RenderSystem asset-not-registered + internal exception (.detail F-3 contract)', () => {
-    it('asset-not-registered fires onError with .detail = { assetHandle } and skips entity', async () => {
+    it('asset-not-registered fires an error event with .detail = { assetHandle } and skips entity', async () => {
       const { createRenderer, log } = await setupWebGPU();
       const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
       const renderer = await createRenderer(
@@ -778,7 +777,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {},
         { shaderManifestUrl: buildManifestDataUrl() },
       );
-      await renderer.ready;
       const { World } = await importEcs();
       const C = await importComponents();
       const world = new World();
@@ -806,26 +804,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         { component: C.Transform, data: identityTransform() },
       );
 
-      const errors: { code: string; detail?: { assetHandle?: number } }[] = [];
-      renderer.onError((e) => errors.push(e as never));
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      const errors: RendererErrorObservation[] = [];
+      subscribeRendererErrors(renderer, (e) => errors.push(e));
+      drawPublished(renderer, world as WorldType);
 
       const assetErr = errors.find((e) => e.code === 'asset-not-registered');
       expect(assetErr).toBeDefined();
       expect(assetErr?.detail).toBeDefined();
-      expect(assetErr?.detail?.assetHandle).toBe(BAD_HANDLE);
+      expect((assetErr?.detail as { assetHandle?: number } | undefined)?.assetHandle).toBe(
+        BAD_HANDLE,
+      );
       // The bad entity is skipped; no draw recorded for it (only entity).
       expect(log.drawIndexedCount).toBe(0);
       // Case E secondary-fix: even when every renderable fails asset
       // registration, the clear pass still runs (so visual debugging shows
       // the cleared canvas rather than a stale frame).
-      // 1 shadow fallback + 6 cube_array fallback faces + 1 clear-only = 8
-      // (Round-2 F-1 BGL binding 5 always has a valid cube_array view).
-      expect(log.beginRenderPassCount).toBe(8);
+      // The invalid entity is skipped, while graph-owned attachment passes are
+      // still recorded after the seven boot fallback clears.
+      expect(log.beginRenderPassCount).toBe(12);
       expect(log.queueSubmitCount).toBe(8); // shadow fallback + 6 cube faces + frame
     });
 
@@ -867,12 +863,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
       const engine = await importEngine();
       const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-      const renderer = await engine.createRenderer(
-        canvas,
-        {},
-        { shaderManifestUrl: buildManifestDataUrl() },
-      );
-      await renderer.ready;
+      const renderer = (
+        await engine.createRenderer(canvas, {}, { shaderManifestUrl: buildManifestDataUrl() })
+      ).unwrap();
 
       const { World } = await importEcs();
       const C = await importComponents();
@@ -900,23 +893,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         { component: C.Transform, data: identityTransform() },
       );
 
-      const errors: {
-        code: string;
-        detail?: { error?: { code: string; message: string } };
-      }[] = [];
-      renderer.onError((e) => errors.push(e as never));
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      const errors: RendererErrorObservation[] = [];
+      subscribeRendererErrors(renderer, (e) => errors.push(e));
+      drawPublished(renderer, world as WorldType);
 
       const runtimeErr = errors.find((e) => e.code === 'webgpu-runtime-error');
       expect(runtimeErr).toBeDefined();
       expect(runtimeErr?.detail).toBeDefined();
-      expect(runtimeErr?.detail?.error).toBeDefined();
-      expect(typeof runtimeErr?.detail?.error?.message).toBe('string');
-      expect(runtimeErr?.detail?.error?.message).toContain('writeBuffer');
+      const runtimeDetail = runtimeErr?.detail as
+        | { error?: { code: string; message: string } }
+        | undefined;
+      expect(runtimeDetail?.error).toBeDefined();
+      expect(typeof runtimeDetail?.error?.message).toBe('string');
+      expect(runtimeDetail?.error?.message).toContain('writeBuffer');
     });
   });
 
@@ -1003,11 +992,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {},
         { shaderManifestUrl: buildManifestDataUrl() },
       );
-      await renderer.ready;
       const { World } = await importEcs();
       const C = await importComponents();
       const { setTransparentSortConfig, TRANSPARENT_SORT_MODE_DISTANCE } = await import(
-        '@forgeax/engine-render/internal'
+        '../../../render/src/systems/transparent-sort-config'
       );
       const { RenderQueue } = await import('@forgeax/engine-types');
 
@@ -1099,12 +1087,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       expect(cfgRes.ok).toBe(true);
 
       const errors: { code: string }[] = [];
-      renderer.onError((e) => errors.push(e));
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      subscribeRendererErrors(renderer, (e) => errors.push(e));
+      drawPublished(renderer, world as WorldType);
 
       expect(errors).toHaveLength(0);
       // All 3 transparent entities are drawn.
@@ -1153,11 +1137,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {},
         { shaderManifestUrl: buildManifestDataUrl() },
       );
-      await renderer.ready;
       const { World } = await importEcs();
       const C = await importComponents();
       const { setTransparentSortConfig, TRANSPARENT_SORT_MODE_DISTANCE } = await import(
-        '@forgeax/engine-render/internal'
+        '../../../render/src/systems/transparent-sort-config'
       );
 
       // Register a MaterialAsset with Geometry-queue pass.
@@ -1225,12 +1208,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       expect(cfgRes.ok).toBe(true);
 
       const errors: { code: string }[] = [];
-      renderer.onError((e) => errors.push(e));
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      subscribeRendererErrors(renderer, (e) => errors.push(e));
+      drawPublished(renderer, world as WorldType);
 
       expect(errors).toHaveLength(0);
       // Both opaque entities are drawn (structural).
@@ -1250,7 +1229,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {},
         { shaderManifestUrl: buildManifestDataUrl() },
       );
-      await renderer.ready;
       const { World } = await importEcs();
       const C = await importComponents();
       const { RenderQueue } = await import('@forgeax/engine-types');
@@ -1314,12 +1292,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       );
 
       const errors: { code: string }[] = [];
-      renderer.onError((e) => errors.push(e));
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      subscribeRendererErrors(renderer, (e) => errors.push(e));
+      drawPublished(renderer, world as WorldType);
 
       expect(errors).toHaveLength(0);
       expect(log.drawIndexedCount).toBe(1);
@@ -1340,7 +1314,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {},
         { shaderManifestUrl: buildManifestDataUrl() },
       );
-      await renderer.ready;
       const { World } = await importEcs();
       const C = await importComponents();
 
@@ -1380,12 +1353,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       );
 
       const errors: { code: string }[] = [];
-      renderer.onError((e) => errors.push(e));
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
-        throw new Error('World attachment failed');
-      }
-      (world as WorldType).update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      subscribeRendererErrors(renderer, (e) => errors.push(e));
+      drawPublished(renderer, world as WorldType);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      Object.assign(log, makeLog());
+      drawPublished(renderer, world as WorldType);
 
       expect(errors).toHaveLength(0);
       expect(log.drawIndexedCount).toBe(1);
@@ -1533,7 +1505,7 @@ describe('RenderSystem Skylight record phase (AC-11)', () => {
     // brdfLutBakeCount === 1 after the first frame that has Skylight.
     //
     // When t26 lands:
-    //   const cache = getOrCreateIblCache(device);
+    //   const cache = getOrCreateIblCache(deviceScope);
     //   expect(cache.irradianceBakeCount).toBe(1);
     //   expect(cache.prefilterBakeCount).toBe(1);
     //   expect(cache.brdfLutBakeCount).toBe(1);
@@ -1589,7 +1561,7 @@ describe('RenderSystem Skylight extract + record phase contract (plan-strategy D
   // MUST NOT be pushed (fail-fast halts the per-entity branch).
 
   interface CollectedError {
-    readonly code: EcsErrorCode;
+    readonly code: string;
     readonly detail: unknown;
   }
 
@@ -1604,8 +1576,8 @@ describe('RenderSystem Skylight extract + record phase contract (plan-strategy D
   function makeWorld(): { world: World; collected: CollectedError[] } {
     const collected: CollectedError[] = [];
     const world = new World();
-    world.setErrorHandler((err) => {
-      const e = err as { code?: EcsErrorCode; detail?: unknown };
+    vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      const e = args[args.length - 1] as { code?: string; detail?: unknown };
       if (e.code !== undefined) collected.push({ code: e.code, detail: e.detail });
     });
     // Camera + light so extractFrame's pre-loop short-circuit does not skip

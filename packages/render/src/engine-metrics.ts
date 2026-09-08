@@ -1,11 +1,10 @@
 import type { EngineMetrics } from '@forgeax/engine-types';
 
-// @forgeax/engine-runtime — EngineMetrics public API (feat-20260527-sprite-nineslice
-// M4 / w16). A per-Renderer counter Map exposed through `renderer.metrics` so AI
-// users observe runtime-time soft signals (e.g. nineslice scale too small,
-// nineslice tile mode without sampler repeat) without parsing console.warn text
-// or reaching into engine internals (charter F1 minimum surface, P3 machine-
-// readable signals over text logs).
+// @forgeax/engine-runtime — owner-scoped EngineMetrics implementation
+// (feat-20260527-sprite-nineslice M4 / w16). The counter map is injected into
+// owning services such as AssetRegistry and the record stage; the Renderer
+// facade does not expose it. AI-facing renderer observation stays on inspect()
+// and observe().
 //
 // Surface — three methods:
 //
@@ -28,17 +27,15 @@ import type { EngineMetrics } from '@forgeax/engine-types';
 //     calls the fold operator emits this frame; one increment per non-
 //     singleton head bucket retained after the M2 / w11 cap-fallback
 //     filter. NOT entity count, NOT pre-filter bucket count. AI users
-//     read it via `renderer.metrics.snapshot()['render.instancing.foldedDraws']`
+//     read it via `ownerMetrics.snapshot()['render.instancing.foldedDraws']`
 //     to verify fold actually reduced draw count under mode-0 (LAYER_Z)
 //     transparent sort. The key is exported as `FOLDED_DRAWS_METRIC_KEY`
-//     from `render-system-fold.ts` (single source of truth — engine
+//     from the record mesh owner (single source of truth — engine
 //     calls increment via the helper, never the literal string).
 //
-// Multi-Renderer isolation (D-5 candidate 1): each Renderer instance owns its
-// own EngineMetrics; counters from one renderer never bleed into another.
-// `createRenderer.ts` constructs a fresh instance per call; tests that spin
-// up multiple renderers can read each `renderer.metrics.snapshot()` in
-// isolation.
+// Assembly isolation (D-5 candidate 1): each renderer assembly injects a fresh
+// EngineMetrics instance; counters from one host never bleed into another.
+// `createRenderer.ts` constructs a fresh instance per call.
 
 // The EngineMetrics interface (3-method contract, zero type dependencies) sank
 // into @forgeax/engine-types (feat-20260705-runtime-tier2-decomposition M1 / w2,
@@ -52,8 +49,8 @@ export type { EngineMetrics };
  * the three-method surface bolted on. The map is private; readers consume
  * the snapshot accessor.
  *
- * @internal — instances are constructed by `createRenderer` and surfaced
- * through `Renderer.metrics`; AI users do not import this class directly.
+ * @internal — instances are constructed by `createRenderer` and retained by
+ * owner services; AI users do not import this class directly.
  */
 export class EngineMetricsImpl implements EngineMetrics {
   private readonly counters = new Map<string, number>();

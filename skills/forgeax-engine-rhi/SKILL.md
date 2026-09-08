@@ -1,16 +1,13 @@
 ---
 name: forgeax-engine-rhi
 description: >-
-  forgeax-engine 底层渲染硬件接口（贡献者向）：spec-aligned 纯接口、opaque handle、
-  math-free、双实现同发、capability gate。Use when contributing to or debugging
-  the RHI backend, reading capability gates, or tracing backend selection.
+  ForgeaX spec-aligned rendering hardware interface. Use when implementing or debugging
+  a backend, capability gate, resource lifetime, descriptor, or backend-selection path.
 ---
 
 # forgeax-engine-rhi
 
-> 基线: [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03) · 同步至: feat-20260629-multi-uv-set-support M7（vertex layout 别名机制 + clamp-to-last 绑定 + deriveVertexBufferLayout 派生规则）
-
-> **RHI 是引擎与 GPU 之间的纯接口腰线，大多数 AI 用户不直接碰它**——可见性走 [`forgeax-engine-material`](../forgeax-engine-material/SKILL.md)，pass / 后处理走 [`forgeax-engine-render-pipeline`](../forgeax-engine-render-pipeline/SKILL.md)。本 skill 面向**贡献者 / 进阶**：理解后端如何被抽象、能力如何门控、多实现如何共存。`@forgeax/engine-rhi` 是 spec-aligned 纯接口（无运行时值）；浏览器侧 `rhi-webgpu` 薄 shim 包 WebGPU，非浏览器侧 `rhi-wgpu` 是 TS 薄壳套 `wgpu-wasm`（唯一 wasm 制品 SSOT，~1.17 MB gzip，wgpu 29 + naga 29 + naga_oil Composer）。`createRenderer(canvas)` 经 `navigator.gpu` 在两者间自动选。第 3 个后端 `rhi-null`（headless no-op，`feat-20260623-dummy-null-rhi-headless-backend`）不进自动选——通过 Channel 1 escape hatch 手动注入 `createRenderer(canvas, { rhi: rhiNull })`，供 `test:unit` 做命令流结构断言。
+> **RHI 是引擎与 GPU 之间的纯接口腰线。** 可见性问题走 [`forgeax-engine-material`](../forgeax-engine-material/SKILL.md)，pass 与后处理走 [`forgeax-engine-render-pipeline`](../forgeax-engine-render-pipeline/SKILL.md)。直接使用本 skill 只处理后端、capability、descriptor 和资源生命周期。浏览器路径由 `rhi-webgpu` 适配，兼容路径由 `rhi-wgpu` + `wgpu-wasm` 适配；`rhi-null` 仅通过显式注入用于结构测试。
 
 ## Color-lighting parity handoff
 
@@ -21,11 +18,11 @@ For backend or native readback failures, start with the [color-lighting parity s
 RHI 的四条铁律塑造它的形态（AGENTS.md §RHI form rules 是 SSOT）：
 
 - **spec-aligned**：descriptor 字段与 `@webgpu/types`（`^0.1.70`）逐字节对齐，`'x' in src` 区分"缺字段"与"显式 undefined"——你照 WebGPU 规范写就对。
-- **opaque handle**：14 个资源句柄全是 brand-only 的 `Id<T>`（无运行时值）；想访问句柄内部的裸 GPU 字段 = tsc 编译期 red signal。句柄靠模块路径区分（`engine-rhi` 的 `Buffer` vs `@webgpu/types` 的 `GPUBuffer`）。
+- **opaque handle**：资源句柄是 brand-only 的 `Id<T>`；访问句柄内部裸 GPU 字段必须在编译期失败。句柄靠模块路径区分（`engine-rhi` 的 `Buffer` vs `@webgpu/types` 的 `GPUBuffer`）。
 - **math-free**：`engine-rhi` 只收 POD + `ArrayBuffer` / `Float32Array`，不依赖 `engine-math`。
 - **dual-impl ship-together**：`rhi-webgpu` 与 `rhi-wgpu` 永远一起发；`createRenderer` 在运行时按 `navigator.gpu` 是否存在选浏览器 / 原生路径，AI 用户不手选后端。
 
-能力（wgpu native features）经 `device.caps.X` 门控——`caps` 是 `RhiCaps`（15 字段：`backendKind` + 14 个布尔能力位，含 `rgba16floatRenderable` / `rg11b10ufloatRenderable` / `float32Filterable` 等 HDR/可过滤寻址位）。用前查 cap，别假定特性都在。
+能力经 `device.caps.X` 门控。用前读取对应 cap；字段 SSOT 是 `RhiCaps` 类型，不在 skill 中复制清单。
 
 ## 核心 API 速查
 
@@ -60,19 +57,18 @@ flowchart TD
 ```ts
 import { createRenderer } from '@forgeax/engine-runtime';
 
-const renderer = await createRenderer(canvas);
-await renderer.ready;
+const created = await createRenderer(canvas);
+if (!created.ok) throw created.error;
+const renderer = created.value;
 
-// capability-gated: read device.caps before assuming a native feature is present
-const device = renderer.device;
-if (device !== null) {
-  const caps = device.caps;
-  if (caps.backendKind === 'wgpu-native') {
-    // native-only path; webgpu / wgpu-webgl2 / null take the portable branch
-  }
-  if (caps.rgba16floatRenderable) {
-    // HDR render-target path available (IBL cubemap, HDR post-processing)
-  }
+// capability-gated: inspect() is the public POD boundary; raw devices stay
+// inside the RHI/backend construction seam.
+const caps = renderer.inspect().capabilities;
+if (caps.backendKind === 'wgpu-native') {
+  // native-only path; webgpu / wgpu-webgl2 / null take the portable branch
+}
+if (caps.rgba16floatRenderable) {
+  // HDR render-target path available (IBL cubemap, HDR post-processing)
 }
 ```
 
@@ -80,7 +76,7 @@ if (device !== null) {
 
 ## RhiNull — headless no-op 后端（`'null'`）
 
-`@forgeax/engine-rhi-null`（`feat-20260623-dummy-null-rhi-headless-backend`）是第 3 个 RHI 后端：headless no-op，零 GPU/DOM 依赖，专供 `test:unit` 做命令流结构断言。不走 `navigator.gpu` 自动选，而是通过 Channel 1 escape hatch 手动注入：
+`@forgeax/engine-rhi-null` 是 headless no-op RHI 后端：零 GPU/DOM 依赖，专供 `test:unit` 做命令流结构断言。不走 `navigator.gpu` 自动选，而是通过 Channel 1 escape hatch 手动注入：
 
 ```ts
 import type { RhiNullDevice } from '@forgeax/engine-rhi-null';
@@ -90,31 +86,37 @@ import { createRenderer } from '@forgeax/engine-runtime';
 // canvas is a required positional param; RhiNull never touches the DOM, so a
 // minimal stub suffices in headless CI (no `undefined` — it won't typecheck).
 const canvas = { width: 1, height: 1 } as unknown as HTMLCanvasElement;
-const renderer = await createRenderer(canvas, { rhi });
-await renderer.ready; // resolves ok — createShaderModule skips WGSL compilation
-renderer.draw([world], { owner: 0 });  // no-op execution, command-stream ledger populated
+const created = await createRenderer(canvas, { rhi });
+if (!created.ok) throw created.error;
+const renderer = created.value;
+const attached = renderer.attach(world);
+if (!attached.ok) throw attached.error;
+if (!world.update().ok) throw new Error('World update failed');
+const frame = renderer.draw({
+  leases: [attached.value],
+  camera: { lease: attached.value },
+  environment: { lease: attached.value },
+});
+if (!frame.ok) throw frame.error; // no-op execution, command stream submitted
 
-// Read back command-stream shape for assertions. renderer.device is typed
-// RhiDevice (spec surface); cast to RhiNullDevice for the ledger + counters.
-const device = renderer.device as unknown as RhiNullDevice;
-console.log(renderer.perFramePassNames);      // type-safe pass order, no cast
-console.log(device.totalDrawCount);           // >= 1 after draw
-console.log(device.framePassNames);           // same data on the cast device
-console.log(device.totalBindGroupCount);      // bind-group assembly count
+// Read structural facts through renderer.inspect(). Detailed RhiNull counters
+// belong to owner-local tests using the injected backend pack, not Renderer.
+console.log(renderer.inspect().capabilities.backendKind); // 'null'
 ```
 
 ### 关键语义
 
 - **`backendKind: 'null'`** —— `RhiCaps.backendKind` 的 4th union member，表示"无真 GPU，结构记账"。graph barrier 归入 `webgpu` / `wgpu-webgl2` 等同组（不插 barrier）。
 - **caps 全 true 除 3 reserved** —— `multiDrawIndirect` / `pushConstants` / `textureBindingArray` 为 `false`（`@reserved-for-wgpu-native-only`）；其余 boolean caps 全 `true`，`maxColorAttachments = 8`。最大化能力路径的结构覆盖。
-- **createShaderModule 跳编译** —— 不调 WebGPU shader compiler，直接返 legal `ShaderModule` brand。`renderer.ready` 的 shader step 不 reject。
+- **createShaderModule 跳编译** —— 不调 WebGPU shader compiler，直接返 legal `ShaderModule` brand。`createRenderer` 只有成功的 `Result` 才发布 Renderer。
 - **handle 记账** —— 每个 `create*` 返回的 brand 在 per-device `Bookkeeper` 中注册；`setVertexBuffer` / `setBindGroup` 做跨设备 + 二次 destroy 校验，返回结构化 err（复用 `'rhi-not-available'` / `'destroy-after-destroy'` 既有码，零新增）。
+- **mixed-frame 计数** —— `totalDispatchCount` 与 `totalDrawCount` 同时覆盖 direct/indirect 命令；配合 `framePassNames` 可断言 compute → raster 顺序，但不能据此声称 shader 或像素正确。
 - **不产像素** —— `getCurrentTexture` 返回 brand 但无真 GPU 纹理数据。RhiNull 是结构层，不可替换 smoke / dawn e2e 的 pixel readback。
 - **per-renderer 实例独立** —— 每次 `createRenderer({ rhi })` 创建独立 `RhiNullDevice` + `Bookkeeper`，互不污染。
 
 完整 API 层、caps 表、bookkeeping 行为、与 vitest mock 的区分见 `packages/rhi-null/README.md`。
 
-## Vertex layout 别名机制 -- 多套 UV clamp-to-last 的 RHI 层基石（feat-20260629）
+## Vertex layout 别名机制 -- 多套 UV clamp-to-last 的 RHI 层基石
 
 > [!IMPORTANT]
 > **一句话价值：** WebGPU spec 允许 vertex buffer layout 的多个 `attribute` 共享同一 buffer offset（同 offset、异 `shaderLocation`）——这是 forgeax 实现 clamp-to-last 的 **RHI 层基石**。引擎在真实 draw 路径产出别名 layout：mesh 有 n 套 UV、shader 声明 m>n 套时，超界 location `[n,m)` 所有 attribute 全部指向第 `n-1` 套 UV 的 buffer offset。
@@ -169,7 +171,7 @@ RhiNull 后端（headless no-op）对 vertex buffer layout 不做真 GPU 绑定�
 
 ## Video capability -- 通用 / 高性能双路径
 
-视频帧上传到 GPU texture 有两条潜在路径：**通用路径**（`copyExternalImageToTexture`）和**高性能路径**（`GPUExternalTexture` + `texture_external` WGSL 采样）。当前引擎**通用路径已全做**——`copyExternalImageToTexture` 是 RHI `GPUQueue` 的既有方法，双后端（webgpu / wgpu-native）语义一致，零 RHI 新增。高性能路径**仅保留显式探测分支**（代码可见、可 grep 命中），但引擎还未暴露 `importExternalTexture` 入口（OOS-5，后续 feat 填）。
+视频帧上传到 GPU texture 有两条潜在路径：**通用路径**（`copyExternalImageToTexture`）和**高性能路径**（`GPUExternalTexture` + `texture_external` WGSL 采样）。当前引擎使用通用路径；`copyExternalImageToTexture` 是 RHI `GPUQueue` 的既有方法，双后端（webgpu / wgpu-native）语义一致。高性能路径仅保留显式能力探测，引擎尚未暴露 `importExternalTexture` 入口。
 
 两条路径的 capability 判定由 `@forgeax/engine-graphics-extras` 的 `probeVideoHighPerfUpload` 完成（每帧 record 阶段调用）——不是 RHI 层的附加 API，而是基于既有 `RhiCaps.backendKind` 的运行时判定。RHI 层**不变**——只消费既有 `copyExternalImageToTexture` 接口：
 
@@ -180,15 +182,17 @@ RhiNull 后端（headless no-op）对 vertex buffer layout 不做真 GPU 绑定�
 //   'wgpu-webgl2' -> copyExternalImageToTexture MAY be absent (WebGL2 subset)
 //
 // GPUExternalTexture high-perf path requires BOTH 'webgpu' backend AND an
-// importExternalTexture RHI entry (absent today, OOS-5 — always false).
+// importExternalTexture RHI entry is absent; the capability is always false.
 ```
 
 ### cap 双缺 — 结构化失败 `video-upload-unsupported`
 
-当两条上传路径都不可用时（如 dawn-node 无 host `HTMLVideoElement` + 高性能路径未实现），引擎在真实的每帧 record 上传路径上 `errorRegistry.fire(VideoUploadUnsupportedError)`——没有旁路的独立"video 系统"，失败信号与上传走同一条 `renderer.draw` 路径（单一 video 路径）。AI 用户在 `renderer.onError` 回调里消费：
+当两条上传路径都不可用时（如 dawn-node 无 host `HTMLVideoElement` + 高性能路径未实现），引擎在真实的每帧 record 上传路径上 `errorRegistry.fire(VideoUploadUnsupportedError)`——没有旁路的独立"video 系统"，失败信号与上传走同一条 `renderer.draw` 路径（单一 video 路径）。AI 用户在 `renderer.subscribe` 的 `error` 事件里消费：
 
 ```ts
-renderer.onError((err) => {
+renderer.subscribe((event) => {
+  if (event.kind !== 'error') return;
+  const err = event.error;
   // err.code is a member of the closed RuntimeErrorCode union; switch exhaustively.
   if (err.code === 'video-upload-unsupported') {
     //   .code === 'video-upload-unsupported'
@@ -211,16 +215,14 @@ renderer.onError((err) => {
 
 ## 资源释放 — destroyBuffer / destroyTexture
 
-与 `createBuffer` / `createTexture` 对偶的 release-side API。RHI 暴露 `RhiDevice.destroyBuffer(buf)` / `destroyTexture(tex)`（`feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle` 引入），双 backend 行为对称。
+与 `createBuffer` / `createTexture` 对偶的 release-side API。RHI 暴露 `RhiDevice.destroyBuffer(buf)` / `destroyTexture(tex)`，双 backend 行为对称。
 
 ### 快乐路径
 
 ```ts
-const device = renderer.device;
-const buf = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM });
-// ... use buf in renders ...
-const result = device.destroyBuffer(buf);
-// result.ok === true — resource marked destroyed
+// GPU handles remain owner-local. Public Renderer exposes capability facts only;
+// resource creation belongs to a RenderFeature plan or an owner-local test.
+console.log(renderer.inspect().capabilities.backendKind);
 ```
 
 AI 用户在 IDE 上 `RhiDevice.` autocomplete 看到 `createBuffer` / `destroyBuffer` 对偶出现（charter F1 单入口可索引），无需读文档即知释放路径。
@@ -259,12 +261,12 @@ switch (r2.error.code) {
 
 `@forgeax/engine-runtime` 暴露并行类型 `GpuBuffer` / `GpuTexture`，合并别名 `type GpuResource = GpuBuffer | GpuTexture`。每个 wrapper 持 boolean `isDestroyed` getter + `destroy(): Result<void, RhiError>` 方法，内部转发到 RHI 的 `destroyBuffer` / `destroyTexture`。二次 destroy 同 fail-fast 语义。
 
-`Renderer.dispose()` 经此 wrapper 显式 walk 释放全部 GPU 资源（gpuStore.destroyAll → graph.drain → instanceBuffers clear → IBL cache.clear → context.unconfigure → listenerRegistry.clear）；二次 dispose idempotent。`createApp().stop()` 串接 `renderer.dispose()`。
+`Renderer.dispose()` 经此 wrapper 显式 walk 释放全部 GPU 资源（gpuStore.destroyAll → graph.drain → instanceBuffers clear → IBL cache.clear → context.unconfigure → listenerRegistry.clear）；二次 dispose idempotent。`createApp().stop()` 只停止帧调度，`createApp().dispose()` 才串接 `renderer.dispose()`。
 
 ### Caveat: chromium adapter pool 中毒
 
 > [!CAUTION]
-> **`device.destroy()` 不可在公共路径调用。** chromium 的 adapter pool 在 `GPUDevice.destroy()` 后无法重新获取 adapter（详见 `createRenderer.ts:1725-1738` 注释 + w23/w25/w26 历史）。本 feat 只加资源级 `destroyBuffer` / `destroyTexture`，不暴露 `destroyDevice` 公共契约。需要访问裸 `GPUDevice.destroy()` 的路径仍走既有 `_internal_getRawDevice(device)` escape hatch（OOS-1）。
+> **`device.destroy()` 不可在公共路径调用。** Chromium 的 adapter pool 在 `GPUDevice.destroy()` 后可能无法重新获取 adapter（详见 `createRenderer.ts` 注释）。公共契约只提供资源级 `destroyBuffer` / `destroyTexture`，不提供 `destroyDevice`。确需访问裸 `GPUDevice.destroy()` 的底层诊断路径使用 `_internal_getRawDevice(device)` escape hatch。
 
 GpuResource v1 是单 owner immortal 模型：有且仅有一个所有者负责 destroy；不引入 refcount / 共享所有权。
 
@@ -296,7 +298,7 @@ to Render's `timestamp-query-unsupported` refusal at that boundary.
 - Capability tri-layer / `RhiCaps` 字段索引（SSOT 15 字段：`backendKind` + 14 bool）：见 `packages/rhi/README.md` §Capabilities + `packages/rhi/src/index.ts` `interface RhiCaps`
 - RHI form rules（spec-aligned / opaque / math-free / dual-impl / single-wasm / naming）：AGENTS.md §RHI form rules
 - 双实现与 wasm SSOT：源码 `packages/rhi-webgpu/src/` · `packages/rhi-wgpu/src/` · `packages/wgpu-wasm/`（Rust crate，build 见 `CONTRIBUTING.md` §Rust toolchain）
-- headless no-op 后端（`'null'`，`feat-20260623-dummy-null-rhi-headless-backend`）：见 `packages/rhi-null/README.md`（API / caps 表 / bookkeeping / 边界 / 与 vitest mock 区分）；源码 `packages/rhi-null/src/`（Device / Queue / Adapter / CommandEncoder / PassEncoders / CanvasContext / Shader / Bookkeeping）
+- headless no-op 后端（`'null'`）：见 `packages/rhi-null/README.md`（API / caps 表 / bookkeeping / 边界 / 与 vitest mock 区分）；源码 `packages/rhi-null/src/`（Device / Queue / Adapter / CommandEncoder / PassEncoders / CanvasContext / Shader / Bookkeeping）
 - 声明式 render-graph（RHI-pure 上层）：见 [`forgeax-engine-render-pipeline`](../forgeax-engine-render-pipeline/SKILL.md)；`RenderGraphErrorCode`（5 成员，勿抄）`packages/render-graph/src/errors.ts`
-- `createBindGroupLayout` 接收的 `entries` 长度可变——material `@group(1)` BGL 的条目形状由各 shader 的 `paramSchema` 在 runtime 上游派生（`derive(paramSchema)`，feat-20260621），RHI 这层只是按已组装好的 descriptor 建层，不感知材质语义。派生规则 + sampler-first 排布见 [`forgeax-engine-shader`](../forgeax-engine-shader/SKILL.md) §内置绑定约定
+- `createBindGroupLayout` 接收的 `entries` 长度可变——material `@group(1)` BGL 的条目形状由各 shader 的 `paramSchema` 在 runtime 上游派生（`derive(paramSchema)`）；RHI 只按已组装好的 descriptor 建层，不感知材质语义。派生规则与 sampler-first 排布见 [`forgeax-engine-shader`](../forgeax-engine-shader/SKILL.md) §内置绑定约定
 - 渲染 / RHI 实战排查：见 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md)

@@ -10,17 +10,72 @@
 //                       label hdrp-ssao-uniform
 //
 // plan-strategy D-1: uniform carries view + projection + inverseProjection.
-// plan-strategy D-C: intensity scalar carried at offset 192 (vec4 pad slot)
-//   so the lighting shader can mix(1.0, ssao*ao, intensity) without a new UBO.
+// plan-strategy D-C: intensity, radius, and bias are carried at offset 192
+//   (the existing vec4 slot), so the lighting shader can mix(1.0, ssao*ao,
+//   intensity) without a new UBO.
 // The kernel uses a uniform buffer on every backend. 1024 B is below the
 // WebGL2 minimum fragment UBO size, so SSAO does not need a storage-buffer
 // capability gate.
 
-import type { Buffer, Texture } from '@forgeax/engine-rhi';
+import type { Buffer, Sampler, Texture, TextureView } from '@forgeax/engine-rhi';
 import { GPU_TEXTURE_USAGE_COPY_DST, GPU_TEXTURE_USAGE_TEXTURE_BINDING } from './gpu-texture-usage';
 import { GPU_BUFFER_USAGE_COPY_DST, GPU_BUFFER_USAGE_UNIFORM } from './gpu-usage';
-import type { RenderSystemRuntime } from './render-system';
-import { generateSsaoKernel, generateSsaoNoise, SSAO_KERNEL_SAMPLE_COUNT } from './ssao-data';
+import type { RenderSystemRuntime } from './record/render-context';
+
+// Deterministic host-side SSAO data is owned by the buffer allocator because
+// these values have no consumer outside the resources they initialize.
+export const SSAO_KERNEL_SAMPLE_COUNT = 64;
+const NOISE_SIZE = 16;
+
+function mulberry32(seed: number): () => number {
+  let state = seed | 0;
+  return () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + t * (b - a);
+}
+
+export function generateSsaoKernel(seed: number = 0): readonly Float32Array[] {
+  const rand = mulberry32(seed);
+  const kernel: Float32Array[] = [];
+  for (let i = 0; i < SSAO_KERNEL_SAMPLE_COUNT; i++) {
+    let x = rand() * 2 - 1;
+    let y = rand() * 2 - 1;
+    let z = rand();
+    const len = Math.sqrt(x * x + y * y + z * z);
+    x /= len;
+    y /= len;
+    z /= len;
+    const r = rand();
+    x *= r;
+    y *= r;
+    z *= r;
+    const scale = lerp(0.1, 1.0, (i / SSAO_KERNEL_SAMPLE_COUNT) ** 2);
+    const sample = new Float32Array(3);
+    sample[0] = x * scale;
+    sample[1] = y * scale;
+    sample[2] = z * scale;
+    kernel.push(sample);
+  }
+  return kernel;
+}
+
+export function generateSsaoNoise(seed: number = 0): Float32Array {
+  const rand = mulberry32(seed);
+  const noise = new Float32Array(NOISE_SIZE * 3);
+  for (let i = 0; i < NOISE_SIZE; i++) {
+    noise[i * 3 + 0] = rand() * 2 - 1;
+    noise[i * 3 + 1] = rand() * 2 - 1;
+    noise[i * 3 + 2] = 0;
+  }
+  return noise;
+}
 
 // Each vec3<f32> in a WGSL array is 16B (12B payload + 4B padding).
 // 64 samples * 16 B/sample = 1024 B.
@@ -30,7 +85,7 @@ const BYTES_PER_KERNEL_ELEMENT = 16;
 //   bytes [0..63]    view              mat4x4<f32>
 //   bytes [64..127]  projection        mat4x4<f32>
 //   bytes [128..191] inverseProjection mat4x4<f32>
-//   bytes [192..207] intensityPad      vec4<f32>  // x = intensity, y/z/w pad
+//   bytes [192..207] intensityPad      vec4<f32>  // x = intensity, y = radius, z = bias, w = pad
 //   bytes [208..255] padding           // align to 256B WebGPU UBO offset
 //
 // The total is rounded to 256B so the same UBO can host an additional
@@ -39,6 +94,110 @@ const UNIFORM_INTENSITY_OFFSET_BYTES = 192;
 const UNIFORM_BYTES = 256;
 export const SSAO_UNIFORM_INTENSITY_OFFSET = UNIFORM_INTENSITY_OFFSET_BYTES;
 export const SSAO_UNIFORM_BYTES = UNIFORM_BYTES;
+
+// ── 1x1 white fallback texture (plan-strategy §D-B) ───────────────────────
+//
+// Single-PSO invariant: the HDRP unified BGL always declares a binding 7
+// texture_2d<f32>. When SSAO is disabled (or its resources are not yet
+// allocated), the bind group binds this 1x1 r8unorm texture filled with
+// 0xFF. r8unorm normalizes 255 -> 1.0, so the lighting shader reads
+// `ssaoFactor = 1.0`, and `mix(1.0, ssao*ao, intensity) = ao` collapses
+// back to the round-1 baseline (ambient = baked-AO only). No shader
+// recompile across enable/disable.
+
+interface SsaoFallbackResources {
+  readonly texture: Texture;
+  readonly view: TextureView;
+  readonly sampler: Sampler;
+}
+
+const fallbackCache = new WeakMap<RenderSystemRuntime, SsaoFallbackResources>();
+
+/**
+ * Lazily allocate the 1x1 r8unorm white fallback texture + a sampler for
+ * SSAO disabled / resource-missing path. Cached per RenderSystemRuntime so
+ * subsequent calls reuse the same resources (charter P5 one-owner).
+ *
+ * Returns `null` if `device.createTexture` / `createTextureView` /
+ * `createSampler` / `queue.writeTexture` fails; the caller (createBindGroup)
+ * propagates the structured RhiError that landed on `runtime.errorRegistry`.
+ */
+export function getOrCreateSsaoFallbackTexture(
+  runtime: RenderSystemRuntime,
+): SsaoFallbackResources | null {
+  const cached = fallbackCache.get(runtime);
+  if (cached !== undefined) return cached;
+
+  const device = runtime.device;
+  const texRes = device.createTexture({
+    label: 'hdrp-ssao-fallback-white',
+    size: { width: 1, height: 1, depthOrArrayLayers: 1 },
+    mipLevelCount: 1,
+    sampleCount: 1,
+    dimension: '2d',
+    format: 'r8unorm',
+    usage: GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST,
+    textureBindingViewDimension: undefined,
+  });
+  if (!texRes.ok) {
+    runtime.errorRegistry.fire(texRes.error);
+    return null;
+  }
+
+  // r8unorm: a single byte 0xFF normalizes to 1.0 (white => AO = 1.0).
+  const whitePixel = new Uint8Array([255]);
+  const writeRes = device.queue.writeTexture(
+    {
+      texture: texRes.value,
+      mipLevel: 0,
+      origin: { x: 0, y: 0, z: 0 },
+    },
+    whitePixel,
+    { offset: 0, bytesPerRow: 256, rowsPerImage: 1 },
+    { width: 1, height: 1, depthOrArrayLayers: 1 },
+  );
+  if (!writeRes.ok) {
+    runtime.errorRegistry.fire(writeRes.error);
+    return null;
+  }
+
+  const viewRes = device.createTextureView(texRes.value, {
+    label: 'hdrp-ssao-fallback-white-view',
+    format: 'r8unorm',
+    dimension: '2d',
+    aspect: 'all',
+    baseMipLevel: 0,
+    mipLevelCount: 1,
+    baseArrayLayer: 0,
+    arrayLayerCount: 1,
+  });
+  if (!viewRes.ok) {
+    runtime.errorRegistry.fire(viewRes.error);
+    return null;
+  }
+
+  const samplerRes = device.createSampler({
+    label: 'hdrp-ssao-fallback-sampler',
+    magFilter: 'linear',
+    minFilter: 'linear',
+    mipmapFilter: 'linear',
+    addressModeU: 'clamp-to-edge',
+    addressModeV: 'clamp-to-edge',
+    addressModeW: 'clamp-to-edge',
+  });
+  if (!samplerRes.ok) {
+    runtime.errorRegistry.fire(samplerRes.error);
+    return null;
+  }
+
+  const resources: SsaoFallbackResources = {
+    texture: texRes.value,
+    view: viewRes.value,
+    sampler: samplerRes.value,
+  };
+  fallbackCache.set(runtime, resources);
+  return resources;
+}
 
 /**
  * SSAO GPU resources owned by this module (plan-strategy D-1, D-4).
@@ -66,7 +225,7 @@ const cache = new WeakMap<RenderSystemRuntime, SsaoBuffers>();
  * On `device.createBuffer` / `device.createTexture` failure, fires a
  * structured error on the runtime's error registry and returns `null`.
  *
- * @returns SsaoBuffers on success, null if any allocation fails.
+ * @returns SsaoBuffers on success, null if an allocation fails.
  */
 export function getOrCreateSsaoBuffers(runtime: RenderSystemRuntime): SsaoBuffers | null {
   const cached = cache.get(runtime);
@@ -137,7 +296,7 @@ export function getOrCreateSsaoBuffers(runtime: RenderSystemRuntime): SsaoBuffer
   // follows the createRenderer.ts fallback-pixel pattern (line 4330).
   const noiseCopyRes = device.queue.writeTexture(
     {
-      texture: noiseTexRes.value as unknown as GPUTexture,
+      texture: noiseTexRes.value,
       mipLevel: 0,
       origin: { x: 0, y: 0, z: 0 },
     },

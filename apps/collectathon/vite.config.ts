@@ -9,6 +9,7 @@ import { fontImporter } from '@forgeax/engine-font/font-importer';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
+import { optionalAssetPack } from '../shared/src/optional-asset-pack.js';
 
 // collectathon vite config: 3D third-person collectathon showcase.
 //
@@ -21,21 +22,24 @@ import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..');
+const assetRoots = [
+  resolve(monorepoRoot, 'forgeax-engine-assets/vendor/fbx-test'),
+  resolve(monorepoRoot, 'forgeax-engine-assets/demo-assets/template-game-default'),
+  resolve(monorepoRoot, 'forgeax-engine-assets/collectathon-audio'),
+  resolve(monorepoRoot, 'forgeax-engine-assets/dejavu-fonts'),
+];
 
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
-    pluginPack({
-      runtimeBinding: createStandaloneRuntimeAssetBinding('collectathon'),
-      refresh: reloadAssetHost(),
-      roots: [
-        resolve(monorepoRoot, 'forgeax-engine-assets/vendor/fbx-test'),
-        resolve(monorepoRoot, 'forgeax-engine-assets/demo-assets/template-game-default'),
-        resolve(monorepoRoot, 'forgeax-engine-assets/collectathon-audio'),
-        resolve(monorepoRoot, 'forgeax-engine-assets/dejavu-fonts'),
-      ],
+    ...optionalAssetPack(assetRoots, () =>
+      pluginPack({
+        runtimeBinding: createStandaloneRuntimeAssetBinding('collectathon'),
+        refresh: reloadAssetHost(),
+        roots: assetRoots,
         importers: [audioImporter, imageImporter, gltfImporter, fbxImporter, fontImporter],
-    }),
+      }),
+    ),
   ],
   server: {
     fs: {

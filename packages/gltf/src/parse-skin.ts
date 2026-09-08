@@ -12,7 +12,7 @@
 //   - plan-strategy D-11 (BindPose AABB importer-phase, per-frame zero cost)
 //   - charter P3 (fail-fast on invalid data)
 
-import { decodeF32Accessor } from './decode-accessor.js';
+import { decodeF32Accessor } from './accessor/decode-accessor.js';
 import { err, type GltfError, gltfErr, ok, type Result } from './errors.js';
 import { buildNodeParentMap, resolveNamedNodePath } from './node-path.js';
 

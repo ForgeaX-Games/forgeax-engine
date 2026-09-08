@@ -1,14 +1,17 @@
 # `@forgeax/engine-runtime`
 
+## Render happy path
+
+`createRenderer -> attach -> draw -> inspect/observe/recover` assembles one
+`RenderScene -> Standard Pipeline -> DeviceScope -> FrameReceipt`
+path. `draw` returns `Result.ok(FrameReceipt)` only after the host finishes and
+submits the frame. Bind observation requests to that receipt; repair the owner
+named by `error.detail`, rebuild or cold-cook its source, and retry.
+
 > [!IMPORTANT]
 > Runtime is the sole public host-assembly entry for `createRenderer`. It selects browser/backend services, invokes render's internal construction seam, and cleans up partial construction. It does not own scene, skinning, animation, or render-domain APIs.
 
 ## Assemble producer features
-
-`createRenderer(..., { membershipTiming })` forwards the Render-owned timing
-option without interpreting it. Runtime does not add a generic profiler or a
-second reason vocabulary. Capability refusal, timestamp capture, recovery
-fencing, and terminal records remain Render and RHI responsibilities.
 
 The host receives a heterogeneous list of producer-owned
 `RenderFeature<FrameData>` values through one `createRenderer` options bag.
@@ -24,40 +27,36 @@ type FrameData = { readonly visibleCount: number };
 const feature = {
   identity: 'package.feature',
   extract: ({ owner }) => ok<FrameData>({ visibleCount: owner }),
-  prepare: (data) => {
+  plan: (data, context) => {
     void data.visibleCount;
-    return ok(undefined);
-  },
-  contribute: (data, context) => {
-    void data.visibleCount;
-    context.staging.addPass('named-pass', {
-      reads: [],
-      writes: [],
-      execute: ({ pass }) => void pass,
-    }).unwrap();
-    return ok(undefined);
+    void context;
+    return ok({ resources: [], passes: [] });
   },
 } satisfies RenderFeature<FrameData>;
 
-const renderer = await createRenderer(canvas, { features: [feature] });
-const ready = await renderer.ready;
-if (!ready.ok) throw ready.error;
+const created = await createRenderer(canvas, { features: [feature] });
+if (!created.ok) throw created.error;
+const renderer = created.value;
 ```
 
-`renderer.renderFeatureDiagnostics()` is the machine-readable lifecycle
+`renderer.inspect()` is the machine-readable lifecycle
 surface. Read `status` and `latestError?.code`; use `latestError?.hint` for
 the next action. `failed` retries on the next frame, `disabled` is revisited
 by `renderer.recover()`, and `disposed` is terminal. `dispose()` is
-idempotent. A pipeline switch preserves feature registration and rebuilds the
-active graph; use `renderer.registerPipeline(id, pipeline)` for that switch.
+idempotent. Feature plans are fixed during host assembly; graph replacement and
+last-known-good recovery stay inside the Standard host.
 
-Hosts that need World- or asset-dependent setup after `renderer.ready` can call
-`await renderer.installRenderFeature(feature)`. It appends the producer to the same
-feature host, keeps identity/capability/error ownership unified, and is
-idempotent for the same feature object. The await includes declared
-material-shader prewarm before the feature can enter the host. A duplicate identity from a different
-object returns `render-feature-registration-conflict`; there is no parallel
-feature registry.
+Prepared compute remains a render-owned projection: program reflection,
+bindings, direct or indirect dispatch shape, and persistent GPU buffers become
+typed graph accesses before encoding. Runtime does not open a compute pass,
+submit a second command buffer, or infer fallback from a backend name. The
+selected render lane must be compatible with `RhiCaps.compute`, storage, and
+indirect capabilities before it reaches graph compilation.
+
+Features are declared before host assembly. A producer returns a closed
+`RenderFeaturePlan`; the host owns identity, capability, error, and lifecycle
+state. The plan is the only producer execution declaration; there is no
+parallel prepare/contribute route or second feature registry.
 
 ## Asset producer readiness boundary
 
@@ -73,53 +72,19 @@ creation, and Catalog publication belong to the build or dev producer host.
 fallback. This keeps browser startup, player bundles, and render assembly
 outside the asset authoring and cooking boundary.
 
-## Assemble prepared graphics without a private seam
+## Plan execution boundary
 
-Prepared graphics is still assembled by the runtime host. A producer imports
-the generic `RenderFeature` declaration from `@forgeax/engine-render`, keeps
-its frame data in its owning producer package, and
-uses `context.graphics` for opaque preparation references. Generation and
-recording remain render-host facts.
-
-```ts
-import { ok } from '@forgeax/engine-types';
-import type { RenderFeature } from '@forgeax/engine-render';
-import { createRenderer } from '@forgeax/engine-runtime';
-
-type PreparedFrame = { readonly items: readonly unknown[] };
-const frame: PreparedFrame = { items: [] };
-const feature = {
-  identity: 'package.prepared-feature',
-  extract: () => ok(frame),
-  prepare: (_data, context) => {
-    const pipeline = context.graphics.preparePipeline('package.pipeline', {
-      shader: 'package.shader',
-      vertexLayout: 'package.vertices',
-      colorFormats: ['rgba8unorm-srgb'],
-    });
-    if (!pipeline.ok) return pipeline;
-    void pipeline.value;
-    return ok(undefined);
-  },
-  contribute: () => ok(undefined),
-} satisfies RenderFeature<PreparedFrame>;
-
-const renderer = await createRenderer(canvas, { features: [feature] });
-```
-
-The five public terms remain distinct: `RenderFeature`, `RenderPipeline`,
-RenderGraph pass, Material pass, and prepared graphics. This is a host
-preparation recipe, not a visible particle draw path or a VFX production
-branch. Wave 2 leaves simulation, manifest changes, RPC/CLI transport, and
-private imports out of scope. See the detailed render contract in
-[`packages/render/README.md`](../render/README.md), the declarations in
-[`features/prepared-graphics.ts`](../render/src/features/prepared-graphics.ts), and the
-producer contract in [`packages/vfx/README.md`](../vfx/README.md).
+The producer plan is compiled into the active typed graph. It declares cooked
+programs, bindings, buffers, logical targets, and draw/dispatch commands; the
+host derives access and owns preparation, recording, recovery, and submit.
+There is no producer-side prepared-resource store and no private encoder seam.
+See the detailed render contract in [`packages/render/README.md`](../render/README.md)
+and the producer contract in [`packages/vfx/README.md`](../vfx/README.md).
 
 The four concepts stay separate: `RenderFeature` is a producer callback
-contract, `RenderPipeline` is full frame policy, a RenderGraph pass is a
-declared execution node, and a material pass is a shader-facing asset pass.
-The feature API and its structured error model are documented by
+contract, Standard Pipeline is the single host-owned frame policy, a
+RenderGraph pass is a declared execution node, and a material pass is a
+shader-facing asset pass. The feature API and its structured error model are documented by
 [`@forgeax/engine-render`](../render/README.md); this README documents only
 the runtime assembly boundary.
 
@@ -128,17 +93,38 @@ the runtime assembly boundary.
 ```ts
 import { createRenderer } from '@forgeax/engine-runtime';
 
-try {
-  const renderer = await createRenderer(canvas);
-  const ready = await renderer.ready;
-  if (!ready.ok) return ready.error;
-  return renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-} catch (error) {
-  // EngineEnvironmentError reports unusable backend/environment setup.
-}
+const created = await createRenderer(canvas);
+if (!created.ok) return created.error;
+const renderer = created.value;
+const attached = renderer.attach(world);
+if (!attached.ok) return attached.error;
+return renderer.draw({
+  leases: [attached.value],
+  camera: { lease: attached.value },
+  environment: { lease: attached.value },
+});
 ```
 
-`createRenderer(canvas, options?, bundler?)` returns `Promise<Renderer>`. Construction failures reject with `EngineEnvironmentError`; after construction, `ready` and `draw` return `Result` values and `dispose()` is idempotent.
+`createRenderer(canvas, options?, bundler?)` reports environment failures through
+its structured construction error. After construction, `attach`, `draw`,
+`inspect`, `observe`, and `recover` remain receipt-bound and `dispose()` is
+idempotent.
+
+### Browser backend selection and diagnosis
+
+The default browser path prefers native WebGPU and can retry through the
+`wgpu`/WebGL2 downlevel backend. Consequently, a native-channel
+`adapter-unavailable` error means only that `navigator.gpu.requestAdapter()` did
+not produce an adapter; it is not a verdict that the machine cannot run the
+game. A thrown `requestAdapter()` failure is reported separately as
+`webgpu-runtime-error` with the original name/message in `detail.error`, while a
+literal `null` remains `adapter-unavailable`.
+
+Always diagnose the final structured error rather than matching the word
+“WebGPU”. Inspect `.code`, `.expected`, `.hint`, and nested backend causes. Asset,
+shader, Pack, permission-policy, and application bootstrap failures belong to
+their own owners and must not be repaired by replacing ForgeaX with a second
+Canvas renderer or by swallowing the entry-module exception.
 
 ## Import each domain from its owner
 
@@ -173,4 +159,7 @@ flowchart LR
   Runtime --> App
 ```
 
-`@forgeax/engine-render` owns `Renderer`, `RendererOptions`, render components, frame stages, prepared graphics, and render errors. Runtime owns only the concrete `createRenderer` host contract and `EngineEnvironmentError`; it never re-exports the moved domain APIs.
+`@forgeax/engine-render` owns `Renderer`, `RendererOptions`, render components,
+declarative feature plans, frame stages, and render errors. Runtime owns only
+the concrete `createRenderer` host contract and `EngineEnvironmentError`; it
+never re-exports the moved domain APIs.

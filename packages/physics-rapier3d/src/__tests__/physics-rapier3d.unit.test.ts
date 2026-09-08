@@ -22,11 +22,37 @@ import {
   PhysicsError,
   RigidBody,
   RigidBodyTypeValue,
+  registerPhysicsComponents,
 } from '@forgeax/engine-physics';
 import { ChildOf, registerPropagateTransforms, Transform } from '@forgeax/engine-scene';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createRapier3DPhysicsWorld, registerPhysicsSystems } from '../rapier-physics-world-3d';
 import { loadRapier3D } from '../wasm-loader';
+
+function prepareWorld(): World {
+  const world = new World();
+  world.components.register(Transform).unwrap();
+  registerPhysicsComponents(world);
+  return world;
+}
+
+function runPhysicsTicks(world: World, count = 1): void {
+  for (let index = 0; index < count; index += 1) {
+    world.update(1 / 60).unwrap();
+    world.update(1 / 60).unwrap();
+  }
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: Rapier exposes runtime WASM classes.
+function rapierBodyFor(pw: any, entity: number): any | undefined {
+  // biome-ignore lint/suspicious/noExplicitAny: Rapier exposes runtime WASM classes.
+  let found: any | undefined;
+  // biome-ignore lint/suspicious/noExplicitAny: Rapier exposes runtime WASM classes.
+  pw.raw.bodies.forEach((body: any) => {
+    if (body.userData === entity) found = body;
+  });
+  return found;
+}
 
 {
   // ─── from collision-event.test.ts ───
@@ -247,7 +273,7 @@ import { loadRapier3D } from '../wasm-loader';
           return;
         }
 
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER as never);
         world.insertResource('PhysicsWorld', pw);
 
@@ -376,7 +402,7 @@ import { loadRapier3D } from '../wasm-loader';
           return;
         }
 
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
 
@@ -435,7 +461,7 @@ import { loadRapier3D } from '../wasm-loader';
           return;
         }
 
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
 
@@ -527,7 +553,7 @@ import { loadRapier3D } from '../wasm-loader';
           return;
         }
 
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
 
@@ -605,7 +631,7 @@ import { loadRapier3D } from '../wasm-loader';
           return;
         }
 
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         const obstacle = world
@@ -654,7 +680,7 @@ import { loadRapier3D } from '../wasm-loader';
           return;
         }
 
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         const obstacle = world
@@ -702,7 +728,7 @@ import { loadRapier3D } from '../wasm-loader';
         // dropped an element, the two resting heights would not differ by the
         // Y-half delta -- a dimension- AND axis-order-sensitive regression.
         async function restHeight(halfExtents: readonly [number, number, number]): Promise<number> {
-          const world = new World();
+          const world = prepareWorld();
           const pw = createRapier3DPhysicsWorld(RAPIER as never);
           world.insertResource('PhysicsWorld', pw);
           const ball = world
@@ -767,7 +793,7 @@ import { loadRapier3D } from '../wasm-loader';
           return;
         }
 
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
 
@@ -917,6 +943,537 @@ import { loadRapier3D } from '../wasm-loader';
   });
 }
 
+describe('incremental physics ECS reconciliation', () => {
+  async function loadOrSkip() {
+    const RAPIER = await loadRapier3D();
+    if ('code' in RAPIER) {
+      expect(RAPIER.code).toBe('wasm-load-failed');
+      return undefined;
+    }
+    return RAPIER;
+  }
+
+  function spawnBox(
+    world: World,
+    options: {
+      readonly pos?: readonly [number, number, number];
+      readonly bodyType?: number | 'implicit';
+      readonly halfExtents?: readonly [number, number, number];
+    } = {},
+  ): number {
+    const transform = {
+      component: Transform as never,
+      data: { pos: options.pos ?? [0, 0, 0] },
+    };
+    const collider = {
+      component: Collider as never,
+      data: {
+        shape: ColliderShapeValue.cuboid,
+        halfExtents: options.halfExtents ?? [1, 1, 1],
+      },
+    };
+    const result =
+      options.bodyType === 'implicit'
+        ? world.spawn(transform, collider)
+        : world.spawn(
+            transform,
+            {
+              component: RigidBody as never,
+              data: { type: options.bodyType ?? RigidBodyTypeValue.static },
+            },
+            collider,
+          );
+    return result.unwrap() as unknown as number;
+  }
+
+  it('does not mark initialization complete before PhysicsWorld becomes ready', async () => {
+    const RAPIER = await loadOrSkip();
+    if (!RAPIER) return;
+    const world = prepareWorld();
+    const entity = spawnBox(world);
+    registerPhysicsSystems(world);
+
+    runPhysicsTicks(world);
+
+    const pw = createRapier3DPhysicsWorld(RAPIER);
+    world.insertResource('PhysicsWorld', pw);
+    runPhysicsTicks(world);
+    expect(pw.hasBody(entity)).toBe(true);
+    expect(pw.getBodyCount()).toBe(1);
+  });
+
+  it('releases ECS projection contexts on teardown and rejects reuse after dispose', async () => {
+    const RAPIER = await loadOrSkip();
+    if (!RAPIER) return;
+    const world = prepareWorld();
+    const pw = createRapier3DPhysicsWorld(RAPIER);
+    world.insertResource('PhysicsWorld', pw);
+    spawnBox(world);
+    const unregister = registerPhysicsSystems(world);
+    runPhysicsTicks(world);
+
+    // biome-ignore lint/suspicious/noExplicitAny: test-only lifecycle inspection.
+    const internals = pw as any;
+    expect(internals.syncState?.world).toBe(world);
+    expect(internals.moveContext?.world).toBe(world);
+
+    unregister();
+    expect(internals.syncState).toBeUndefined();
+    expect(internals.moveContext).toBeUndefined();
+
+    const unregisterAgain = registerPhysicsSystems(world);
+    runPhysicsTicks(world);
+    expect(internals.syncState?.world).toBe(world);
+    expect(internals.moveContext?.world).toBe(world);
+    unregisterAgain();
+
+    pw.dispose();
+    expect(internals.syncState).toBeUndefined();
+    expect(internals.moveContext).toBeUndefined();
+    expect(pw.getBodyCount()).toBe(0);
+    expect(pw.getKinematicControllerStates()).toEqual([]);
+    expect(() => pw._syncFromEcs(world, Transform)).toThrow(/disposed/);
+    expect(() => pw.setMoveContext(world, Transform, CharacterController)).toThrow(/disposed/);
+  });
+
+  it('bootstraps once, then performs no query, materialization, or Rapier setters on warm static ticks', async () => {
+    const RAPIER = await loadOrSkip();
+    if (!RAPIER) return;
+    const world = prepareWorld();
+    const pw = createRapier3DPhysicsWorld(RAPIER);
+    world.insertResource('PhysicsWorld', pw);
+    const entity = spawnBox(world);
+    registerPropagateTransforms(world);
+    registerPhysicsSystems(world);
+
+    const ensureSpy = vi.spyOn(pw, 'ensureBody');
+    const syncSpy = vi.spyOn(pw, 'syncAuthoredPose');
+    runPhysicsTicks(world);
+    expect(ensureSpy).toHaveBeenCalledTimes(1);
+    expect(syncSpy).not.toHaveBeenCalled();
+
+    const body = rapierBodyFor(pw, entity);
+    expect(body).toBeDefined();
+    const collider = body?.collider(0);
+    expect(collider).toBeDefined();
+    const translationSpy = vi.spyOn(body, 'setTranslation');
+    const rotationSpy = vi.spyOn(body, 'setRotation');
+    const shapeSpy = vi.spyOn(collider, 'setHalfExtents');
+    const querySpy = vi.spyOn(world, 'query');
+    const pruneSpy = vi.spyOn(pw, 'pruneMissingEntities');
+    ensureSpy.mockClear();
+    syncSpy.mockClear();
+
+    runPhysicsTicks(world, 2);
+
+    expect(querySpy).not.toHaveBeenCalled();
+    expect(ensureSpy).not.toHaveBeenCalled();
+    expect(syncSpy).not.toHaveBeenCalled();
+    expect(pruneSpy).not.toHaveBeenCalled();
+    expect(translationSpy).not.toHaveBeenCalled();
+    expect(rotationSpy).not.toHaveBeenCalled();
+    expect(shapeSpy).not.toHaveBeenCalled();
+  });
+
+  it('coalesces authored Transform writes and consumes the final resolved pose once', async () => {
+    const RAPIER = await loadOrSkip();
+    if (!RAPIER) return;
+    const world = prepareWorld();
+    const pw = createRapier3DPhysicsWorld(RAPIER);
+    world.insertResource('PhysicsWorld', pw);
+    const entity = spawnBox(world);
+    registerPropagateTransforms(world);
+    registerPhysicsSystems(world);
+    runPhysicsTicks(world);
+
+    const ensureSpy = vi.spyOn(pw, 'ensureBody');
+    const syncSpy = vi.spyOn(pw, 'syncAuthoredPose');
+    world.set(entity as never, Transform as never, { pos: [2, 0, 0] }).unwrap();
+    world.set(entity as never, Transform as never, { pos: [4, 0, 0] }).unwrap();
+    world.set(entity as never, Transform as never, { pos: [7, 0, 0] }).unwrap();
+    runPhysicsTicks(world);
+
+    expect(ensureSpy).not.toHaveBeenCalled();
+    expect(syncSpy).toHaveBeenCalledTimes(1);
+    expect(rapierBodyFor(pw, entity)?.translation().x).toBeCloseTo(7, 5);
+  });
+
+  it('uses derived Transform evidence to update only collider descendants after a parent move', async () => {
+    const RAPIER = await loadOrSkip();
+    if (!RAPIER) return;
+    const world = prepareWorld();
+    const pw = createRapier3DPhysicsWorld(RAPIER);
+    world.insertResource('PhysicsWorld', pw);
+    const parent = world
+      .spawn({ component: Transform as never, data: { pos: [1, 0, 0] } })
+      .unwrap();
+    const child = world
+      .spawn(
+        { component: Transform as never, data: { pos: [2, 0, 0] } },
+        { component: ChildOf as never, data: { parent } },
+        { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
+        {
+          component: Collider as never,
+          data: { shape: ColliderShapeValue.cuboid, halfExtents: [1, 1, 1] },
+        },
+      )
+      .unwrap();
+    const unrelated = spawnBox(world, { pos: [20, 0, 0] });
+    registerPropagateTransforms(world);
+    registerPhysicsSystems(world);
+    runPhysicsTicks(world);
+
+    const syncSpy = vi.spyOn(pw, 'syncAuthoredPose');
+    world.set(parent, Transform as never, { pos: [5, 0, 0] }).unwrap();
+    runPhysicsTicks(world);
+
+    expect(syncSpy).toHaveBeenCalledTimes(1);
+    expect(syncSpy).toHaveBeenCalledWith(
+      child,
+      expect.objectContaining({ position: expect.objectContaining({ x: 7 }) }),
+      expect.anything(),
+      'static',
+    );
+    expect(rapierBodyFor(pw, child)?.translation().x).toBeCloseTo(7, 5);
+    expect(rapierBodyFor(pw, unrelated)?.translation().x).toBeCloseTo(20, 5);
+  });
+
+  it.each([
+    ['static', RigidBodyTypeValue.static],
+    ['non-controller-owned kinematic', RigidBodyTypeValue.kinematic],
+  ] as const)('uses a readable identity world pose for root and parent-cancelled %s bodies', async (_label, bodyType) => {
+    const RAPIER = await loadOrSkip();
+    if (!RAPIER) return;
+    const world = prepareWorld();
+    const pw = createRapier3DPhysicsWorld(RAPIER);
+    world.insertResource('PhysicsWorld', pw);
+    const root = spawnBox(world, { bodyType });
+    const parent = world
+      .spawn({ component: Transform as never, data: { pos: [1, 0, 0] } })
+      .unwrap();
+    const child = world
+      .spawn(
+        { component: Transform as never, data: { pos: [-1, 0, 0] } },
+        { component: ChildOf as never, data: { parent } },
+        { component: RigidBody as never, data: { type: bodyType } },
+        {
+          component: Collider as never,
+          data: { shape: ColliderShapeValue.cuboid, halfExtents: [1, 1, 1] },
+        },
+      )
+      .unwrap();
+    registerPropagateTransforms(world);
+    registerPhysicsSystems(world);
+    runPhysicsTicks(world);
+
+    const rootWorld = world.get(root as never, Transform as never).unwrap().world as Float32Array;
+    const childWorld = world.get(child, Transform as never).unwrap().world as Float32Array;
+    expect(Array.from(rootWorld)).toEqual([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    expect(Array.from(childWorld)).toEqual([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    expect(rapierBodyFor(pw, root)?.translation().x).toBeCloseTo(0, 5);
+    expect(rapierBodyFor(pw, child)?.translation().x).toBeCloseTo(0, 5);
+
+    world.set(parent, Transform as never, { pos: [3, 0, 0] }).unwrap();
+    world.set(child, Transform as never, { pos: [-3, 0, 0] }).unwrap();
+    runPhysicsTicks(world);
+
+    expect(rapierBodyFor(pw, child)?.translation().x).toBeCloseTo(0, 5);
+  });
+
+  it('does not treat a dynamic body Transform write as an authored Rapier pose', async () => {
+    const RAPIER = await loadOrSkip();
+    if (!RAPIER) return;
+    const world = prepareWorld();
+    const pw = createRapier3DPhysicsWorld(RAPIER);
+    world.insertResource('PhysicsWorld', pw);
+    const entity = spawnBox(world, { bodyType: RigidBodyTypeValue.dynamic });
+    world.set(entity as never, RigidBody as never, { gravityScale: 0 }).unwrap();
+    registerPropagateTransforms(world);
+    registerPhysicsSystems(world);
+    runPhysicsTicks(world);
+
+    const ensureSpy = vi.spyOn(pw, 'ensureBody');
+    const syncSpy = vi.spyOn(pw, 'syncAuthoredPose');
+    world.set(entity as never, Transform as never, { pos: [50, 0, 0] }).unwrap();
+    runPhysicsTicks(world);
+
+    expect(ensureSpy).not.toHaveBeenCalled();
+    expect(syncSpy).not.toHaveBeenCalled();
+    expect(rapierBodyFor(pw, entity)?.translation().x).toBeCloseTo(0, 5);
+  });
+
+  it('reconciles Collider and RigidBody add, remove, and change from the final ECS combination', async () => {
+    const RAPIER = await loadOrSkip();
+    if (!RAPIER) return;
+    const world = prepareWorld();
+    const pw = createRapier3DPhysicsWorld(RAPIER);
+    world.insertResource('PhysicsWorld', pw);
+    const entity = spawnBox(world);
+    registerPhysicsSystems(world);
+    runPhysicsTicks(world);
+
+    const removeSpy = vi.spyOn(pw, 'removeEntity');
+    const ensureSpy = vi.spyOn(pw, 'ensureBody');
+    world.set(entity as never, Collider as never, { halfExtents: [3, 1, 1] }).unwrap();
+    runPhysicsTicks(world);
+    expect(removeSpy).toHaveBeenCalledTimes(1);
+    expect(ensureSpy).toHaveBeenCalledTimes(1);
+    expect(rapierBodyFor(pw, entity)?.collider(0).halfExtents().x).toBeCloseTo(3, 5);
+
+    removeSpy.mockClear();
+    ensureSpy.mockClear();
+    world.removeComponent(entity as never, Collider as never).unwrap();
+    runPhysicsTicks(world);
+    expect(pw.hasBody(entity)).toBe(false);
+    expect(removeSpy).toHaveBeenCalledTimes(1);
+
+    world
+      .addComponent(entity as never, {
+        component: Collider as never,
+        data: { shape: ColliderShapeValue.sphere, radius: 2 },
+      })
+      .unwrap();
+    runPhysicsTicks(world);
+    expect(pw.hasBody(entity)).toBe(true);
+    expect(rapierBodyFor(pw, entity)?.collider(0).radius()).toBeCloseTo(2, 5);
+
+    world.removeComponent(entity as never, RigidBody as never).unwrap();
+    runPhysicsTicks(world);
+    expect(rapierBodyFor(pw, entity)?.bodyType()).toBe(RAPIER.RigidBodyType.Fixed);
+
+    world
+      .addComponent(entity as never, {
+        component: RigidBody as never,
+        data: { type: RigidBodyTypeValue.dynamic, gravityScale: 0 },
+      })
+      .unwrap();
+    runPhysicsTicks(world);
+    expect(rapierBodyFor(pw, entity)?.bodyType()).toBe(RAPIER.RigidBodyType.Dynamic);
+    expect(pw.getBodyCount()).toBe(1);
+
+    world.set(entity as never, RigidBody as never, { type: RigidBodyTypeValue.static }).unwrap();
+    world.set(entity as never, RigidBody as never, { type: RigidBodyTypeValue.kinematic }).unwrap();
+    runPhysicsTicks(world);
+    expect(rapierBodyFor(pw, entity)?.bodyType()).toBe(RAPIER.RigidBodyType.KinematicPositionBased);
+    expect(pw.getBodyCount()).toBe(1);
+  });
+
+  it('switches kinematic pose ownership when CharacterController is added or removed', async () => {
+    const RAPIER = await loadOrSkip();
+    if (!RAPIER) return;
+    const world = prepareWorld();
+    const pw = createRapier3DPhysicsWorld(RAPIER);
+    world.insertResource('PhysicsWorld', pw);
+    const entity = spawnBox(world, { bodyType: RigidBodyTypeValue.kinematic });
+    registerPropagateTransforms(world);
+    registerPhysicsSystems(world);
+    runPhysicsTicks(world);
+
+    const syncSpy = vi.spyOn(pw, 'syncAuthoredPose');
+    world.set(entity as never, Transform as never, { pos: [9, 0, 0] }).unwrap();
+    world
+      .addComponent(entity as never, { component: CharacterController as never, data: {} })
+      .unwrap();
+    runPhysicsTicks(world);
+    expect(syncSpy).not.toHaveBeenCalled();
+    expect(rapierBodyFor(pw, entity)?.translation().x).toBeCloseTo(0, 5);
+
+    world.removeComponent(entity as never, CharacterController as never).unwrap();
+    runPhysicsTicks(world);
+    expect(syncSpy).toHaveBeenCalledTimes(1);
+    expect(rapierBodyFor(pw, entity)?.translation().x).toBeCloseTo(9, 5);
+  });
+
+  it('rebuilds only the cached character controller receipt when offset changes', async () => {
+    const RAPIER = await loadOrSkip();
+    if (!RAPIER) return;
+    const world = prepareWorld();
+    const pw = createRapier3DPhysicsWorld(RAPIER);
+    world.insertResource('PhysicsWorld', pw);
+    const entity = spawnBox(world, { bodyType: RigidBodyTypeValue.kinematic });
+    world
+      .addComponent(entity as never, {
+        component: CharacterController as never,
+        data: { offset: 0.02 },
+      })
+      .unwrap();
+    registerPhysicsSystems(world);
+    runPhysicsTicks(world);
+    pw.moveAndSlide(entity, Float32Array.of(0, 0, 0) as never);
+
+    const body = rapierBodyFor(pw, entity);
+    // biome-ignore lint/suspicious/noExplicitAny: test-only inspection of the backend receipt cache.
+    const receipts = (pw as any).kccCache as Map<number, unknown>;
+    // biome-ignore lint/suspicious/noExplicitAny: test-only inspection of the backend receipt cache.
+    const offsets = (pw as any).kccOffsets as Map<number, number>;
+    const receipt = receipts.get(entity);
+    const removeEntitySpy = vi.spyOn(pw, 'removeEntity');
+    const ensureBodySpy = vi.spyOn(pw, 'ensureBody');
+
+    world.set(entity as never, CharacterController as never, { offset: 0.5 }).unwrap();
+    runPhysicsTicks(world);
+
+    expect(rapierBodyFor(pw, entity)).toBe(body);
+    expect(removeEntitySpy).not.toHaveBeenCalled();
+    expect(ensureBodySpy).not.toHaveBeenCalled();
+    expect(receipts.get(entity)).not.toBe(receipt);
+    expect(offsets.get(entity)).toBeCloseTo(0.5, 5);
+  });
+
+  it('rebuilds the cached character controller receipt from a same-tick remove and add', async () => {
+    const RAPIER = await loadOrSkip();
+    if (!RAPIER) return;
+    const world = prepareWorld();
+    const pw = createRapier3DPhysicsWorld(RAPIER);
+    world.insertResource('PhysicsWorld', pw);
+    const entity = spawnBox(world, { bodyType: RigidBodyTypeValue.kinematic });
+    world
+      .addComponent(entity as never, {
+        component: CharacterController as never,
+        data: { offset: 0.02 },
+      })
+      .unwrap();
+    registerPhysicsSystems(world);
+    runPhysicsTicks(world);
+    pw.moveAndSlide(entity, Float32Array.of(0, 0, 0) as never);
+
+    const body = rapierBodyFor(pw, entity);
+    // biome-ignore lint/suspicious/noExplicitAny: test-only inspection of the backend receipt cache.
+    const receipts = (pw as any).kccCache as Map<number, unknown>;
+    // biome-ignore lint/suspicious/noExplicitAny: test-only inspection of the backend receipt cache.
+    const offsets = (pw as any).kccOffsets as Map<number, number>;
+    const receipt = receipts.get(entity);
+    const removeEntitySpy = vi.spyOn(pw, 'removeEntity');
+    const ensureBodySpy = vi.spyOn(pw, 'ensureBody');
+
+    world.removeComponent(entity as never, CharacterController as never).unwrap();
+    world
+      .addComponent(entity as never, {
+        component: CharacterController as never,
+        data: { offset: 0.4 },
+      })
+      .unwrap();
+    runPhysicsTicks(world);
+
+    expect(rapierBodyFor(pw, entity)).toBe(body);
+    expect(removeEntitySpy).not.toHaveBeenCalled();
+    expect(ensureBodySpy).not.toHaveBeenCalled();
+    expect(receipts.get(entity)).not.toBe(receipt);
+    expect(offsets.get(entity)).toBeCloseTo(0.4, 5);
+  });
+
+  it('keeps the cached character controller receipt for grounded-only writes', async () => {
+    const RAPIER = await loadOrSkip();
+    if (!RAPIER) return;
+    const world = prepareWorld();
+    const pw = createRapier3DPhysicsWorld(RAPIER);
+    world.insertResource('PhysicsWorld', pw);
+    const entity = spawnBox(world, { bodyType: RigidBodyTypeValue.kinematic });
+    world
+      .addComponent(entity as never, {
+        component: CharacterController as never,
+        data: { offset: 0.02 },
+      })
+      .unwrap();
+    registerPhysicsSystems(world);
+    runPhysicsTicks(world);
+    pw.moveAndSlide(entity, Float32Array.of(0, 0, 0) as never);
+    runPhysicsTicks(world);
+
+    // biome-ignore lint/suspicious/noExplicitAny: test-only inspection of the backend receipt cache.
+    const receipts = (pw as any).kccCache as Map<number, unknown>;
+    const receipt = receipts.get(entity);
+    const body = rapierBodyFor(pw, entity);
+    const removeEntitySpy = vi.spyOn(pw, 'removeEntity');
+    const ensureBodySpy = vi.spyOn(pw, 'ensureBody');
+
+    world.set(entity as never, CharacterController as never, { grounded: true }).unwrap();
+    runPhysicsTicks(world);
+
+    expect(rapierBodyFor(pw, entity)).toBe(body);
+    expect(removeEntitySpy).not.toHaveBeenCalled();
+    expect(ensureBodySpy).not.toHaveBeenCalled();
+    expect(receipts.get(entity)).toBe(receipt);
+  });
+
+  it('removes the old generation and creates the final entity after same-slot reuse', async () => {
+    const RAPIER = await loadOrSkip();
+    if (!RAPIER) return;
+    const world = prepareWorld();
+    const pw = createRapier3DPhysicsWorld(RAPIER);
+    world.insertResource('PhysicsWorld', pw);
+    const previous = spawnBox(world, { pos: [1, 0, 0] });
+    registerPhysicsSystems(world);
+    runPhysicsTicks(world);
+
+    world.despawn(previous as never).unwrap();
+    const replacement = spawnBox(world, { pos: [11, 0, 0] });
+    expect(replacement).not.toBe(previous);
+    expect(replacement & 0x00ffffff).toBe(previous & 0x00ffffff);
+    runPhysicsTicks(world);
+
+    expect(pw.hasBody(previous)).toBe(false);
+    expect(pw.hasBody(replacement)).toBe(true);
+    expect(pw.getBodyCount()).toBe(1);
+    expect(rapierBodyFor(pw, replacement)?.translation().x).toBeCloseTo(11, 5);
+  });
+
+  it('falls back to a full reconcile after projection journal overflow', async () => {
+    const RAPIER = await loadOrSkip();
+    if (!RAPIER) return;
+    const world = prepareWorld();
+    const pw = createRapier3DPhysicsWorld(RAPIER);
+    world.insertResource('PhysicsWorld', pw);
+    const entity = spawnBox(world);
+    registerPropagateTransforms(world);
+    registerPhysicsSystems(world);
+    runPhysicsTicks(world);
+
+    const removeSpy = vi.spyOn(pw, 'removeEntity');
+    const ensureSpy = vi.spyOn(pw, 'ensureBody');
+    const syncSpy = vi.spyOn(pw, 'syncAuthoredPose');
+    let finalX = 0;
+    for (let index = 0; index <= 65_536; index += 1) {
+      finalX = index % 19;
+      world.set(entity as never, Transform as never, { pos: [finalX, 0, 0] }).unwrap();
+    }
+    runPhysicsTicks(world);
+
+    expect(removeSpy).toHaveBeenCalledTimes(1);
+    expect(ensureSpy).toHaveBeenCalledTimes(1);
+    expect(syncSpy).not.toHaveBeenCalled();
+    expect(pw.getBodyCount()).toBe(1);
+    expect(rapierBodyFor(pw, entity)?.translation().x).toBeCloseTo(finalX, 5);
+  });
+
+  it('retains only an existing fixed Transform-less body and never creates one without Transform', async () => {
+    const RAPIER = await loadOrSkip();
+    if (!RAPIER) return;
+    const world = prepareWorld();
+    const pw = createRapier3DPhysicsWorld(RAPIER);
+    world.insertResource('PhysicsWorld', pw);
+    const fixed = spawnBox(world);
+    const dynamic = spawnBox(world, { bodyType: RigidBodyTypeValue.dynamic });
+    registerPhysicsSystems(world);
+    runPhysicsTicks(world);
+
+    world.removeComponent(fixed as never, Transform as never).unwrap();
+    world.removeComponent(dynamic as never, Transform as never).unwrap();
+    const neverMaterialized = world
+      .spawn({
+        component: Collider as never,
+        data: { shape: ColliderShapeValue.cuboid, halfExtents: [1, 1, 1] },
+      })
+      .unwrap() as unknown as number;
+    runPhysicsTicks(world);
+
+    expect(pw.hasBody(fixed)).toBe(true);
+    expect(pw.hasBody(dynamic)).toBe(false);
+    expect(pw.hasBody(neverMaterialized)).toBe(false);
+    expect(pw.getBodyCount()).toBe(1);
+  });
+});
+
 // ─── feat-20260617 M2 moveAndSlide (kinematic character controller) ───
 //
 // Shared scene builder: spawns a kinematic capsule character (RigidBody +
@@ -1003,7 +1560,7 @@ import { loadRapier3D } from '../wasm-loader';
       it('AC-01 flat walk: actualDelta tracks desiredDelta and grounded=true', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         registerPhysicsSystems(world);
@@ -1025,7 +1582,7 @@ import { loadRapier3D } from '../wasm-loader';
       it('AC-02 wall ahead: actualDelta.x clamped below requested and no clip-through', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         registerPhysicsSystems(world);
@@ -1047,7 +1604,7 @@ import { loadRapier3D } from '../wasm-loader';
       it('AC-03 angled into wall: tangential motion survives, normal is eaten', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         registerPhysicsSystems(world);
@@ -1077,7 +1634,7 @@ import { loadRapier3D } from '../wasm-loader';
       it('two characters far apart both keep moving across frames', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         registerPhysicsSystems(world);
@@ -1109,7 +1666,7 @@ import { loadRapier3D } from '../wasm-loader';
       it('overlapping SENSOR does not jam a grounded character (sensors are not obstacles)', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         registerPhysicsSystems(world);
@@ -1166,7 +1723,7 @@ import { loadRapier3D } from '../wasm-loader';
       it('AC-04 gentle slope (< maxSlopeClimbDeg=45): y rises, not blocked', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         registerPhysicsSystems(world);
@@ -1193,7 +1750,7 @@ import { loadRapier3D } from '../wasm-loader';
       it('AC-05 steep slope (> maxSlopeClimbDeg=45): horizontal travel is blocked', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         registerPhysicsSystems(world);
@@ -1221,7 +1778,7 @@ import { loadRapier3D } from '../wasm-loader';
       it('AC-06a low step (0.2 < autoStepMaxHeight=0.3): character climbs it', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         registerPhysicsSystems(world);
@@ -1261,7 +1818,7 @@ import { loadRapier3D } from '../wasm-loader';
       it('AC-06b high step (0.5 > autoStepMaxHeight=0.3): character is blocked', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         registerPhysicsSystems(world);
@@ -1284,7 +1841,7 @@ import { loadRapier3D } from '../wasm-loader';
       it('AC-06c autoStepMaxHeight=0 disables auto-step (low step now blocks)', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         registerPhysicsSystems(world);
@@ -1308,7 +1865,7 @@ import { loadRapier3D } from '../wasm-loader';
       it('AC-07a snap-to-ground keeps the character on a descending slope (pure horizontal move pulls y down)', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         registerPhysicsSystems(world);
@@ -1343,7 +1900,7 @@ import { loadRapier3D } from '../wasm-loader';
       it('AC-07b grounded flips false when the character walks off a ledge into open air', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         registerPhysicsSystems(world);
@@ -1380,7 +1937,7 @@ import { loadRapier3D } from '../wasm-loader';
       it('AC-07c pure horizontal move on flat ground stays grounded', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         registerPhysicsSystems(world);
@@ -1403,7 +1960,7 @@ import { loadRapier3D } from '../wasm-loader';
       it('AC-08a dynamic body: throws controller-requires-kinematic with detail', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         registerPhysicsSystems(world);
@@ -1431,7 +1988,7 @@ import { loadRapier3D } from '../wasm-loader';
       it('AC-08b static body: throws controller-requires-kinematic', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         registerPhysicsSystems(world);
@@ -1519,7 +2076,7 @@ import { loadRapier3D } from '../wasm-loader';
       it('AC-10a kinematic platform without CharacterController is mirrored', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         // The kinematic mirror drives the collider from Transform.world (so a
@@ -1558,7 +2115,7 @@ import { loadRapier3D } from '../wasm-loader';
       it('AC-10b kinematic character with CharacterController is NOT mirrored', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         registerPhysicsSystems(world);
@@ -1592,10 +2149,10 @@ import { loadRapier3D } from '../wasm-loader';
     });
 
     describe('moveAndSlide despawn cleanup (AC-11)', () => {
-      it('AC-11a despawn auto-fires Collider.onRemove: KCC + caches cleared', async () => {
+      it('AC-11a despawn clears KCC and caches on the next tick', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         registerPhysicsSystems(world);
@@ -1611,9 +2168,10 @@ import { loadRapier3D } from '../wasm-loader';
         expect(pw.raw.characterControllers.size).toBe(1);
         expect(pw.kccCache.size).toBe(1);
 
-        // Despawn must auto-trigger Collider.onRemove -> removeEntity -> KCC cleanup.
+        // Physics owns cleanup through the next query membership diff; structural
+        // despawn does not execute a user callback inside the commit.
         world.despawn(char as never);
-
+        world.update(1 / 60).unwrap();
         expect(pw.raw.characterControllers.size).toBe(0);
         expect(pw.kccCache.size).toBe(0);
       });
@@ -1621,7 +2179,7 @@ import { loadRapier3D } from '../wasm-loader';
       it('AC-11b despawn a character that never moved: removeEntity does not throw', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         registerPhysicsSystems(world);
@@ -1636,6 +2194,7 @@ import { loadRapier3D } from '../wasm-loader';
         const before = pw.getBodyCount();
         expect(before).toBeGreaterThan(0);
         expect(() => world.despawn(char as never)).not.toThrow();
+        world.update(1 / 60).unwrap();
         expect(pw.kccCache.size).toBe(0);
       });
     });
@@ -1648,7 +2207,7 @@ import { loadRapier3D } from '../wasm-loader';
         // The self-exclude predicate omits the character's own collider, so on
         // flat ground a full horizontal request is delivered intact (no
         // self-collision eating the movement).
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         registerPhysicsSystems(world);
@@ -1666,7 +2225,7 @@ import { loadRapier3D } from '../wasm-loader';
       it('returns false before the body is built, true after', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
-        const world = new World();
+        const world = prepareWorld();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
         registerPhysicsSystems(world);
@@ -1710,7 +2269,7 @@ import { loadRapier3D } from '../wasm-loader';
     it('a kinematic sensor overlapping a kinematic body populates CollidingEntities both ways', async () => {
       const RAPIER = await loadOrNull();
       if (!RAPIER) return;
-      const world = new World();
+      const world = prepareWorld();
       const pw = createRapier3DPhysicsWorld(RAPIER);
       world.insertResource('PhysicsWorld', pw);
       registerPhysicsSystems(world);
@@ -1757,7 +2316,7 @@ import { loadRapier3D } from '../wasm-loader';
     it('despawning a collided sensor clears it from the survivor CollidingEntities', async () => {
       const RAPIER = await loadOrNull();
       if (!RAPIER) return;
-      const world = new World();
+      const world = prepareWorld();
       const pw = createRapier3DPhysicsWorld(RAPIER);
       world.insertResource('PhysicsWorld', pw);
       registerPhysicsSystems(world);

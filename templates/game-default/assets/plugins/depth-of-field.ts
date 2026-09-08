@@ -1,6 +1,9 @@
 import { PostProcessParams, type Renderer } from '@forgeax/engine-render';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import type { GameHost } from '@forgeax/engine-app';
+import type { Context } from '@forgeax/engine-plugin';
 import dofShader from '../shaders/depth-of-field.wgsl';
+import { installGameFullscreenFeature } from './fullscreen-feature';
 
 export const DEPTH_OF_FIELD_ID = 'game-default::depth-of-field';
 export const DOF_PARAM_BYTES = 32;
@@ -37,7 +40,13 @@ function packParams(enabled: boolean, focalDistance: number, aperture: number): 
   return new Uint8Array(bytes);
 }
 
-export function installDepthOfField(world: World, renderer: Renderer | undefined, initialEnabled: boolean): DepthOfFieldHandle {
+export async function installDepthOfField(
+  context: Context,
+  world: World,
+  host: GameHost | undefined,
+  renderer: Renderer | undefined,
+  initialEnabled: boolean,
+): Promise<DepthOfFieldHandle> {
   const focalDistance = 7;
   const aperture = 0.8;
   const params = packParams(initialEnabled, focalDistance, aperture);
@@ -53,7 +62,8 @@ export function installDepthOfField(world: World, renderer: Renderer | undefined
       snapshot: () => ({ enabled: false, mode: 'off', focalDistance, aperture, effect: DEPTH_OF_FIELD_ID }),
     };
   }
-  const unregister = renderer.postProcess.register(DEPTH_OF_FIELD_ID, {
+  const feature = await installGameFullscreenFeature(context, host, renderer, {
+    identity: DEPTH_OF_FIELD_ID,
     source: dofShader.wgsl,
     reads: [{ key: 'sceneColor' }, { key: 'depth', sampleType: 'depth' }],
     params: { byteSize: DOF_PARAM_BYTES, defaultValue: params },
@@ -62,12 +72,13 @@ export function installDepthOfField(world: World, renderer: Renderer | undefined
   const write = (): void => { world.set(paramsEntity, PostProcessParams, { data: packParams(enabled, focalDistance, aperture) }); };
   return {
     paramsEntity,
-    installed: true,
+    installed: feature.installed,
+    ...(feature.error === undefined ? {} : { error: feature.error }),
     setEnabled(next: boolean): void { enabled = next; write(); },
     reset(): void { enabled = initialEnabled; write(); },
-    dispose: unregister,
+    dispose: feature.dispose,
     snapshot(): DepthOfFieldSnapshot {
-      return { enabled, mode: enabled ? 'bokeh' : 'off', focalDistance, aperture, effect: DEPTH_OF_FIELD_ID };
+      return { enabled: feature.installed && enabled, mode: feature.installed && enabled ? 'bokeh' : 'off', focalDistance, aperture, effect: DEPTH_OF_FIELD_ID };
     },
   };
 }

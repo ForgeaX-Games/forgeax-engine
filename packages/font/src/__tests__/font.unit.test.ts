@@ -191,10 +191,11 @@ describe('font package root surface', () => {
   it('keeps the version authority in package metadata, not a root mirror', async () => {
     const mod = await import('../index.js');
     expect('FONT_PACKAGE_VERSION' in mod).toBe(false);
-    expect(typeof mod.bakeFont).toBe('function');
-    expect(typeof mod.encodePng).toBe('function');
-    expect(typeof mod.atlasToSidecar).toBe('function');
-    expect(typeof mod.runCliFont).toBe('function');
+    expect(typeof mod.fontContribution).toBe('object');
+    expect('bakeFont' in mod).toBe(false);
+    expect('encodePng' in mod).toBe(false);
+    expect('atlasToSidecar' in mod).toBe(false);
+    expect('runCliFont' in mod).toBe(false);
   });
 });
 

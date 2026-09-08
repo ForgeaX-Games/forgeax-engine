@@ -10,9 +10,11 @@
 //
 // The sandbox layer is dismantled — eval is full-access (route B).
 
+import { err, ok, type Result } from '@forgeax/engine-types';
 import type { WebSocket } from 'ws';
 import { WebSocketServer } from 'ws';
-import { REMOTE_ERROR_CODE_TO_JSONRPC, RemoteError, type RemoteErrorCode } from './errors';
+import { REMOTE_ERROR_MESSAGES } from './error-messages';
+import { REMOTE_ERROR_CODE_TO_JSONRPC, RemoteError } from './errors';
 import { executeScript } from './execute';
 import {
   buildIntrospectDoc,
@@ -24,15 +26,6 @@ import {
 export type { ComponentIntrospectionDescriptor } from './introspect';
 
 const REMOTE_TO_JSONRPC = REMOTE_ERROR_CODE_TO_JSONRPC;
-
-const REMOTE_CODE_MESSAGE: Record<RemoteErrorCode, string> = {
-  'script-syntax-error': 'Script syntax error',
-  'script-runtime-error': 'Script runtime error',
-  'server-startup-failed': 'Server startup failed',
-  'server-not-running': 'Server not reachable',
-};
-
-import { err, ok, type Result } from '@forgeax/engine-types';
 
 export type { Result };
 
@@ -56,13 +49,11 @@ export type StartServerOptions = {
   /** Read-only World-owned simulation inspection root. */
   readonly simulation?: unknown;
   /**
-   * Live DebugRhiAdapter for eval-scope injection (plan-strategy D-4).
-   * When present, eval scripts can call debugAdapter.captureFrames(frames, label?)
-   * and Dawn/Node debugAdapter.inspectAt(tapePath, drawIdx, fields?) — the 4th
-   * eval-scope live root.
+   * Host-owned RHI capture capability for eval-scope injection (plan-strategy D-4).
+   * It is exposed as the single `rhiCapture` eval root.
    * Undefined when FORGEAX_ENGINE_RHI_DEBUG !== '1'.
    */
-  readonly debugAdapter?: unknown;
+  readonly rhiCapture?: unknown;
 };
 
 type JsonRpcRequest = {
@@ -94,7 +85,7 @@ function inspectorErrorToJsonRpc(e: RemoteError): JsonRpcError {
   if (detail !== undefined) data.detail = detail;
   return {
     code: REMOTE_TO_JSONRPC[e.code],
-    message: REMOTE_CODE_MESSAGE[e.code],
+    message: REMOTE_ERROR_MESSAGES[e.code],
     data,
   };
 }
@@ -126,7 +117,7 @@ async function handleEnvelope(
     world: unknown;
     renderer: unknown;
     assets: unknown;
-    debugAdapter: unknown | undefined;
+    rhiCapture: unknown | undefined;
     introspection: readonly ComponentIntrospectionDescriptor[];
     profiler: unknown | undefined;
     execution: unknown | undefined;
@@ -156,7 +147,7 @@ async function handleEnvelope(
         world: ctx.world,
         renderer: ctx.renderer,
         assets: ctx.assets,
-        ...(ctx.debugAdapter !== undefined ? { debugAdapter: ctx.debugAdapter } : {}),
+        ...(ctx.rhiCapture !== undefined ? { rhiCapture: ctx.rhiCapture } : {}),
         ...(ctx.profiler !== undefined ? { profiler: ctx.profiler } : {}),
         ...(ctx.execution !== undefined ? { execution: ctx.execution } : {}),
         ...(ctx.simulation !== undefined ? { simulation: ctx.simulation } : {}),
@@ -173,7 +164,7 @@ async function handleEnvelope(
         world: ctx.world,
         renderer: ctx.renderer,
         assets: ctx.assets,
-        debugAdapter: ctx.debugAdapter,
+        rhiCapture: ctx.rhiCapture,
         profiler: ctx.profiler,
         execution: ctx.execution,
         simulation: ctx.simulation,
@@ -213,7 +204,7 @@ export function startServer(opts: StartServerOptions): Promise<Result<ConsoleHan
     const world = opts.world;
     const renderer = opts.renderer ?? {};
     const assets = opts.assets ?? {};
-    const debugAdapter = opts.debugAdapter;
+    const rhiCapture = opts.rhiCapture;
     const introspection = opts.introspection ?? [];
     const profiler = isProfilerRoot(opts.profiler) ? opts.profiler : undefined;
     const execution = isExecutionRoot(opts.execution) ? opts.execution : undefined;
@@ -249,7 +240,7 @@ export function startServer(opts: StartServerOptions): Promise<Result<ConsoleHan
           world,
           renderer,
           assets,
-          debugAdapter,
+          rhiCapture,
           introspection,
           profiler,
           execution,

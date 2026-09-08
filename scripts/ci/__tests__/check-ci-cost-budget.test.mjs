@@ -461,6 +461,7 @@ function sampleRun(runId, runAttempt, overrides = {}) {
       'coverage-perf',
       'vitest-browser',
       'shared-inputs-browser',
+      'multithread-browser-benchmark',
       'smoke-fleet',
       'smoke-fleet-0',
       'smoke-fleet-1',

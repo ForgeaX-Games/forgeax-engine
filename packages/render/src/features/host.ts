@@ -1,30 +1,43 @@
 import type { EntityHandle } from '@forgeax/engine-ecs';
-import type { RhiCaps } from '@forgeax/engine-rhi';
+import type { RhiCaps, TextureFormat } from '@forgeax/engine-rhi';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import {
   type RenderError,
   RenderFeatureCapabilityMissingError,
+  RenderFeaturePreparationFailedError,
   RenderFeatureRegistrationConflictError,
   RenderFeatureStageFailedError,
 } from '../errors/render';
+import type { PostProcessShaderEntry } from '../fullscreen-post-process-pass';
 import type {
   PreparedGraphicsReference,
   PreparedGraphicsResolvedSnapshot,
   PreparedGraphicsResolver,
   PreparedGraphicsResourceLease,
 } from '../prepare/prepared-graphics-resolver';
-import type {
-  RenderFeatureContributionStaging,
-  RenderFeatureGpuComputeResolver,
-  RenderFeatureGraphContribution,
-  RenderFeatureGraphicsValidator,
-} from './graph-contribution';
-import { createRenderFeatureContributionStaging } from './graph-contribution';
-import type { RenderFeatureGpuWorkResolver } from './prepared-gpu-work';
 import {
-  createRenderFeatureGraphicsPrepare,
-  type RenderFeatureGraphicsContributionStaging,
+  freezeRenderFeaturePlan,
+  type RenderFeatureLogicalTarget,
+  type RenderFeatureMaterialShaderBindingContract,
+  type RenderFeaturePassDeclaration,
+  type RenderFeaturePlan,
+  type RenderFeaturePlannedFrame,
+  type RenderFeatureResourceDeclaration,
+  renderFeaturePlanSignature,
+} from './plan';
+import type {
+  RenderFeatureGpuBindingsRef,
+  RenderFeatureGpuBufferRef,
+  RenderFeatureGpuComputePassDescriptor,
+  RenderFeatureGpuPrepareSession,
+  RenderFeatureGpuProgramRef,
+  RenderFeatureGpuWorkOwner,
+} from './prepared-gpu-work';
+import {
+  type RenderFeatureGraphicsPassDescriptor,
   type RenderFeatureGraphicsPrepare,
+  type RenderFeaturePreparedGraphicsState,
+  type RenderFeaturePreparedRef,
   validateRenderFeatureGraphicsPass,
 } from './prepared-graphics';
 import {
@@ -40,18 +53,46 @@ import type {
   RenderFeatureErrorDescriptor,
   RenderFeatureExtractContext,
   RenderFeatureHiddenEntityReport,
-  RenderFeaturePrepareContext,
   RenderFeatureRecoverInput,
-  RenderFeatureResourceHandle,
   RenderFeatureStatus,
   RenderFeatureTargetHandle,
   RenderFeatureWorldVisibilitySnapshot,
 } from './types';
 
+const planExecutionProjections = new WeakMap<
+  RenderFeaturePlannedFrame,
+  RenderFeaturePlanExecution
+>();
+
+export interface RenderFeaturePlanExecutionPass {
+  readonly featureIdentity: string;
+  readonly order: number;
+  readonly name: string;
+  readonly graphics?: RenderFeatureGraphicsPassDescriptor;
+  readonly graphicsState?: RenderFeaturePreparedGraphicsState;
+  readonly gpuCompute?: RenderFeatureGpuComputePassDescriptor;
+  readonly resolvedGraphics?: PreparedGraphicsResolvedSnapshot;
+  readonly resolvedGpuCompute?: import('./prepared-gpu-work').RenderFeatureResolvedGpuComputePass;
+}
+
+/** Host-owned device projection of one frozen plan; graph access is derived later. */
+export interface RenderFeaturePlanExecution {
+  readonly featureIdentity: string;
+  readonly order: number;
+  readonly passes: readonly RenderFeaturePlanExecutionPass[];
+}
+
+/** @internal Typed-graph adapter for the host-owned projection of a validated plan. */
+export function getRenderFeaturePlanExecutionProjection(
+  planned: RenderFeaturePlannedFrame,
+): RenderFeaturePlanExecution | undefined {
+  return planExecutionProjections.get(planned);
+}
+
 export interface RenderFeatureStageEvent {
   readonly featureIdentity: string;
   readonly order: number;
-  readonly stage: 'extract' | 'prepare' | 'contribute';
+  readonly stage: 'extract' | 'plan';
 }
 
 export interface RenderFeatureFrameInput {
@@ -64,17 +105,15 @@ export interface RenderFeatureFrameInput {
   readonly targets?: readonly RenderFeatureTargetHandle[];
   readonly generation?: number;
   readonly caps: Readonly<RhiCaps>;
-  readonly createContributionStaging?: (
-    featureIdentity: string,
-    order: number,
-    validateGraphics?: RenderFeatureGraphicsValidator,
-    resolveGraphics?: import('./graph-contribution').RenderFeatureGraphicsResolver,
-    resolveGpuCompute?: RenderFeatureGpuComputeResolver,
-  ) => RenderFeatureContributionStaging & RenderFeatureGraphicsContributionStaging;
+  /** Renderer-owned material binding contract projection for producer plans. */
+  readonly materialShaderBindingContract?: (
+    materialShaderId: string,
+  ) => RenderFeatureMaterialShaderBindingContract;
   readonly createPreparedGraphicsResolver?: (
     input: RenderFeaturePreparedGraphicsResolverInput,
   ) => PreparedGraphicsResolver;
-  readonly getGpuWorkResolver?: (featureIdentity: string) => RenderFeatureGpuWorkResolver;
+  /** Single renderer-owned GPU preparation owner for all feature sessions. */
+  readonly gpuWork?: RenderFeatureGpuWorkOwner;
 }
 
 export interface RenderFeaturePreparedGraphicsResolverInput {
@@ -82,23 +121,19 @@ export interface RenderFeaturePreparedGraphicsResolverInput {
   readonly order: number;
   readonly generation: number;
   readonly transaction: PreparedGraphicsTransaction;
+  readonly fullscreenEffects: ReadonlyMap<string, PostProcessShaderEntry>;
   readonly lookup: (
     reference: import('./prepared-graphics').RenderFeaturePreparedRef,
   ) => import('./prepared-graphics-store').PreparedGraphicsItem | undefined;
 }
 
 export interface RenderFeatureFrameResult {
-  readonly events: readonly string[];
   readonly stageEvents: readonly RenderFeatureStageEvent[];
   readonly errors: readonly RenderError[];
-  readonly contributions: readonly RenderFeatureGraphContribution[];
+  readonly plans: readonly RenderFeaturePlannedFrame[];
+  readonly fullscreenEffects: ReadonlyMap<string, PostProcessShaderEntry>;
   readonly preparedResourceBatches: readonly RenderFeaturePreparedResourceBatch[];
   readonly hiddenEntityReports: readonly RenderFeatureHiddenEntityReport[];
-}
-
-export interface RenderFeatureOwnedResource {
-  readonly handle: RenderFeatureResourceHandle;
-  readonly release: () => Result<void, RenderError>;
 }
 
 export interface RenderFeatureHost {
@@ -107,11 +142,9 @@ export interface RenderFeatureHost {
   readonly preparedGeneration: number;
   /** Install a producer after renderer creation; same object identity is idempotent. */
   install(feature: RenderFeature<unknown>): Result<void, RenderError>;
+  /** Remove one installed producer and release every resource it owns. */
+  uninstall(feature: RenderFeature<unknown>): Result<void, RenderError>;
   advancePreparedGeneration(): number;
-  registerResource(
-    identity: string,
-    resource: RenderFeatureOwnedResource,
-  ): Result<void, RenderError>;
   setStatus(
     identity: string,
     status: RenderFeatureStatus,
@@ -173,8 +206,7 @@ export function settlePreparedGraphicsCompletion(
 
 interface FeatureSlot {
   readonly feature: RenderFeature<unknown>;
-  readonly order: number;
-  readonly resources: RenderFeatureOwnedResource[];
+  order: number;
   readonly preparedResourceBatches: Set<RenderFeaturePreparedResourceBatch>;
   readonly preparedStore: PreparedGraphicsStore;
   status: RenderFeatureStatus;
@@ -230,17 +262,6 @@ function missingCapability(
   return feature.requiredCapabilities?.find((capability) => caps[capability] !== true);
 }
 
-function lifecycleContext(input: RenderFeatureRecoverInput): RenderFeaturePrepareContext {
-  return {
-    caps: input.caps,
-    frame: { frameNumber: input.frameNumber },
-    resources: [],
-    targets: [],
-    reportError: { report: () => undefined },
-    graphics: createRenderFeatureGraphicsPrepare('renderer.lifecycle', -1),
-  };
-}
-
 function createPreparedGraphicsPrepare(
   transaction: PreparedGraphicsTransaction,
 ): RenderFeatureGraphicsPrepare {
@@ -292,7 +313,10 @@ function graphicsValidator(
   identity: string,
   transaction: PreparedGraphicsTransaction,
   capabilityAvailable: boolean,
-): RenderFeatureGraphicsValidator {
+): (
+  descriptor: RenderFeatureGraphicsPassDescriptor,
+  resources: readonly { readonly name: string }[],
+) => Result<RenderFeaturePreparedGraphicsState, RenderError> {
   return (descriptor, resources) => {
     const attachments = [
       ...descriptor.attachments.colors
@@ -323,74 +347,11 @@ function graphicsValidator(
   };
 }
 
-function invokeLifecycle(
-  slot: FeatureSlot,
-  stage: 'recover' | 'dispose',
-  input: RenderFeatureRecoverInput,
-): Result<void, RenderError> {
-  const callback = slot.feature[stage];
-  if (callback === undefined) return ok(undefined);
-  try {
-    const result = callback(lifecycleContext(input));
-    return result.ok ? result : err(result.error);
-  } catch (_failure) {
-    return err(
-      new RenderFeatureStageFailedError(
-        slot.feature.identity,
-        slot.order,
-        stage,
-        'renderer-recover',
-      ),
-    );
-  }
-}
-
-function releaseResource(
-  slot: FeatureSlot,
-  resource: RenderFeatureOwnedResource,
-): Result<void, RenderError> {
-  try {
-    return resource.release();
-  } catch {
-    return err(unknownFeatureError(slot.feature.identity, 'dispose'));
-  }
-}
-
-function cleanupErrorDescriptor(
-  error: RenderError,
-  slot: FeatureSlot,
-): RenderFeatureCleanupFailure {
-  return {
-    featureIdentity: slot.feature.identity,
-    order: slot.order,
-    code: error.code,
-  };
-}
-
-function withCleanupFailures(
-  error: RenderError,
-  cleanupFailures: readonly RenderFeatureCleanupFailure[],
-): RenderError {
-  if (cleanupFailures.length === 0 || error.code !== 'render-feature-stage-failed') return error;
-  const detail = {
-    ...error.detail,
-    cleanupFailures: Object.freeze([...cleanupFailures]),
-  };
-  const wrapped = new RenderFeatureStageFailedError(
-    detail.featureIdentity,
-    detail.order,
-    detail.stage,
-    detail.recovery,
-  );
-  Object.defineProperty(wrapped, 'detail', { value: detail });
-  return wrapped;
-}
-
 function asFeatureError(
   error: unknown,
   identity: string,
   order: number,
-  stage: 'extract' | 'prepare' | 'contribute',
+  stage: 'extract' | 'plan',
 ): RenderError {
   if (error instanceof Error && typeof (error as Partial<RenderError>).code === 'string') {
     return error as RenderError;
@@ -412,14 +373,14 @@ function featureErrorForSlot(slot: FeatureSlot, error: RenderError): RenderError
         : new RenderFeatureStageFailedError(
             slot.feature.identity,
             slot.order,
-            'contribute',
+            'plan',
             'next-frame',
           );
     default:
       return new RenderFeatureStageFailedError(
         slot.feature.identity,
         slot.order,
-        'contribute',
+        'plan',
         'next-frame',
       );
   }
@@ -448,7 +409,7 @@ function errorDescriptor(error: RenderError): RenderFeatureErrorDescriptor {
         detail: {
           featureIdentity: 'unknown',
           order: -1,
-          stage: 'contribute',
+          stage: 'plan',
           recovery: 'next-frame',
         },
       };
@@ -457,7 +418,7 @@ function errorDescriptor(error: RenderError): RenderFeatureErrorDescriptor {
 
 function recordFailure(
   slot: FeatureSlot,
-  stage: 'extract' | 'prepare' | 'contribute',
+  stage: 'extract' | 'plan',
   failure: unknown,
   errors: RenderError[],
 ): void {
@@ -467,16 +428,447 @@ function recordFailure(
   slot.latestError = errorDescriptor(error);
 }
 
+function logicalTargets(
+  targets: readonly RenderFeatureTargetHandle[],
+): readonly RenderFeatureLogicalTarget[] {
+  return Object.freeze(
+    targets.map((target) => ({
+      name: target.kind === 'scene-color' ? 'color' : 'depth',
+      kind: target.kind === 'scene-color' ? ('color' as const) : ('depth' as const),
+      format: target.format,
+      sampleCount: target.sampleCount,
+    })),
+  );
+}
+
+interface PreparedPlanResources {
+  readonly computePrograms: ReadonlyMap<string, RenderFeatureGpuProgramRef>;
+  readonly graphicsPrograms: ReadonlyMap<string, RenderFeaturePreparedRef<'pipeline'>>;
+  readonly buffers: ReadonlyMap<string, RenderFeatureGpuBufferRef>;
+  readonly computeBindings: ReadonlyMap<string, RenderFeatureGpuBindingsRef>;
+  readonly graphicsBindings: ReadonlyMap<string, RenderFeaturePreparedRef<'bindings'>>;
+  readonly vertexData: ReadonlyMap<string, RenderFeaturePreparedRef<'vertex-data'>>;
+  readonly indexData: ReadonlyMap<string, RenderFeaturePreparedRef<'index-data'>>;
+}
+
+function planFailure(slot: FeatureSlot): RenderFeatureStageFailedError {
+  return new RenderFeatureStageFailedError(slot.feature.identity, slot.order, 'plan', 'next-frame');
+}
+
+function targetHandle(
+  name: string,
+  targets: readonly RenderFeatureTargetHandle[],
+): string | RenderFeatureTargetHandle | undefined {
+  if (name === 'swapchain') return 'swapchain';
+  return targets.find(
+    (target) =>
+      (name === 'color' && target.kind === 'scene-color') ||
+      (name === 'depth' && target.kind === 'scene-depth'),
+  );
+}
+
+function targetFormat(
+  name: string,
+  targets: readonly RenderFeatureLogicalTarget[],
+  fallback: string | undefined,
+): TextureFormat | undefined {
+  const target = targets.find((candidate) => candidate.name === name);
+  return (target?.format ?? fallback) as TextureFormat | undefined;
+}
+
+function preparePlanResources(
+  slot: FeatureSlot,
+  plan: RenderFeaturePlan,
+  graphics: RenderFeatureGraphicsPrepare,
+  gpu: RenderFeatureGpuPrepareSession | undefined,
+  targets: readonly RenderFeatureTargetHandle[],
+): Result<PreparedPlanResources, RenderError> {
+  const computePrograms = new Map<string, RenderFeatureGpuProgramRef>();
+  const graphicsPrograms = new Map<string, RenderFeaturePreparedRef<'pipeline'>>();
+  const buffers = new Map<string, RenderFeatureGpuBufferRef>();
+  const computeBindings = new Map<string, RenderFeatureGpuBindingsRef>();
+  const graphicsBindings = new Map<string, RenderFeaturePreparedRef<'bindings'>>();
+  const vertexData = new Map<string, RenderFeaturePreparedRef<'vertex-data'>>();
+  const indexData = new Map<string, RenderFeaturePreparedRef<'index-data'>>();
+  const byKind = <Kind extends RenderFeatureResourceDeclaration['kind']>(kind: Kind) =>
+    plan.resources.filter(
+      (resource): resource is Extract<RenderFeatureResourceDeclaration, { readonly kind: Kind }> =>
+        resource.kind === kind,
+    );
+
+  if (
+    gpu === undefined &&
+    plan.resources.some((resource) =>
+      ['compute-program', 'buffer', 'compute-bindings'].includes(resource.kind),
+    )
+  ) {
+    return err(planFailure(slot));
+  }
+  for (const resource of byKind('compute-program')) {
+    const prepared = gpu?.prepareProgram(resource.name, resource.program);
+    if (prepared === undefined) return err(planFailure(slot));
+    if (!prepared.ok) return prepared;
+    computePrograms.set(resource.name, prepared.value);
+  }
+  for (const resource of byKind('graphics-program')) {
+    const prepared = graphics.preparePipeline(resource.name, resource.program);
+    if (!prepared.ok) return prepared;
+    graphicsPrograms.set(resource.name, prepared.value);
+  }
+  for (const resource of byKind('buffer')) {
+    const prepared = gpu?.prepareBuffer(resource.name, {
+      size: resource.size,
+      usage: resource.usage,
+      ...(resource.data === undefined ? {} : { data: resource.data }),
+    });
+    if (prepared === undefined) return err(planFailure(slot));
+    if (!prepared.ok) return prepared;
+    buffers.set(resource.name, prepared.value);
+  }
+  for (const resource of byKind('compute-bindings')) {
+    const program = computePrograms.get(resource.program);
+    const entries = resource.entries.map((entry) => ({
+      binding: entry.binding,
+      buffer: buffers.get(entry.resource),
+    }));
+    if (program === undefined || entries.some((entry) => entry.buffer === undefined)) {
+      return err(planFailure(slot));
+    }
+    const prepared = gpu?.prepareBindings(resource.name, {
+      program,
+      entries: entries.map((entry) => ({
+        binding: entry.binding,
+        buffer: entry.buffer as RenderFeatureGpuBufferRef,
+      })),
+    });
+    if (prepared === undefined) return err(planFailure(slot));
+    if (!prepared.ok) return prepared;
+    computeBindings.set(resource.name, prepared.value);
+  }
+  for (const resource of byKind('graphics-bindings')) {
+    const program = graphicsPrograms.get(resource.program);
+    if (program === undefined) return err(planFailure(slot));
+    const values: Record<string, unknown> = { ...resource.values };
+    for (const [key, targetName] of Object.entries(resource.logicalTargets ?? {})) {
+      const target = targetHandle(targetName, targets);
+      if (target === undefined || typeof target === 'string') return err(planFailure(slot));
+      values[key] = target;
+    }
+    const prepared = graphics.prepareBindings(resource.name, { pipeline: program, values });
+    if (!prepared.ok) return prepared;
+    graphicsBindings.set(resource.name, prepared.value);
+  }
+  for (const resource of byKind('vertex-data')) {
+    const descriptor =
+      resource.buffer === undefined
+        ? { layout: resource.layout, data: resource.data }
+        : { layout: resource.layout, buffer: buffers.get(resource.buffer) };
+    if ('buffer' in descriptor && descriptor.buffer === undefined) return err(planFailure(slot));
+    const prepared = graphics.prepareVertexData(
+      resource.name,
+      descriptor as import('./prepared-graphics').RenderFeatureVertexDataDescriptor,
+    );
+    if (!prepared.ok) return prepared;
+    vertexData.set(resource.name, prepared.value);
+  }
+  for (const resource of byKind('index-data')) {
+    const descriptor =
+      resource.buffer === undefined
+        ? { format: resource.format, data: resource.data }
+        : { format: resource.format, buffer: buffers.get(resource.buffer) };
+    if ('buffer' in descriptor && descriptor.buffer === undefined) return err(planFailure(slot));
+    const prepared = graphics.prepareIndexData(
+      resource.name,
+      descriptor as import('./prepared-graphics').RenderFeatureIndexDataDescriptor,
+    );
+    if (!prepared.ok) return prepared;
+    indexData.set(resource.name, prepared.value);
+  }
+  return ok({
+    computePrograms,
+    graphicsPrograms,
+    buffers,
+    computeBindings,
+    graphicsBindings,
+    vertexData,
+    indexData,
+  });
+}
+
+function projectDraw(
+  slot: FeatureSlot,
+  draw: Extract<RenderFeaturePassDeclaration, { readonly kind: 'raster' }>['draws'][number],
+  prepared: PreparedPlanResources,
+): Result<import('./prepared-graphics').RenderFeatureDrawRecord, RenderError> {
+  const pipeline = prepared.graphicsPrograms.get(draw.program);
+  const bindings = draw.bindings.map((name) => prepared.graphicsBindings.get(name));
+  const vertexData = draw.vertexData.map((entry) => ({
+    slot: entry.slot,
+    resource: prepared.vertexData.get(entry.resource),
+  }));
+  const indexData =
+    draw.indexData === undefined
+      ? undefined
+      : {
+          resource: prepared.indexData.get(draw.indexData.resource),
+          format: draw.indexData.format,
+        };
+  if (
+    pipeline === undefined ||
+    bindings.some((binding) => binding === undefined) ||
+    vertexData.some((vertex) => vertex.resource === undefined) ||
+    (indexData !== undefined && indexData.resource === undefined)
+  ) {
+    return err(planFailure(slot));
+  }
+  const common = {
+    pipeline,
+    bindings: bindings as readonly RenderFeaturePreparedRef<'bindings'>[],
+    vertexData: vertexData as readonly {
+      readonly slot: number;
+      readonly resource: RenderFeaturePreparedRef<'vertex-data'>;
+    }[],
+    ...(draw.vertexLayout === undefined ? {} : { vertexLayout: draw.vertexLayout }),
+  };
+  switch (draw.draw.kind) {
+    case 'draw':
+      return ok({
+        kind: 'draw',
+        ...common,
+        ...(indexData === undefined
+          ? {}
+          : {
+              indexData: {
+                resource: indexData.resource as RenderFeaturePreparedRef<'index-data'>,
+                format: indexData.format,
+              },
+            }),
+        command: {
+          vertexCount: draw.draw.vertexCount,
+          instanceCount: draw.draw.instanceCount,
+          ...(draw.draw.firstVertex === undefined ? {} : { firstVertex: draw.draw.firstVertex }),
+          ...(draw.draw.firstInstance === undefined
+            ? {}
+            : { firstInstance: draw.draw.firstInstance }),
+        },
+      });
+    case 'draw-indexed':
+      return ok({
+        kind: 'draw-indexed',
+        ...common,
+        indexData:
+          indexData === undefined
+            ? undefined
+            : {
+                resource: indexData.resource as RenderFeaturePreparedRef<'index-data'>,
+                format: indexData.format,
+              },
+        command: {
+          indexCount: draw.draw.indexCount,
+          instanceCount: draw.draw.instanceCount,
+          ...(draw.draw.firstIndex === undefined ? {} : { firstIndex: draw.draw.firstIndex }),
+          ...(draw.draw.baseVertex === undefined ? {} : { baseVertex: draw.draw.baseVertex }),
+          ...(draw.draw.firstInstance === undefined
+            ? {}
+            : { firstInstance: draw.draw.firstInstance }),
+        },
+      });
+    case 'draw-indirect':
+    case 'draw-indexed-indirect': {
+      const buffer = prepared.buffers.get(draw.draw.resource);
+      if (buffer === undefined) return err(planFailure(slot));
+      const command = {
+        buffer,
+        ...(draw.draw.offset === undefined ? {} : { offset: draw.draw.offset }),
+      };
+      if (draw.draw.kind === 'draw-indexed-indirect') {
+        return ok({
+          kind: 'draw-indexed-indirect',
+          ...common,
+          indexData:
+            indexData === undefined
+              ? undefined
+              : {
+                  resource: indexData.resource as RenderFeaturePreparedRef<'index-data'>,
+                  format: indexData.format,
+                },
+          command,
+        });
+      }
+      return ok({
+        kind: 'draw-indirect',
+        ...common,
+        ...(indexData === undefined
+          ? {}
+          : {
+              indexData: {
+                resource: indexData.resource as RenderFeaturePreparedRef<'index-data'>,
+                format: indexData.format,
+              },
+            }),
+        command,
+      });
+    }
+  }
+}
+
+function projectPlanPasses(
+  slot: FeatureSlot,
+  plan: RenderFeaturePlan,
+  prepared: PreparedPlanResources,
+  gpu: RenderFeatureGpuPrepareSession | undefined,
+  targets: readonly RenderFeatureTargetHandle[],
+  validateGraphics: (
+    descriptor: RenderFeatureGraphicsPassDescriptor,
+    resources: readonly { readonly name: string }[],
+  ) => Result<RenderFeaturePreparedGraphicsState, RenderError>,
+  resolveGraphics?: (
+    descriptor: RenderFeatureGraphicsPassDescriptor,
+  ) => Result<PreparedGraphicsResolvedSnapshot, RenderError> | undefined,
+): Result<RenderFeaturePlanExecution, RenderError> {
+  const logical = logicalTargets(targets);
+  const projected: RenderFeaturePlanExecutionPass[] = [];
+  for (const pass of plan.passes) {
+    if (pass.kind === 'compute') {
+      const program = prepared.computePrograms.get(pass.program);
+      const bindings = prepared.computeBindings.get(pass.bindings);
+      if (program === undefined || bindings === undefined) return err(planFailure(slot));
+      const descriptor: RenderFeatureGpuComputePassDescriptor = {
+        program,
+        bindings,
+        dispatches: pass.dispatches.map((dispatch) =>
+          dispatch.kind === 'direct'
+            ? {
+                entryPoint: dispatch.entryPoint,
+                bindings,
+                workgroups: dispatch.workgroups,
+              }
+            : {
+                entryPoint: dispatch.entryPoint,
+                bindings,
+                indirect: {
+                  buffer: prepared.buffers.get(dispatch.resource) as RenderFeatureGpuBufferRef,
+                  offset: dispatch.offset,
+                },
+              },
+        ),
+      };
+      if (
+        descriptor.dispatches.some(
+          (dispatch) => dispatch.indirect !== undefined && dispatch.indirect.buffer === undefined,
+        )
+      ) {
+        return err(planFailure(slot));
+      }
+      const resolved = gpu?.resolveComputePass(slot.feature.identity, descriptor);
+      if (resolved === undefined) return err(planFailure(slot));
+      if (!resolved.ok) return resolved;
+      projected.push({
+        featureIdentity: slot.feature.identity,
+        order: slot.order,
+        name: pass.name,
+        gpuCompute: descriptor,
+        resolvedGpuCompute: resolved.value,
+      });
+      continue;
+    }
+
+    const draws: import('./prepared-graphics').RenderFeatureDrawRecord[] = [];
+    for (const draw of pass.draws) {
+      const projected = projectDraw(slot, draw, prepared);
+      if (!projected.ok) return projected;
+      draws.push(projected.value);
+    }
+    const fallbackFormat = (() => {
+      const firstProgram = prepared.graphicsPrograms.get(pass.draws[0]?.program ?? '');
+      const declaration = plan.resources.find(
+        (resource) =>
+          resource.kind === 'graphics-program' &&
+          prepared.graphicsPrograms.get(resource.name) === firstProgram,
+      );
+      return declaration?.kind === 'graphics-program'
+        ? declaration.program.colorFormats[0]
+        : undefined;
+    })();
+    const colors = pass.colorAttachments.map((attachment) => ({
+      resource: targetHandle(attachment.target, targets),
+      format: targetFormat(attachment.target, logical, fallbackFormat),
+      loadOp: attachment.loadOp,
+      storeOp: attachment.storeOp,
+    }));
+    const depth =
+      pass.depthStencilAttachment === undefined
+        ? undefined
+        : {
+            resource: targetHandle(pass.depthStencilAttachment.target, targets),
+            format: targetFormat(pass.depthStencilAttachment.target, logical, undefined),
+            depthLoadOp: pass.depthStencilAttachment.depthLoadOp,
+            depthStoreOp: pass.depthStencilAttachment.depthStoreOp,
+          };
+    const sampledTargets = (pass.sampledTargets ?? []).map((name) => targetHandle(name, targets));
+    if (
+      colors.some(
+        (attachment) => attachment.resource === undefined || attachment.format === undefined,
+      ) ||
+      (depth !== undefined && (depth.resource === undefined || depth.format === undefined)) ||
+      sampledTargets.some((target) => target === undefined || typeof target === 'string')
+    ) {
+      return err(planFailure(slot));
+    }
+    const attachments: RenderFeatureGraphicsPassDescriptor['attachments'] =
+      depth === undefined
+        ? { colors: colors as RenderFeatureGraphicsPassDescriptor['attachments']['colors'] }
+        : {
+            colors: colors as RenderFeatureGraphicsPassDescriptor['attachments']['colors'],
+            depthStencil: depth as NonNullable<
+              RenderFeatureGraphicsPassDescriptor['attachments']['depthStencil']
+            >,
+          };
+    const descriptor: RenderFeatureGraphicsPassDescriptor = {
+      attachments,
+      ...(sampledTargets.length === 0
+        ? {}
+        : {
+            sampledTargets: sampledTargets as readonly RenderFeatureTargetHandle[],
+          }),
+      draws,
+    };
+    const graphicsState = validateGraphics(descriptor, []);
+    if (!graphicsState.ok) return graphicsState;
+    const resolved = resolveGraphics?.(descriptor);
+    if (
+      resolved !== undefined &&
+      !resolved.ok &&
+      resolved.error instanceof RenderFeaturePreparationFailedError &&
+      resolved.error.detail.reason === 'pipeline-pending'
+    ) {
+      continue;
+    }
+    if (resolved !== undefined && !resolved.ok) return resolved;
+    projected.push({
+      featureIdentity: slot.feature.identity,
+      order: slot.order,
+      name: pass.name,
+      graphics: descriptor,
+      graphicsState: graphicsState.value,
+      ...(resolved?.ok === true ? { resolvedGraphics: resolved.value } : {}),
+    });
+  }
+  return ok({
+    featureIdentity: slot.feature.identity,
+    order: slot.order,
+    passes: Object.freeze(projected),
+  });
+}
+
 function invokeStage<T>(
   slot: FeatureSlot,
   stage: RenderFeatureStageEvent['stage'],
   action: () => Result<T, RenderError>,
-  events: string[],
   stageEvents: RenderFeatureStageEvent[],
   errors: RenderError[],
 ): Result<T, RenderError> {
   const identity = slot.feature.identity;
-  events.push(`${identity}:${stage}`);
   stageEvents.push({ featureIdentity: identity, order: slot.order, stage });
   try {
     const result = action();
@@ -537,7 +929,6 @@ class FeatureHostImpl implements RenderFeatureHost {
     this.slots.push({
       feature,
       order: this.slots.length,
-      resources: [],
       preparedResourceBatches: new Set(),
       preparedStore: createPreparedGraphicsStore(),
       status: 'active',
@@ -545,6 +936,25 @@ class FeatureHostImpl implements RenderFeatureHost {
     });
     this.publishDiagnosticsChanged();
     return ok(undefined);
+  }
+
+  uninstall(feature: RenderFeature<unknown>): Result<void, RenderError> {
+    if (this.disposed) return err(unknownFeatureError(feature.identity, 'dispose'));
+    const index = this.slots.findIndex((slot) => slot.feature === feature);
+    if (index < 0) return ok(undefined);
+    const slot = this.slots[index];
+    if (slot === undefined) return ok(undefined);
+
+    let firstError: RenderError | undefined;
+    for (const batch of slot.preparedResourceBatches) {
+      const result = batch.release();
+      if (!result.ok && firstError === undefined) firstError = result.error;
+    }
+    slot.status = 'disposed';
+    this.slots.splice(index, 1);
+    for (const [order, remaining] of this.slots.entries()) remaining.order = order;
+    this.publishDiagnosticsChanged();
+    return firstError === undefined ? ok(undefined) : err(firstError);
   }
 
   advancePreparedGeneration(): number {
@@ -555,18 +965,6 @@ class FeatureHostImpl implements RenderFeatureHost {
     }
     this.lastRecoveryFrame = undefined;
     return this.generation;
-  }
-
-  registerResource(
-    identity: string,
-    resource: RenderFeatureOwnedResource,
-  ): Result<void, RenderError> {
-    const slot = findSlot(this.slots, identity);
-    if (slot === undefined || this.disposed || slot.status === 'disposed') {
-      return err(unknownFeatureError(identity, 'dispose'));
-    }
-    slot.resources.push(resource);
-    return ok(undefined);
   }
 
   setStatus(
@@ -697,14 +1095,6 @@ class FeatureHostImpl implements RenderFeatureHost {
         if (firstError === undefined) firstError = error;
         continue;
       }
-      const recovered = invokeLifecycle(slot, 'recover', input);
-      if (!recovered.ok) {
-        slot.status = 'failed';
-        slot.latestError = errorDescriptor(recovered.error);
-        diagnosticsChanged = true;
-        if (firstError === undefined) firstError = recovered.error;
-        continue;
-      }
       if (slot.status !== 'active' || slot.latestError !== undefined) {
         slot.status = 'active';
         slot.latestError = undefined;
@@ -729,51 +1119,26 @@ class FeatureHostImpl implements RenderFeatureHost {
     this.disposed = true;
 
     const retired = this.retirePreparedGraphics();
-    let firstError: RenderError | undefined = retired.ok ? undefined : retired.error;
-    const cleanupFailures: RenderFeatureCleanupFailure[] = [];
+    const firstError: RenderError | undefined = retired.ok ? undefined : retired.error;
     for (const slot of this.slots) {
-      for (const resource of slot.resources) {
-        const result = releaseResource(slot, resource);
-        if (!result.ok) {
-          cleanupFailures.push(cleanupErrorDescriptor(result.error, slot));
-          if (firstError === undefined) firstError = result.error;
-        }
-      }
-      const disposed = invokeLifecycle(slot, 'dispose', {
-        frameNumber: -1,
-        caps: {} as never,
-      });
-      if (!disposed.ok) {
-        cleanupFailures.push(cleanupErrorDescriptor(disposed.error, slot));
-        if (firstError === undefined) firstError = disposed.error;
-      }
-      slot.resources.length = 0;
       slot.status = 'disposed';
     }
     this.publishDiagnosticsChanged();
     this.diagnosticsListeners.clear();
 
-    return firstError === undefined
-      ? ok(undefined)
-      : err(withCleanupFailures(firstError, cleanupFailures));
+    return firstError === undefined ? ok(undefined) : err(firstError);
   }
 }
 
-/**
- * Run the three typed stages once for every active feature.
- *
- * The feature value is kept in the slot closure: no heterogeneous FrameData
- * ledger or assertion is needed between callbacks. A failure ends only the
- * current slot and is retained in the host diagnostics projection.
- */
+/** Build and project the mandatory plan once for every active feature. */
 export function runRenderFeatureFrame(
   host: RenderFeatureHost,
   input: RenderFeatureFrameInput,
 ): RenderFeatureFrameResult {
-  const events: string[] = [];
   const stageEvents: RenderFeatureStageEvent[] = [];
   const errors: RenderError[] = [];
-  const contributions: RenderFeatureGraphContribution[] = [];
+  const plans: RenderFeaturePlannedFrame[] = [];
+  const fullscreenEffects = new Map<string, PostProcessShaderEntry>();
   const preparedResourceBatches: RenderFeaturePreparedResourceBatch[] = [];
   const hiddenEntityReports: RenderFeatureHiddenEntityReport[] = [
     ...(input.hiddenEntityReports ?? []),
@@ -797,7 +1162,6 @@ export function runRenderFeatureFrame(
     const slot: FeatureSlot = {
       feature,
       order,
-      resources: [],
       preparedResourceBatches: new Set(),
       preparedStore: createPreparedGraphicsStore(),
       status: 'active',
@@ -807,14 +1171,10 @@ export function runRenderFeatureFrame(
     const transaction = host.beginPreparedFrame(identity, input.generation ?? 0);
     if (transaction === undefined) continue;
     const graphics = createPreparedGraphicsPrepare(transaction);
-    const gpu = input.getGpuWorkResolver?.(identity);
-    gpu?.beginFrame();
-    const validateGraphics = graphicsValidator(
+    const gpu: RenderFeatureGpuPrepareSession | undefined = input.gpuWork?.beginFeature(
       identity,
-      transaction,
-      missingCapability(feature, input.caps) === undefined,
+      input.generation ?? 0,
     );
-    let staging!: RenderFeatureContributionStaging & RenderFeatureGraphicsContributionStaging;
     const featureHiddenEntityReports: RenderFeatureHiddenEntityReport[] = [];
     const extractContext = {
       worlds: input.worlds,
@@ -829,7 +1189,6 @@ export function runRenderFeatureFrame(
       slot,
       'extract',
       () => slot.feature.extract(extractContext),
-      events,
       stageEvents,
       errors,
     );
@@ -839,34 +1198,64 @@ export function runRenderFeatureFrame(
       continue;
     }
 
-    const prepared = invokeStage(
+    const targets = logicalTargets(input.targets ?? []);
+    const declared = invokeStage(
       slot,
-      'prepare',
+      'plan',
       () =>
-        slot.feature.prepare(extracted.value, {
+        feature.plan(extracted.value, {
           caps: input.caps,
           frame: { frameNumber: input.frameNumber },
-          resources: [],
-          targets: input.targets ?? [],
-          reportError: { report: (error) => errors.push(error) },
-          graphics,
-          ...(gpu === undefined ? {} : { gpu }),
+          generation: transaction.generation,
+          targets,
+          ...(input.materialShaderBindingContract === undefined
+            ? {}
+            : { materialShaderBindingContract: input.materialShaderBindingContract }),
         }),
-      events,
       stageEvents,
       errors,
     );
-    if (!prepared.ok) {
+    if (!declared.ok) {
       transaction.abort();
       host.setStatus(identity, 'failed', slot.latestError);
       continue;
     }
+    const frozen = freezeRenderFeaturePlan(identity, declared.value, targets);
+    if (!frozen.ok) {
+      recordFailure(slot, 'plan', frozen.error, errors);
+      transaction.abort();
+      host.setStatus(identity, 'failed', slot.latestError);
+      continue;
+    }
+    const plannedFrame: RenderFeaturePlannedFrame = Object.freeze({
+      featureIdentity: identity,
+      generation: transaction.generation,
+      signature: renderFeaturePlanSignature(frozen.value),
+      plan: frozen.value,
+    });
+    for (const resource of frozen.value.resources) {
+      if (resource.kind !== 'fullscreen-program') continue;
+      fullscreenEffects.set(identity, {
+        source: resource.source,
+        ...(resource.reads === undefined ? {} : { reads: resource.reads }),
+        ...(resource.params === undefined ? {} : { params: resource.params }),
+      });
+    }
+    const prepared = preparePlanResources(slot, frozen.value, graphics, gpu, input.targets ?? []);
+    if (!prepared.ok) {
+      recordFailure(slot, 'plan', prepared.error, errors);
+      transaction.abort();
+      host.setStatus(identity, 'failed', slot.latestError);
+      continue;
+    }
+    const validateGraphics = graphicsValidator(identity, transaction, true);
 
     const resolverInput: RenderFeaturePreparedGraphicsResolverInput = {
       featureIdentity: identity,
       order,
       generation: transaction.generation,
       transaction,
+      fullscreenEffects,
       lookup: (reference) =>
         [...transaction.overlayItems(), ...transaction.committedItems()].find(
           (item) => item.reference === reference,
@@ -884,93 +1273,52 @@ export function runRenderFeatureFrame(
     const releaseResolver = (): void => {
       if (resolver !== undefined) resolver.release();
     };
-    const resolveGpuCompute =
-      gpu === undefined
-        ? undefined
-        : (descriptor: import('./prepared-gpu-work').RenderFeatureGpuComputePassDescriptor) =>
-            gpu.resolveComputePass(identity, descriptor);
-    staging =
-      input.createContributionStaging?.(
-        identity,
-        order,
-        validateGraphics,
-        resolveGraphics,
-        resolveGpuCompute,
-      ) ??
-      createRenderFeatureContributionStaging(
-        identity,
-        order,
-        validateGraphics,
-        resolveGraphics,
-        resolveGpuCompute,
-      );
-
-    const contributed = invokeStage(
+    const projected = projectPlanPasses(
       slot,
-      'contribute',
-      () =>
-        slot.feature.contribute(extracted.value, {
-          caps: input.caps,
-          frame: { frameNumber: input.frameNumber },
-          resources: [],
-          targets: input.targets ?? [],
-          reportError: { report: (error) => errors.push(error) },
-          graphics,
-          ...(gpu === undefined ? {} : { gpu }),
-          staging,
-        }),
-      events,
-      stageEvents,
-      errors,
+      frozen.value,
+      prepared.value,
+      gpu,
+      input.targets ?? [],
+      validateGraphics,
+      resolveGraphics,
     );
-    if (!contributed.ok) {
-      staging?.abort();
+    if (!projected.ok) {
+      recordFailure(slot, 'plan', projected.error, errors);
       transaction.abort();
       releaseResolver();
       host.setStatus(identity, 'failed', slot.latestError);
       continue;
     }
-    if (staging !== undefined) {
-      const committed = staging.commit();
-      if (!committed.ok) {
-        recordFailure(slot, 'contribute', committed.error, errors);
-        transaction.abort();
-        releaseResolver();
-        host.setStatus(identity, 'failed', slot.latestError);
-        continue;
-      }
-      const preparedCommit = transaction.commit();
-      if (!preparedCommit.ok) {
-        recordFailure(slot, 'contribute', preparedCommit.error, errors);
-        releaseResolver();
-        host.setStatus(identity, 'failed', slot.latestError);
-        continue;
-      }
-      const leases = [
-        ...new Set(committed.value.passes.flatMap((pass) => pass.resolvedGraphics?.leases ?? [])),
-        ...(gpu?.retireUntouched() ?? []),
-      ];
-      const retained = host.retainPreparedGraphics(identity, leases);
-      if (!retained.ok) {
-        recordFailure(slot, 'contribute', retained.error, errors);
-        releaseResolver();
-        host.setStatus(identity, 'failed', slot.latestError);
-        continue;
-      }
-      if (leases.length > 0) preparedResourceBatches.push(retained.value);
-      if (committed.value.resources.length > 0 || committed.value.passes.length > 0) {
-        contributions.push(committed.value);
-      }
+    const preparedCommit = transaction.commit();
+    if (!preparedCommit.ok) {
+      recordFailure(slot, 'plan', preparedCommit.error, errors);
+      releaseResolver();
+      host.setStatus(identity, 'failed', slot.latestError);
+      continue;
     }
+    const leases = [
+      ...new Set(projected.value.passes.flatMap((pass) => pass.resolvedGraphics?.leases ?? [])),
+      ...(gpu?.retireUntouched() ?? []),
+    ];
+    const retained = host.retainPreparedGraphics(identity, leases);
+    if (!retained.ok) {
+      recordFailure(slot, 'plan', retained.error, errors);
+      releaseResolver();
+      host.setStatus(identity, 'failed', slot.latestError);
+      continue;
+    }
+    planExecutionProjections.set(plannedFrame, projected.value);
+    plans.push(plannedFrame);
+    if (leases.length > 0) preparedResourceBatches.push(retained.value);
     hiddenEntityReports.push(...featureHiddenEntityReports);
     host.setStatus(identity, 'active');
   }
 
   return {
-    events,
     stageEvents,
     errors,
-    contributions,
+    plans,
+    fullscreenEffects,
     preparedResourceBatches,
     hiddenEntityReports: mergeHiddenEntityReports(hiddenEntityReports),
   };
@@ -1014,7 +1362,6 @@ export function createRenderFeatureHost(
   const slots: FeatureSlot[] = features.map((feature, order) => ({
     feature,
     order,
-    resources: [],
     preparedResourceBatches: new Set(),
     preparedStore: createPreparedGraphicsStore(),
     status: 'active',

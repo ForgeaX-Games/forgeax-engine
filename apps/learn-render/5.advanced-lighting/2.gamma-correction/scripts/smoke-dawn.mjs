@@ -2,11 +2,11 @@
 // apps/learn-render/5.advanced-lighting/2.gamma-correction/scripts/smoke-dawn.mjs
 //
 // LearnOpenGL section 5.advanced-lighting 2.gamma-correction dawn-node smoke.
-// Structural-only: >=60 frames, onError=0, both pipelines install + drive
-// frames; no pixel readback (gamma visual delta is verify-step territory).
+// Structural-only: >=60 frames, onError=0, one Standard feature drives both
+// gamma parameter modes; no pixel readback (visual delta is verify-step work).
 //
 // Output literals (preserved for grep tooling):
-//   - `[learn-render-2-gamma-correction] backend=<backend>`
+//   - `[learn-render-2-gamma-correction] pipeline=Standard`
 //   - `[smoke] frames observed=<N>`
 //   - `[smoke] PASS`
 //   - `[smoke] FAIL`
@@ -28,9 +28,7 @@ const WOOD_SRC_PATH = resolve(TEXTURES_DIR, 'wood.png');
 
 const WOOD_GUID_STR = '019e3969-1d48-7c3b-ac24-6d68f457065f';
 
-// Inline shader sources mirror src/index.ts (kept in sync by hand; AI users
-// grep `pow(col, vec3<f32>(2.2))` to find the wrong-gamma effect across both
-// the demo and this smoke).
+// Inline shader source mirrors the host-owned fullscreen feature in src/index.ts.
 const PASSTHROUGH_CORRECT_WGSL = `
 struct FullscreenOutput {
   @builtin(position) position : vec4<f32>,
@@ -80,6 +78,32 @@ fn fs_main(in : FullscreenOutput) -> @location(0) vec4<f32> {
   let col = textureSample(screenTexture, screenSampler, in.uv).rgb;
   let wrong = pow(col, vec3<f32>(2.2));
   return vec4<f32>(wrong, 1.0);
+}
+`;
+
+const GAMMA_EFFECT_WGSL = `
+struct FullscreenOutput {
+  @builtin(position) position : vec4<f32>,
+  @location(0) uv : vec2<f32>,
+};
+@vertex
+fn vs_main(@builtin(vertex_index) i : u32) -> FullscreenOutput {
+  var x : f32 = -1.0; var y : f32 = -1.0;
+  if (i == 1u) { x = 3.0; }
+  if (i == 2u) { y = 3.0; }
+  var out : FullscreenOutput;
+  out.position = vec4<f32>(x, y, 0.0, 1.0);
+  out.uv = vec2<f32>((x + 1.0) * 0.5, 1.0 - (y + 1.0) * 0.5);
+  return out;
+}
+@group(1) @binding(0) var screenTexture : texture_2d<f32>;
+@group(1) @binding(1) var screenSampler : sampler;
+@group(1) @binding(2) var<uniform> gammaParams : vec4<f32>;
+@fragment
+fn fs_main(in : FullscreenOutput) -> @location(0) vec4<f32> {
+  let col = textureSample(screenTexture, screenSampler, in.uv).rgb;
+  if (gammaParams.x > 0.5) { return vec4<f32>(pow(col, vec3<f32>(2.2)), 1.0); }
+  return vec4<f32>(col, 1.0);
 }
 `;
 
@@ -191,17 +215,21 @@ if (!existsSync(WOOD_SRC_PATH)) {
 
 const { World } = await import('@forgeax/engine-ecs');
 const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
-const enginePkg = await import('@forgeax/engine-runtime');
-const { createRenderer } = enginePkg;
-const { addFullscreenPass, addScenePass } = await import('@forgeax/engine-render');
-const { Camera, MeshFilter, MeshRenderer, PointLight } = await import('@forgeax/engine-render');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
+const {
+  Camera,
+  MeshFilter,
+  MeshRenderer,
+  PointLight,
+  PostProcessParams,
+} = await import('@forgeax/engine-render');
+const { createFullscreenRenderFeature } = await import('@forgeax/engine-app');
 const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_QUAD,
 } = await import('@forgeax/engine-assets-runtime');
 const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
-const { RenderGraph } = await import('@forgeax/engine-render-graph');
 
 const woodDecodeRes = await decodeImageFromFile(WOOD_SRC_PATH);
 if (!woodDecodeRes.ok) {
@@ -219,32 +247,38 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const gammaFeature = createFullscreenRenderFeature({
+    identity: 'learn-render-5-2::gamma',
+    source: GAMMA_EFFECT_WGSL,
+    params: { byteSize: 16, defaultValue: new Uint8Array(16) },
+  });
+  const constructed = await constructRuntimeRendererHost(
+    mockCanvas,
+    { features: [gammaFeature] },
+    { shaderManifestUrl: MANIFEST_URL },
+  );
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  var assets = constructed.value.assets;
 } catch (err) {
   console.error(
-    `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
+    `[smoke] FAIL - constructRuntimeRendererHost failed: ${err instanceof Error ? err.message : String(err)}`,
   );
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[learn-render-2-gamma-correction] backend=${renderer.backend}`);
+console.log('[learn-render-2-gamma-correction] Standard pipeline active');
 
-const assets = renderer.assets;
 if (!assets) {
   console.error('[smoke] FAIL - AssetRegistry is null');
   process.exit(1);
 }
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => { if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint }); });
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 const woodGuidRes = AssetGuid.parse(WOOD_GUID_STR);
 if (!woodGuidRes.ok) {
@@ -263,8 +297,9 @@ const woodTexAsset = {
 };
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const lease = worldAttachment1.value;
 
 // Catalogue the texture under its GUID, then mint a shared-ref column handle.
 assets.catalog(woodGuidRes.value, woodTexAsset);
@@ -308,7 +343,7 @@ world.spawn(
   { component: PointLight, data: {} },
 );
 
-world.spawn(
+const cameraEntity = world.spawn(
   {
     component: Transform,
     data: {
@@ -318,130 +353,46 @@ world.spawn(
     component: Camera,
     data: { fov: Math.PI / 4, aspect: WIDTH / HEIGHT, near: 0.1, far: 100 },
   },
-);
+  { component: PostProcessParams, data: { shader: 'learn-render-5-2::gamma', data: new Uint8Array(16) } },
+).unwrap();
 
-// --- 5. Register two custom RenderPipelines + their assets ---
-
-const GAMMA_CORRECT_POSTPROCESS_ID = 'forgeax-gamma::passthrough-correct';
-const GAMMA_WRONG_POSTPROCESS_ID = 'forgeax-gamma::wrong-gamma';
-const GAMMA_CORRECT_PIPELINE_ID = 'learn-render-2-gamma::correct';
-const GAMMA_WRONG_PIPELINE_ID = 'learn-render-2-gamma::wrong';
-
-const OFFSCREEN_SRGB_KEY = 'offscreenSrgb';
-const OFFSCREEN_DEPTH_KEY = 'gammaDepth';
-const INTERMEDIATE_LINEAR_KEY = 'intermediateLinear';
-
-function makeGammaPipeline(mode) {
-  return {
-    buildGraph(ctx) {
-      const graph = new RenderGraph();
-      graph.addColorTarget(OFFSCREEN_SRGB_KEY, {
-        format: 'rgba8unorm-srgb',
-        size: 'swapchain',
-        sample: 1,
-        usage: 0x10 | 0x04,
-      });
-      graph.addColorTarget(OFFSCREEN_DEPTH_KEY, {
-        format: 'depth24plus-stencil8',
-        size: 'swapchain',
-        sample: 1,
-        usage: 0x10,
-      });
-      if (mode === 'wrong') {
-        graph.addColorTarget(INTERMEDIATE_LINEAR_KEY, {
-          format: 'bgra8unorm',
-          size: 'swapchain',
-          sample: 1,
-          usage: 0x10 | 0x04,
-        });
-      }
-      addScenePass(graph, 'main', {
-        color: OFFSCREEN_SRGB_KEY,
-        depth: OFFSCREEN_DEPTH_KEY,
-        selector: { LightMode: ['Forward'] },
-        _routeFromOpts: true,
-      });
-      const postShaderId =
-        mode === 'correct' ? GAMMA_CORRECT_POSTPROCESS_ID : GAMMA_WRONG_POSTPROCESS_ID;
-      addFullscreenPass(graph, 'postGamma', {
-        shader: postShaderId,
-        color: 'swapchain',
-        reads: [OFFSCREEN_SRGB_KEY],
-      });
-      const compileResult = graph.compile({
-        backendKind: ctx.runtime.device.caps.backendKind,
-        caps: ctx.runtime.device.caps,
-        device: ctx.runtime.device,
-      });
-      if (!compileResult.ok) return null;
-      return graph;
-    },
-    execute(ctx) {
-      ctx.frameState.perFrameGraph?.execute(ctx);
-    },
-  };
-}
-
-try {
-  renderer.postProcess.register(GAMMA_CORRECT_POSTPROCESS_ID, {
-    source: PASSTHROUGH_CORRECT_WGSL,
-    reads: [OFFSCREEN_SRGB_KEY],
-  });
-  renderer.registerPipeline(GAMMA_CORRECT_PIPELINE_ID, makeGammaPipeline('correct'));
-  renderer.postProcess.register(GAMMA_WRONG_POSTPROCESS_ID, {
-    source: WRONG_GAMMA_WGSL,
-    reads: [OFFSCREEN_SRGB_KEY],
-  });
-  renderer.registerPipeline(GAMMA_WRONG_PIPELINE_ID, makeGammaPipeline('wrong'));
-} catch (e) {
-  console.error('[smoke] FAIL - register threw:', e instanceof Error ? e.message : String(e));
-  process.exit(1);
-}
-
-// --- 6. Install correct pipeline + draw frames ---
-
-const installCorrect = renderer.installPipeline({
-  kind: 'render-pipeline',
-  pipelineId: GAMMA_CORRECT_PIPELINE_ID,
-});
-if (!installCorrect.ok) {
-  console.error(`[smoke] FAIL - installPipeline(correct): ${installCorrect.error.code}`);
-  process.exit(1);
-}
+const frameRequest = {
+  leases: [worldAttachment1.value],
+  camera: { lease: worldAttachment1.value },
+  environment: { lease: worldAttachment1.value },
+};
 
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < PER_STATE_FRAMES; i++) {
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-  if (!r.ok) console.error(`[smoke] draw correct frame ${i} error: ${r.error.code}`);
+  const r = renderer.draw(frameRequest);
+  if (!r.ok) {
+    console.error(`[smoke] draw correct frame ${i} error: ${r.error.code}`);
+  } else {
+    const completed = await r.value.completed;
+    if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+  }
   framesObserved++;
 }
 
-// --- 7. Hot-swap to wrong pipeline + draw more frames ---
-
-const installWrong = renderer.installPipeline({
-  kind: 'render-pipeline',
-  pipelineId: GAMMA_WRONG_PIPELINE_ID,
-});
-if (!installWrong.ok) {
-  console.error(`[smoke] FAIL - installPipeline(wrong): ${installWrong.error.code}`);
-  process.exit(1);
-}
+// Update the receipt-bound feature parameter, then drive the same frame owner.
+const wrongMode = new Uint8Array(16);
+new Float32Array(wrongMode.buffer)[0] = 1;
+const modeResult = world.set(cameraEntity, PostProcessParams, { data: wrongMode });
+if (!modeResult.ok) throw modeResult.error;
 
 for (let i = 0; i < PER_STATE_FRAMES; i++) {
   world.update(1 / 60).unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-  if (!r.ok) console.error(`[smoke] draw wrong frame ${i} error: ${r.error.code}`);
+  const r = renderer.draw(frameRequest);
+  if (!r.ok) {
+    console.error(`[smoke] draw wrong frame ${i} error: ${r.error.code}`);
+  } else {
+    const completed = await r.value.completed;
+    if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+  }
   framesObserved++;
 }
-
-const device = sharedDevice;
-if (!device) {
-  console.error('[smoke] FAIL - no shared device captured');
-  process.exit(1);
-}
-await device.queue.onSubmittedWorkDone();
 const frameWall = Date.now() - frameStart;
 console.log(
   `[smoke] frames observed=${framesObserved} (wall=${frameWall}ms, per-state=${PER_STATE_FRAMES})`,
@@ -453,13 +404,11 @@ const wallTotalMs = Date.now() - frameStart;
 console.log(`[smoke] wallTotalMs=${wallTotalMs}`);
 
 const failures = [];
-if (renderer.backend !== 'webgpu')
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES)
-  failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
+  failures.push(`(a) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (errors.length > 0) {
   const codes = errors.map((e) => e.code).join(', ');
-  failures.push(`(c) Renderer.onError fired ${errors.length} times: [${codes}]`);
+  failures.push(`(b) Renderer.onError fired ${errors.length} times: [${codes}]`);
 }
 
 if (failures.length > 0) {
@@ -468,14 +417,19 @@ if (failures.length > 0) {
   console.error(
     "  rerun: pnpm --filter '@forgeax/app-learn-render-5-advanced-lighting-2-gamma-correction' smoke",
   );
-  device.destroy?.();
+  const disposeResult = await renderer.dispose();
+  if (!disposeResult.ok) console.error(`[smoke] renderer.dispose() returned err: ${disposeResult.error.code}`);
   process.exit(1);
 }
 
 console.log(
-  `[smoke] PASS - 3 criteria GREEN: backend=webgpu, frames=${framesObserved}, RhiError count=0, wallTotalMs=${wallTotalMs}`,
+  `[smoke] PASS - 3 criteria GREEN: pipeline=Standard, frames=${framesObserved}, RhiError count=0, wallTotalMs=${wallTotalMs}`,
 );
 
-device.destroy?.();
+const disposeResult = await renderer.dispose();
+if (!disposeResult.ok) {
+  console.error(`[smoke] renderer.dispose() returned err: ${disposeResult.error.code}`);
+  process.exit(1);
+}
 delete globalThis.navigator.gpu;
 process.exit(0);

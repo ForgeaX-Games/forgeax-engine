@@ -15,26 +15,24 @@ interface HookBook {
 
 const hookBook: HookBook = { index: new Map(), add: 0, insert: 0, discard: 0, remove: 0 };
 
-export const HookedMarker = defineComponent(
-  'ComponentHooksMarker',
-  { key: 'u32', value: 'f32' },
-  {
-    onAdd: () => {
-      hookBook.add += 1;
-    },
-    onInsert: (entity, value) => {
-      hookBook.insert += 1;
-      hookBook.index.set(value.key, entity);
-    },
-    onDiscard: (_entity, value) => {
-      hookBook.discard += 1;
-      hookBook.index.delete(value.key);
-    },
-    onRemove: () => {
-      hookBook.remove += 1;
-    },
-  },
-);
+// Component lifecycle callbacks were intentionally removed from the ECS core.
+// Keep this Bevy reproduction honest by recording the same facts at the
+// explicit mutation sites below; the World mutation result remains the owner
+// of success/failure and no hidden callback channel is introduced.
+export const HookedMarker = defineComponent('ComponentHooksMarker', {
+  key: 'u32',
+  value: 'f32',
+});
+
+function recordMarkerInsert(entity: EntityHandle, key: number): void {
+  hookBook.insert += 1;
+  hookBook.index.set(key, entity);
+}
+
+function recordMarkerDiscard(key: number): void {
+  hookBook.discard += 1;
+  hookBook.index.delete(key);
+}
 
 interface ComponentHooksState {
   elapsed: number;
@@ -83,6 +81,8 @@ export function buildComponentHooksWorld(world: World): ComponentHooksState {
     component: HookedMarker,
     data: { key: 1, value: 0 },
   });
+  hookBook.add += 1;
+  recordMarkerInsert(rekeyEntity, 1);
   const addEntity = spawnMarker(world, [180, -90, 0], [0.15, 0.8, 1, 1]);
   world.spawn(
     { component: Transform, data: { pos: [0, 0, 100], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
@@ -105,14 +105,22 @@ export function buildComponentHooksWorld(world: World): ComponentHooksState {
       state.elapsed += world.getResource(Time).delta;
       if (!state.added && state.elapsed >= HOOK_STEP) {
         world.addComponent(addEntity, { component: HookedMarker, data: { key: 2, value: 0 } }).unwrap();
+        hookBook.add += 1;
+        recordMarkerInsert(addEntity, 2);
         state.added = true;
       }
       if (!state.rekeyed && state.elapsed >= HOOK_STEP * 2) {
+        const previous = world.get(rekeyEntity, HookedMarker).unwrap();
+        recordMarkerDiscard(previous.key);
         world.set(rekeyEntity, HookedMarker, { key: 3, value: 1 }).unwrap();
+        recordMarkerInsert(rekeyEntity, 3);
         state.rekeyed = true;
       }
       if (!state.removed && state.elapsed >= HOOK_STEP * 3) {
+        const previous = world.get(addEntity, HookedMarker).unwrap();
+        recordMarkerDiscard(previous.key);
         world.removeComponent(addEntity, HookedMarker).unwrap();
+        hookBook.remove += 1;
         state.removed = true;
       }
     },

@@ -14,8 +14,8 @@ import { SpriteRegionOverride } from '@forgeax/engine-render/authoring';
 // Step 1: createApp(canvas, opts) -- one-screen takeoff
 const appRes = await createApp(target, { clearColor: [0.07, 0.07, 0.09, 1] });
 
-// Step 2: configure the public Pack v2 catalogue
-assets.configurePackIndex('/pack-index.json');
+// Step 2: select the scoped dev catalog or the emitted production catalog
+configureRuntimeAssetCatalog(assets, runtimeBinding);
 
 // Step 3: load the baked atlas by its authored GUID
 const atlasGuid = AssetGuid.parse('0e8657b1-c0ab-4940-a4f6-27fcd976823c');

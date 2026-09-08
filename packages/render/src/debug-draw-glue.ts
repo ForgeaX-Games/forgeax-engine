@@ -1,112 +1,48 @@
-// @forgeax/engine-runtime — debug-draw auto-attach SSOT (feat-20260615-debug-draw M5 / w28)
+// @forgeax/engine-render - typed debug overlay graph contribution.
 //
-// Plan D-1: wiring lives in packages/runtime/, not in packages/debug-draw/
-// Plan D-5: single-file SSOT for createApp hook + attachDebugOverlayPass helper
-// Plan D-8: both URP and HDRP share the same attachDebugOverlayPass helper (SSOT)
-//
-// Two exports:
-//   (a) createDebugDrawOnReady(renderer, format?) — creates a DebugDraw instance
-//       once renderer.ready settles. Sets the package-internal registry so the
-//       graph pass closures can reach it. Called from createApp to populate
-//       app.debugDraw.
-//   (b) attachDebugOverlayPass(graph, getViewProj) — adds a tonemap-suffix
-//       overlay pass to a render-graph. The pass execute closure reads the
-//       internally-registered DebugDraw instance (set by createDebugDrawOnReady).
+// App owns the concrete DebugDraw instance and injects its declaration-only
+// capability through the Renderer host. Render owns graph ordering and pass
+// encoding without depending on the debug-draw package.
 
-import type { DebugDraw } from '@forgeax/engine-debug-draw';
-import { createDebugDraw } from '@forgeax/engine-debug-draw';
-import type { Mat4 } from '@forgeax/engine-math';
-import type { RenderGraph } from '@forgeax/engine-render-graph';
-import type { TextureFormat, TextureView } from '@forgeax/engine-rhi';
-import type { RenderPipelineContext } from './render-pipeline-context';
-import type { Renderer } from './renderer';
-import { selectSwapChainFormat } from './surface-format';
+import { mat4 } from '@forgeax/engine-math';
+import type { RenderGraphBuilder, RenderGraphError } from '@forgeax/engine-render-graph';
+import type { Result } from '@forgeax/engine-types';
+import type { RenderPipelineFrame, RenderPipelineTarget } from './render-pipeline';
 
-/**
- * Package-internal registry: the active DebugDraw instance for the current
- * renderer. Set by createDebugDrawOnReady, read by attachDebugOverlayPass
- * execute closures. A single renderer has one DebugDraw instance.
- */
-let registeredDebugDraw: DebugDraw | null = null;
-
-/**
- * Create a DebugDraw instance once `renderer.ready` settles.
- *
- * Waits for the GPU device + shader manifest + builtin asset upload to
- * complete before creating the DebugDraw PSO. Stores the instance in the
- * package-internal registry so graph pass closures can reach it.
- *
- * Bug A fix (feat-20260626 m6-4): the PSO color format MUST equal the swap-chain
- * LDR view the overlay pass draws into (`attachDebugOverlayPass` flushes to
- * `ctx.view`), or the backend rejects the render pass with an attachment-state
- * mismatch every frame. The view format is the SSOT
- * `selectSwapChainFormat(caps.storageBuffer).view` -- `bgra8unorm-srgb` on
- * native WebGPU (follows getPreferredCanvasFormat + the srgb-via-viewFormats
- * route) and `rgba8unorm-srgb` on wgpu-wasm GLES -- the same derivation
- * `PipelineState.colorAttachmentFormat` uses (memory
- * offscreen-rt-format-must-follow-swapchain-not-hardcode-rgba). The hardcoded
- * `'bgra8unorm'` default was latent until the overlay pass actually flushed
- * (before the glue merge the pass was a no-op stub that never validated). A
- * caller may still pass an explicit `format` to target a custom surface.
- */
-export async function createDebugDrawOnReady(
-  renderer: Renderer,
-  format?: TextureFormat,
-): Promise<DebugDraw> {
-  const ready = await renderer.ready;
-  if (!ready.ok) throw ready.error;
-
-  const resolvedFormat =
-    format ??
-    (selectSwapChainFormat(renderer.device.caps.storageBuffer).view as unknown as TextureFormat);
-
-  const ddResult = await createDebugDraw({
-    device: renderer.device,
-    queue: renderer.device.queue,
-    createShaderModule: renderer._internal_createShaderModule,
-    format: resolvedFormat,
-  });
-  if (!ddResult.ok) throw ddResult.error;
-
-  registeredDebugDraw = ddResult.value;
-  return ddResult.value;
-}
-
-/**
- * Attach a DebugOverlay pass to a render graph at the tonemap suffix.
- *
- * The pass is added with empty reads/writes (the swap-chain is not a
- * graph-declared target). The execute closure reads `ctx.view` (the
- * swap-chain TextureView) + `ctx.encoder` (the shared frame command
- * encoder) and calls `dd.flush(encoder, view, viewProj)` using the
- * registered DebugDraw instance.
- *
- * When no DebugDraw is registered (createDebugDrawOnReady not called,
- * or tree-shaken), the pass is a silent no-op.
- *
- * Per plan D-8: URP and HDRP both call this helper with their respective
- * tonemap-suffix graphs, keeping the wiring single-source.
- *
- * @param graph - The per-frame RenderGraph (URP forward-graph or HDRP tonemap-graph).
- * @param getViewProj - Thunk that returns camera.viewProj from the pass context
- *   at execute time (not at graph-build time).
- */
-export function attachDebugOverlayPass(
-  graph: RenderGraph<RenderPipelineContext>,
-  getViewProj: (ctx: RenderPipelineContext) => Mat4,
-  options: { readonly reads?: readonly string[] } = {},
-): void {
-  graph.addPass('debug-overlay', {
-    // The overlay draws to ctx.view, but it still needs a graph edge so a
-    // producer that targets the scene color cannot be appended after it.
-    // The caller supplies the active pipeline's final scene-color token.
-    reads: options.reads ?? [],
-    writes: [],
-    execute: (ctx: RenderPipelineContext) => {
-      const dd = registeredDebugDraw;
-      if (!dd) return; // not registered (no debug-draw in this runtime)
-      const viewProj = getViewProj(ctx);
-      dd.flush(ctx.encoder, ctx.view as unknown as TextureView, viewProj);
+export function addTypedDebugOverlayPass(
+  graph: RenderGraphBuilder<RenderPipelineFrame>,
+  output: RenderPipelineTarget,
+): Result<void, RenderGraphError> {
+  return graph.addRasterPass('debug-overlay', {
+    accesses: [{ resource: output.view, usage: 'color-attachment' }],
+    colorAttachments: [{ view: output.view, loadOp: 'load', storeOp: 'store' }],
+    encode: ({ pass, frame }) => {
+      const projection = mat4.create();
+      if (frame.camera.projection === 'orthographic') {
+        mat4.orthographic(
+          projection,
+          frame.camera.orthoLeft,
+          frame.camera.orthoRight,
+          frame.camera.orthoBottom,
+          frame.camera.orthoTop,
+          frame.camera.near,
+          frame.camera.far,
+        );
+      } else {
+        mat4.perspective(
+          projection,
+          frame.camera.fov,
+          frame.camera.aspect,
+          frame.camera.near,
+          frame.camera.far,
+        );
+      }
+      const view = mat4.invert(mat4.create(), frame.camera.world);
+      const result = frame.runtime.debugOverlay?.encode(
+        pass,
+        mat4.multiply(mat4.create(), projection, view),
+      );
+      if (result !== undefined && !result.ok) throw result.error;
     },
   });
 }

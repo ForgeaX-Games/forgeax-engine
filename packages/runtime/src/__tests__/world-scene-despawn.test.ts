@@ -10,12 +10,22 @@
 //   - opts.keepDetached preserves members marked via detachSceneMember.
 
 import { World } from '@forgeax/engine-ecs';
-import { SceneInstance } from '@forgeax/engine-render/internal';
-import { ChildOf, Transform } from '@forgeax/engine-scene';
+import { SceneInstance } from '@forgeax/engine-render';
+import {
+  ChildOf,
+  Transform,
+  worldDespawnDescendants,
+  worldDespawnScene,
+  worldDetachSceneMember,
+  worldInstantiateScene,
+} from '@forgeax/engine-scene';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
 function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
+  for (const component of [SceneInstance, ChildOf, Transform]) {
+    world.components.register(component).unwrap();
+  }
   return world.allocSharedRef('SceneAsset', asset);
 }
 
@@ -30,7 +40,7 @@ describe('world.despawnScene (w19)', () => {
       ],
     };
     const handle = registerSceneAsset(world, asset);
-    const r = world.instantiateScene(handle);
+    const r = worldInstantiateScene(world, handle);
     if (!r.ok) throw new Error('instantiateScene failed');
     const inst = world.get(r.value.root, SceneInstance);
     if (!inst.ok) throw new Error('get failed');
@@ -39,7 +49,7 @@ describe('world.despawnScene (w19)', () => {
     const m0 = inst.value.mapping[0] as unknown as number;
     const m1 = inst.value.mapping[1] as unknown as number;
 
-    const dr = world.despawnScene(r.value.root);
+    const dr = worldDespawnScene(world, r.value.root);
     expect(dr.ok).toBe(true);
     if (!dr.ok) return;
     expect(dr.value).toBeGreaterThanOrEqual(3); // root + 2 members
@@ -60,7 +70,7 @@ describe('world.despawnScene (w19)', () => {
       ],
     };
     const handle = registerSceneAsset(world, asset);
-    const r = world.instantiateScene(handle);
+    const r = worldInstantiateScene(world, handle);
     if (!r.ok) throw new Error('instantiate failed');
     const inst = world.get(r.value.root, SceneInstance);
     if (!inst.ok) throw new Error('get failed');
@@ -68,10 +78,10 @@ describe('world.despawnScene (w19)', () => {
     if (!(inst.value.mapping instanceof Uint32Array)) return;
     const member1 = inst.value.mapping[1] as unknown as number;
 
-    const det = world.detachSceneMember(r.value.root, member1 as never);
+    const det = worldDetachSceneMember(world, r.value.root, member1 as never);
     expect(det.ok).toBe(true);
 
-    const dr = world.despawnScene(r.value.root, { keepDetached: true });
+    const dr = worldDespawnScene(world, r.value.root, { keepDetached: true });
     expect(dr.ok).toBe(true);
     // Detached member must remain alive
     expect(world.get(member1 as never, Transform).ok).toBe(true);
@@ -89,7 +99,7 @@ describe('world.despawnDescendants (w19)', () => {
     );
     if (!child.ok) throw new Error('spawn child failed');
 
-    const dr = world.despawnDescendants(root.value);
+    const dr = worldDespawnDescendants(world, root.value);
     expect(dr.ok).toBe(true);
     if (!dr.ok) return;
     expect(dr.value).toBeGreaterThanOrEqual(1); // child despawned
@@ -114,7 +124,7 @@ describe('world.despawnDescendants (w19)', () => {
     );
     if (!c2.ok) throw new Error('spawn failed');
 
-    const dr = world.despawnDescendants(root.value);
+    const dr = worldDespawnDescendants(world, root.value);
     expect(dr.ok).toBe(true);
     expect(world.get(c1.value, Transform).ok).toBe(false);
     expect(world.get(c2.value, Transform).ok).toBe(false);

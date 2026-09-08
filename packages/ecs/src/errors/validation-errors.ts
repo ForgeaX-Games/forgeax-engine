@@ -1,4 +1,5 @@
 import type { Component, ComponentSchema, FieldReflection } from '../component';
+import { componentDefinition } from '../component-schema';
 
 export class TimeDeltaInvalidError extends Error {
   override readonly name = 'TimeDeltaInvalidError';
@@ -101,6 +102,128 @@ export class ComponentFieldInvalidValueError extends Error {
   }
 }
 
+export class ComponentNumericValueInvalidError extends Error {
+  override readonly name = 'ComponentNumericValueInvalidError';
+  readonly code = 'component-numeric-value-invalid' as const;
+  readonly expected = 'a numeric value other than NaN';
+  readonly hint: string;
+  readonly detail: {
+    readonly entity: number | undefined;
+    readonly component: string;
+    readonly field: string;
+    readonly received: number;
+    readonly index?: number;
+  };
+
+  constructor(
+    entity: number | undefined,
+    component: string,
+    field: string,
+    received: number,
+    index?: number,
+  ) {
+    const location =
+      index === undefined ? `${component}.${field}` : `${component}.${field}[${index}]`;
+    const hint = `Replace NaN at ${location} with an authored numeric value; Number.POSITIVE_INFINITY remains valid where the component domain permits it.`;
+    super(
+      `${location} received NaN.\n` +
+        `  code: component-numeric-value-invalid\n` +
+        `  expected: a numeric value other than NaN\n` +
+        `  hint: ${hint}`,
+    );
+    this.hint = hint;
+    this.detail = {
+      entity,
+      component,
+      field,
+      received,
+      ...(index === undefined ? {} : { index }),
+    };
+  }
+}
+
+const NUMERIC_FIELD_TYPES = new Set(['f32', 'f64', 'i32', 'u32', 'i16', 'u16', 'i8', 'u8', 'enum']);
+
+export function validateNumericFieldValues<S extends ComponentSchema>(
+  component: Component<string, S>,
+  raw: Partial<Record<string, unknown>> | undefined,
+  entity?: number,
+): ComponentNumericValueInvalidError | null {
+  if (raw === undefined) return null;
+  const fields = componentDefinition(component).fields as Readonly<Record<string, FieldReflection>>;
+  const rawValues = raw as Record<string, unknown>;
+  for (const fieldName of Object.keys(rawValues)) {
+    const reflection = fields[fieldName];
+    if (reflection === undefined) continue;
+    const value = rawValues[fieldName];
+    if (NUMERIC_FIELD_TYPES.has(reflection.type)) {
+      if (typeof value === 'number' && Number.isNaN(value)) {
+        return new ComponentNumericValueInvalidError(entity, component.name, fieldName, value);
+      }
+      continue;
+    }
+    if (
+      reflection.arrayMeta === undefined ||
+      !NUMERIC_FIELD_TYPES.has(reflection.arrayMeta.elementType)
+    ) {
+      continue;
+    }
+    const length =
+      Array.isArray(value) || ArrayBuffer.isView(value)
+        ? (value as { readonly length?: number }).length
+        : undefined;
+    if (length === undefined) continue;
+    const values = value as ArrayLike<unknown>;
+    for (let index = 0; index < length; index++) {
+      const received = values[index];
+      if (typeof received === 'number' && Number.isNaN(received)) {
+        return new ComponentNumericValueInvalidError(
+          entity,
+          component.name,
+          fieldName,
+          received,
+          index,
+        );
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Returned before an ECS write when a managed `array<T>` field receives a
+ * value that the storage boundary cannot interpret as an array payload. The
+ * old column writer treated arbitrary objects as an empty payload, which
+ * silently changed the row while retaining no evidence of the caller error.
+ */
+export class ManagedArrayInvalidValueError extends Error {
+  override readonly name = 'ManagedArrayInvalidValueError';
+  readonly code = 'managed-array-invalid-value' as const;
+  readonly expected = 'an Array or TypedArray payload (or null/undefined to clear it)';
+  readonly hint: string;
+  readonly detail: {
+    readonly component: string;
+    readonly field: string;
+    readonly fieldType: string;
+    readonly actualValue: unknown;
+  };
+
+  constructor(componentName: string, fieldName: string, fieldType: string, actualValue: unknown) {
+    const hint =
+      `Set ${componentName}.${fieldName} to a plain array or TypedArray matching ` +
+      `${fieldType}; use null or undefined to clear the managed value.`;
+    super(
+      `${componentName}.${fieldName}: managed array received an invalid value.\n` +
+        `  code: managed-array-invalid-value\n` +
+        `  fieldType: ${fieldType}\n` +
+        `  expected: an Array or TypedArray payload (or null/undefined to clear it)\n` +
+        `  hint: ${hint}`,
+    );
+    this.hint = hint;
+    this.detail = { component: componentName, field: fieldName, fieldType, actualValue };
+  }
+}
+
 /**
  * Validate the closed enum fields present in a write payload. Enums without
  * labels remain open numeric fields for compatibility with existing schemas.
@@ -111,7 +234,7 @@ export function validateEnumFieldValues<S extends ComponentSchema>(
   entity?: number,
 ): ComponentFieldInvalidValueError | null {
   if (raw === undefined) return null;
-  const fields = component.fields as Readonly<Record<string, FieldReflection>>;
+  const fields = componentDefinition(component).fields as Readonly<Record<string, FieldReflection>>;
   const rawValues = raw as Record<string, unknown>;
   for (const fieldName of Object.keys(rawValues)) {
     const reflection = fields[fieldName];
@@ -163,43 +286,10 @@ export function validateEnumFieldValues<S extends ComponentSchema>(
  *   direction (feat-20260709 M2 / D-1, add-only union member).
  *
  * `.code = 'spawn-light-invalid-bounds'`
- * `.detail = { field: 'range' | 'innerOuter' | 'outerNinety' | 'direction';`
- * `            got: number | readonly number[] }`
+ * `.detail.field` is derived from `keyof typeof SPAWN_LIGHT_INVALID_BOUNDS_POLICY`;
+ * `.detail.got` is `number | readonly number[]`.
  * `.hint` — names the offending field plus the valid replacement form.
  */
-export class SpawnLightInvalidBoundsError extends Error {
-  override readonly name = 'SpawnLightInvalidBoundsError';
-  readonly code = 'spawn-light-invalid-bounds' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: {
-    readonly field: 'range' | 'innerOuter' | 'outerNinety' | 'direction';
-    readonly got: number | readonly number[];
-  };
-
-  constructor(
-    componentName: string,
-    field: 'range' | 'innerOuter' | 'outerNinety' | 'direction',
-    got: number | readonly number[],
-  ) {
-    const policy = SPAWN_LIGHT_INVALID_BOUNDS_POLICY[field];
-    const hint = policy.hint(componentName, got);
-    const expectedStr = policy.expected;
-    super(
-      `${componentName}: spawn payload bound violation.\n` +
-        `  code: spawn-light-invalid-bounds\n` +
-        `  component: ${componentName}\n` +
-        `  field: ${field}\n` +
-        `  got: ${got}\n` +
-        `  expected: ${expectedStr}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expectedStr;
-    this.detail = { field, got };
-  }
-}
-
 const SPAWN_LIGHT_INVALID_BOUNDS_POLICY = {
   range: {
     expected: 'range >= 0 or Number.POSITIVE_INFINITY',
@@ -221,79 +311,44 @@ const SPAWN_LIGHT_INVALID_BOUNDS_POLICY = {
     hint: (componentName: string, got: number | readonly number[]) =>
       `${componentName}.direction is missing or a zero vector (got ${JSON.stringify(got)}); direction has no default, provide a non-zero direction, e.g. [-0.5, -1, -0.3]`,
   },
-} satisfies {
-  readonly [Field in SpawnLightInvalidBoundsError['detail']['field']]: {
+} satisfies Record<
+  string,
+  {
     readonly expected: string;
     readonly hint: (componentName: string, got: number | readonly number[]) => string;
-  };
-};
+  }
+>;
 
-// ────────────────────────────────────────────────────────────────────────────
-// feat-20260520-directional-light-shadow-mapping M1 / w1 — closed-union
-// evolution +1 (`'cardinality-exceeded'`). feat-20260520-2d-sprite-layer-mvp
-// M-2 w13 — closed-union evolution +1 (`'resource-invalid-value'`). Both
-// land as minor (add-member) per AGENTS.md §Error model evolution contract;
-// the unified count after merge is 24 -> 26.
-//
-// `'cardinality-exceeded'` is triggered when ECS spawn / addComponent
-// detects more than one entity carrying a cardinality=1 component such as
-// PointLightShadow (plan-strategy D-3). `.detail` carries
-// `{ componentName, count, max }` so AI users narrow on `.code` then read
-// `.detail` for the offending component name + the bound violated
-// (charter P3 progressive disclosure).
-//
-// `'resource-invalid-value'` sits in the spawn-* fail-fast kebab series
-// alongside `'spawn-light-invalid-bounds'` (feat-20260519). Triggered by
-// `setTransparentSortConfig(world, { mode, yzAlpha })` when
-// `mode ∈/ {0, 1, 2}` (plan-strategy D-4). Generalisable to any future
-// world-level resource validator that fails on bound-mismatch payloads;
-// `.detail` carries `receivedMode` for the sort-config use case and accepts
-// an optional `receivedKey` slot for future resource validators sharing the
-// code.
-//
-// AGENTS.md table sync is deferred to a follow-up w33 (AC-16) so the doc +
-// code commits land together with the D-6 historical 23 -> 24 catch-up
-// (feat-20260519 missed the table bump). Plan-decisions D-3 + D-4 + D-6
-// reference this comment.
-// ───────────────────────────────────────────────────────────────────────
-
-/**
- * Thrown / returned via `Result.err` when an attempt is made to add or spawn
- * a second entity with a component declared cardinality = 1 on the World.
- * The canonical first consumer is `PointLightShadow` (at most 4 shadow-casting
- * point lights per scene, cardinality=4); other bounded components route through
- * the same code.
- *
- * `.code = 'cardinality-exceeded'`
- * `.detail = { componentName, count, max }`
- * `.hint` — names the offending component, the current count, and the bound.
- */
-export class CardinalityExceededError extends Error {
-  override readonly name = 'CardinalityExceededError';
-  readonly code = 'cardinality-exceeded' as const;
+export class SpawnLightInvalidBoundsError extends Error {
+  override readonly name = 'SpawnLightInvalidBoundsError';
+  readonly code = 'spawn-light-invalid-bounds' as const;
   readonly hint: string;
   readonly expected: string;
   readonly detail: {
-    readonly componentName: string;
-    readonly count: number;
-    readonly max: number;
+    readonly field: keyof typeof SPAWN_LIGHT_INVALID_BOUNDS_POLICY;
+    readonly got: number | readonly number[];
   };
 
-  constructor(componentName: string, count: number, max: number) {
-    const hint = `Component "${componentName}" is declared cardinality=${max}; current count ${count} exceeds the bound. Despawn the extra entity or merge the data into a single carrier.`;
-    const expectedStr = `count <= ${max} for component "${componentName}"`;
+  constructor(
+    componentName: string,
+    field: keyof typeof SPAWN_LIGHT_INVALID_BOUNDS_POLICY,
+    got: number | readonly number[],
+  ) {
+    const policy = SPAWN_LIGHT_INVALID_BOUNDS_POLICY[field];
+    const hint = policy.hint(componentName, got);
+    const expectedStr = policy.expected;
     super(
-      `Cardinality exceeded for component "${componentName}".\n` +
-        `  code: cardinality-exceeded\n` +
+      `${componentName}: spawn payload bound violation.\n` +
+        `  code: spawn-light-invalid-bounds\n` +
         `  component: ${componentName}\n` +
-        `  count: ${count}\n` +
-        `  max: ${max}\n` +
+        `  field: ${field}\n` +
+        `  got: ${got}\n` +
         `  expected: ${expectedStr}\n` +
         `  hint: ${hint}`,
     );
     this.hint = hint;
     this.expected = expectedStr;
-    this.detail = { componentName, count, max };
+    this.detail = { field, got };
   }
 }
 

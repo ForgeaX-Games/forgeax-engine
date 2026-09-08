@@ -103,9 +103,6 @@
         },
         "optional": {
           "type": "boolean"
-        },
-        "static": {
-          "type": "boolean"
         }
       }
     },
@@ -126,6 +123,9 @@
         },
         {
           "type": "number"
+        },
+        {
+          "$ref": "#/$defs/textureGuid"
         },
         {
           "type": "array",
@@ -161,6 +161,11 @@
           "type": "number"
         }
       }
+    },
+    "textureGuid": {
+      "type": "string",
+      "minLength": 1,
+      "description": "仅当对应 parameters 条目的 type 为 texture 时，字符串才解释为纹理 GUID 简写。"
     },
     "coordinates": {
       "type": "object",

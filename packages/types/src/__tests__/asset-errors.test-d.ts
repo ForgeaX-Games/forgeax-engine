@@ -30,9 +30,18 @@ import type {
   NativeCookError,
   RuntimeParseError,
 } from '../asset-errors.js';
-import { ASSET_ERROR_HINTS, type AssetErrorCode } from '../index';
+import {
+  ASSET_ERROR_HINTS,
+  type AssetErrorCode,
+  type MeshAsset,
+  type VertexAttributeMap,
+} from '../index';
 
 describe('AssetErrorCode closed union - 22 members (feat-20260608 M0 +tileset-region-index-out-of-range + M1 +tileset-tile-entry-malformed; feat-20260621 +asset-invalidated)', () => {
+  it('type-level: vertex color is the optional linear RGBA runtime attribute', () => {
+    expectTypeOf<VertexAttributeMap['color']>().toEqualTypeOf<Float32Array | undefined>();
+    expectTypeOf<MeshAsset['attributes']['color']>().toEqualTypeOf<Float32Array | undefined>();
+  });
   it('type-level: contains cubemap-handle-missing as a new member', () => {
     expectTypeOf<'cubemap-handle-missing'>().toMatchTypeOf<AssetErrorCode>();
   });
@@ -93,10 +102,14 @@ describe('AssetErrorCode closed union - 22 members (feat-20260608 M0 +tileset-re
         case 'source-not-imported':
           return 'source-not-imported';
         // === 3 new codes (feat-20260608-mesh-multi-section-primitive-multi-material-slot M1 / w2) ===
-        case 'mesh-renderer-material-count-mismatch':
-          return 'mesh-renderer-material-count-mismatch';
+        case 'mesh-renderer-material-override-invalid':
+          return 'mesh-renderer-material-override-invalid';
+        case 'mesh-renderer-material-override-overflow':
+          return 'mesh-renderer-material-override-overflow';
         case 'mesh-asset-submeshes-empty':
           return 'mesh-asset-submeshes-empty';
+        case 'mesh-asset-material-slot-index-out-of-range':
+          return 'mesh-asset-material-slot-index-out-of-range';
         case 'mesh-submesh-index-range-out-of-bounds':
           return 'mesh-submesh-index-range-out-of-bounds';
         // === 1 new code (feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild) ===

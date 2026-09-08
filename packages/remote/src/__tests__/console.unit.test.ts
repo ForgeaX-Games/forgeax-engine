@@ -268,6 +268,7 @@ import { type ConsoleHandle, startServer } from '../server';
     'script-runtime-error',
     'server-startup-failed',
     'server-not-running',
+    'eval-result-not-serializable',
   ];
 
   const WIRE_SEGMENT: Readonly<Record<RemoteErrorCode, number>> = {
@@ -275,6 +276,7 @@ import { type ConsoleHandle, startServer } from '../server';
     'script-runtime-error': -32002,
     'server-startup-failed': -32003,
     'server-not-running': -32004,
+    'eval-result-not-serializable': -32005,
   };
 
   describe('RemoteErrorCode closed union (4 members) + 4-field surface', () => {
@@ -316,6 +318,7 @@ import { type ConsoleHandle, startServer } from '../server';
     'script-runtime-error',
     'server-startup-failed',
     'server-not-running',
+    'eval-result-not-serializable',
   ]);
 
   describe('RemoteError runtime - construction + 4-field surface', () => {
@@ -370,6 +373,10 @@ import { type ConsoleHandle, startServer } from '../server';
     'server-not-running': {
       expected: 'server is reachable at ws://localhost:<port>',
       hint: 'start the demo first; verify app.remote is wired; pass --port to override default 5732',
+    },
+    'eval-result-not-serializable': {
+      expected: 'eval result is JSON-serializable',
+      hint: 'return a JSON-safe value; BigInt and cyclic objects are unsupported over JSON-RPC',
     },
   } as const satisfies Record<
     RemoteErrorCode,
@@ -500,6 +507,8 @@ import { type ConsoleHandle, startServer } from '../server';
         return 'startup-failed';
       case 'server-not-running':
         return 'not-running';
+      case 'eval-result-not-serializable':
+        return 'eval-result-not-serializable';
     }
   }
 

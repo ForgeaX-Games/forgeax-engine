@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // bevy-screenshot headless dawn smoke — proves Bevy window/screenshot
 // behavior: plane + cube rendered, Space triggers screenshot capture.
 // Browser and smoke share the same src/screenshot.ts scene.
@@ -98,7 +99,7 @@ async function capture(device) {
 
 // --- build ---
 const { World } = await import('@forgeax/engine-ecs');
-const { createRenderer } = await import('@forgeax/engine-runtime');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
@@ -106,26 +107,23 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
 } catch (err) {
-  console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
+  console.error(`[smoke] FAIL - renderer host construction failed: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
-console.log(`[bevy-screenshot] backend=${renderer.backend}`);
+console.log('[bevy-screenshot] Standard pipeline active');
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+subscribeSmokeErrors(renderer, (err) => errors.push({ code: err.code, hint: err.hint }));
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const { buildScreenshotWorld, stepScreenshot } = await import(resolve(here, '..', 'src', 'screenshot.ts'));
 buildScreenshotWorld(world);
@@ -149,13 +147,27 @@ function spaceSnapshot() {
 }
 
 // --- render initial frames ---
+let latestReceipt;
 for (let f = 0; f < 5; f++) {
   stepScreenshot(world, noInputSnapshot());
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = renderer.draw({
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  });
   if (!r.ok) { console.error(`[smoke] FAIL - draw error: ${r.error.code}`); process.exit(1); }
+  latestReceipt = r.value;
 }
 await delay(100);
+
+if (latestReceipt !== undefined) {
+  const observed = await renderer.observe(latestReceipt, { include: ['bindings'] });
+  if (!observed.ok) {
+    console.error(`[smoke] FAIL - receipt observation error: ${observed.error.code}`);
+    process.exit(1);
+  }
+}
 
 const initialPixels = await capture(sharedDevice);
 const cx = Math.floor(WIDTH / 2);

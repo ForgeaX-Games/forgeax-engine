@@ -1,5 +1,5 @@
+import { semanticBuildKey } from '@forgeax/engine-ddc';
 import { describe, expect, it } from 'vitest';
-import { semanticDdcKey } from '../ddc-cache.js';
 
 const input = () => ({
   schemaVersion: '2.0.0',
@@ -14,21 +14,24 @@ const input = () => ({
 
 describe('semantic DDC key', () => {
   it('includes every semantic input and excludes publish environment', () => {
-    const a = semanticDdcKey(input());
-    const b = semanticDdcKey({ ...input(), publish: { base: '/release/', url: 'x', hash: 'y' } });
+    const a = semanticBuildKey(input());
+    const b = semanticBuildKey({ ...input(), publish: { base: '/release/', url: 'x', hash: 'y' } });
     expect(a).toBe(b);
-    expect(semanticDdcKey({ ...input(), codecVersion: 'codec@3' })).not.toBe(a);
+    expect(semanticBuildKey({ ...input(), codecVersion: 'codec@3' })).not.toBe(a);
     expect(
-      semanticDdcKey({ ...input(), settings: { colorSpace: 'linear', mipmap: true } }),
+      semanticBuildKey({ ...input(), settings: { colorSpace: 'linear', mipmap: true } }),
     ).not.toBe(a);
     expect(
-      semanticDdcKey({ ...input(), sourceDependencies: [{ path: 'assets/a.png', digest: 'bbb' }] }),
+      semanticBuildKey({
+        ...input(),
+        sourceDependencies: [{ path: 'assets/a.png', digest: 'bbb' }],
+      }),
     ).not.toBe(a);
   });
 
   it('is stable for object insertion order and GUID order', () => {
-    const a = semanticDdcKey(input());
-    const b = semanticDdcKey({
+    const a = semanticBuildKey(input());
+    const b = semanticBuildKey({
       ...input(),
       settings: { mipmap: true, colorSpace: 'srgb' },
       declaredGuids: [...input().declaredGuids].reverse(),
@@ -37,12 +40,51 @@ describe('semantic DDC key', () => {
   });
 
   it('does not use path or publish fields as semantic identity', () => {
-    const a = semanticDdcKey(input());
-    const b = semanticDdcKey({
+    const a = semanticBuildKey(input());
+    const b = semanticBuildKey({
       ...input(),
       sourceDependencies: [{ path: 'moved/a.png', digest: 'aaa' }],
       publish: { base: '/other/', url: 'other/a.bin', hash: 'other-hash' },
     });
     expect(a).toBe(b);
+  });
+
+  it('normalizes host-specific asset roots for path-only dependencies', () => {
+    const a = semanticBuildKey({
+      ...input(),
+      sourceDependencies: ['../../tmp/sample/assets/vfx/flow.png'],
+    });
+    const b = semanticBuildKey({
+      ...input(),
+      sourceDependencies: ['host-games/sample/assets/vfx/flow.png'],
+    });
+    expect(a).toBe(b);
+  });
+
+  it('invalidates changed source dependency evidence while ignoring order', () => {
+    const a = semanticBuildKey({
+      ...input(),
+      sourceDependencies: [
+        { path: 'assets/a.png', digest: 'aaa' },
+        { path: 'assets/b.png', digest: 'bbb' },
+      ],
+    });
+    const reordered = semanticBuildKey({
+      ...input(),
+      sourceDependencies: [
+        { path: 'assets/b.png', digest: 'bbb' },
+        { path: 'assets/a.png', digest: 'aaa' },
+      ],
+    });
+    expect(reordered).toBe(a);
+    expect(
+      semanticBuildKey({
+        ...input(),
+        sourceDependencies: [
+          { path: 'assets/a.png', digest: 'changed' },
+          { path: 'assets/b.png', digest: 'bbb' },
+        ],
+      }),
+    ).not.toBe(a);
   });
 });

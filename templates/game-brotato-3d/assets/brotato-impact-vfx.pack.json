@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "2.0.0",
+  "kind": "internal-text-package",
+  "assets": [
+    {
+      "guid": "019fb264-3000-7000-8000-000000000079",
+      "kind": "particle-effect",
+      "execution": "cooked",
+      "payload": {
+        "schemaVersion": 2,
+        "emitters": [
+          {
+            "id": "impact-burst",
+            "capacity": 64,
+            "backend": { "required": "gpu" },
+            "space": "local",
+            "schedule": { "rate": 0, "bursts": [{ "time": 0, "count": 20 }] },
+            "bounds": { "kind": "sphere", "center": [0, 0, 0], "radius": 2.4 },
+            "program": { "module": "brotato-impact.vfx.wgsl" },
+            "renderers": [{ "kind": "billboard", "material": "019fb264-3000-7000-8000-000000000012", "blend": "additive" }]
+          }
+        ]
+      },
+      "refs": [],
+      "artifacts": {}
+    }
+  ]
+}

@@ -7,16 +7,11 @@
 import type { PeerId } from './endpoint';
 
 // ---------------------------------------------------------------------------
-// EndpointErrorCode -- closed 5-member union
+// EndpointErrorCode -- closed 5-member union derived from endpointErrorPolicy
 // ---------------------------------------------------------------------------
 
 /** Transport-level endpoint error codes (requirements AC-02, AC-13). */
-export type EndpointErrorCode =
-  | 'peer-not-found'
-  | 'connection-closed'
-  | 'send-failed'
-  | 'already-closed'
-  | 'connection-failed';
+export type EndpointErrorCode = keyof typeof endpointErrorPolicy;
 
 // ---------------------------------------------------------------------------
 // Per-code detail payloads
@@ -151,7 +146,7 @@ const endpointErrorPolicy = {
       'the endpoint factory must successfully establish a connection or bind to the listen address',
     hint: 'the initial connection or bind failed; verify the address is reachable and the port is not in use, then retry',
   },
-} satisfies Record<EndpointErrorCode, EndpointErrorPolicy>;
+} satisfies Record<string, EndpointErrorPolicy>;
 
 /** Expected-invariant table per error code. */
 export const ENDPOINT_EXPECTED: Readonly<Record<EndpointErrorCode, string>> = Object.fromEntries(

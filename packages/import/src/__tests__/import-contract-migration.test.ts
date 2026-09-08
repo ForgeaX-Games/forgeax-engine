@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Asset, AssetRelation, ImportedAsset, ImportResult } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { createImportProduct } from '../import-product.js';
 import { type RunImportMeta, runImport } from '../import-runner.js';
 import { ImporterRegistry } from '../importer-registry.js';
 
@@ -186,5 +187,37 @@ describe('import runner producer fact propagation', () => {
     expect(source).not.toContain('readonly bins');
     expect(source).not.toContain("a.kind === 'texture'");
     expect(source).not.toContain("a.kind === 'mesh'");
+  });
+});
+
+describe('engine-import terminal product contract', () => {
+  it('projects refs, artifacts, receipts, diagnostics, and source identity together', () => {
+    const result = createImportProduct({
+      assets: [
+        {
+          guid: '019e3969-1d48-7c3b-ac24-6d68f457065f',
+          kind: 'texture',
+          payload: { kind: 'texture', width: 1, height: 1 },
+          refs: [],
+          artifacts: {},
+        },
+      ],
+      sourceDependencies: ['hero.png'],
+      refs: [],
+      artifacts: {},
+      receipts: [],
+      diagnostics: [],
+      sourceRevision: 'sha256:hero',
+      sourceKey: 'hero/albedo',
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.sourceRevision).toBe('sha256:hero');
+    expect(result.value.sourceKey).toBe('hero/albedo');
+    expect(result.value).toHaveProperty('refs');
+    expect(result.value).toHaveProperty('artifacts');
+    expect(result.value).toHaveProperty('receipts');
+    expect(result.value).toHaveProperty('diagnostics');
   });
 });

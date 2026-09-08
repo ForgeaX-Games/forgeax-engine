@@ -34,13 +34,38 @@ import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import { createRenderer } from '@forgeax/engine-runtime';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
 
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 // GUIDs: stable per-run (not persisted across builds).
 const VIDEO_GUID_STRING = 'f1b3d000-1111-4aaa-9eee-aa1111112222';
 const MATERIAL_GUID_STRING = 'b2b3d000-2222-4bbb-9eee-bb2222223333';
+const STATIC_MATERIAL_GUID_STRING = 'c3b3d000-3333-4ccc-9eee-cc3333334444';
+
+type VideoTextureRecoveryControls = {
+  removeProvider(): void;
+  restoreProvider(): void;
+  cleanup(): void;
+  inspect(): {
+    readonly providerPresent: boolean;
+    readonly sameWorld: boolean;
+    readonly sameRenderer: boolean;
+    readonly sameHost: boolean;
+    readonly sameVideoEntity: boolean;
+    readonly sameStaticEntity: boolean;
+    readonly sameVideoClip: boolean;
+    readonly sameVideoMaterial: boolean;
+    readonly sameStaticMaterial: boolean;
+    readonly packFirstErrorCode: string | undefined;
+    readonly packCurrentErrorCode: string | undefined;
+    readonly packRetrySucceeded: boolean;
+    readonly videoUrl: string;
+    readonly videoElementCount: number;
+    readonly videoElementSrc: string | undefined;
+    readonly errorCodes: readonly string[];
+  };
+};
 
 // --- host: VideoElementProvider implementation ------------------------------
 
@@ -53,7 +78,12 @@ const MATERIAL_GUID_STRING = 'b2b3d000-2222-4bbb-9eee-bb2222223333';
  * mute, dispose) single-sidedly. The engine NEVER constructs a video
  * element or sets `.src` (requirements constraint).
  */
-function createDemoVideoProvider(): VideoElementProvider {
+type DemoVideoProvider = VideoElementProvider & {
+  elementCount(): number;
+  firstElementAttributeUrl(): string | undefined;
+};
+
+function createDemoVideoProvider(url: string): DemoVideoProvider {
   const cache = new Map<number, HTMLVideoElement>();
 
   function ensureElement(entity: EntityHandle, url: string): HTMLVideoElement {
@@ -62,6 +92,7 @@ function createDemoVideoProvider(): VideoElementProvider {
     if (existing !== undefined) return existing;
 
     const videoEl = document.createElement('video');
+    videoEl.setAttribute('src', url);
     videoEl.src = url;
     videoEl.muted = true;
     videoEl.playsInline = true;
@@ -80,7 +111,14 @@ function createDemoVideoProvider(): VideoElementProvider {
 
   return {
     getElement(entity, _clipHandle): HTMLVideoElement | undefined {
-      return ensureElement(entity, '/cutscene.webm');
+      return ensureElement(entity, url);
+    },
+    elementCount() {
+      return cache.size;
+    },
+    firstElementAttributeUrl() {
+      for (const element of cache.values()) return element.getAttribute('src') ?? undefined;
+      return undefined;
     },
   };
 }
@@ -94,22 +132,29 @@ void bootstrap(canvas);
 
 export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   try {
-    const renderer = await createRenderer(target, {}, forgeaxBundlerAdapter());
-    renderer.onError((e) => {
-      console.error('[video-texture] renderer.onError:', e.code, e.hint);
+    const constructed = await constructRuntimeRendererHost(target, {}, forgeaxBundlerAdapter());
+    if (!constructed.ok) throw constructed.error;
+    const { renderer, assets } = constructed.value;
+    const rendererErrorCodes: string[] = [];
+    renderer.subscribe((event) => {
+      if (event.kind !== 'error') return;
+      const e = event.error;
+      const code = e.code === 'device-operation-failed' ? e.detail.cause.code : e.code;
+      rendererErrorCodes.push(code);
+      console.error('[video-texture] renderer error:', e.code, code, e.hint);
     });
-    console.warn(`[video-texture] backend=${renderer.backend}`);
+    console.warn('[video-texture] Standard pipeline active');
 
-    const ready = await renderer.ready;
-    if (!ready.ok) {
-      console.error('[video-texture] renderer.ready failed:', ready.error);
-      return;
-    }
-
-    const assets = renderer.assets;
-    if (assets === null) {
-      console.error('[video-texture] AssetRegistry is null');
-      return;
+    const search = new URLSearchParams(globalThis.location?.search ?? '');
+    const recoveryMode = search.get('recovery') === '1';
+    const packRetryMode = search.get('pack-retry') === '1';
+    let packFirstErrorCode: string | undefined;
+    let packCurrentErrorCode: string | undefined;
+    let packRetrySucceeded = false;
+    if (packRetryMode) {
+      const reset = await fetch('/__forgeax-video-pack-reset', { method: 'POST' });
+      if (!reset.ok) throw new Error('video-texture: Pack retry fixture reset failed');
+      assets.configurePackIndex('/video-pack-index.json');
     }
 
     // Step 1: register VideoAsset { kind: 'video', url }
@@ -119,15 +164,37 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       return;
     }
     const videoGuid = videoGuidResult.value;
-    assets.catalog<VideoAsset>(videoGuid, {
-      kind: 'video',
-      url: '/cutscene.webm',
-    });
-    const videoHandleRes = await assets.loadByGuid<VideoAsset>(videoGuid);
+    if (!packRetryMode) {
+      assets.catalog<VideoAsset>(videoGuid, {
+        kind: 'video',
+        url: '/cutscene.webm',
+      });
+    }
+    let videoHandleRes = await assets.loadByGuid<VideoAsset>(videoGuid);
+    if (!videoHandleRes.ok) {
+      if (packRetryMode && videoHandleRes.error.code === 'asset-parse-failed') {
+        packFirstErrorCode = videoHandleRes.error.code;
+        packCurrentErrorCode = packFirstErrorCode;
+        console.warn('[video-texture] Pack retry first descriptor rejected:', packFirstErrorCode);
+        const repair = await fetch('/__forgeax-video-pack-repair', { method: 'POST' });
+        if (!repair.ok) throw new Error('video-texture: Pack retry fixture repair failed');
+        assets.invalidate(VIDEO_GUID_STRING);
+        videoHandleRes = await assets.loadByGuid<VideoAsset>(videoGuid);
+        if (videoHandleRes.ok) {
+          packRetrySucceeded = true;
+          packCurrentErrorCode = undefined;
+        }
+      }
+    }
     if (!videoHandleRes.ok) {
       console.error('[video-texture] loadByGuid video failed:', videoHandleRes.error);
       return;
     }
+    if (packRetryMode && !packRetrySucceeded) {
+      console.error('[video-texture] Pack retry unexpectedly bypassed the first failure');
+      return;
+    }
+    const videoAsset = videoHandleRes.value;
     console.log('[video-texture] VideoAsset registered');
 
     // Step 2: register unlit MaterialAsset with values.baseColorTexture=videoGuid.
@@ -159,9 +226,32 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     }
     console.log('[video-texture] video-textured material registered');
 
+    const staticMatGuidResult = AssetGuid.parse(STATIC_MATERIAL_GUID_STRING);
+    if (!staticMatGuidResult.ok) {
+      console.error('[video-texture] static material GUID parse failed:', staticMatGuidResult.error);
+      return;
+    }
+    assets.catalog(staticMatGuidResult.value, {
+      kind: 'material',
+      passes: [
+        {
+          name: 'Forward',
+          program: { module: 'forgeax::default-unlit' },
+          renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
+        },
+      ],
+      values: { baseColor: [0.12, 0.78, 0.24] },
+    });
+    const staticMatHandleRes = await assets.loadByGuid(staticMatGuidResult.value);
+    if (!staticMatHandleRes.ok) {
+      console.error('[video-texture] static material load failed:', staticMatHandleRes.error);
+      return;
+    }
+    console.log('[video-texture] static sibling material registered');
+
     // Step 3: build world
     const world = new World();
-    const worldAttachment1 = renderer.attachWorld(world);
+    const worldAttachment1 = renderer.attach(world);
     if (!worldAttachment1.ok) throw worldAttachment1.error;
 
     // Register the host VideoElementProvider as a World Resource. The single
@@ -175,11 +265,11 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // default view, and the quad never shows live video — the smoke's pixel
     // probes MUST then go RED. The browser smoke runs this mode to prove its
     // probes actually detect video content (not e.g. a false-green from the HUD).
-    const falsify = new URLSearchParams(globalThis.location?.search ?? '').get('falsify') === '1';
+    const falsify = search.get('falsify') === '1';
+    let demoProvider: DemoVideoProvider | undefined;
     if (!falsify) {
-      const provider = createDemoVideoProvider();
-      world.registerSimulationTransientResource(VIDEO_ELEMENT_PROVIDER_KEY);
-      world.insertResource(VIDEO_ELEMENT_PROVIDER_KEY, provider);
+      demoProvider = createDemoVideoProvider(videoAsset.url);
+      world.insertResource(VIDEO_ELEMENT_PROVIDER_KEY, demoProvider);
     } else {
       console.warn('[video-texture] FALSIFY mode: VideoElementProvider NOT registered');
     }
@@ -220,8 +310,16 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // per-world column handle for spawn).
     const videoClipHandle = world.allocSharedRef('VideoAsset', videoHandleRes.value);
     const matHandle = world.allocSharedRef('MaterialAsset', matHandleRes.value);
+    const staticMatHandle = world.allocSharedRef('MaterialAsset', staticMatHandleRes.value);
 
-    // Spawn the video-textured quad entity at origin, scaled 2x on X/Y,
+    const staticEnt = world.spawn(
+      { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
+      { component: MeshRenderer, data: { materials: [staticMatHandle] } },
+      { component: Transform, data: { pos: [-2.1, 0, -1], scale: [1.2, 1.2, 1] } },
+    );
+    console.log(`[video-texture] static sibling quad spawned: entity=${String(staticEnt)}`);
+
+    // Spawn the video-textured quad entity beside the static sibling, scaled 2x on X/Y,
     // positioned slightly behind the camera at Z=-1.
     const videoEnt = world.spawn(
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
@@ -232,10 +330,66 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       },
       {
         component: Transform,
-        data: { pos: [0, 0, -1], scale: [2, 2, 1]},
+        data: { pos: [0.5, 0, -1], scale: [2, 2, 1] },
       },
     );
     console.log(`[video-texture] video-textured quad spawned: entity=${String(videoEnt)}`);
+
+    const attachment = renderer.attach(world);
+    if (!attachment.ok) throw attachment.error;
+
+    let running = true;
+    if (recoveryMode && !falsify && demoProvider !== undefined) {
+      const stable = {
+        world,
+        renderer,
+        deviceGeneration: renderer.inspect().frame.deviceGeneration,
+        videoEnt,
+        staticEnt,
+        videoClipHandle,
+        matHandle,
+        staticMatHandle,
+        provider: demoProvider,
+      };
+      const recoveryGlobal = globalThis as typeof globalThis & {
+        __forgeaxVideoTextureRecovery?: VideoTextureRecoveryControls;
+      };
+      recoveryGlobal.__forgeaxVideoTextureRecovery = {
+        removeProvider() {
+          world.removeResource(VIDEO_ELEMENT_PROVIDER_KEY);
+        },
+        restoreProvider() {
+          world.insertResource(VIDEO_ELEMENT_PROVIDER_KEY, demoProvider);
+        },
+        cleanup() {
+          running = false;
+          void renderer.dispose();
+        },
+        inspect() {
+          return {
+            providerPresent:
+              world.hasResource(VIDEO_ELEMENT_PROVIDER_KEY) &&
+              world.getResource<VideoElementProvider>(VIDEO_ELEMENT_PROVIDER_KEY) === stable.provider,
+            sameWorld: world === stable.world,
+            sameRenderer: renderer === stable.renderer,
+            sameHost: renderer === stable.renderer,
+            sameDevice: renderer.inspect().frame.deviceGeneration === stable.deviceGeneration,
+            sameVideoEntity: videoEnt === stable.videoEnt,
+            sameStaticEntity: staticEnt === stable.staticEnt,
+            sameVideoClip: videoClipHandle === stable.videoClipHandle,
+            sameVideoMaterial: matHandle === stable.matHandle,
+            sameStaticMaterial: staticMatHandle === stable.staticMatHandle,
+            packFirstErrorCode,
+            packCurrentErrorCode,
+            packRetrySucceeded,
+            videoUrl: videoAsset.url,
+            videoElementCount: stable.provider.elementCount(),
+            videoElementSrc: stable.provider.firstElementAttributeUrl(),
+            errorCodes: rendererErrorCodes.slice(),
+          };
+        },
+      };
+    }
 
     // HUD update.
     const hudEl = document.querySelector<HTMLElement>('#hud');
@@ -245,8 +399,13 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
     // Render loop.
     const frame = (): void => {
+      if (!running) return;
       world.update().unwrap();
-      const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      const r = renderer.draw({
+        leases: [attachment.value],
+        camera: { lease: attachment.value },
+        environment: { lease: attachment.value },
+      });
       if (!r.ok) {
         console.error('[video-texture] draw error:', r.error.code, r.error.hint);
       }

@@ -115,10 +115,9 @@ const mockCanvas = {
 // --- 3. Drive engine ECS path ---
 
   const { World } = await import('@forgeax/engine-ecs');
-  const enginePkg = await import('@forgeax/engine-runtime');
+  const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
   const { createBoxGeometry } = await import('@forgeax/engine-geometry');
   const { pick } = await import('@forgeax/engine-picking');
-  const { createRenderer } = enginePkg;
 const { Materials } = await import('@forgeax/engine-render');
   const {
     Camera,
@@ -144,26 +143,25 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 
-console.log(`[picking] backend=${renderer.backend}`);
+console.log(`[picking] backend=${renderer.inspect().capabilities.backendKind}`);
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint });
+});
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 // Custom cube mesh ensures AABB computation (the ray-AABB pick test reads it).
 const boxResult = createBoxGeometry(1, 1, 1, 1, 1, 1);
@@ -198,7 +196,11 @@ let framesObserved = 0;
 
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = renderer.draw({
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
 }
@@ -308,7 +310,7 @@ if (m18Failures.length === 0) console.log('[picking] M18 live vertex recovery: P
 // --- 6. Verdict ---
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (renderer.inspect().capabilities.backendKind !== 'webgpu') failures.push(`(a) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
 if (!centerHit) {
   failures.push('(b) center pick returned undefined (expected the cube entity)');
 } else if (centerHit.entity !== cubeEntity) {

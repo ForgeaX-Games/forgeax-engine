@@ -29,8 +29,7 @@ import {
   detectEdge,
   detectRemovedEntities,
 } from '@forgeax/engine-audio';
-import { encodeEntity } from '@forgeax/engine-ecs';
-import { ImporterRegistry } from '@forgeax/engine-import';
+import { ImporterRegistry, type RunImportMeta, runImport } from '@forgeax/engine-import';
 import { mat4, quat, vec3 } from '@forgeax/engine-math';
 import type { ImportContext, ImportSubAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -38,6 +37,25 @@ import { audioImporter, sourceKeyForAudioOutput } from '../audio-importer.js';
 import { syncListenerFromWorldMatrix } from '../audio-listener-sync-system';
 import { decodeAudioClipBytes } from '../clip-loader';
 import { WebAudioEngine } from '../web-audio-engine';
+
+function makeMockAudioParam(initialValue: number): AudioParam {
+  let value = initialValue;
+  return {
+    get value() {
+      return value;
+    },
+    set value(next: number) {
+      value = next;
+    },
+    cancelScheduledValues: vi.fn(),
+    setValueAtTime: vi.fn((next: number) => {
+      value = next;
+    }),
+    linearRampToValueAtTime: vi.fn((next: number) => {
+      value = next;
+    }),
+  } as unknown as AudioParam;
+}
 
 {
   // --- from app-injection.test.ts ---
@@ -97,10 +115,16 @@ import { WebAudioEngine } from '../web-audio-engine';
   // --- from audio-importer.test.ts ---
   const GUID = '019e3969-1d43-7610-8810-e80dbd491d90';
 
-  function makeCtx(subAssets: readonly ImportSubAsset[]): ImportContext {
+  function makeCtx(
+    subAssets: readonly ImportSubAsset[],
+    readSource: ImportContext['readSource'] = async () => ({
+      ok: true,
+      value: new Uint8Array([1, 2, 3, 4]),
+    }),
+  ): ImportContext {
     return {
       source: 'bgm.ogg',
-      readSource: async () => ({ ok: true, value: new Uint8Array([1, 2, 3, 4]) }),
+      readSource,
       readSibling: async () => ({ ok: true, value: new Uint8Array() }),
       decodeImage: async () => {
         throw new Error('decodeImage not used by audioImporter');
@@ -155,13 +179,247 @@ import { WebAudioEngine } from '../web-audio-engine';
       await expect(audioImporter.import(ctx)).resolves.toBeDefined();
     });
 
-    it('skips a non-audio sub-asset kind', async () => {
-      const ctx = makeCtx([{ guid: GUID, sourceIndex: 0, kind: 'texture' }]);
-      const result = await audioImporter.import(ctx);
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      const produced = result.value.assets;
-      expect(produced.length).toBe(0);
+    it.each([
+      {
+        name: 'zero declarations',
+        subAssets: [],
+        actual: 'subAssets[] is empty',
+      },
+      {
+        name: 'one foreign declaration',
+        subAssets: [{ guid: GUID, sourceIndex: 0, kind: 'texture' }],
+        actual: `subAssets[0]=texture:${GUID}`,
+      },
+      {
+        name: 'mixed audio and foreign declarations',
+        subAssets: [
+          { guid: GUID, sourceIndex: 0, kind: 'audio' },
+          { guid: `${GUID}-texture`, sourceIndex: 1, kind: 'texture' },
+        ],
+        actual: `subAssets[0]=audio:${GUID}, subAssets[1]=texture:${GUID}-texture`,
+      },
+      {
+        name: 'duplicate audio declarations',
+        subAssets: [
+          { guid: GUID, sourceIndex: 0, kind: 'audio' },
+          { guid: `${GUID}-second`, sourceIndex: 1, kind: 'audio' },
+        ],
+        actual: `subAssets[0]=audio:${GUID}, subAssets[1]=audio:${GUID}-second`,
+      },
+    ])('refuses $name before importer source work', async ({ subAssets, actual }) => {
+      const readSource = vi.fn<ImportContext['readSource']>(async () => ({
+        ok: true,
+        value: new Uint8Array([1, 2, 3]),
+      }));
+      const result = await audioImporter.import(makeCtx(subAssets, readSource));
+
+      expect(result.ok).toBe(false);
+      expect(readSource).not.toHaveBeenCalled();
+      if (result.ok) return;
+      expect(result.error.code).toBe('source-validation-failed');
+      expect(result.error.detail).toMatchObject({
+        diagnostics: [
+          expect.objectContaining({
+            code: 'audio-subasset-topology',
+            rule: 'audio-required-single-output',
+            actual,
+          }),
+        ],
+      });
+    });
+
+    it('refuses every invalid topology through runImport before importer read', async () => {
+      const registry = new ImporterRegistry();
+      registry.register(audioImporter);
+      const readSource = vi.fn<ImportContext['readSource']>(async () => ({
+        ok: true,
+        value: new Uint8Array([1, 2, 3]),
+      }));
+      const invalidTopologies: ReadonlyArray<{
+        readonly name: string;
+        readonly subAssets: RunImportMeta['subAssets'];
+        readonly actual: string;
+      }> = [
+        { name: 'zero audio', subAssets: [], actual: 'subAssets[] is empty' },
+        {
+          name: 'foreign kind',
+          subAssets: [
+            { guid: GUID, sourceIndex: 0, sourceKey: 'foreign:texture', kind: 'texture' },
+          ],
+          actual: `subAssets[0]=texture:${GUID}`,
+        },
+        {
+          name: 'mixed kinds',
+          subAssets: [
+            { guid: GUID, sourceIndex: 0, sourceKey: 'audio:audio', kind: 'audio' },
+            {
+              guid: `${GUID}-texture`,
+              sourceIndex: 1,
+              sourceKey: 'foreign:texture',
+              kind: 'texture',
+            },
+          ],
+          actual: `subAssets[0]=audio:${GUID}, subAssets[1]=texture:${GUID}-texture`,
+        },
+        {
+          name: 'duplicate audio',
+          subAssets: [
+            { guid: GUID, sourceIndex: 0, sourceKey: 'audio:first', kind: 'audio' },
+            {
+              guid: `${GUID}-second`,
+              sourceIndex: 1,
+              sourceKey: 'audio:second',
+              kind: 'audio',
+            },
+          ],
+          actual: `subAssets[0]=audio:${GUID}, subAssets[1]=audio:${GUID}-second`,
+        },
+      ];
+
+      for (const [index, topology] of invalidTopologies.entries()) {
+        const rejected = await runImport(
+          { importer: 'audio', source: 'bgm.ogg', subAssets: topology.subAssets },
+          registry,
+          { readSource },
+        );
+        expect(rejected.ok, `${topology.name} unexpectedly succeeded`).toBe(false);
+        expect(readSource).toHaveBeenCalledTimes(index + 1);
+        if (!rejected.ok) {
+          expect(rejected.error.code).toBe('source-validation-failed');
+          expect(rejected.error.detail).toMatchObject({
+            diagnostics: [expect.objectContaining({ actual: topology.actual })],
+          });
+        }
+      }
+    });
+
+    it('retries repaired Meta through the same registry and preserves Pack identity', async () => {
+      const registry = new ImporterRegistry();
+      registry.register(audioImporter);
+      const readSource = vi.fn<ImportContext['readSource']>(async () => ({
+        ok: true,
+        value: new Uint8Array([1, 2, 3]),
+      }));
+      const meta = {
+        importer: 'audio',
+        source: 'bgm.ogg',
+        subAssets: [] as RunImportMeta['subAssets'],
+      };
+      const rejected = await runImport(meta, registry, { readSource });
+      expect(rejected.ok).toBe(false);
+      expect(readSource).toHaveBeenCalledTimes(1);
+
+      meta.subAssets = [
+        {
+          guid: GUID,
+          sourceIndex: 0,
+          sourceKey: 'audio:audio',
+          kind: 'audio',
+        },
+      ];
+      const repaired = await runImport(meta, registry, { readSource });
+
+      expect(repaired.ok).toBe(true);
+      expect(readSource).toHaveBeenCalledTimes(3);
+      if (!repaired.ok || 'skipped' in repaired.value) return;
+      expect(repaired.value.product.sourceDependencies).toEqual(['bgm.ogg']);
+      expect(repaired.value.pack.assets).toHaveLength(1);
+      expect(repaired.value.pack.assets[0]).toMatchObject({
+        guid: GUID,
+        kind: 'audio',
+        sourceKey: 'audio:audio',
+        sourceIndex: 0,
+        payload: {
+          kind: 'audio',
+          mediaType: 'audio/ogg',
+          source: 'bgm.ogg',
+        },
+      });
+      expect(repaired.value.pack.assets[0]?.artifacts.source).toMatchObject({
+        mediaType: 'audio/ogg',
+        assetCodec: { name: 'browser-audio' },
+        bytes: new Uint8Array([1, 2, 3]),
+      });
+    });
+
+    it('preserves an importer source-read failure and retries the same Meta through the same registry', async () => {
+      const registry = new ImporterRegistry();
+      registry.register(audioImporter);
+      const bytes = new Uint8Array([7, 8, 9, 10]);
+      let readCalls = 0;
+      let refuseSecondRead = true;
+      const readSource = vi.fn<ImportContext['readSource']>(async () => {
+        readCalls += 1;
+        if (readCalls === 2 && refuseSecondRead) {
+          return {
+            ok: false,
+            error: new Error('transient audio source refusal'),
+          };
+        }
+        return { ok: true, value: new Uint8Array(bytes) };
+      });
+      const meta: RunImportMeta = {
+        importer: 'audio',
+        source: 'm69-audio.mp3',
+        subAssets: [
+          {
+            guid: GUID,
+            sourceIndex: 0,
+            sourceKey: 'audio:audio',
+            kind: 'audio',
+          },
+        ],
+      };
+
+      const rejected = await runImport(meta, registry, { readSource });
+
+      expect(rejected.ok).toBe(false);
+      expect(readCalls).toBe(2);
+      expect(rejected).not.toHaveProperty('value');
+      expect(rejected).not.toHaveProperty('pack');
+      if (rejected.ok) return;
+      expect(rejected.error).toMatchObject({
+        code: 'source-read-failed',
+        expected: 'readable source file at meta.source "m69-audio.mp3"',
+        detail: {
+          source: 'm69-audio.mp3',
+          reason: 'transient audio source refusal',
+        },
+      });
+      expect(rejected.error.code).not.toBe('import-internal-error');
+
+      refuseSecondRead = false;
+      const repaired = await runImport(meta, registry, { readSource });
+
+      expect(repaired.ok).toBe(true);
+      expect(readCalls).toBe(4);
+      if (!repaired.ok || 'skipped' in repaired.value) return;
+      expect(repaired.value.product.sourceDependencies).toEqual(['m69-audio.mp3']);
+      expect(repaired.value.pack).toMatchObject({
+        schemaVersion: '2.0.0',
+        kind: 'internal-text-package',
+      });
+      expect(repaired.value.pack.assets).toHaveLength(1);
+      expect(repaired.value.pack.assets.filter((asset) => asset.guid === GUID)).toHaveLength(1);
+      expect(repaired.value.pack.assets[0]).toMatchObject({
+        guid: GUID,
+        kind: 'audio',
+        sourceKey: 'audio:audio',
+        sourceIndex: 0,
+        payload: {
+          kind: 'audio',
+          mediaType: 'audio/mpeg',
+          source: 'm69-audio.mp3',
+          bytes,
+        },
+        artifacts: {
+          source: {
+            mediaType: 'audio/mpeg',
+            assetCodec: { name: 'browser-audio' },
+            bytes,
+          },
+        },
+      });
     });
   });
 }
@@ -202,7 +460,7 @@ import { WebAudioEngine } from '../web-audio-engine';
           createGain: vi.fn(
             () =>
               ({
-                gain: { value: 1 },
+                gain: makeMockAudioParam(1),
                 connect: vi.fn().mockReturnValue(undefined),
                 disconnect: vi.fn(),
               }) as unknown as GainNode,
@@ -355,7 +613,7 @@ import { WebAudioEngine } from '../web-audio-engine';
         overrides.createGain ??
         (() =>
           ({
-            gain: { value: 1 },
+            gain: makeMockAudioParam(1),
             connect: vi.fn().mockReturnValue(undefined),
             disconnect: vi.fn(),
           }) as unknown as GainNode),
@@ -391,7 +649,7 @@ import { WebAudioEngine } from '../web-audio-engine';
 
     it('routes sfx source to sfxGain node', () => {
       const createGainSpy = vi.fn().mockImplementation(() => ({
-        gain: { value: 1 },
+        gain: makeMockAudioParam(1),
         connect: vi.fn().mockReturnValue(undefined),
         disconnect: vi.fn(),
       }));
@@ -412,7 +670,7 @@ import { WebAudioEngine } from '../web-audio-engine';
 
     it('routes music source to musicGain node', () => {
       const createGainSpy = vi.fn().mockImplementation(() => ({
-        gain: { value: 1 },
+        gain: makeMockAudioParam(1),
         connect: vi.fn().mockReturnValue(undefined),
         disconnect: vi.fn(),
       }));
@@ -432,7 +690,7 @@ import { WebAudioEngine } from '../web-audio-engine';
 
     it('default bus routes to sfx', () => {
       const createGainSpy = vi.fn().mockImplementation(() => ({
-        gain: { value: 1 },
+        gain: makeMockAudioParam(1),
         connect: vi.fn().mockReturnValue(undefined),
         disconnect: vi.fn(),
       }));
@@ -563,7 +821,7 @@ import { WebAudioEngine } from '../web-audio-engine';
         createGain: vi.fn(
           () =>
             ({
-              gain: { value: 1 },
+              gain: makeMockAudioParam(1),
               connect: vi.fn().mockReturnValue(undefined),
               disconnect: vi.fn(),
             }) as unknown as GainNode,
@@ -659,7 +917,7 @@ import { WebAudioEngine } from '../web-audio-engine';
 
       let storedPlaying = false;
       const clipHandle = 42;
-      const entity = encodeEntity(0, 0);
+      const entity = 0;
 
       const mockRegistry = {
         get: vi.fn().mockReturnValue({ ok: true, value: clip }),
@@ -691,7 +949,7 @@ import { WebAudioEngine } from '../web-audio-engine';
       const clip = { kind: 'audio' as const, sourceKey: 'fixture', bytes: new Uint8Array([1]) };
       const engine = new WebAudioEngine();
       const playSpy = vi.spyOn(engine, 'play');
-      const entity = encodeEntity(0, 0);
+      const entity = 0;
       const mockRegistry = {
         get: vi.fn().mockReturnValue({ ok: true, value: clip }),
       };
@@ -714,7 +972,7 @@ import { WebAudioEngine } from '../web-audio-engine';
       const clip = { kind: 'audio' as const, sourceKey: 'fixture', bytes: new Uint8Array([1]) };
       const engine = new WebAudioEngine();
       const playSpy = vi.spyOn(engine, 'play');
-      const entity = encodeEntity(0, 0);
+      const entity = 0;
       let clipReady = false;
       const mockRegistry = {
         get: vi
@@ -751,7 +1009,7 @@ import { WebAudioEngine } from '../web-audio-engine';
 
       let storedPlaying = false;
       const clipHandle = 42;
-      const entity = encodeEntity(0, 0);
+      const entity = 0;
 
       const mockRegistry = {
         get: vi.fn().mockReturnValue({ ok: true, value: clip }),
@@ -781,7 +1039,7 @@ import { WebAudioEngine } from '../web-audio-engine';
 
       let storedPlaying = false;
       const clipHandle = 42;
-      const entity = encodeEntity(0, 0);
+      const entity = 0;
 
       const mockRegistry = {
         get: vi.fn().mockReturnValue({ ok: true, value: clip }),
@@ -1052,7 +1310,7 @@ import { WebAudioEngine } from '../web-audio-engine';
           createGain: vi.fn(
             () =>
               ({
-                gain: { value: 1 },
+                gain: makeMockAudioParam(1),
                 connect: vi.fn().mockReturnValue(undefined),
                 disconnect: vi.fn(),
               }) as unknown as GainNode,
@@ -1306,7 +1564,7 @@ import { WebAudioEngine } from '../web-audio-engine';
 
   function makeMockGainNode(initialGain = 1): GainNode {
     return {
-      gain: { value: initialGain } as unknown as AudioParam,
+      gain: makeMockAudioParam(initialGain),
       context: undefined as unknown as BaseAudioContext,
       numberOfInputs: 1,
       numberOfOutputs: 1,
@@ -1415,7 +1673,7 @@ import { WebAudioEngine } from '../web-audio-engine';
         listener: mockListener,
         createGain: vi.fn().mockReturnValue({
           connect: vi.fn(),
-          gain: { value: 1 },
+          gain: makeMockAudioParam(1),
         }),
         createPanner: vi.fn(),
         createBufferSource: vi.fn(),
@@ -1446,7 +1704,7 @@ import { WebAudioEngine } from '../web-audio-engine';
         listener: mockListener,
         createGain: vi.fn().mockReturnValue({
           connect: vi.fn(),
-          gain: { value: 1 },
+          gain: makeMockAudioParam(1),
         }),
         createPanner: vi.fn(),
         createBufferSource: vi.fn(),
@@ -1757,7 +2015,7 @@ import { WebAudioEngine } from '../web-audio-engine';
 
   function makeMockGainNode(initialGain = 1): GainNode {
     return {
-      gain: { value: initialGain },
+      gain: makeMockAudioParam(initialGain),
       context: undefined as unknown as BaseAudioContext,
       numberOfInputs: 1,
       numberOfOutputs: 1,
@@ -1846,24 +2104,60 @@ import { WebAudioEngine } from '../web-audio-engine';
     let OriginalAudioContext: typeof AudioContext;
     let docAddEventListenerSpy: ReturnType<typeof vi.fn>;
     let docRemoveEventListenerSpy: ReturnType<typeof vi.fn>;
+    let docDispatchEventSpy: ReturnType<typeof vi.fn>;
     let resumeSpy: ReturnType<typeof vi.fn>;
     let mockCtor: ReturnType<typeof vi.fn>;
+    let mockContext: { state: AudioContextState };
+    let engine: WebAudioEngine | undefined;
+    const listeners = new Map<string, Set<() => void>>();
+
+    async function flushResume(): Promise<void> {
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+
+    function dispatchGesture(type: string): void {
+      const handlers = [...(listeners.get(type) ?? [])];
+      listeners.get(type)?.clear();
+      for (const handler of handlers) handler();
+    }
 
     beforeEach(() => {
       OriginalAudioContext = globalThis.AudioContext;
-      resumeSpy = vi.fn().mockResolvedValue(undefined);
-      docAddEventListenerSpy = vi.fn();
-      docRemoveEventListenerSpy = vi.fn();
+      listeners.clear();
+      mockContext = { state: 'suspended' as AudioContextState };
+      let resumeCalls = 0;
+      resumeSpy = vi.fn().mockImplementation(() => {
+        resumeCalls += 1;
+        if (resumeCalls === 1) return Promise.reject(new Error('gesture blocked'));
+        mockContext.state = 'running';
+        return Promise.resolve();
+      });
+      docAddEventListenerSpy = vi.fn((type: string, handler: () => void) => {
+        const handlers = listeners.get(type) ?? new Set<() => void>();
+        handlers.add(handler);
+        listeners.set(type, handlers);
+      });
+      docRemoveEventListenerSpy = vi.fn((type: string, handler: () => void) => {
+        listeners.get(type)?.delete(handler);
+      });
+      docDispatchEventSpy = vi.fn((event: Event) => {
+        dispatchGesture(event.type);
+        return true;
+      });
 
       // Mock document for node environment
       vi.stubGlobal('document', {
         addEventListener: docAddEventListenerSpy,
         removeEventListener: docRemoveEventListenerSpy,
+        dispatchEvent: docDispatchEventSpy,
       });
 
       mockCtor = vi.fn().mockImplementation(function AudioContextMock(this: unknown) {
         return {
-          state: 'suspended' as AudioContextState,
+          get state() {
+            return mockContext.state;
+          },
           sampleRate: 48000,
           destination: {} as unknown as AudioDestinationNode,
           currentTime: 0,
@@ -1874,7 +2168,7 @@ import { WebAudioEngine } from '../web-audio-engine';
           createGain: vi.fn(
             () =>
               ({
-                gain: { value: 1 },
+                gain: makeMockAudioParam(1),
                 connect: vi.fn().mockReturnValue(undefined),
                 disconnect: vi.fn(),
               }) as unknown as GainNode,
@@ -1929,49 +2223,90 @@ import { WebAudioEngine } from '../web-audio-engine';
     });
 
     afterEach(() => {
+      engine?.destroy();
+      engine = undefined;
       globalThis.AudioContext = OriginalAudioContext;
       vi.restoreAllMocks();
       vi.unstubAllGlobals();
     });
 
     it('registers a one-shot gesture listener when ctx is suspended', () => {
-      const engine = new WebAudioEngine();
+      engine = new WebAudioEngine();
       const buf = createTestBuffer();
 
       engine.play(1, buf, { loop: false, volume: 1, spatialBlend: 0, bus: 'sfx' });
 
-      // RED: skeleton does not register gesture listeners.
-      // GREEN (w16): expect(docAddEventListenerSpy).toHaveBeenCalledWith('click', expect.any(Function), { once: true });
+      expect(docAddEventListenerSpy).toHaveBeenCalledTimes(3);
+      expect(listeners.get('click')?.size).toBe(1);
+      expect(listeners.get('keydown')?.size).toBe(1);
+      expect(listeners.get('touchstart')?.size).toBe(1);
     });
 
     it('does not register duplicate gesture listener on second play', () => {
-      const engine = new WebAudioEngine();
+      engine = new WebAudioEngine();
       const buf = createTestBuffer();
 
       engine.play(1, buf, { loop: false, volume: 1, spatialBlend: 0, bus: 'sfx' });
       engine.play(2, buf, { loop: true, volume: 0.5, spatialBlend: 0, bus: 'music' });
 
-      // RED: skeleton never registers.
-      // GREEN (w16): no duplicate registration on second play
+      expect(docAddEventListenerSpy).toHaveBeenCalledTimes(3);
+      expect([...listeners.values()].reduce((total, set) => total + set.size, 0)).toBe(3);
     });
 
-    it('gesture listener calls ctx.resume() and removes itself', () => {
-      const engine = new WebAudioEngine();
+    it('gesture listener calls ctx.resume() and removes itself after running', async () => {
+      engine = new WebAudioEngine();
       const buf = createTestBuffer();
+      resumeSpy.mockImplementation(() => {
+        mockContext.state = 'running';
+        return Promise.resolve();
+      });
 
       engine.play(1, buf, { loop: false, volume: 1, spatialBlend: 0, bus: 'sfx' });
+      dispatchGesture('click');
+      await flushResume();
 
-      // RED: skeleton never registers.
-      // GREEN (w16): simulate the gesture firing, verify resume() called
+      expect(resumeSpy).toHaveBeenCalledTimes(1);
+      expect(engine.getState()).toMatchObject({ contextState: 'running', lastError: null });
+      expect(docRemoveEventListenerSpy).toHaveBeenCalledTimes(3);
+      expect([...listeners.values()].reduce((total, set) => total + set.size, 0)).toBe(0);
     });
 
-    it('reports suspended state when resume() fails', () => {
-      // This test verifies that even if the gesture listener fires but
-      // resume() rejects, getState().contextState still reflects the
-      // real suspended state (charter P3 explicit failure).
-      const engine = new WebAudioEngine();
-      const state = engine.getState();
-      expect(state.contextState).toBe('suspended');
+    it('re-arms one bounded listener set after refusal and recovers on the next gesture', async () => {
+      engine = new WebAudioEngine();
+      const buf = createTestBuffer();
+
+      engine.play(1, buf, { loop: true, volume: 1, spatialBlend: 0, bus: 'sfx' });
+      expect(engine.getActiveSourceCount()).toBe(1);
+
+      dispatchGesture('click');
+      await flushResume();
+      expect(resumeSpy).toHaveBeenCalledTimes(1);
+      expect(engine.getState()).toMatchObject({
+        contextState: 'suspended',
+        activeSourceCount: 1,
+      });
+      expect(engine.getState().lastError).toMatchObject({
+        code: 'context-suspended',
+        detail: { code: 'context-suspended' },
+      });
+      expect(docAddEventListenerSpy).toHaveBeenCalledTimes(6);
+      expect([...listeners.values()].reduce((total, set) => total + set.size, 0)).toBe(3);
+
+      dispatchGesture('keydown');
+      await flushResume();
+      expect(resumeSpy).toHaveBeenCalledTimes(2);
+      expect(engine.getState()).toMatchObject({
+        contextState: 'running',
+        activeSourceCount: 1,
+        lastError: null,
+      });
+      expect([...listeners.values()].reduce((total, set) => total + set.size, 0)).toBe(0);
+      expect(docRemoveEventListenerSpy).toHaveBeenCalledTimes(6);
+
+      engine.stop(1);
+      expect(engine.getActiveSourceCount()).toBe(0);
+      engine.destroy();
+      engine.destroy();
     });
   });
 }
@@ -2046,7 +2381,7 @@ import { WebAudioEngine } from '../web-audio-engine';
 
   function makeTickMockCtx(): AudioContext {
     const g = {
-      gain: { value: 1 },
+      gain: makeMockAudioParam(1),
       connect: vi.fn().mockReturnValue(undefined),
       disconnect: vi.fn(),
       context: undefined as unknown as BaseAudioContext,
@@ -2209,7 +2544,7 @@ import { WebAudioEngine } from '../web-audio-engine';
       it('two WebAudioEngine instances have independent edge detection', async () => {
         const clip = { kind: 'audio' as const, sourceKey: 'fixture', bytes: new Uint8Array([1]) };
         const clipHandle = 42;
-        const entityId = encodeEntity(0, 0);
+        const entityId = 0;
 
         const mockResolver = {
           resolve: vi.fn().mockReturnValue({ ok: true, value: clip }),
@@ -2275,7 +2610,7 @@ import { WebAudioEngine } from '../web-audio-engine';
       it('after WebAudioEngine.destroy(), a new engine starts with clean tick state', async () => {
         const clip = { kind: 'audio' as const, sourceKey: 'fixture', bytes: new Uint8Array([1]) };
         const clipHandle = 42;
-        const entityId = encodeEntity(0, 0);
+        const entityId = 0;
 
         const mockResolver = {
           resolve: vi.fn().mockReturnValue({ ok: true, value: clip }),
@@ -2327,8 +2662,8 @@ import { WebAudioEngine } from '../web-audio-engine';
       it("cleanupDespawnedEntities on engine B does not corrupt engine A's tick state", async () => {
         const clip = { kind: 'audio' as const, sourceKey: 'fixture', bytes: new Uint8Array([1]) };
         const clipHandle = 42;
-        const entityA = encodeEntity(0, 0);
-        const entityB = encodeEntity(1, 0);
+        const entityA = 0;
+        const entityB = 1;
 
         const mockResolver = {
           resolve: vi.fn().mockReturnValue({ ok: true, value: clip }),
@@ -2398,7 +2733,7 @@ import { WebAudioEngine } from '../web-audio-engine';
 
   function makeOnendedMockCtx(capturedNodes: AudioBufferSourceNode[]): AudioContext {
     const g = {
-      gain: { value: 1 },
+      gain: makeMockAudioParam(1),
       connect: vi.fn().mockReturnValue(undefined),
       disconnect: vi.fn(),
       context: undefined as unknown as BaseAudioContext,

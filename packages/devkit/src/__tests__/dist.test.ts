@@ -21,6 +21,7 @@ describe('dist closure', () => {
       id: 'game',
       name: 'Game',
       entry: 'main.ts',
+      plugins: [{ id: 'gameplay', name: './main.ts', realm: 'engine' }],
       assetRoots: ['assets'],
       packageJson: {},
     };
@@ -47,6 +48,7 @@ describe('dist closure', () => {
       id: 'game',
       name: 'Game',
       entry: 'main.ts',
+      plugins: [{ id: 'gameplay', name: './main.ts', realm: 'engine' }],
       assetRoots: ['assets'],
       packageJson: {},
     };
@@ -55,5 +57,29 @@ describe('dist closure', () => {
     const result = await verifyDist(dist);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('dist-artifact-undeclared');
+  });
+
+  it('writes and verifies a caller-selected static output directory', async () => {
+    const root = await mkdtemp(resolve(tmpdir(), 'forgeax-devkit-project-'));
+    const output = await mkdtemp(resolve(tmpdir(), 'forgeax-devkit-output-'));
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(resolve(output, 'shaders'), { recursive: true });
+    await Promise.all([
+      writeFile(resolve(output, 'index.html'), '<canvas></canvas>'),
+      writeFile(resolve(output, 'pack-index.json'), '[]'),
+      writeFile(resolve(output, 'shaders/manifest.json'), '{}'),
+    ]);
+    const facts: ProjectFacts = {
+      root,
+      id: 'game',
+      name: 'Game',
+      entry: 'main.ts',
+      plugins: [{ id: 'gameplay', name: './main.ts', realm: 'engine' }],
+      assetRoots: ['assets'],
+      packageJson: {},
+    };
+    const manifest = await writeDistManifest(facts, '/games/game/', output);
+    expect(manifest.base).toBe('/games/game/');
+    expect((await verifyDist(output)).ok).toBe(true);
   });
 });

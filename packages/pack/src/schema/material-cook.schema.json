@@ -4,8 +4,22 @@
   "type": "object",
   "required": ["schemaVersion", "guid", "resolved", "refs", "artifact", "receipt"],
   "properties": {
-    "schemaVersion": { "const": "material-cook/1" },
+    "schemaVersion": { "const": "material-cook/3" },
     "guid": { "type": "string", "minLength": 1 },
+    "materialGuid": { "type": "string", "minLength": 1 },
+    "publicationGeneration": { "type": "integer", "minimum": 1 },
+    "specializationKey": { "type": "string", "minLength": 1 },
+    "artifactDigest": { "type": "string", "pattern": "^sha256:" },
+    "sourceClosure": { "type": "array", "items": { "type": "string" } },
+    "parameterContract": {
+      "type": "object",
+      "required": ["parameters", "values"],
+      "properties": {
+        "parameters": { "type": "array" },
+        "values": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
     "authored": { "type": "object", "required": ["kind"] },
     "resolved": { "type": "object", "required": ["passes", "parameters", "values"] },
     "refs": {
@@ -32,13 +46,71 @@
     },
     "receipt": {
       "type": "object",
-      "required": ["sourceClosure", "profile", "compilerVersion", "inputDigest", "outputDigest"],
+      "required": [
+        "schemaVersion",
+        "sourceClosure",
+        "profile",
+        "compilerVersion",
+        "identity",
+        "derivedInterface"
+      ],
       "properties": {
+        "schemaVersion": { "const": "material-cook/3" },
         "sourceClosure": { "type": "array", "items": { "type": "string" } },
         "profile": { "type": "string" },
         "compilerVersion": { "type": "string" },
-        "inputDigest": { "type": "string" },
-        "outputDigest": { "type": "string" }
+        "identity": {
+          "type": "object",
+          "required": [
+            "materialContractDigest",
+            "sourceRevision",
+            "sourceClosureDigest",
+            "layoutIdentity",
+            "programIdentity",
+            "pipelineIdentity",
+            "materialPublicationIdentity",
+            "cookIdentity",
+            "compilerFingerprint",
+            "wasm",
+            "artifactDigest",
+            "valueGeneration",
+            "dependencyGeneration",
+            "cookGeneration"
+          ],
+          "properties": {
+            "materialContractDigest": { "type": "string", "minLength": 1 },
+            "sourceRevision": { "type": "string", "minLength": 1 },
+            "sourceClosureDigest": { "type": "string", "minLength": 1 },
+            "layoutIdentity": { "type": "string", "minLength": 1 },
+            "programIdentity": { "type": "string", "minLength": 1 },
+            "pipelineIdentity": { "type": "string", "minLength": 1 },
+            "materialPublicationIdentity": { "type": "string", "minLength": 1 },
+            "cookIdentity": { "type": "string", "minLength": 1 },
+            "compilerFingerprint": { "type": "string", "minLength": 1 },
+            "wasm": {
+              "type": "object",
+              "required": ["sourceContentKey", "artifactSha256", "glueSha256"],
+              "properties": {
+                "sourceContentKey": { "type": "string", "minLength": 1 },
+                "artifactSha256": { "type": "string", "minLength": 1 },
+                "glueSha256": { "type": "string", "minLength": 1 }
+              },
+              "additionalProperties": false
+            },
+            "artifactDigest": { "type": "string", "minLength": 1 },
+            "valueGeneration": { "type": "integer", "minimum": 1 },
+            "dependencyGeneration": { "type": "integer", "minimum": 1 },
+            "cookGeneration": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        },
+        "derivedInterface": {
+          "type": "object",
+          "required": ["layoutIdentity"],
+          "properties": { "layoutIdentity": { "type": "string", "minLength": 1 } },
+          "additionalProperties": false
+        },
+        "publicationGeneration": { "type": "integer", "minimum": 1 }
       },
       "additionalProperties": false
     }

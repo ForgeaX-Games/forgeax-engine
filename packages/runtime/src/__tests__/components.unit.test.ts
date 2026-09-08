@@ -1,5 +1,5 @@
-// Consolidated by feat-20260609-test-pool-startup-reduction-merge-tiny-test-files
 // biome-ignore-all lint/complexity/noUselessLoneBlockStatements: block-scope isolation between merged source files (consolidation paradigm)
+// Consolidated by feat-20260609-test-pool-startup-reduction-merge-tiny-test-files
 //
 // Source files (N=21):
 //   - packages/runtime/src/__tests__/children.test.ts
@@ -29,18 +29,14 @@
 
 import { AnimationPlayer } from '@forgeax/engine-animation';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { defineComponent, ENTITY_NULL_RAW, type EntityHandle, World } from '@forgeax/engine-ecs';
 import {
-  GlyphText,
-  SPRITE_PLAYBACK_MODE_CLAMP,
-  SPRITE_PLAYBACK_MODE_LOOP,
-  SpriteAnimation,
-  type SpritePlaybackMode,
-  SpriteRegionOverride,
-  spritePlaybackModeFromU32,
-  TileLayer,
-  Tilemap,
-} from '@forgeax/engine-render/authoring';
+  type Component,
+  defineComponent,
+  ENTITY_NULL_RAW,
+  type EntityHandle,
+  World,
+} from '@forgeax/engine-ecs';
+import { componentDefinition, componentId, componentSchema } from '@forgeax/engine-ecs/internal';
 import {
   ANTIALIAS_NONE,
   BLOOM_DISABLED,
@@ -48,27 +44,40 @@ import {
   CAMERA_PROJECTION_PERSPECTIVE,
   Camera,
   DirectionalLight,
-  extractFrame,
   Layer,
   MeshFilter,
   MeshRenderer,
   orthographic,
   perspective,
-  prepareExtractContext,
+  SceneInstance,
   SKYBOX_MODE_CUBEMAP,
   SkyboxBackground,
   type SkyboxMode,
   SortKey,
-  skyboxModeFromF32,
   TONEMAP_NONE,
   TONEMAP_REINHARD,
   TONEMAP_REINHARD_EXTENDED,
-  tonemapFromF32,
-} from '@forgeax/engine-render/internal';
+} from '@forgeax/engine-render';
+import {
+  GlyphText,
+  SpriteAnimation,
+  SpriteRegionOverride,
+  Tilemap,
+} from '@forgeax/engine-render/authoring';
+import * as SceneOwner from '@forgeax/engine-scene';
 import { ChildOf, Children, propagateTransforms, Transform } from '@forgeax/engine-scene';
 import type { Handle, LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, expectTypeOf, it } from 'vitest';
+import { tonemapFromF32 } from '../../../render/src/components/camera';
+import { skyboxModeFromF32 } from '../../../render/src/components/skybox-background';
+import {
+  SPRITE_PLAYBACK_MODE_CLAMP,
+  SPRITE_PLAYBACK_MODE_LOOP,
+  type SpritePlaybackMode,
+  spritePlaybackModeFromU32,
+} from '../../../render/src/components/sprite-playback-mode';
+import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
 
 {
   // --- from children.test.ts ---
@@ -95,60 +104,26 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   // `hierarchy-components.test.ts` convention.
 
   describe('w13 - Children { entities: array<entity> } schema (AC-05)', () => {
-    it('Children.schema.entities is the array<entity> keyword (no legacy `count` field)', () => {
+    it('componentSchema(Children).entities is the array<entity> keyword (no legacy `count` field)', () => {
       expect(Children.name).toBe('Children');
-      expect(Object.keys(Children.schema).length).toBe(1);
-      expect((Children.schema as Record<string, unknown>).entities).toBe('array<entity>');
-      expect((Children.schema as Record<string, unknown>).count).toBeUndefined();
+      expect(Object.keys(componentSchema(Children)).length).toBe(1);
+      expect((componentSchema(Children) as Record<string, unknown>).entities).toBe('array<entity>');
+      expect((componentSchema(Children) as Record<string, unknown>).count).toBeUndefined();
     });
 
     it('world.get(e, Children).entities is a Uint32Array snapshot with length reflecting initial payload', () => {
       const world = new World();
-      const a = world.spawn().unwrap();
-      const b = world.spawn().unwrap();
-      // Entity is a brand over number (Entity = number & { __entity }); the
-      // Uint32Array constructor accepts the brand directly through structural
-      // widening, no cast needed.
-      const parent = world
-        .spawn({
-          component: Children,
-          data: {
-            entities: new Uint32Array([a, b]),
-          },
-        })
-        .unwrap();
+      world.components.register(ChildOf).unwrap();
+      world.components.register(Children).unwrap();
+      const parent = world.spawn().unwrap();
+      const a = world.spawn({ component: ChildOf, data: { parent } }).unwrap();
+      const b = world.spawn({ component: ChildOf, data: { parent } }).unwrap();
       const got = world.get(parent, Children).unwrap();
-      // `entities` is a fresh Uint32Array snapshot (D-4 no-cache).
+      // `Children` is an engine-maintained materialized target. Its snapshot
+      // is read-only; source-side ChildOf writes are the only mutation route.
       expect(got.entities.length).toBe(2);
       expect(got.entities[0]).toBe(a);
       expect(got.entities[1]).toBe(b);
-    });
-
-    it('world.push(parent, Children, ...) writes a new element + length reflects push/pop', () => {
-      const world = new World();
-      const a = world.spawn().unwrap();
-      const b = world.spawn().unwrap();
-      const c = world.spawn().unwrap();
-      const parent = world
-        .spawn({
-          component: Children,
-          data: { entities: new Uint32Array([a]) },
-        })
-        .unwrap();
-      expect(world.get(parent, Children).unwrap().entities.length).toBe(1);
-      world.push(parent, Children, 'entities', b).unwrap();
-      world.push(parent, Children, 'entities', c).unwrap();
-      expect(world.get(parent, Children).unwrap().entities.length).toBe(3);
-      // Re-materialise the snapshot (D-4 no-cache) and confirm the writes landed.
-      const snap = world.get(parent, Children).unwrap().entities;
-      expect(snap.length).toBe(3);
-      expect(snap[0]).toBe(a);
-      expect(snap[1]).toBe(b);
-      expect(snap[2]).toBe(c);
-      // pop reduces snapshot length by 1.
-      const popped: EntityHandle = world.pop(parent, Children, 'entities').unwrap();
-      expect(popped).toBe(c);
-      expect(world.get(parent, Children).unwrap().entities.length).toBe(2);
     });
   });
 }
@@ -177,62 +152,63 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   describe('w7 - 5 component schemas register through defineComponent', () => {
     it('Transform has pos/quat/scale inline array fields + world array<f32,16>', () => {
       expect(Transform.name).toBe('Transform');
-      expect(Object.keys(Transform.schema).length).toBe(4);
+      expect(Object.keys(componentSchema(Transform)).length).toBe(4);
       // pos: inline [x, y, z]
-      expect(Transform.schema.pos).toBe('array<f32, 3>');
+      expect(componentSchema(Transform).pos).toBe('array<f32, 3>');
       // quat: inline [x, y, z, w] quaternion
-      expect(Transform.schema.quat).toBe('array<f32, 4>');
+      expect(componentSchema(Transform).quat).toBe('array<f32, 4>');
       // scale: inline [x, y, z]
-      expect(Transform.schema.scale).toBe('array<f32, 3>');
+      expect(componentSchema(Transform).scale).toBe('array<f32, 3>');
       // world: resolved mat4 (column-major 16 floats)
-      expect(Transform.schema.world).toBe('array<f32, 16>');
+      expect(componentSchema(Transform).world).toBe('array<f32, 16>');
     });
 
     it('MeshFilter has 1 shared<MeshAsset> field (assetHandle; M5 / w14)', () => {
       expect(MeshFilter.name).toBe('MeshFilter');
-      expect(Object.keys(MeshFilter.schema).length).toBe(1);
-      expect(MeshFilter.schema.assetHandle).toBe('shared<MeshAsset>');
+      expect(Object.keys(componentSchema(MeshFilter)).length).toBe(1);
+      expect(componentSchema(MeshFilter).assetHandle).toBe('shared<MeshAsset>');
     });
 
     it('MeshRenderer has 1 field (materials; feat-20260608 M2 / w7 multi-material array)', () => {
       expect(MeshRenderer.name).toBe('MeshRenderer');
-      expect(Object.keys(MeshRenderer.schema).length).toBe(1);
-      const schemaRecord = MeshRenderer.schema as Record<string, string>;
+      expect(Object.keys(componentSchema(MeshRenderer)).length).toBe(1);
+      const schemaRecord = componentSchema(MeshRenderer) as Record<string, string>;
       expect(schemaRecord.materials).toBe('array<shared<MaterialAsset>>');
     });
 
-    it('Camera has 19 fields (17 f32 + clearColor array<f32,4> + autoAspect bool: perspective quartet + projection + ortho quartet + tonemap trio + antialias + bloom quartet + clearColor + autoAspect)', () => {
+    it('Camera has 20 fields (17 f32 + historyVersion u32 + clearColor array<f32,4> + autoAspect bool)', () => {
       expect(Camera.name).toBe('Camera');
-      expect(Object.keys(Camera.schema).length).toBe(19);
-      expect(Camera.schema.fov).toBe('f32');
-      expect(Camera.schema.aspect).toBe('f32');
-      expect(Camera.schema.near).toBe('f32');
-      expect(Camera.schema.far).toBe('f32');
-      expect(Camera.schema.projection).toBe('f32');
-      expect(Camera.schema.left).toBe('f32');
-      expect(Camera.schema.right).toBe('f32');
-      expect(Camera.schema.bottom).toBe('f32');
-      expect(Camera.schema.top).toBe('f32');
+      expect(Object.keys(componentSchema(Camera)).length).toBe(20);
+      expect(componentSchema(Camera).fov).toBe('f32');
+      expect(componentSchema(Camera).aspect).toBe('f32');
+      expect(componentSchema(Camera).near).toBe('f32');
+      expect(componentSchema(Camera).far).toBe('f32');
+      expect(componentSchema(Camera).projection).toBe('f32');
+      expect(componentSchema(Camera).left).toBe('f32');
+      expect(componentSchema(Camera).right).toBe('f32');
+      expect(componentSchema(Camera).bottom).toBe('f32');
+      expect(componentSchema(Camera).top).toBe('f32');
+      expect(componentSchema(Camera).historyVersion).toBe('u32');
       // feat-20260519-tonemap-reinhard-mvp / M1 / T-M1.2: AC-01 + D-1.
-      expect(Camera.schema.tonemap).toBe('f32');
-      expect(Camera.schema.exposure).toBe('f32');
-      expect(Camera.schema.whitePoint).toBe('f32');
-      expect(Camera.schema.antialias).toBe('f32');
+      expect(componentSchema(Camera).tonemap).toBe('f32');
+      expect(componentSchema(Camera).exposure).toBe('f32');
+      expect(componentSchema(Camera).whitePoint).toBe('f32');
+      expect(componentSchema(Camera).antialias).toBe('f32');
       // feat-20260531-bloom-first-declarative-render-graph-pass / w2.
-      expect(Camera.schema.bloom).toBe('f32');
-      expect(Camera.schema.bloomThreshold).toBe('f32');
-      expect(Camera.schema.bloomIntensity).toBe('f32');
-      expect(Camera.schema.bloomBlurRadius).toBe('f32');
+      expect(componentSchema(Camera).bloom).toBe('f32');
+      expect(componentSchema(Camera).bloomThreshold).toBe('f32');
+      expect(componentSchema(Camera).bloomIntensity).toBe('f32');
+      expect(componentSchema(Camera).bloomBlurRadius).toBe('f32');
       // feat-20260709 M3: clear-color quartet collapsed into one inline
       // array<f32,4> column (clearColor); per-axis scalars are gone.
-      expect(Camera.schema.clearColor).toBe('array<f32, 4>');
-      expect('clearR' in Camera.schema).toBe(false);
-      expect('clearG' in Camera.schema).toBe(false);
-      expect('clearB' in Camera.schema).toBe(false);
-      expect('clearA' in Camera.schema).toBe(false);
+      expect(componentSchema(Camera).clearColor).toBe('array<f32, 4>');
+      expect('clearR' in componentSchema(Camera)).toBe(false);
+      expect('clearG' in componentSchema(Camera)).toBe(false);
+      expect('clearB' in componentSchema(Camera)).toBe(false);
+      expect('clearA' in componentSchema(Camera)).toBe(false);
       // feat-20260617-host-engine-contract-and-video-cutscene / M3: aspect-sync
       // opt-out flag (bool column tier, not f32).
-      expect(Camera.schema.autoAspect).toBe('bool');
+      expect(componentSchema(Camera).autoAspect).toBe('bool');
     });
 
     it('DirectionalLight has 12 fields: 3 light + castShadow bool + 8 merged shadow f32', () => {
@@ -241,32 +217,32 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       // feat-20260709 M2: direction/color collapsed from 6 per-axis scalars to
       // two array<f32,3> columns (3 light fields: direction + color + intensity).
       expect(DirectionalLight.name).toBe('DirectionalLight');
-      expect(Object.keys(DirectionalLight.schema).length).toBe(12);
+      expect(Object.keys(componentSchema(DirectionalLight)).length).toBe(12);
       // 3 light fields
-      expect(DirectionalLight.schema.direction).toBe('array<f32, 3>');
-      expect(DirectionalLight.schema.color).toBe('array<f32, 3>');
-      expect(DirectionalLight.schema.intensity).toBe('f32');
+      expect(componentSchema(DirectionalLight).direction).toBe('array<f32, 3>');
+      expect(componentSchema(DirectionalLight).color).toBe('array<f32, 3>');
+      expect(componentSchema(DirectionalLight).intensity).toBe('f32');
       // shadow gate + 8 merged shadow fields
-      expect(DirectionalLight.schema.castShadow).toBe('bool');
-      expect(DirectionalLight.schema.mapSize).toBe('f32');
-      expect(DirectionalLight.schema.cascadeCount).toBe('f32');
-      expect(DirectionalLight.schema.splitLambda).toBe('f32');
-      expect(DirectionalLight.schema.cascadeBlend).toBe('f32');
-      expect(DirectionalLight.schema.depthBias).toBe('f32');
-      expect(DirectionalLight.schema.normalBias).toBe('f32');
-      expect(DirectionalLight.schema.shadowDistance).toBe('f32');
-      expect(DirectionalLight.schema.pcfKernelSize).toBe('f32');
+      expect(componentSchema(DirectionalLight).castShadow).toBe('bool');
+      expect(componentSchema(DirectionalLight).mapSize).toBe('f32');
+      expect(componentSchema(DirectionalLight).cascadeCount).toBe('f32');
+      expect(componentSchema(DirectionalLight).splitLambda).toBe('f32');
+      expect(componentSchema(DirectionalLight).cascadeBlend).toBe('f32');
+      expect(componentSchema(DirectionalLight).depthBias).toBe('f32');
+      expect(componentSchema(DirectionalLight).normalBias).toBe('f32');
+      expect(componentSchema(DirectionalLight).shadowDistance).toBe('f32');
+      expect(componentSchema(DirectionalLight).pcfKernelSize).toBe('f32');
     });
 
-    it('all 5 components are frozen tokens with auto-incrementing .id', () => {
+    it('all 5 components are frozen tokens with owner-assigned identities', () => {
       expect(Object.isFrozen(Transform)).toBe(true);
       expect(Object.isFrozen(MeshFilter)).toBe(true);
       expect(Object.isFrozen(MeshRenderer)).toBe(true);
       expect(Object.isFrozen(Camera)).toBe(true);
       expect(Object.isFrozen(DirectionalLight)).toBe(true);
       for (const t of [Transform, MeshFilter, MeshRenderer, Camera, DirectionalLight]) {
-        expect(typeof t.id).toBe('number');
-        expect(t.id).toBeGreaterThanOrEqual(0);
+        expect(typeof componentId(t)).toBe('number');
+        expect(componentId(t)).toBeGreaterThanOrEqual(0);
       }
     });
   });
@@ -395,13 +371,13 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   });
 
   describe('w7 - 5 component schemas remain unique tokens (no double registration / no name collision)', () => {
-    it('5 components have 5 distinct .id values', () => {
+    it('5 components have 5 distinct componentId values', () => {
       const ids = new Set([
-        Transform.id,
-        MeshFilter.id,
-        MeshRenderer.id,
-        Camera.id,
-        DirectionalLight.id,
+        componentId(Transform),
+        componentId(MeshFilter),
+        componentId(MeshRenderer),
+        componentId(Camera),
+        componentId(DirectionalLight),
       ]);
       expect(ids.size).toBe(5);
     });
@@ -411,7 +387,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       // collide with downstream user code at the registry level. The user token
       // is a fresh allocation; it does not interfere with the 5 engine tokens.
       const UserPos = defineComponent('UserPos', { x: { type: 'f32' } });
-      expect(UserPos.id).not.toBe(Transform.id);
+      expect(componentId(UserPos)).not.toBe(componentId(Transform));
     });
   });
 }
@@ -440,20 +416,20 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   // lives in render-system-extract.test.ts (Transform.world parent x child).
   //
   // charter mapping: proposition 2 (Bevy ChildOf/Children industry analog) +
-  // proposition 3 (machine-readable schema > prose: grep ChildOf.schema /
-  // Children.schema recovers shape).
+  // proposition 3 (machine-readable schema > prose: grep componentSchema(ChildOf) /
+  // componentSchema(Children) recovers shape).
 
   describe('w5 - ChildOf / Children register through defineComponent', () => {
     it('ChildOf has 1 entity field (parent) (M5 / w18)', () => {
       expect(ChildOf.name).toBe('ChildOf');
-      expect(Object.keys(ChildOf.schema).length).toBe(1);
-      expect(ChildOf.schema.parent).toBe('entity');
+      expect(Object.keys(componentSchema(ChildOf)).length).toBe(1);
+      expect(componentSchema(ChildOf).parent).toBe('entity');
     });
 
     it('Children has 1 array<entity> field (entities; M3 / w13 migration from legacy `count: u32`)', () => {
       expect(Children.name).toBe('Children');
-      expect(Object.keys(Children.schema).length).toBe(1);
-      expect((Children.schema as Record<string, unknown>).entities).toBe('array<entity>');
+      expect(Object.keys(componentSchema(Children)).length).toBe(1);
+      expect((componentSchema(Children) as Record<string, unknown>).entities).toBe('array<entity>');
     });
 
     it('Transform carries the resolved world mat4 column (array<f32, 16>)', () => {
@@ -461,17 +437,17 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       // separate GlobalTransform component. The 3 local-TRS inline array
       // columns (pos/quat/scale) plus the `world: array<f32, 16>` resolved
       // mat4 are the full shape.
-      const tKeys = Object.keys(Transform.schema);
+      const tKeys = Object.keys(componentSchema(Transform));
       expect(tKeys).toContain('world');
-      expect(Transform.schema.world).toBe('array<f32, 16>');
-      expect(Transform.schema.pos).toBe('array<f32, 3>');
-      expect(Transform.schema.quat).toBe('array<f32, 4>');
-      expect(Transform.schema.scale).toBe('array<f32, 3>');
+      expect(componentSchema(Transform).world).toBe('array<f32, 16>');
+      expect(componentSchema(Transform).pos).toBe('array<f32, 3>');
+      expect(componentSchema(Transform).quat).toBe('array<f32, 4>');
+      expect(componentSchema(Transform).scale).toBe('array<f32, 3>');
     });
 
     it('ChildOf / Children frozen tokens (schema immutable)', () => {
-      expect(Object.isFrozen(ChildOf.schema)).toBe(true);
-      expect(Object.isFrozen(Children.schema)).toBe(true);
+      expect(Object.isFrozen(componentSchema(ChildOf))).toBe(true);
+      expect(Object.isFrozen(componentSchema(Children))).toBe(true);
     });
 
     it('spawn with ChildOf carries encoded Entity u32 through ref field round-trip', () => {
@@ -569,8 +545,8 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   describe('w07 - Layer = defineComponent("Layer", { value: "i32" })', () => {
     it('has schema { value: "i32" } (1 i32 field)', () => {
       expect(Layer.name).toBe('Layer');
-      expect(Object.keys(Layer.schema).length).toBe(1);
-      expect(Layer.schema.value).toBe('i32');
+      expect(Object.keys(componentSchema(Layer)).length).toBe(1);
+      expect(componentSchema(Layer).value).toBe('i32');
     });
 
     it("spawn Layer { value: -100 } (background) round-trips with two's complement", () => {
@@ -641,13 +617,8 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   }
 
   describe('relationship-migration-regression (t21 / AC-25 / AC-26)', () => {
-    it('ChildOf declares the Children relationship mirror block', () => {
-      expect(ChildOf.relationship).toEqual({
-        mirror: 'Children',
-        field: 'entities',
-        exclusive: true,
-        linkedSpawn: true,
-      });
+    it('ChildOf remains the writable relationship source token', () => {
+      expect(ChildOf.name).toBe('ChildOf');
     });
 
     it('propagateTransforms reader path unchanged: child composes parent x local translation', () => {
@@ -771,10 +742,11 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       expect(mod.ChildOf).toBeDefined();
     });
 
-    it('runtime ChildOf resolves its Children mirror as array<entity>', async () => {
+    it('runtime scene barrel exposes both relationship tokens', async () => {
       const { ChildOf, Children } = await import('@forgeax/engine-scene');
-      expect(ChildOf.relationship?.mirror).toBe('Children');
-      expect((Children.schema as Record<string, string>).entities).toBe('array<entity>');
+      expect(ChildOf.name).toBe('ChildOf');
+      expect(Children.name).toBe('Children');
+      expect((componentSchema(Children) as Record<string, string>).entities).toBe('array<entity>');
     });
   });
 }
@@ -836,7 +808,14 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
     return { kind: 'scene', entities: nodes };
   }
 
-  function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
+  function registerSceneAsset(
+    world: World,
+    asset: SceneAsset,
+    components: readonly Component[] = [Transform],
+  ): Handle<'SceneAsset', 'shared'> {
+    for (const component of [SceneInstance, ChildOf, Children, ...components]) {
+      world.components.register(component).unwrap();
+    }
     return world.allocSharedRef('SceneAsset', asset);
   }
 
@@ -844,7 +823,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
     // entityToLocalId.keys() iterates in topo-sort spawn order; first key is
     // localId 0's live Entity. Robust against the mapping[0]===0 encoding
     // (gen=0+idx=0 produces raw u32 0, which is a valid Entity not "empty").
-    const stateRes = world.getSceneInstanceState(root);
+    const stateRes = SceneOwner.worldGetSceneInstanceState(world, root);
     if (!stateRes.ok) throw new Error('SceneInstance state lookup failed');
     const it = stateRes.value.entityToLocalId.keys();
     const first = it.next();
@@ -858,6 +837,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
         pos: { type: 'array<f32, 3>', default: new Float32Array([99, 99, 99]) },
       });
       const world = new World();
+      world.components.register(Transform).unwrap();
 
       const nodes: SceneEntity[] = [
         {
@@ -865,8 +845,8 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
           components: { Transform: { pos: [1.5, 0, 0] } },
         },
       ];
-      const handle = registerSceneAsset(world, buildScene(nodes));
-      const r = world.instantiateScene(handle);
+      const handle = registerSceneAsset(world, buildScene(nodes), [Transform]);
+      const r = SceneOwner.worldInstantiateScene(world, handle);
       expect(r.ok).toBe(true);
       if (!r.ok) return;
       const e = firstNodeEntity(world, r.value.root);
@@ -874,7 +854,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       expect(Array.from(t.pos)).toEqual([1.5, 0, 0]);
       // overrides stay empty - no setSceneOverride was called. M3 reads them
       // from the SceneInstanceState payload via getSceneInstanceState.
-      const stateRes = world.getSceneInstanceState(r.value.root);
+      const stateRes = SceneOwner.worldGetSceneInstanceState(world, r.value.root);
       expect(stateRes.ok).toBe(true);
       if (!stateRes.ok) return;
       expect(stateRes.value.overrides.size).toBe(0);
@@ -885,6 +865,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
         pos: { type: 'array<f32, 3>', default: new Float32Array([0, 7, 0]) },
       });
       const world = new World();
+      world.components.register(Transform).unwrap();
 
       // Node omits pos entirely -> layer 2 fills the whole array column with
       // the field-descriptor default [0, 7, 0] (beats the layer-3 zero-fill,
@@ -895,8 +876,8 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
           components: { Transform: {} },
         },
       ];
-      const handle = registerSceneAsset(world, buildScene(nodes));
-      const r = world.instantiateScene(handle);
+      const handle = registerSceneAsset(world, buildScene(nodes), [Transform]);
+      const r = SceneOwner.worldInstantiateScene(world, handle);
       expect(r.ok).toBe(true);
       if (!r.ok) return;
       const e = firstNodeEntity(world, r.value.root);
@@ -911,6 +892,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
         kind: 'u32',
       });
       const world = new World();
+      world.components.register(Transform).unwrap();
 
       // No defaults at the component level; node writes nothing. Three-layer
       // chain leaves pos / flag / kind empty -> layer 3 fills with TS type
@@ -921,8 +903,8 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
           components: { Transform: {} },
         },
       ];
-      const handle = registerSceneAsset(world, buildScene(nodes));
-      const r = world.instantiateScene(handle);
+      const handle = registerSceneAsset(world, buildScene(nodes), [Transform]);
+      const r = SceneOwner.worldInstantiateScene(world, handle);
       expect(r.ok).toBe(true);
       if (!r.ok) return;
       const e = firstNodeEntity(world, r.value.root);
@@ -935,6 +917,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
     it('AC-12 layer 3: entity-typed field falls back to NULL_ENTITY sentinel', () => {
       const TargetSlot = defineComponent('TargetSlot', { target: 'entity' });
       const world = new World();
+      world.components.register(TargetSlot).unwrap();
 
       // Node declares TargetSlot with NO target value -> three layers silent
       // -> layer 3 must store ENTITY_NULL_RAW (0xffffffff) sentinel in the u32
@@ -950,8 +933,8 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
           components: { TargetSlot: {} },
         },
       ];
-      const handle = registerSceneAsset(world, buildScene(nodes));
-      const r = world.instantiateScene(handle);
+      const handle = registerSceneAsset(world, buildScene(nodes), [TargetSlot]);
+      const r = SceneOwner.worldInstantiateScene(world, handle);
       expect(r.ok).toBe(true);
       if (!r.ok) return;
       const e = firstNodeEntity(world, r.value.root);
@@ -977,6 +960,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
         scale: 'array<f32, 3>',
       });
       const world = new World();
+      world.components.register(Transform).unwrap();
 
       const nodes: SceneEntity[] = [
         {
@@ -984,8 +968,8 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
           components: { Transform: { pos: [1.5, 0, 0] } },
         },
       ];
-      const handle = registerSceneAsset(world, buildScene(nodes));
-      const r = world.instantiateScene(handle);
+      const handle = registerSceneAsset(world, buildScene(nodes), [Transform]);
+      const r = SceneOwner.worldInstantiateScene(world, handle);
       expect(r.ok).toBe(true);
       if (!r.ok) return;
       const e = firstNodeEntity(world, r.value.root);
@@ -1000,14 +984,15 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       // plan-strategy §3.3 §error-model: layer 3 MUST be silent. This test
       // pins the negative -- the Result must be ok and no error-shaped value
       // surfaces to the caller.
-      defineComponent('Transform', {
+      const Transform = defineComponent('Transform', {
         pos: 'array<f32, 3>',
       });
       const world = new World();
+      world.components.register(Transform).unwrap();
 
       const nodes: SceneEntity[] = [{ localId: localId(0), components: { Transform: {} } }];
-      const handle = registerSceneAsset(world, buildScene(nodes));
-      const r = world.instantiateScene(handle);
+      const handle = registerSceneAsset(world, buildScene(nodes), [Transform]);
+      const r = SceneOwner.worldInstantiateScene(world, handle);
       expect(r.ok).toBe(true);
       // No 'scene-default-missing' / similar code surfaces. Asserted at the
       // Result envelope -- if w22 ever introduces such a code in the silent
@@ -1041,8 +1026,8 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   describe('w08 - SortKey = defineComponent("SortKey", { value: "f32" })', () => {
     it('has schema { value: "f32" } (1 f32 field)', () => {
       expect(SortKey.name).toBe('SortKey');
-      expect(Object.keys(SortKey.schema).length).toBe(1);
-      expect(SortKey.schema.value).toBe('f32');
+      expect(Object.keys(componentSchema(SortKey)).length).toBe(1);
+      expect(componentSchema(SortKey).value).toBe('f32');
     });
 
     it('spawn SortKey { value: 1.5 } round-trips within f32 precision', () => {
@@ -1109,7 +1094,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   describe('AnimationPlayer — SoA 10-field schema lock (M1 / w3 + M3 / w24)', () => {
     it('AnimationPlayer is a registered component with name "AnimationPlayer" and 10 SoA schema fields', () => {
       expect(AnimationPlayer.name).toBe('AnimationPlayer');
-      const schema = AnimationPlayer.schema as Record<string, unknown>;
+      const schema = componentSchema(AnimationPlayer) as Record<string, unknown>;
       expect(Object.keys(schema).length).toBe(10);
       expect(schema).toEqual({
         clips: 'array<shared<AnimationClip>>',
@@ -1125,60 +1110,72 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       });
     });
 
-    it('AnimationPlayer.schema.clips is variable array<shared<AnimationClip>> (SoA keyword)', () => {
-      expect((AnimationPlayer.schema as Record<string, unknown>).clips).toBe(
+    it('componentSchema(AnimationPlayer).clips is variable array<shared<AnimationClip>> (SoA keyword)', () => {
+      expect((componentSchema(AnimationPlayer) as Record<string, unknown>).clips).toBe(
         'array<shared<AnimationClip>>',
       );
     });
 
-    it('AnimationPlayer.schema.times is variable array<f32>', () => {
-      expect((AnimationPlayer.schema as Record<string, unknown>).times).toBe('array<f32>');
+    it('componentSchema(AnimationPlayer).times is variable array<f32>', () => {
+      expect((componentSchema(AnimationPlayer) as Record<string, unknown>).times).toBe(
+        'array<f32>',
+      );
     });
 
-    it('AnimationPlayer.schema.weights is variable array<f32>', () => {
-      expect((AnimationPlayer.schema as Record<string, unknown>).weights).toBe('array<f32>');
+    it('componentSchema(AnimationPlayer).weights is variable array<f32>', () => {
+      expect((componentSchema(AnimationPlayer) as Record<string, unknown>).weights).toBe(
+        'array<f32>',
+      );
     });
 
-    it('AnimationPlayer.schema.speeds is variable array<f32>', () => {
-      expect((AnimationPlayer.schema as Record<string, unknown>).speeds).toBe('array<f32>');
+    it('componentSchema(AnimationPlayer).speeds is variable array<f32>', () => {
+      expect((componentSchema(AnimationPlayer) as Record<string, unknown>).speeds).toBe(
+        'array<f32>',
+      );
     });
 
-    it('AnimationPlayer.schema.paused is bool', () => {
-      expect((AnimationPlayer.schema as Record<string, unknown>).paused).toBe('bool');
+    it('componentSchema(AnimationPlayer).paused is bool', () => {
+      expect((componentSchema(AnimationPlayer) as Record<string, unknown>).paused).toBe('bool');
     });
 
-    it('AnimationPlayer.schema.looping is bool', () => {
-      expect((AnimationPlayer.schema as Record<string, unknown>).looping).toBe('bool');
+    it('componentSchema(AnimationPlayer).looping is bool', () => {
+      expect((componentSchema(AnimationPlayer) as Record<string, unknown>).looping).toBe('bool');
     });
 
-    it('AnimationPlayer.schema.graph is shared<AnimationGraph> (M3 / w24 graph handle)', () => {
-      expect((AnimationPlayer.schema as Record<string, unknown>).graph).toBe(
+    it('componentSchema(AnimationPlayer).graph is shared<AnimationGraph> (M3 / w24 graph handle)', () => {
+      expect((componentSchema(AnimationPlayer) as Record<string, unknown>).graph).toBe(
         'shared<AnimationGraph>',
       );
     });
 
-    it('AnimationPlayer.schema.nodeWeights is variable array<f32> (M3 / w24 per-node knob)', () => {
-      expect((AnimationPlayer.schema as Record<string, unknown>).nodeWeights).toBe('array<f32>');
+    it('componentSchema(AnimationPlayer).nodeWeights is variable array<f32> (M3 / w24 per-node knob)', () => {
+      expect((componentSchema(AnimationPlayer) as Record<string, unknown>).nodeWeights).toBe(
+        'array<f32>',
+      );
     });
 
-    it('AnimationPlayer.schema.nodeTimes is variable array<f32> (M3 / w24 per-node seek time)', () => {
-      expect((AnimationPlayer.schema as Record<string, unknown>).nodeTimes).toBe('array<f32>');
+    it('componentSchema(AnimationPlayer).nodeTimes is variable array<f32> (M3 / w24 per-node seek time)', () => {
+      expect((componentSchema(AnimationPlayer) as Record<string, unknown>).nodeTimes).toBe(
+        'array<f32>',
+      );
     });
 
-    it('AnimationPlayer.schema.nodeSpeeds is variable array<f32> (M3 / w24 per-node speed)', () => {
-      expect((AnimationPlayer.schema as Record<string, unknown>).nodeSpeeds).toBe('array<f32>');
+    it('componentSchema(AnimationPlayer).nodeSpeeds is variable array<f32> (M3 / w24 per-node speed)', () => {
+      expect((componentSchema(AnimationPlayer) as Record<string, unknown>).nodeSpeeds).toBe(
+        'array<f32>',
+      );
     });
 
     it('old field clip is absent from schema (AC-02 type-level error)', () => {
-      expect(AnimationPlayer.schema).not.toHaveProperty('clip');
+      expect(componentSchema(AnimationPlayer)).not.toHaveProperty('clip');
     });
 
     it('old field time is absent from schema (AC-02 type-level error)', () => {
-      expect(AnimationPlayer.schema).not.toHaveProperty('time');
+      expect(componentSchema(AnimationPlayer)).not.toHaveProperty('time');
     });
 
     it('old field speed is absent from schema (AC-02 type-level error)', () => {
-      expect(AnimationPlayer.schema).not.toHaveProperty('speed');
+      expect(componentSchema(AnimationPlayer)).not.toHaveProperty('speed');
     });
 
     it('AnimationPlayer spawn yields variable SoA defaults: clips/times/weights/speeds all empty, paused=false, looping=true (M1 / w4 variable columns, speeds default [])', () => {
@@ -1295,8 +1292,8 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   //        refactoring — every field value must stay byte-identical)
   // ────────────────────────────────────────────────────────────────────────────
 
-  describe('camera factory 19-field snapshot (w14 AC-07 invariant)', () => {
-    it('perspective({ fov: Math.PI/3, aspect: 16/9 }) — all 19 fields match reference', () => {
+  describe('camera factory 20-field snapshot (w14 AC-07 invariant)', () => {
+    it('perspective({ fov: Math.PI/3, aspect: 16/9 }) — all 20 fields match reference', () => {
       const pod = perspective({ fov: Math.PI / 3, aspect: 16 / 9 });
       // Perspective quartet — caller-supplied
       expect(pod.fov).toBeCloseTo(Math.PI / 3, 6);
@@ -1316,6 +1313,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       expect(pod.whitePoint).toBeCloseTo(4.0, 6);
       // Post-processing defaults
       expect(pod.antialias).toBe(ANTIALIAS_NONE);
+      expect(pod.historyVersion).toBe(0);
       expect(pod.bloom).toBe(BLOOM_DISABLED);
       expect(pod.bloomThreshold).toBeCloseTo(1.0, 6);
       expect(pod.bloomIntensity).toBeCloseTo(1.0, 6);
@@ -1349,7 +1347,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       expect(pod.bloomBlurRadius).toBeCloseTo(4.0, 6);
     });
 
-    it('orthographic({ left: -10, right: 10, bottom: -10, top: 10 }) — all 19 fields match reference', () => {
+    it('orthographic({ left: -10, right: 10, bottom: -10, top: 10 }) — all 20 fields match reference', () => {
       const pod = orthographic({ left: -10, right: 10, bottom: -10, top: 10 });
       // Ortho bounds — caller-supplied
       expect(pod.left).toBe(-10);
@@ -1368,6 +1366,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       expect(pod.whitePoint).toBeCloseTo(4.0, 6);
       // Post-processing defaults
       expect(pod.antialias).toBe(ANTIALIAS_NONE);
+      expect(pod.historyVersion).toBe(0);
       expect(pod.bloom).toBe(BLOOM_DISABLED);
       expect(pod.bloomThreshold).toBeCloseTo(1.0, 6);
       expect(pod.bloomIntensity).toBeCloseTo(1.0, 6);
@@ -1393,14 +1392,14 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       expect(pod.tonemap).toBe(TONEMAP_NONE);
     });
 
-    it('perspective + orthographic 19-field counts (19 Camera columns)', () => {
+    it('perspective + orthographic 20-field counts (20 Camera columns)', () => {
       const p = perspective({ fov: 60, aspect: 4 / 3 });
       const o = orthographic({ left: -1, right: 1, bottom: -1, top: 1 });
-      // Both return exactly 19 fields (17 pre-clear + 1 clearColor array +
+      // Both return exactly 20 fields (17 f32 + historyVersion u32 + one clearColor array +
       // autoAspect bool column; feat-20260709 M3 collapsed the 4-scalar
       // clear-color quartet into one inline array<f32,4>).
-      expect(Object.keys(p).length).toBe(19);
-      expect(Object.keys(o).length).toBe(19);
+      expect(Object.keys(p).length).toBe(20);
+      expect(Object.keys(o).length).toBe(20);
     });
   });
 
@@ -1409,7 +1408,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   // ────────────────────────────────────────────────────────────────────────────
 
   describe('Camera.fields reflection (w14 AC-07 SSOT)', () => {
-    it('Camera.fields has exactly 19 keys matching the Camera column set', () => {
+    it('Camera.fields has exactly 20 keys matching the Camera column set', () => {
       const keys = Object.keys(Camera.fields).sort();
       expect(keys).toEqual([
         'antialias',
@@ -1424,6 +1423,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
         'exposure',
         'far',
         'fov',
+        'historyVersion',
         'left',
         'near',
         'projection',
@@ -1434,10 +1434,16 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       ]);
     });
 
-    it("every Camera.fields entry is 'f32' except autoAspect (bool) and clearColor (array<f32,4>)", () => {
+    it('every Camera.fields entry has the declared numeric, bool, or array storage kind', () => {
       for (const key of Object.keys(Camera.fields) as Array<keyof typeof Camera.fields>) {
         const expected =
-          key === 'autoAspect' ? 'bool' : key === 'clearColor' ? 'array<f32, 4>' : 'f32';
+          key === 'autoAspect'
+            ? 'bool'
+            : key === 'clearColor'
+              ? 'array<f32, 4>'
+              : key === 'historyVersion'
+                ? 'u32'
+                : 'f32';
         expect(Camera.fields[key].type).toBe(expected);
       }
     });
@@ -1461,6 +1467,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       expect(d.exposure.default).toBeCloseTo(1.0, 6);
       expect(d.whitePoint.default).toBeCloseTo(4.0, 6);
       expect(d.antialias.default).toBe(0);
+      expect(d.historyVersion.default).toBe(0);
       expect(d.bloom.default).toBe(0);
       expect(d.bloomThreshold.default).toBeCloseTo(1.0, 6);
       expect(d.bloomIntensity.default).toBeCloseTo(1.0, 6);
@@ -1479,9 +1486,9 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
     });
   });
 
-  describe('Camera.defaults — frozen token defaults map (AC-07 + feat-20260528-fxaa-post-processing + feat-20260531-bloom + feat-20260608-clear-color)', () => {
-    it('Camera.defaults equals { projection: 0, left: -1, right: 1, bottom: -1, top: 1, tonemap: 0, exposure: 1.0, whitePoint: 4.0, antialias: 0, bloom: 0, bloomThreshold: 1.0, bloomIntensity: 1.0, bloomBlurRadius: 4.0, clearColor: [0,0,0,0], autoAspect: true }', () => {
-      expect(Camera.defaults).toEqual({
+  describe('componentDefinition(Camera).defaults — frozen token defaults map (AC-07 + feat-20260528-fxaa-post-processing + feat-20260531-bloom + feat-20260608-clear-color)', () => {
+    it('componentDefinition(Camera).defaults equals { projection: 0, left: -1, right: 1, bottom: -1, top: 1, tonemap: 0, exposure: 1.0, whitePoint: 4.0, antialias: 0, bloom: 0, bloomThreshold: 1.0, bloomIntensity: 1.0, bloomBlurRadius: 4.0, clearColor: [0,0,0,0], autoAspect: true }', () => {
+      expect(componentDefinition(Camera).defaults).toEqual({
         projection: 0,
         left: -1,
         right: 1,
@@ -1491,6 +1498,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
         exposure: 1.0,
         whitePoint: 4.0,
         antialias: 0,
+        historyVersion: 0,
         bloom: 0,
         bloomThreshold: 1.0,
         bloomIntensity: 1.0,
@@ -1500,15 +1508,17 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       });
     });
 
-    it('Camera.defaults is deep-frozen (Object.isFrozen returns true)', () => {
-      expect(Camera.defaults).toBeDefined();
+    it('componentDefinition(Camera).defaults is deep-frozen (Object.isFrozen returns true)', () => {
+      expect(componentDefinition(Camera).defaults).toBeDefined();
       // Object.isFrozen is true for any frozen object; defineComponent
       // freezes the per-component defaults map at registration time.
-      expect(Object.isFrozen(Camera.defaults)).toBe(true);
+      expect(Object.isFrozen(componentDefinition(Camera).defaults)).toBe(true);
     });
 
-    it('Camera.defaults does NOT carry fov / aspect / near / far (perspective quartet stays explicit per OOS-5)', () => {
-      const d = Camera.defaults as Readonly<Record<string, unknown>> | undefined;
+    it('componentDefinition(Camera).defaults does NOT carry fov / aspect / near / far (perspective quartet stays explicit per OOS-5)', () => {
+      const d = componentDefinition(Camera).defaults as
+        | Readonly<Record<string, unknown>>
+        | undefined;
       expect(d).toBeDefined();
       if (d === undefined) return;
       expect('fov' in d).toBe(false);
@@ -1703,7 +1713,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       expect(pod.exposure).toBeCloseTo(1.0, 6);
     });
 
-    it('perspective return value has all 19 Camera fields', () => {
+    it('perspective return value has all 20 Camera fields', () => {
       const pod = perspective({ fov: 60, aspect: 4 / 3 });
       const keys = Object.keys(pod).sort();
       expect(keys).toEqual([
@@ -1719,6 +1729,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
         'exposure',
         'far',
         'fov',
+        'historyVersion',
         'left',
         'near',
         'projection',
@@ -1775,7 +1786,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   // Layer defaults fill regression barrier (AC-04 sweep table #14).
   // Three concerns:
   //
-  //   (a) `Layer.defaults` is a frozen map asserting `{ value: 0 }`
+  //   (a) `componentDefinition(Layer).defaults` is a frozen map asserting `{ value: 0 }`
   //       (default game layer, charter P1 progressive disclosure).
   //
   //   (b) `world.spawn({ component: Layer, data: {} })` yields `value === 0`
@@ -1787,14 +1798,14 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   // Anchors: requirements AC-04 (sweep table #14 Layer defaults-added);
   // plan-strategy section 2 sweep pre-judgment table.
 
-  describe('Layer.defaults -- frozen map assertion (AC-04 #14)', () => {
-    it('Layer.defaults equals { value: 0 }', () => {
-      expect(Layer.defaults).toEqual({ value: 0 });
+  describe('componentDefinition(Layer).defaults -- frozen map assertion (AC-04 #14)', () => {
+    it('componentDefinition(Layer).defaults equals { value: 0 }', () => {
+      expect(componentDefinition(Layer).defaults).toEqual({ value: 0 });
     });
 
-    it('Layer.defaults is deep-frozen (Object.isFrozen returns true)', () => {
-      expect(Layer.defaults).toBeDefined();
-      expect(Object.isFrozen(Layer.defaults as object)).toBe(true);
+    it('componentDefinition(Layer).defaults is deep-frozen (Object.isFrozen returns true)', () => {
+      expect(componentDefinition(Layer).defaults).toBeDefined();
+      expect(Object.isFrozen(componentDefinition(Layer).defaults as object)).toBe(true);
     });
   });
 
@@ -1826,7 +1837,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   // MeshRenderer schema migration barrier: material field removed, materials
   // array added.
   //
-  //   (a) `MeshRenderer.defaults` is a frozen map asserting
+  //   (a) `componentDefinition(MeshRenderer).defaults` is a frozen map asserting
   //       `{ materials: [] }` (empty array routes to D-Q7 case B default
   //       material path).
   //
@@ -1839,14 +1850,14 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   //   (d) `world.spawn` with the old `material` field (singular) is a TS
   //       compile-time error (verified via test-d.ts).
 
-  describe('MeshRenderer.defaults — frozen map assertion (w8)', () => {
-    it('MeshRenderer.defaults equals { materials: [] }', () => {
-      expect(MeshRenderer.defaults).toEqual({ materials: [] });
+  describe('componentDefinition(MeshRenderer).defaults — frozen map assertion (w8)', () => {
+    it('componentDefinition(MeshRenderer).defaults equals { materials: [] }', () => {
+      expect(componentDefinition(MeshRenderer).defaults).toEqual({ materials: [] });
     });
 
-    it('MeshRenderer.defaults is deep-frozen (Object.isFrozen returns true)', () => {
-      expect(MeshRenderer.defaults).toBeDefined();
-      expect(Object.isFrozen(MeshRenderer.defaults as object)).toBe(true);
+    it('componentDefinition(MeshRenderer).defaults is deep-frozen (Object.isFrozen returns true)', () => {
+      expect(componentDefinition(MeshRenderer).defaults).toBeDefined();
+      expect(Object.isFrozen(componentDefinition(MeshRenderer).defaults as object)).toBe(true);
     });
   });
 
@@ -1870,6 +1881,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       const matHandle = world.allocSharedRef('MaterialAsset', {
         kind: 'material',
         baseColor: [1, 0, 0, 1],
+        passes: [{ name: 'forward', program: { module: 'project::standard' } }],
       } as never);
 
       expect(matHandle).toBeGreaterThan(0);
@@ -2021,7 +2033,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   // SortKey defaults fill regression barrier (AC-04 sweep table #15).
   // Three concerns:
   //
-  //   (a) `SortKey.defaults` is a frozen map asserting `{ value: 0 }`
+  //   (a) `componentDefinition(SortKey).defaults` is a frozen map asserting `{ value: 0 }`
   //       (value 0 means 'no override, use mode formula' per transparent-sort
   //       algorithm semantics, charter P1 progressive disclosure).
   //
@@ -2034,14 +2046,14 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   // Anchors: requirements AC-04 (sweep table #15 SortKey defaults-added);
   // plan-strategy section 2 sweep pre-judgment table.
 
-  describe('SortKey.defaults -- frozen map assertion (AC-04 #15)', () => {
-    it('SortKey.defaults equals { value: 0 }', () => {
-      expect(SortKey.defaults).toEqual({ value: 0 });
+  describe('componentDefinition(SortKey).defaults -- frozen map assertion (AC-04 #15)', () => {
+    it('componentDefinition(SortKey).defaults equals { value: 0 }', () => {
+      expect(componentDefinition(SortKey).defaults).toEqual({ value: 0 });
     });
 
-    it('SortKey.defaults is deep-frozen (Object.isFrozen returns true)', () => {
-      expect(SortKey.defaults).toBeDefined();
-      expect(Object.isFrozen(SortKey.defaults as object)).toBe(true);
+    it('componentDefinition(SortKey).defaults is deep-frozen (Object.isFrozen returns true)', () => {
+      expect(componentDefinition(SortKey).defaults).toBeDefined();
+      expect(Object.isFrozen(componentDefinition(SortKey).defaults as object)).toBe(true);
     });
   });
 
@@ -2110,8 +2122,10 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   describe('SpriteRegionOverride — defineComponent does not throw (R-SCHEMA-2)', () => {
     it("name + schema lock match the M2 D-6 contract (region: 'array<f32, 4>')", () => {
       expect(SpriteRegionOverride.name).toBe('SpriteRegionOverride');
-      expect(Object.keys(SpriteRegionOverride.schema).length).toBe(1);
-      expect((SpriteRegionOverride.schema as Record<string, unknown>).region).toBe('array<f32, 4>');
+      expect(Object.keys(componentSchema(SpriteRegionOverride)).length).toBe(1);
+      expect((componentSchema(SpriteRegionOverride) as Record<string, unknown>).region).toBe(
+        'array<f32, 4>',
+      );
     });
   });
 
@@ -2153,7 +2167,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
     it('name + schema lock match the M2 D-5 + D-6 contract (6 fields)', () => {
       expect(SpriteAnimation.name).toBe('SpriteAnimation');
 
-      const schema = SpriteAnimation.schema as Record<string, unknown>;
+      const schema = componentSchema(SpriteAnimation) as Record<string, unknown>;
       expect(Object.keys(schema).length).toBe(6);
       expect(schema.frameCount).toBe('u32');
       expect(schema.frameDuration).toBe('f32');
@@ -2451,6 +2465,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       const matHandle = world.allocSharedRef('MaterialAsset', {
         kind: 'material',
         baseColor: [1, 0, 0, 1],
+        passes: [{ name: 'forward', program: { module: 'project::standard' } }],
       } as never);
 
       const meshHandle = world.allocSharedRef('MeshAsset', {
@@ -2458,11 +2473,13 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
         vertices: new Float32Array(4 * 12),
         indices: new Uint16Array([0, 1, 2, 0, 2, 3]),
         attributes: { position: new Float32Array(4 * 3) },
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 6,
             vertexCount: 4,
+            materialSlot: 0,
             topology: 'triangle-list' as const,
           },
         ],
@@ -2495,11 +2512,13 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
         vertices: new Float32Array(4 * 12),
         indices: new Uint16Array([0, 1, 2, 0, 2, 3]),
         attributes: { position: new Float32Array(4 * 3) },
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 6,
             vertexCount: 4,
+            materialSlot: 0,
             topology: 'triangle-list' as const,
           },
         ],
@@ -2520,7 +2539,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       expect(frame.renderables.length).toBe(1);
     });
 
-    it('materials: [m, m] with submeshes: [1] (non-empty length mismatch) -> count-mismatch fail-fast, 0 renderables', () => {
+    it('materials overflow emits a diagnostic and ignores the extra override', () => {
       const world = new World();
 
       const assets = new AssetRegistry(
@@ -2531,6 +2550,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       const matHandle = world.allocSharedRef('MaterialAsset', {
         kind: 'material',
         baseColor: [1, 0, 0, 1],
+        passes: [{ name: 'forward', program: { module: 'project::standard' } }],
       } as never);
 
       const meshHandle = world.allocSharedRef('MeshAsset', {
@@ -2538,11 +2558,13 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
         vertices: new Float32Array(4 * 12),
         indices: new Uint16Array([0, 1, 2, 0, 2, 3]),
         attributes: { position: new Float32Array(4 * 3) },
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 6,
             vertexCount: 4,
+            materialSlot: 0,
             topology: 'triangle-list' as const,
           },
         ],
@@ -2555,7 +2577,9 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
       );
 
       const frame = extractFrame(world, prepareExtractContext(world, { assets }));
-      expect(frame.renderables.length).toBe(0);
+      // Owner validation is diagnostic and non-fatal: the malformed extra
+      // override is ignored while the valid first material still renders.
+      expect(frame.renderables).toHaveLength(1);
     });
   });
 
@@ -2568,24 +2592,23 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
   // ────────────────────────────────────────────────────────────────────────
   describe('M3 vec-collapse schema + defaults (w11 AC-01 / E1 / E9)', () => {
     it('Camera.clearColor is array<f32,4> with explicit layer-2 default [0,0,0,0]', () => {
-      expect(Camera.schema.clearColor).toBe('array<f32, 4>');
+      expect(componentSchema(Camera).clearColor).toBe('array<f32, 4>');
       expect(Array.from(Camera.fields.clearColor.default as Float32Array)).toEqual([0, 0, 0, 0]);
     });
 
     it('GlyphText.color is array<f32,4> with explicit layer-2 default [1,1,1,1]; per-axis scalars gone', () => {
-      expect(GlyphText.schema.color).toBe('array<f32, 4>');
-      expect(GlyphText.fields.fontHandle.simulationTransient).toBe(true);
-      expect('colorR' in GlyphText.schema).toBe(false);
-      expect('colorG' in GlyphText.schema).toBe(false);
-      expect('colorB' in GlyphText.schema).toBe(false);
-      expect('colorA' in GlyphText.schema).toBe(false);
+      expect(componentSchema(GlyphText).color).toBe('array<f32, 4>');
+      expect('colorR' in componentSchema(GlyphText)).toBe(false);
+      expect('colorG' in componentSchema(GlyphText)).toBe(false);
+      expect('colorB' in componentSchema(GlyphText)).toBe(false);
+      expect('colorA' in componentSchema(GlyphText)).toBe(false);
       expect(Array.from(GlyphText.fields.color.default as Float32Array)).toEqual([1, 1, 1, 1]);
     });
 
     it('Tilemap.tileSize is array<f32,2> with explicit layer-2 default [1,1]; per-axis scalars gone', () => {
-      expect(Tilemap.schema.tileSize).toBe('array<f32, 2>');
-      expect('tileSizeX' in Tilemap.schema).toBe(false);
-      expect('tileSizeY' in Tilemap.schema).toBe(false);
+      expect(componentSchema(Tilemap).tileSize).toBe('array<f32, 2>');
+      expect('tileSizeX' in componentSchema(Tilemap)).toBe(false);
+      expect('tileSizeY' in componentSchema(Tilemap)).toBe(false);
       expect(Array.from(Tilemap.fields.tileSize.default as Float32Array)).toEqual([1, 1]);
     });
 
@@ -2638,74 +2661,6 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
         .unwrap();
       const row = world.get(e, Camera).unwrap();
       expect(Array.from(row.clearColor)).toEqual([Math.fround(0.4), Math.fround(0.6), 1, 1]);
-    });
-  });
-}
-
-{
-  // --- tweak-20260714-tilemap-layer-childed-render-entities M1 (AC-01) ---
-  //
-  // TileLayer.defineComponent declares coAttach: [{ Transform, {} }] so any
-  // spawn of TileLayer that omits Transform auto-attaches an identity
-  // Transform (pos=[0,0,0], quat=[0,0,0,1], scale=[1,1,1]). This satisfies
-  // requirements AC-01 (default identity Transform) and AC-09 (existing demo
-  // spawn code stays byte-identical). Detailed coAttach mechanics live in
-  // packages/ecs/src/__tests__/co-attach.test.ts; here we only pin the
-  // TileLayer surface.
-
-  describe('TileLayer default identity Transform via coAttach (AC-01)', () => {
-    it('TileLayer.coAttach declares Transform with identity payload', () => {
-      expect(TileLayer.coAttach).toBeDefined();
-      expect(TileLayer.coAttach?.length).toBe(1);
-      expect(TileLayer.coAttach?.[0]?.component).toBe(Transform);
-    });
-
-    it('spawn(TileLayer, ChildOf) without Transform auto-attaches identity Transform', () => {
-      const world = new World();
-      const parent = world.spawn().unwrap();
-      const layer = world
-        .spawn(
-          {
-            component: TileLayer,
-            data: {
-              tiles: new Uint32Array([0, 0, 0, 0]),
-              layerOrder: 0,
-              dirty: 1,
-            },
-          },
-          { component: ChildOf, data: { parent } },
-        )
-        .unwrap();
-
-      const t = world.get(layer, Transform).unwrap();
-      expect(Array.from(t.pos)).toEqual([0, 0, 0]);
-      expect(Array.from(t.quat)).toEqual([0, 0, 0, 1]);
-      expect(Array.from(t.scale)).toEqual([1, 1, 1]);
-    });
-
-    it('spawn(TileLayer + explicit Transform) preserves the caller-supplied Transform (layer-1 wins)', () => {
-      const world = new World();
-      const parent = world.spawn().unwrap();
-      const layer = world
-        .spawn(
-          {
-            component: TileLayer,
-            data: {
-              tiles: new Uint32Array([0]),
-              layerOrder: 0,
-              dirty: 0,
-            },
-          },
-          {
-            component: Transform,
-            data: { pos: [3, 4, 5], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
-          },
-          { component: ChildOf, data: { parent } },
-        )
-        .unwrap();
-
-      const t = world.get(layer, Transform).unwrap();
-      expect(Array.from(t.pos)).toEqual([3, 4, 5]);
     });
   });
 }

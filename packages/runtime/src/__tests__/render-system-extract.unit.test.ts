@@ -37,26 +37,29 @@
 
 import { readFile } from 'node:fs/promises';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { type EcsErrorCode, World } from '@forgeax/engine-ecs';
-import { SpriteInstances } from '@forgeax/engine-render/authoring';
+import { World } from '@forgeax/engine-ecs';
 import {
   Camera,
   DirectionalLight,
-  extractFrame,
   Instances,
   MeshFilter,
   MeshRenderer,
-  prepareExtractContext,
-} from '@forgeax/engine-render/internal';
+} from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
 import type { Handle, MaterialAsset, MaterialPass, MeshAsset } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { SpriteInstances } from '../../../render/src/components';
+import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
 
 interface CollectedError {
-  readonly code: EcsErrorCode;
+  readonly code: string;
   readonly detail: unknown;
 }
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function identityTransform(): {
   pos: number[];
@@ -115,7 +118,11 @@ function registerSpriteMesh(world: World): Handle<'MeshAsset', 'shared'> {
     indices: new Uint16Array([0, 1, 2]),
     attributes: { position: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]) },
     aabb: new Float32Array([0, 0, 0, 1, 1, 1]),
-    submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+    submeshes: [
+      { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list', materialSlot: 0 },
+    ],
+
+    materialSlots: [{ slotName: 'Default' }],
   });
 }
 
@@ -159,8 +166,8 @@ function makeScene(): {
   const collected: CollectedError[] = [];
   const world = new World();
   const assets = new AssetRegistry(makeShaderRegistryWithSpriteAndPbr());
-  world.setErrorHandler((err) => {
-    const e = err as { code?: EcsErrorCode; detail?: unknown };
+  vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+    const e = args[args.length - 1] as { code?: string; detail?: unknown };
     if (e.code !== undefined) collected.push({ code: e.code, detail: e.detail });
   });
   spawnCameraAndLight(world);

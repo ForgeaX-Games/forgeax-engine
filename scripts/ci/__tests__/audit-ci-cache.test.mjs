@@ -382,7 +382,7 @@ test('repair: cache-warm measures restore time and cost-reporter collects its cu
   assert.ok(restoreStart >= 0 && restoreStart < restore);
   assert.ok(
     restoreFinish > restore &&
-      restoreFinish < cacheWarm.indexOf('name: Download shard transfer artifacts'),
+      restoreFinish < cacheWarm.indexOf('name: Download shard DDC artifacts'),
   );
   assert.match(
     cacheWarm,

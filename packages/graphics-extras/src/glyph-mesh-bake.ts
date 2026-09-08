@@ -30,9 +30,12 @@
 // is NOT modified -- the cube is purely a bake-step property of the mesh.
 
 import type { World } from '@forgeax/engine-ecs';
-import { PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
+import {
+  buildMeshAttributeMapForUvSets,
+  PROCEDURAL_FLOATS_PER_VERTEX,
+} from '@forgeax/engine-geometry';
 import { ok, type Result } from '@forgeax/engine-rhi';
-import type { AssetError, Handle, MeshAsset, VertexAttributeMap } from '@forgeax/engine-types';
+import type { AssetError, Handle, MeshAsset } from '@forgeax/engine-types';
 
 import type { GlyphLayoutResult } from './glyph-layout';
 
@@ -60,15 +63,22 @@ export function buildGlyphMeshAsset(layout: GlyphLayoutResult): MeshAsset {
     // (D-5). The GPU vertex buffer is built from the interleaved `vertices`
     // (uploadMeshById reads `mesh.vertices`), fully decoupled from this
     // position attribute -- which exists only to drive `computeAABB`.
-    attributes: cubeCornerAttributes(radius),
+    attributes: {
+      // Keep the conservative pick/cull position stream and the canonical
+      // 12-float upload layout in one geometry-owned projection.
+      ...buildMeshAttributeMapForUvSets(1),
+      position: cubeCornerAttributes(radius).position,
+    },
     submeshes: [
       {
         indexOffset: 0,
         indexCount: indices.length,
         vertexCount: vertices.length / PROCEDURAL_FLOATS_PER_VERTEX,
         topology: 'triangle-list',
+        materialSlot: 0,
       },
     ],
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 
@@ -108,7 +118,7 @@ export function bakeGlyphMesh(
  * (radius 0) all corners collapse to the origin, yielding a zero-volume box
  * that pick treats as a point miss -- consistent with the empty-string path.
  */
-function cubeCornerAttributes(radius: number): VertexAttributeMap {
+function cubeCornerAttributes(radius: number): { position: Float32Array } {
   const r = radius;
   return {
     position: Float32Array.of(

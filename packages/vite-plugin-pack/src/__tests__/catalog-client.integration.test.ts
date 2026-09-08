@@ -1,11 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  CATALOG_DELTA_EVENT,
-  type CatalogHotChannel,
-  createCatalogClient,
-  reloadAssetHost,
-} from '../catalog-client.js';
+import { type CatalogHotChannel, createCatalogClient } from '../catalog-client.js';
+import { CATALOG_DELTA_EVENT } from '../catalog-transport.js';
+import { reloadAssetHost } from '../index.js';
 
 describe('catalog client', () => {
   it('forwards only a neutral catalog delta and unregisters cleanly', async () => {
@@ -41,6 +38,23 @@ describe('catalog client', () => {
     const client = createCatalogClient(async () => [], undefined);
     expect(await client.enumerate()).toEqual([]);
     expect(() => client.subscribe(() => {})).not.toThrow();
+  });
+
+  it('exposes structured failure fields for malformed enumeration results', async () => {
+    const validationFailure = { added: [{ guid: 'invalid' }] };
+    const client = createCatalogClient(async () => validationFailure as never, undefined);
+
+    await expect(client.enumerate()).rejects.toMatchObject({
+      code: 'route-failed',
+      expected: expect.any(String),
+      hint: expect.any(String),
+      detail: { stage: 'route', subject: 'catalog-enumeration' },
+      cause: {
+        code: 'catalog-delta-invalid',
+        detail: { field: 'added' },
+      },
+    });
+    expect(client.desynchronized()).toBe(true);
   });
 
   it('requests a full reload only when an engine host explicitly chooses that policy', () => {

@@ -29,7 +29,7 @@
 // existing `pick()` raycast walk catches it for free.
 
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
-import { Entity, type EntityHandle, err, ok, type Result, type World } from '@forgeax/engine-ecs';
+import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
 import {
   bakeGlyphMesh,
@@ -39,10 +39,10 @@ import {
   trackFontConcurrency,
 } from '@forgeax/engine-graphics-extras';
 import type { FontAsset, Handle, MaterialAsset, MeshAsset, Submesh } from '@forgeax/engine-types';
-import { TextError, unpackSlot } from '@forgeax/engine-types';
+import { err, ok, type Result, TextError, toShared, unpackSlot } from '@forgeax/engine-types';
 import { MeshFilter, MeshRenderer } from './components';
 import { GlyphText } from './components/glyph-text';
-import type { GpuResourceStore } from './gpu-resource-store';
+import type { GpuResidencyCache } from './device/gpu-residency';
 
 // Per-entity bake bookkeeping: the baked mesh handle id + the authoring
 // signature it was baked from. A WeakMap owns one cache per World and each
@@ -50,10 +50,10 @@ import type { GpuResourceStore } from './gpu-resource-store';
 // EntityHandle, so slot reuse replaces stale state instead of aliasing it or
 // growing one historical entry per generation.
 interface BakeRecord {
-  readonly meshHandleId: number;
+  readonly meshHandle: Handle<'MeshAsset', 'shared'>;
   signature: string;
   /** The MeshRenderer.material handle assigned on first observation. */
-  readonly materialHandleId: number;
+  readonly materialHandle: Handle<'MaterialAsset', 'shared'>;
 }
 interface BakeCacheEntry {
   readonly handle: EntityHandle;
@@ -64,14 +64,18 @@ let bakeCache = new WeakMap<World, Map<number, BakeCacheEntry>>();
 // One current material producer handle per GlyphText entity slot. Continuous
 // tint edits replace and release the previous producer instead of growing a
 // historical color-key cache.
-let materialCache = new WeakMap<World, Map<number, number>>();
-let liveGlyphHandles = new WeakMap<World, Set<number>>();
+let materialCache = new WeakMap<World, Map<number, Handle<'MaterialAsset', 'shared'>>>();
+let liveGlyphSlots = new WeakMap<World, Set<number>>();
+
+function entitySlot(entity: EntityHandle): number {
+  return unpackSlot(entity as number);
+}
 
 /** Clear the per-entity bake + per-font material caches (test isolation). */
 export function resetGlyphBakeCache(): void {
   bakeCache = new WeakMap();
   materialCache = new WeakMap();
-  liveGlyphHandles = new WeakMap();
+  liveGlyphSlots = new WeakMap();
 }
 
 function worldBakeCache(world: World): Map<number, BakeCacheEntry> {
@@ -83,7 +87,7 @@ function worldBakeCache(world: World): Map<number, BakeCacheEntry> {
   return cache;
 }
 
-function worldMaterialCache(world: World): Map<number, number> {
+function worldMaterialCache(world: World): Map<number, Handle<'MaterialAsset', 'shared'>> {
   let cache = materialCache.get(world);
   if (cache === undefined) {
     cache = new Map();
@@ -94,17 +98,32 @@ function worldMaterialCache(world: World): Map<number, number> {
 
 /** Release renderer-derived producer refs at GlyphText removal time. */
 function releaseGlyphProducers(world: World, entity: EntityHandle): void {
-  const slot = unpackSlot(entity as unknown as number);
+  const slot = entitySlot(entity);
   const bake = bakeCache.get(world)?.get(slot);
   if (bake?.handle === entity) {
-    world.sharedRefs.release(asMeshHandle(bake.record.meshHandleId));
+    world.sharedRefs.release(bake.record.meshHandle);
     bakeCache.get(world)?.delete(slot);
   }
   const material = materialCache.get(world)?.get(slot);
   if (material !== undefined) {
-    world.sharedRefs.release(asMaterialHandle(material));
+    world.sharedRefs.release(material);
     materialCache.get(world)?.delete(slot);
   }
+}
+
+/** Remove stale renderer-derived state when a previously baked font is rejected. */
+function clearRejectedGlyphState(world: World, entity: EntityHandle): void {
+  const slot = entitySlot(entity);
+  const bake = bakeCache.get(world)?.get(slot);
+  if (bake?.handle !== entity) return;
+
+  // These components are owned by this system only when the matching bake
+  // record exists. Removing them before releasing the producer refs leaves no
+  // stale draw/material handles and lets the next valid frame take the normal
+  // first-observation path.
+  if (world.get(entity, MeshFilter).ok) world.removeComponent(entity, MeshFilter);
+  if (world.get(entity, MeshRenderer).ok) world.removeComponent(entity, MeshRenderer);
+  releaseGlyphProducers(world, entity);
 }
 
 // Premultiplied-alpha blend (mirrors the sprite path, plan D-7). The
@@ -128,23 +147,6 @@ interface GlyphTextData {
 }
 
 /** @internal archetype-walk view (same shape reached for in render-system-extract). */
-interface WorldInternalView {
-  /** @internal */
-  _getGraph(): {
-    readonly tables: ReadonlyArray<
-      | {
-          readonly size: number;
-          readonly components: ReadonlyArray<{ readonly id: number }>;
-          readonly storage: ReadonlyMap<
-            number,
-            { readonly fields: ReadonlyMap<string, { readonly view: ArrayLike<number> }> }
-          >;
-        }
-      | undefined
-    >;
-  };
-}
-
 /**
  * Lay out + bake every `GlyphText` entity, attaching MeshFilter + MeshRenderer
  * on first observation and re-baking in place on a text / size / color change.
@@ -156,22 +158,20 @@ interface WorldInternalView {
  */
 export function glyphTextLayoutSystem(
   world: World,
-  gpuStore: GpuResourceStore,
+  gpuStore: GpuResidencyCache,
 ): Result<void, TextError> {
   resetFontConcurrency();
 
-  const worldInternal = world as unknown as WorldInternalView;
-  // No GlyphText entity in this World -> empty collection -> no-op pass. The
-  // former per-World `_getComponentByName(GlyphText.name)` registration probe
-  // is gone (feat-20260602 dropped the registered concept); column presence is
-  // read directly from the archetype graph by `collectGlyphEntities`.
-  const entities = collectGlyphEntities(worldInternal, GlyphText.id);
-  const live = liveGlyphHandles.get(world) ?? new Set<number>();
+  // No GlyphText entity in this World -> empty query -> no-op pass. The
+  // ECS query is the single owner of component presence and entity iteration;
+  // the renderer does not reach into archetype storage internals.
+  const entities = collectGlyphEntities(world);
+  const live = liveGlyphSlots.get(world) ?? new Set<number>();
   live.clear();
-  for (const entity of entities) live.add(entity as unknown as number);
-  liveGlyphHandles.set(world, live);
+  for (const entity of entities) live.add(entitySlot(entity));
+  liveGlyphSlots.set(world, live);
   for (const entry of worldBakeCache(world).values()) {
-    if (!live.has(entry.handle as unknown as number)) releaseGlyphProducers(world, entry.handle);
+    if (!live.has(entitySlot(entry.handle))) releaseGlyphProducers(world, entry.handle);
   }
 
   let firstError: TextError | null = null;
@@ -185,33 +185,27 @@ export function glyphTextLayoutSystem(
 }
 
 /** Collect every Entity handle carrying GlyphText (single archetype walk). */
-function collectGlyphEntities(worldInternal: WorldInternalView, gtId: number): EntityHandle[] {
-  const graph = worldInternal._getGraph();
+function collectGlyphEntities(world: World): EntityHandle[] {
   const entities: EntityHandle[] = [];
-  for (const table of graph.tables) {
-    if (!table || table.size === 0) continue;
-    if (!table.components.some((c) => c.id === gtId)) continue;
-    const selfCol = table.storage.get(Entity.id)?.fields.get('self')?.view;
-    if (selfCol === undefined) continue;
-    for (let i = 0; i < table.size; i++) {
-      entities.push((selfCol[i] ?? 0) as EntityHandle);
-    }
+  const query = world.query({ read: [GlyphText] }).unwrap();
+  for (const row of query) {
+    entities.push(row.entity);
   }
   return entities;
 }
 
 /**
  * Process one GlyphText entity. Returns a TextError when the concurrency limit
- * is exceeded (the entity is skipped); returns null otherwise.
+ * is exceeded after clearing stale derived state; returns null otherwise.
  */
 function processEntity(
   world: World,
-  gpuStore: GpuResourceStore,
+  gpuStore: GpuResidencyCache,
   entity: EntityHandle,
 ): TextError | null {
   const gtRes = world.get(entity, GlyphText);
   if (!gtRes.ok) return null;
-  const gt = gtRes.value as unknown as GlyphTextData;
+  const gt = gtRes.value;
 
   // Unresolved font handle (zero sentinel) -> skip (entity not yet wired).
   if (gt.fontHandle === 0) return null;
@@ -220,7 +214,10 @@ function processEntity(
   try {
     trackFontConcurrency(gt.fontHandle);
   } catch (e) {
-    if (e instanceof TextError) return e;
+    if (e instanceof TextError) {
+      clearRejectedGlyphState(world, entity);
+      return e;
+    }
     throw e;
   }
 
@@ -230,13 +227,13 @@ function processEntity(
 
   const signature = signatureOf(gt);
   const entityCache = worldBakeCache(world);
-  const slot = unpackSlot(entity as unknown as number);
+  const slot = entitySlot(entity);
   const cachedEntry = entityCache.get(slot);
   if (cachedEntry !== undefined && cachedEntry.handle !== entity) {
-    world.sharedRefs.release(asMeshHandle(cachedEntry.record.meshHandleId));
+    world.sharedRefs.release(cachedEntry.record.meshHandle);
     const staleMaterial = worldMaterialCache(world).get(slot);
     if (staleMaterial !== undefined) {
-      world.sharedRefs.release(asMaterialHandle(staleMaterial));
+      world.sharedRefs.release(staleMaterial);
       worldMaterialCache(world).delete(slot);
     }
     entityCache.delete(slot);
@@ -245,20 +242,22 @@ function processEntity(
 
   // Dirty path: same entity already baked, but the authoring signature changed.
   if (cached !== undefined) {
+    ensureGlyphMeshMaterialSlots(world, cached.meshHandle);
     if (cached.signature === signature) return null; // clean -> nothing to do
     const layout = layoutGlyphText(font, gt.text, gt.fontSize);
-    // feat-20260601-gpu-resource-store-extraction M1: in-place GPU mesh update
+    // feat-20260601-device/gpu-residency-extraction M1: in-place GPU mesh update
     // moved to the store. The mesh became GPU-resident on the first render
     // frame's `ensureResident` pull; the dirty re-layout overwrites those
     // buffers in place (a no-op if not yet resident -- the next render's
     // ensureResident then uploads the latest registered POD).
-    const meshHandle = asMeshHandle(cached.meshHandleId);
+    const meshHandle = cached.meshHandle;
     const submeshes = [
       {
         indexOffset: 0,
         indexCount: layout.indices.length,
         vertexCount: layout.vertices.length / PROCEDURAL_FLOATS_PER_VERTEX,
         topology: 'triangle-list',
+        materialSlot: 0,
       },
     ] satisfies readonly Submesh[];
     // A dynamic label can begin empty, so its first bake has a degenerate AABB.
@@ -275,6 +274,7 @@ function processEntity(
         vertices: layout.vertices,
         indices: layout.indices,
         submeshes,
+        materialSlots: [{ slotName: 'Default' }],
         aabb,
       });
     }
@@ -282,17 +282,17 @@ function processEntity(
     // A color change replaces the material payload at this entity's stable
     // derived slot and re-binds the new producer handle in place.
     const materialId = resolveTextMaterial(world, gt, font, slot);
-    if (materialId !== cached.materialHandleId) {
+    if (materialId !== cached.materialHandle) {
       world.set(entity, MeshRenderer, {
-        materials: [materialId] as unknown as never,
+        materials: [materialId],
       });
     }
     entityCache.set(slot, {
       handle: entity,
       record: {
-        meshHandleId: cached.meshHandleId,
+        meshHandle: cached.meshHandle,
         signature,
-        materialHandleId: materialId,
+        materialHandle: materialId,
       },
     });
     return null;
@@ -302,7 +302,11 @@ function processEntity(
   // the bake cache was reset between frames), skip without re-baking. `world.get`
   // returns err(component-not-present) (never throws) when the column is absent,
   // so the column probe needs no registration guard (feat-20260602).
-  if (world.get(entity, MeshFilter).ok) return null;
+  const existingFilter = world.get(entity, MeshFilter);
+  if (existingFilter.ok) {
+    ensureGlyphMeshMaterialSlots(world, existingFilter.value.assetHandle);
+    return null;
+  }
 
   const layout = layoutGlyphText(font, gt.text, gt.fontSize);
   const bake = bakeGlyphMesh(world, layout);
@@ -314,20 +318,33 @@ function processEntity(
   // handle 0 -> default mid-grey unlit, and the atlas would never be sampled.
   const materialId = resolveTextMaterial(world, gt, font, slot);
 
-  world.addComponent(entity, { component: MeshFilter, data: { assetHandle: bake.value.handle } });
+  world.addComponent(entity, {
+    component: MeshFilter,
+    data: { assetHandle: bake.value.handle },
+  });
   world.addComponent(entity, {
     component: MeshRenderer,
-    data: { materials: [materialId] as unknown as never },
+    data: { materials: [materialId] },
   });
   entityCache.set(slot, {
     handle: entity,
     record: {
-      meshHandleId: handleId(bake.value.handle),
+      meshHandle: bake.value.handle,
       signature,
-      materialHandleId: materialId,
+      materialHandle: materialId,
     },
   });
   return null;
+}
+
+export function ensureGlyphMeshMaterialSlots(
+  world: World,
+  meshHandle: Handle<'MeshAsset', 'shared'>,
+): void {
+  const mesh = world.sharedRefs.resolve<'MeshAsset', MeshAsset>(meshHandle);
+  if (mesh.ok && !Array.isArray(mesh.value.materialSlots)) {
+    Object.assign(mesh.value, { materialSlots: [{ slotName: 'Default' }] });
+  }
 }
 
 /**
@@ -344,7 +361,7 @@ function resolveTextMaterial(
   gt: GlyphTextData,
   font: FontAsset,
   slot: number,
-): number {
+): Handle<'MaterialAsset', 'shared'> {
   const cache = worldMaterialCache(world);
   const material = {
     kind: 'material',
@@ -382,11 +399,11 @@ function resolveTextMaterial(
       { name: 'normalTexture', type: 'texture', optional: true },
     ],
   } satisfies MaterialAsset;
-  const id = world.allocSharedRef('MaterialAsset', material) as unknown as number;
+  const id = world.allocSharedRef('MaterialAsset', material);
   const previous = cache.get(slot);
   cache.set(slot, id);
   if (previous !== undefined && previous !== id) {
-    world.sharedRefs.release(asMaterialHandle(previous));
+    world.sharedRefs.release(previous);
   }
   return id;
 }
@@ -400,14 +417,5 @@ function signatureOf(gt: GlyphTextData): string {
 // (runtime value is the raw number), so a cast is the canonical bridge
 // (mirrors pick.ts toShared).
 function asFontHandle(raw: number): Handle<'FontAsset', 'shared'> {
-  return raw as unknown as Handle<'FontAsset', 'shared'>;
-}
-function asMeshHandle(id: number): Handle<'MeshAsset', 'shared'> {
-  return id as unknown as Handle<'MeshAsset', 'shared'>;
-}
-function asMaterialHandle(id: number): Handle<'MaterialAsset', 'shared'> {
-  return id as unknown as Handle<'MaterialAsset', 'shared'>;
-}
-function handleId(handle: Handle<'MeshAsset', 'shared'>): number {
-  return handle as unknown as number;
+  return toShared<'FontAsset'>(raw);
 }

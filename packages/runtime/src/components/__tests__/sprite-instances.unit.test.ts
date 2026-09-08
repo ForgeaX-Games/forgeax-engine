@@ -20,7 +20,7 @@
 // P3 (schema fail-fast at TS edge), P4 (consistent abstraction — peer to
 // Instances).
 
-import { type Component, getRegisteredComponents, type ShapeOf, World } from '@forgeax/engine-ecs';
+import { type Component, type SchemaOf, type ShapeOf, World } from '@forgeax/engine-ecs';
 import {
   SpriteInstances,
   type SpriteInstancesData,
@@ -30,11 +30,8 @@ import {
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
 describe('SpriteInstances — defineComponent registration (w3 a)', () => {
-  it("getRegisteredComponents() carries an entry named 'SpriteInstances'", () => {
-    const map = getRegisteredComponents();
-    const entry = map.get('SpriteInstances');
-    expect(entry).toBeDefined();
-    expect(entry).toBe(SpriteInstances);
+  it('the token name remains the discoverable component identity', () => {
+    expect(SpriteInstances.name).toBe('SpriteInstances');
   });
 
   it("Component.name literal is 'SpriteInstances'", () => {
@@ -43,7 +40,7 @@ describe('SpriteInstances — defineComponent registration (w3 a)', () => {
   });
 
   it('schema is the 2-field {transforms, regions} array<f32> record', () => {
-    expectTypeOf<typeof SpriteInstances.schema>().toEqualTypeOf<
+    expectTypeOf<SchemaOf<typeof SpriteInstances>>().toEqualTypeOf<
       Readonly<{
         readonly transforms: 'array<f32>';
         readonly regions: 'array<f32>';
@@ -52,8 +49,8 @@ describe('SpriteInstances — defineComponent registration (w3 a)', () => {
   });
 
   it('schema field literals narrow to array<f32>', () => {
-    expectTypeOf<(typeof SpriteInstances.schema)['transforms']>().toEqualTypeOf<'array<f32>'>();
-    expectTypeOf<(typeof SpriteInstances.schema)['regions']>().toEqualTypeOf<'array<f32>'>();
+    expectTypeOf<SchemaOf<typeof SpriteInstances>['transforms']>().toEqualTypeOf<'array<f32>'>();
+    expectTypeOf<SchemaOf<typeof SpriteInstances>['regions']>().toEqualTypeOf<'array<f32>'>();
   });
 });
 
@@ -66,7 +63,7 @@ describe('SpriteInstances — SpriteInstancesData type assertion (w3 b)', () => 
   });
 
   it('ShapeOf<schema> matches SpriteInstancesData (single SSOT type)', () => {
-    type ShapeData = ShapeOf<typeof SpriteInstances.schema>;
+    type ShapeData = ShapeOf<SchemaOf<typeof SpriteInstances>>;
     expectTypeOf<ShapeData['transforms']>().toEqualTypeOf<Float32Array>();
     expectTypeOf<ShapeData['regions']>().toEqualTypeOf<Float32Array>();
   });

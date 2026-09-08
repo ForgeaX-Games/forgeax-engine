@@ -84,11 +84,27 @@ test('literal coverage routing reaches the split runner and preserves its defaul
   const result = spawnSync('pnpm', ['test:unit', '--', '--coverage', '--dry-run'], {
     cwd: repoRoot,
     encoding: 'utf8',
+    env: { ...process.env, FORGEAX_SKIP_HARNESS_SYNC: '1' },
   });
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /^group-01: /m);
   assert.doesNotMatch(result.stderr, /unknown argument: --coverage/);
+});
+
+test('split coverage rejects multiplicative group and Vitest worker concurrency', () => {
+  const result = spawnSync(
+    process.execPath,
+    [splitRunnerPath, '--dry-run', '--group-concurrency=2', '--max-workers=2'],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: { ...process.env, FORGEAX_SKIP_HARNESS_SYNC: '1' },
+    },
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /concurrent groups require --max-workers=1/);
 });
 
 test('literal non-coverage routing uses the discovered bounded roster', () => {
@@ -97,6 +113,7 @@ test('literal non-coverage routing uses the discovered bounded roster', () => {
   const result = spawnSync('pnpm', ['test:unit', '--', '--dry-run', '--group-size=2'], {
     cwd: repoRoot,
     encoding: 'utf8',
+    env: { ...process.env, FORGEAX_SKIP_HARNESS_SYNC: '1' },
   });
 
   assert.equal(packageJson.scripts['test:unit'], 'node scripts/ci/run-vitest-unit.mjs');
@@ -104,4 +121,37 @@ test('literal non-coverage routing uses the discovered bounded roster', () => {
   assert.match(result.stdout, /^group-01: /m);
   assert.match(splitSource, /export function allProjectNames/);
   assert.match(splitSource, /options\.coverage/);
+});
+
+test('literal typecheck routing uses two-project bounded groups without coverage', () => {
+  const packageJson = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
+  const result = spawnSync(
+    process.execPath,
+    [
+      splitRunnerPath,
+      '--non-coverage',
+      '--typecheck',
+      '--group-size=2',
+      '--max-workers=1',
+      '--testTimeout=90000',
+      '--hookTimeout=90000',
+      '--dry-run',
+    ],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: { ...process.env, FORGEAX_SKIP_HARNESS_SYNC: '1' },
+    },
+  );
+
+  assert.equal(
+    packageJson.scripts['test:type'],
+    'node scripts/ci/run-split-vitest-coverage.mjs --non-coverage --typecheck --group-size=2 --max-workers=1 --testTimeout=90000 --hookTimeout=90000',
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^group-01: /m);
+  const groups = result.stdout.match(/^group-\d+: .*$/gm) ?? [];
+  assert.ok(groups.length > 0);
+  assert.ok(groups.every((group) => group.split(': ')[1].split(', ').length <= 2));
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /--coverage(?:=|\s|$)/);
 });

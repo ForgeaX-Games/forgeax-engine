@@ -6,6 +6,7 @@ import { defineConfig } from 'vite';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..');
+const devPort = Number(process.env.FORGEAX_REMOTE_DEMO_PORT ?? '5173');
 
 // remote-demo vite config — mirror of hello-cube vite.config.ts shape.
 // The forgeaxShader plugin is injected so the production app
@@ -18,6 +19,8 @@ const monorepoRoot = resolve(here, '..', '..');
 export default defineConfig({
   plugins: [forgeaxShader() as never, vitePluginRhiDebug()],
   server: {
+    port: devPort,
+    strictPort: true,
     fs: {
       allow: [monorepoRoot],
     },

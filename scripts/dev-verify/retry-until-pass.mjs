@@ -10,19 +10,19 @@
 // two different sites across its two CI attempts — same wasm bytes, same env.
 // See docs/how-to/2026-07-06-webkit-fallback-flake-investigation.md.
 //
-// The gate is "retry until pass, or N attempts" — each attempt uses a FRESH
-// browser (the crash is a per-process wasm memory fault; a new process recovers).
-// This does NOT mask deterministic regressions: a real bug fails every attempt
-// and still FAILs after N tries; only a flaky crash can pass on a later attempt.
+// Only a result explicitly classified retryable gets another FRESH browser
+// (the known crash is a per-process wasm memory fault; a new process recovers).
+// Deterministic navigation, channel, pixel, or semantic failures stop after the
+// first attempt instead of multiplying their timeout and log noise.
 
 /**
- * @typedef {{ ok: boolean, summary: string }} AttemptResult
+ * @typedef {{ ok: boolean, summary: string, retryable?: boolean }} AttemptResult
  */
 
 /**
- * Run attemptFn up to maxAttempts times. Returns the first ok result, or the
- * last result if all attempts fail. attemptFn owns its own resources (browser
- * launch/close) so each attempt is fully isolated.
+ * Run attemptFn up to maxAttempts times while failures remain explicitly
+ * retryable. attemptFn owns its own resources (browser launch/close) so each
+ * retry is fully isolated.
  *
  * @param {(attemptNo: number) => Promise<AttemptResult>} attemptFn
  * @param {{ maxAttempts?: number, label: string }} opts
@@ -35,10 +35,14 @@ export async function runWithRetry(attemptFn, { maxAttempts = 3, label }) {
     try {
       last = await attemptFn(attempt);
     } catch (e) {
-      last = { ok: false, summary: `threw: ${e?.message ?? String(e)}` };
+      last = { ok: false, summary: `threw: ${e?.message ?? String(e)}`, retryable: true };
     }
     if (last.ok) {
       console.log(`[retry:${label}] attempt ${attempt} PASS — ${last.summary}`);
+      return last;
+    }
+    if (last.retryable !== true) {
+      console.log(`[retry:${label}] attempt ${attempt} FAIL — ${last.summary} (not retryable)`);
       return last;
     }
     console.log(

@@ -1,6 +1,5 @@
 import {
-  resolveVisibility,
-  visibilityStateFromU32,
+  resolveVisibility as resolveRenderVisibility,
   Visibility,
   VisibilityStateValue,
   type VisibilityState,
@@ -17,14 +16,10 @@ export type VisibilityLoopSnapshot = {
   readonly explicitlyHidden: number;
 };
 
-export type VisibilityLoopRenderer = {
-  readonly visibilityStats: { readonly explicitlyHidden: number };
-};
-
 export type VisibilityLoopHandle = {
   readonly toggle: () => void;
   readonly reset: () => void;
-  readonly snapshot: (renderer?: VisibilityLoopRenderer) => VisibilityLoopSnapshot;
+  readonly snapshot: () => VisibilityLoopSnapshot;
 };
 
 const EMPTY: VisibilityLoopSnapshot = {
@@ -51,7 +46,11 @@ export function installVisibilityLoop(
 
   const existing = world.get(target, Visibility);
   const initial: VisibilityState = existing.ok
-    ? visibilityStateFromU32(existing.value.state) ?? 'inherited'
+    ? existing.value.state === VisibilityStateValue.hidden
+      ? 'hidden'
+      : existing.value.state === VisibilityStateValue.visible
+        ? 'visible'
+        : 'inherited'
     : 'inherited';
   if (!existing.ok) {
     const added = world.addComponent(target, {
@@ -68,7 +67,11 @@ export function installVisibilityLoop(
   const toggle = (): void => {
     const current = world.get(target, Visibility);
     const intent = current.ok
-      ? visibilityStateFromU32(current.value.state) ?? 'inherited'
+      ? current.value.state === VisibilityStateValue.hidden
+        ? 'hidden'
+        : current.value.state === VisibilityStateValue.visible
+          ? 'visible'
+          : 'inherited'
       : 'inherited';
     setState(intent === 'hidden' ? 'visible' : 'hidden');
     toggles += 1;
@@ -81,8 +84,8 @@ export function installVisibilityLoop(
   return {
     toggle,
     reset,
-    snapshot: (renderer) => {
-      const visibility = resolveVisibility(world);
+    snapshot: () => {
+      const visibility = resolveRenderVisibility(world);
       const resolved = visibility.get(target);
       const effective = visibility.effective(target);
       return {
@@ -91,7 +94,7 @@ export function installVisibilityLoop(
         effective,
         source: resolved?.source ?? 'default',
         toggles,
-        explicitlyHidden: renderer?.visibilityStats.explicitlyHidden ?? (effective === 'hidden' ? 1 : 0),
+        explicitlyHidden: effective === 'hidden' ? 1 : 0,
       };
     },
   };

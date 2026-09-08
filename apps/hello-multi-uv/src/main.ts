@@ -18,35 +18,26 @@
 // Import path follows `apps/hello/cube/src/main.ts` pattern.
 
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
-import type { CanvasAppError } from '@forgeax/engine-app';
-import { createApp } from '@forgeax/engine-app';
+import { type CanvasAppError, createApp, createFullscreenRenderFeature } from '@forgeax/engine-app';
 import { createMaterialLoader, type MaterialReady } from '@forgeax/engine-assets-runtime';
 import type { CookedMaterialRecord } from '@forgeax/engine-pack';
 import {
   ANTIALIAS_MSAA,
-  addFullscreenPass,
-  addScenePass,
   Camera,
+  DEFAULT_STANDARD_PROFILE,
   DirectionalLight,
   MeshFilter,
   MeshRenderer,
-  type RenderPipeline,
-  type RenderPipelineContext,
-  type RenderPipelineData,
 } from '@forgeax/engine-render';
-import { RenderGraph } from '@forgeax/engine-render-graph';
 import { Transform } from '@forgeax/engine-scene';
 import type {
   MaterialAsset,
   MaterialPassList,
   MaterialValue,
-  RenderPipelineAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
-import customPipelineInversionShader from './custom-pipeline-inversion.wgsl';
 import './multi-uv-demo.wgsl';
 import inheritancePackUrl from './multi-uv-inheritance.pack.json?url';
-import depthFalsifierShader from './post-depth-falsifier.wgsl';
 import depthOverlayShader from './post-depth-overlay.wgsl';
 import depthOverlayMsaaShader from './post-depth-overlay-msaa.wgsl';
 import inversionShader from './post-inversion.wgsl';
@@ -89,81 +80,6 @@ declare global {
 }
 
 const DEMO_MATERIAL_SHADER_PATH = 'hello-multi-uv::multi-uv-demo';
-const CUSTOM_PIPELINE_ID = 'hello-multi-uv::custom-render-graph';
-const CUSTOM_PIPELINE_INVERSION_ID = 'hello-multi-uv::custom-render-graph-inversion';
-const CUSTOM_PIPELINE_PASSTHROUGH_ID = 'hello-multi-uv::custom-render-graph-passthrough';
-const CUSTOM_PIPELINE_DEPTH_ID = 'hello-multi-uv::custom-render-graph-depth';
-const CUSTOM_PIPELINE_DEPTH_MSAA_ID = 'hello-multi-uv::custom-render-graph-depth-msaa';
-const CUSTOM_PIPELINE_DEPTH_FALSIFIER_ID = 'hello-multi-uv::custom-render-graph-depth-falsifier';
-const CUSTOM_COLOR_KEY = 'helloMultiUvCustomColor';
-const CUSTOM_DEPTH_KEY = 'depth';
-const CUSTOM_RESOLVE_KEY = 'helloMultiUvCustomResolve';
-
-function makeCustomPipeline(postShader: string, readsDepth = false): RenderPipeline {
-  return {
-    buildGraph(
-      ctx: RenderPipelineContext,
-      _data: RenderPipelineData,
-    ): RenderGraph<RenderPipelineContext> | null {
-      const graph = new RenderGraph<RenderPipelineContext>();
-      const colorFormat = ctx.pipelineState.colorAttachmentFormat ?? 'rgba8unorm-srgb';
-      // `ctx` is intentionally a stable early-build carrier and does not
-      // expose per-camera topology state there. The per-frame camera snapshot
-      // is the public buildGraph source for MSAA, while execute receives the
-      // matching live `ctx.msaaActive` for recordMainPass.
-      const msaaActive = _data.camera.antialias === 'msaa';
-      const falsifyMsaaResolve = params.has('falsify-msaa-resolve');
-      const sceneSample = msaaActive ? 4 : 1;
-      graph.addColorTarget(CUSTOM_COLOR_KEY, {
-        format: colorFormat,
-        size: 'swapchain',
-        sample: sceneSample,
-        usage: 0x10 | 0x04,
-      });
-      graph.addColorTarget(CUSTOM_DEPTH_KEY, {
-        format: 'depth24plus-stencil8',
-        size: 'swapchain',
-        sample: sceneSample,
-        usage: 0x10 | 0x04,
-      });
-      if (msaaActive && !falsifyMsaaResolve) {
-        graph.addColorTarget(CUSTOM_RESOLVE_KEY, {
-          format: colorFormat,
-          size: 'swapchain',
-          sample: 1,
-          usage: 0x10 | 0x04,
-        });
-      }
-      const colorInputKey =
-        msaaActive && !falsifyMsaaResolve ? CUSTOM_RESOLVE_KEY : CUSTOM_COLOR_KEY;
-      addScenePass(graph, 'custom-scene', {
-        color: CUSTOM_COLOR_KEY,
-        depth: CUSTOM_DEPTH_KEY,
-        ...(msaaActive ? { resolve: falsifyMsaaResolve ? null : CUSTOM_RESOLVE_KEY } : {}),
-        selector: { LightMode: ['Forward'] },
-        _routeFromOpts: true,
-      });
-      addFullscreenPass(graph, 'custom-present', {
-        shader: postShader,
-        color: 'swapchain',
-        reads: readsDepth ? [colorInputKey, CUSTOM_DEPTH_KEY] : [colorInputKey],
-      });
-      const compiled = graph.compile({
-        backendKind: ctx.runtime.device.caps.backendKind,
-        caps: ctx.runtime.device.caps,
-        device: ctx.runtime.device,
-      });
-      if (!compiled.ok) {
-        console.error('[hello-multi-uv] custom pipeline graph compile failed:', compiled.error);
-        return null;
-      }
-      return graph;
-    },
-    execute(ctx: RenderPipelineContext): void {
-      ctx.frameState.perFrameGraph?.execute(ctx);
-    },
-  };
-}
 
 function materialFromCookedRecord(
   record: CookedMaterialRecord,
@@ -180,10 +96,10 @@ function materialFromCookedRecord(
     ...pass,
     program: {
       ...pass.program,
-      moduleSlots: {
-        ...pass.program.moduleSlots,
-        M3_MULTI_UV_VARIANT: variant,
-      },
+      module:
+        variant === 'true'
+          ? 'hello-multi-uv::multi-uv-demo'
+          : 'hello-multi-uv::multi-uv-demo-false',
     },
   });
   const passes: MaterialPassList = [withVariant(firstPass), ...restPasses.map(withVariant)];
@@ -205,6 +121,26 @@ if (!canvas) throw new Error('hello-multi-uv: missing <canvas id="app"> in index
 const targetCanvas = canvas;
 const params = new URLSearchParams(location.search);
 const useMsaa = params.has('msaa');
+type PostChoice = 'passthrough' | 'inversion' | 'depth';
+const initialPost: PostChoice =
+  params.get('post') === 'depth'
+    ? 'depth'
+    : params.get('post') === 'inversion'
+      ? 'inversion'
+      : 'passthrough';
+const fullscreenShader =
+  initialPost === 'depth'
+    ? useMsaa
+      ? depthOverlayMsaaShader.wgsl
+      : depthOverlayShader.wgsl
+    : initialPost === 'inversion'
+      ? inversionShader.wgsl
+      : passthroughShader.wgsl;
+const fullscreenFeature = createFullscreenRenderFeature({
+  identity: `hello-multi-uv::${initialPost}`,
+  source: fullscreenShader,
+  ...(initialPost === 'depth' ? { reads: [{ key: 'depth', sampleType: 'depth' as const }] } : {}),
+});
 
 function resizeCanvas(): void {
   targetCanvas.width = window.innerWidth;
@@ -223,11 +159,6 @@ const VY = GRID_Y + 1;
 const UV_SETS = 2;
 const FLOATS_BASE = 12;
 const FLOATS_PER_VERTEX = FLOATS_BASE + (UV_SETS - 1) * 2; // 14
-const POST_PASSTHROUGH_ID = 'hello-multi-uv::passthrough';
-const POST_INVERSION_ID = 'hello-multi-uv::inversion';
-const POST_DEPTH_ID = 'hello-multi-uv::depth';
-const POST_DEPTH_MSAA_ID = 'hello-multi-uv::depth-msaa';
-
 const vertexCount = VX * VY;
 const indexCount = GRID_X * GRID_Y * 6;
 const vertices = new Float32Array(vertexCount * FLOATS_PER_VERTEX);
@@ -302,12 +233,25 @@ for (let i = 0; i < vertexCount; i++) {
   uv1[i * 2 + 1] = vertices[srcBase + 13] as number;
 }
 
-const app = await createApp(canvas, {}, forgeaxBundlerAdapter());
+const app = await createApp(
+  canvas,
+  {
+    features: [fullscreenFeature],
+    standardProfile: {
+      ...DEFAULT_STANDARD_PROFILE,
+      antialias: useMsaa ? 'msaa' : 'fxaa',
+    },
+  },
+  forgeaxBundlerAdapter(),
+);
 if (!app.ok) {
   reportError(app.error);
 } else {
   const world = app.value.world;
-  const assets = app.value.renderer.assets;
+  const assets = app.value.assets;
+  if (assets === undefined) {
+    throw new Error('hello-multi-uv: asset owner unavailable');
+  }
   const startupVariant: 'true' | 'false' = params.get('variant') === 'false' ? 'false' : 'true';
   const switchedVariant: 'true' | 'false' = startupVariant === 'true' ? 'false' : 'true';
   const liveMaterialMode = params.get('live-material');
@@ -341,7 +285,18 @@ if (!app.ok) {
         .map((entry) => [entry.guid.toLowerCase(), entry.payload?.cooked]),
     );
     const loader = createMaterialLoader({
-      loadRecord: async (guid: string) => cookedByGuid.get(guid.toLowerCase()),
+      loadPublication: async (guid: string) => {
+        const record = cookedByGuid.get(guid.toLowerCase());
+        if (record === undefined) return undefined;
+        return {
+          guid,
+          record,
+          artifact: {
+            bytes: Uint8Array.from(record.artifact.bytes),
+            digest: record.artifact.digest,
+          },
+        };
+      },
       loadReference: async (guid: string) =>
         cookedByGuid.has(guid.toLowerCase()) || guid === DEMO_MATERIAL_SHADER_PATH,
     });
@@ -360,7 +315,8 @@ if (!app.ok) {
     }
     if (
       root.artifact.digest !== derived.artifact.digest ||
-      root.record.receipt.inputDigest !== derived.record.receipt.inputDigest ||
+      root.record.receipt.identity.programIdentity !==
+        derived.record.receipt.identity.programIdentity ||
       root.record.resolved.passes[0]?.program.module !== DEMO_MATERIAL_SHADER_PATH ||
       derived.record.resolved.passes[0]?.program.module !== DEMO_MATERIAL_SHADER_PATH
     ) {
@@ -385,40 +341,10 @@ if (!app.ok) {
   variantControl.append(variantStatus);
   document.body.append(variantControl);
 
-  const pipelineControl = document.createElement('label');
-  pipelineControl.id = 'pipeline-control';
-  pipelineControl.style.cssText =
-    'position:fixed;z-index:1;top:58px;left:12px;padding:8px 10px;color:#fff;background:#111c;border-radius:4px;font:14px monospace';
-  pipelineControl.append('M3_PIPELINE ');
-  const pipelineSelect = document.createElement('select');
-  pipelineSelect.id = 'pipeline-select';
-  pipelineSelect.setAttribute('aria-label', 'M3 render pipeline');
-  pipelineSelect.add(new Option('standard URP', 'standard'));
-  pipelineSelect.add(new Option('custom RenderGraph', 'custom'));
-  pipelineControl.append(pipelineSelect, ' ');
-  const pipelineStatus = document.createElement('span');
-  pipelineStatus.id = 'pipeline-status';
-  pipelineStatus.textContent = 'M3_PIPELINE=standard';
-  pipelineControl.append(pipelineStatus);
-  document.body.append(pipelineControl);
-
-  const postControl = document.createElement('label');
-  postControl.id = 'post-control';
-  postControl.style.cssText =
-    'position:fixed;z-index:1;top:104px;left:12px;padding:8px 10px;color:#fff;background:#111c;border-radius:4px;font:14px monospace';
-  postControl.append('M3_POST_EFFECT ');
-  const postSelect = document.createElement('select');
-  postSelect.id = 'post-select';
-  postSelect.setAttribute('aria-label', 'M3 post-process effect');
-  postSelect.add(new Option('passthrough', 'passthrough'));
-  postSelect.add(new Option('inversion', 'inversion'));
-  postSelect.add(new Option('depth overlay', 'depth'));
-  postControl.append(postSelect, ' ');
   const postStatus = document.createElement('span');
   postStatus.id = 'post-status';
-  postStatus.textContent = 'M3_POST_EFFECT=passthrough';
-  postControl.append(postStatus);
-  document.body.append(postControl);
+  postStatus.textContent = `M3_POST_EFFECT=${initialPost}`;
+  variantControl.append(' ', postStatus);
 
   const baseColorTexture: TextureAsset = {
     kind: 'texture',
@@ -482,44 +408,6 @@ if (!app.ok) {
   antialiasStatus.id = 'antialias-status';
   antialiasStatus.textContent = `M3_ANTIALIAS=${useMsaa ? 'msaa' : 'none'}`;
   variantControl.append(' ', antialiasStatus);
-  app.value.renderer.postProcess.register(CUSTOM_PIPELINE_INVERSION_ID, {
-    source: customPipelineInversionShader.wgsl,
-  });
-  app.value.renderer.postProcess.register(CUSTOM_PIPELINE_PASSTHROUGH_ID, {
-    source: passthroughShader.wgsl,
-  });
-  app.value.renderer.postProcess.register(CUSTOM_PIPELINE_DEPTH_ID, {
-    source: depthOverlayShader.wgsl,
-    reads: [{ key: CUSTOM_DEPTH_KEY, sampleType: 'depth' }],
-  });
-  app.value.renderer.postProcess.register(CUSTOM_PIPELINE_DEPTH_MSAA_ID, {
-    source: depthOverlayMsaaShader.wgsl,
-    reads: [{ key: CUSTOM_DEPTH_KEY, sampleType: 'depth' }],
-  });
-  app.value.renderer.postProcess.register(CUSTOM_PIPELINE_DEPTH_FALSIFIER_ID, {
-    source: depthFalsifierShader.wgsl,
-  });
-  app.value.renderer.registerPipeline(
-    CUSTOM_PIPELINE_ID,
-    makeCustomPipeline(CUSTOM_PIPELINE_PASSTHROUGH_ID),
-  );
-  app.value.renderer.registerPipeline(
-    CUSTOM_PIPELINE_INVERSION_ID,
-    makeCustomPipeline(CUSTOM_PIPELINE_INVERSION_ID),
-  );
-  app.value.renderer.registerPipeline(
-    CUSTOM_PIPELINE_DEPTH_ID,
-    makeCustomPipeline(CUSTOM_PIPELINE_DEPTH_ID, true),
-  );
-  app.value.renderer.registerPipeline(
-    CUSTOM_PIPELINE_DEPTH_MSAA_ID,
-    makeCustomPipeline(CUSTOM_PIPELINE_DEPTH_MSAA_ID, true),
-  );
-  app.value.renderer.registerPipeline(
-    CUSTOM_PIPELINE_DEPTH_FALSIFIER_ID,
-    makeCustomPipeline(CUSTOM_PIPELINE_DEPTH_FALSIFIER_ID),
-  );
-
   // Build MeshAsset with independent per-attribute typed arrays. The interleaved
   // `vertices` buffer is the main GPU vertex data; `attributes` provides
   // per-attribute views for deriveVertexBufferLayout.
@@ -540,9 +428,12 @@ if (!app.ok) {
         indexCount: indices.length,
         vertexCount,
         topology: 'triangle-list' as const,
+        materialSlot: 0,
       },
     ],
     aabb: new Float32Array([-HALF_W, -HALF_H, -0.01, HALF_W, HALF_H, 0.01]),
+
+    materialSlots: [{ slotName: 'Default' }],
   };
 
   // Build MaterialAsset referencing the custom multi-uv shader (AC-10 visual
@@ -761,8 +652,10 @@ if (!app.ok) {
       sourceDerivedGuid: inheritedMaterialPair?.derived.record.guid ?? null,
       sourceRootArtifactDigest: inheritedMaterialPair?.root.artifact.digest ?? null,
       sourceArtifactDigest: inheritedMaterialPair?.derived.artifact.digest ?? null,
-      sourceRootCookInputDigest: inheritedMaterialPair?.root.record.receipt.inputDigest ?? null,
-      sourceCookInputDigest: inheritedMaterialPair?.derived.record.receipt.inputDigest ?? null,
+      sourceRootCookInputDigest:
+        inheritedMaterialPair?.root.record.receipt.identity.cookIdentity ?? null,
+      sourceCookInputDigest:
+        inheritedMaterialPair?.derived.record.receipt.identity.cookIdentity ?? null,
       falsifierMarker:
         inheritanceParameterMutation && falsifyLiveMaterial
           ? 'FALSIFY_EXPECTED_FAILURE:live-inheritance-parameters'
@@ -816,122 +709,7 @@ if (!app.ok) {
     },
   });
 
-  const falsifyPipelineSelection = new URLSearchParams(location.search).has('falsify-pipeline');
-  const falsifyReversePipelineSelection = new URLSearchParams(location.search).has(
-    'falsify-reverse-pipeline',
-  );
-  const falsifyDepthSelection = new URLSearchParams(location.search).has('falsify-depth');
-  const standardPipeline: RenderPipelineAsset = {
-    kind: 'render-pipeline',
-    pipelineId: 'forgeax::urp',
-  };
-  type PipelineChoice = 'standard' | 'custom';
-  type PostChoice = 'passthrough' | 'inversion' | 'depth';
-  let selectedPipeline: PipelineChoice = 'standard';
-  let releasePipeline: (() => void) | undefined;
-  let selectedPost: PostChoice = 'passthrough';
-  const pipelineAsset = (pipeline: PipelineChoice, post: PostChoice): RenderPipelineAsset => ({
-    kind: 'render-pipeline',
-    pipelineId:
-      pipeline === 'custom'
-        ? falsifyPipelineSelection
-          ? 'forgeax::urp'
-          : post === 'depth'
-            ? falsifyDepthSelection
-              ? CUSTOM_PIPELINE_DEPTH_FALSIFIER_ID
-              : useMsaa
-                ? CUSTOM_PIPELINE_DEPTH_MSAA_ID
-                : CUSTOM_PIPELINE_DEPTH_ID
-            : post === 'inversion'
-              ? CUSTOM_PIPELINE_INVERSION_ID
-              : CUSTOM_PIPELINE_ID
-        : standardPipeline.pipelineId,
-    ...(pipeline === 'standard' && !falsifyReversePipelineSelection
-      ? {
-          config: {
-            postEffects: [
-              post === 'depth'
-                ? useMsaa
-                  ? POST_DEPTH_MSAA_ID
-                  : POST_DEPTH_ID
-                : post === 'inversion'
-                  ? POST_INVERSION_ID
-                  : POST_PASSTHROUGH_ID,
-            ],
-          },
-        }
-      : {}),
-  });
-  const selectPipeline = (pipeline: PipelineChoice) => {
-    const asset = pipelineAsset(pipeline, selectedPost);
-    const result = app.value.renderer.installPipeline(asset);
-    if (!result.ok) {
-      console.error('[hello-multi-uv] pipeline selection failed:', result.error);
-      return;
-    }
-    releasePipeline?.();
-    releasePipeline = result.value;
-    selectedPipeline = pipeline;
-    pipelineSelect.value = pipeline;
-    pipelineStatus.textContent = `M3_PIPELINE=${pipeline}`;
-  };
-  pipelineSelect.addEventListener('change', () => {
-    selectPipeline(pipelineSelect.value === 'custom' ? 'custom' : 'standard');
-  });
-
-  app.value.renderer.postProcess.register(POST_PASSTHROUGH_ID, {
-    source: passthroughShader.wgsl,
-  });
-  app.value.renderer.postProcess.register(POST_INVERSION_ID, {
-    source: inversionShader.wgsl,
-  });
-  app.value.renderer.postProcess.register(POST_DEPTH_ID, {
-    source: depthOverlayShader.wgsl,
-    reads: [{ key: CUSTOM_DEPTH_KEY, sampleType: 'depth' }],
-  });
-  app.value.renderer.postProcess.register(POST_DEPTH_MSAA_ID, {
-    source: depthOverlayMsaaShader.wgsl,
-    reads: [{ key: CUSTOM_DEPTH_KEY, sampleType: 'depth' }],
-  });
-
-  const selectPost = (effect: PostChoice) => {
-    const asset = pipelineAsset(selectedPipeline, effect);
-    const result = app.value.renderer.installPipeline(asset);
-    if (!result.ok) {
-      console.error('[hello-multi-uv] post selection failed:', result.error);
-      return;
-    }
-    releasePipeline?.();
-    releasePipeline = result.value;
-    selectedPost = effect;
-    postSelect.value = effect;
-    postStatus.textContent = `M3_POST_EFFECT=${effect}`;
-  };
-  postSelect.addEventListener('change', () => {
-    selectPost(
-      postSelect.value === 'depth'
-        ? 'depth'
-        : postSelect.value === 'inversion'
-          ? 'inversion'
-          : 'passthrough',
-    );
-  });
-
-  const initialPost: PostChoice =
-    params.get('post') === 'depth'
-      ? 'depth'
-      : params.get('post') === 'inversion'
-        ? 'inversion'
-        : 'passthrough';
-  selectedPost = initialPost;
-  postSelect.value = initialPost;
-  postStatus.textContent = `M3_POST_EFFECT=${initialPost}`;
   app.value.start();
-  if (params.get('pipeline') === 'custom') {
-    selectPipeline('custom');
-  } else {
-    selectPost(initialPost);
-  }
 }
 
 function reportError(err: CanvasAppError): void {

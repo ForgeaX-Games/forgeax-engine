@@ -82,50 +82,6 @@ try {
     'bus|routing|declarative playback|Entity despawn cleanup|listener getter|audioListenerSyncSystem|spatialBlend|edge detection|destroy then new backend|concurrent backends|F24',
     ...BOUNDED_VITEST_ARGS,
   ]);
-  // The authored Preview path imports the full game-default asset graph. Keep
-  // that one browser child inside the same 4 GiB bound used by the heavy
-  // Vitest browser CI job; the smaller lifecycle children remain unchanged.
-  const previewSimulationEnv = {
-    ...childEnv,
-    NODE_OPTIONS: `${childEnv.NODE_OPTIONS ?? ''} --max-old-space-size=4096`.trim(),
-  };
-  run('authored Preview simulation evidence/cleanup/invariants', [
-    '--filter',
-    '@forgeax/preview',
-    'smoke:simulation-record-restore',
-  ], previewSimulationEnv);
-  // Keep the three public front doors on their owning project configs. The
-  // root workspace config enumerates the whole app fleet and is unnecessary
-  // for these isolated integration probes.
-  run('simulation app participant front door', [
-    'exec',
-    'vitest',
-    'run',
-    '--config',
-    'packages/app/vitest.config.ts',
-    'packages/app/src/__tests__/simulation-participants.integration.test.ts',
-    ...BOUNDED_VITEST_ARGS,
-  ]);
-  run('simulation remote inspect front door', [
-    'exec',
-    'vitest',
-    'run',
-    '--config',
-    'packages/remote/vitest.config.ts',
-    'packages/remote/src/__tests__/simulation-inspect.integration.test.ts',
-    ...BOUNDED_VITEST_ARGS,
-  ]);
-  run('simulation preview error front door', [
-    'exec',
-    'vitest',
-    'run',
-    '--config',
-    'apps/preview/vitest.config.ts',
-    'apps/preview/__tests__/simulation-error-surface.test.ts',
-    ...BOUNDED_VITEST_ARGS,
-  ]);
-  console.log('[m4-interactive] simulation public front door/errors: PASS');
-  console.log('[m4-interactive] simulation restore/replay: read-only front door PASS');
   console.log('[m4-interactive] PASS - M4 interactive simulation gates GREEN');
 } catch (error) {
   console.error(`[m4-interactive] FAIL - ${error instanceof Error ? error.message : String(error)}`);

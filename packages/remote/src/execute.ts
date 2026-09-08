@@ -6,10 +6,10 @@
 // as the import function from the calling module scope is injected.
 //
 // CONTRACT (the one an AI user holds): the script IS the body of an async
-// function with `world` / `renderer` / `assets` / `debugAdapter` / `simulation` / `_import`
+// function with `world` / `renderer` / `assets` / `rhiCapture` / `simulation` / `_import`
 // in scope. So all of these Just Work, un-wrapped:
 //   - a bare expression:            `renderer.backend`            -> auto-returned
-//   - top-level await:              `await _import('@forgeax/engine-ecs')`
+//   - top-level await:              `await _import('engine-module')`
 //   - top-level return:             `return world.inspect().entityCount`
 //   - multi-statement + return:     `const m = await _import(...); return m.x`
 // (the historical `(async () => { ... })()` IIFE form still works too — its
@@ -44,10 +44,10 @@ export type ExecuteContext = {
   readonly world: unknown;
   readonly renderer: unknown;
   readonly assets: unknown;
-  readonly debugAdapter?: unknown;
+  readonly rhiCapture?: unknown;
+  readonly simulation?: unknown;
   readonly profiler?: unknown;
   readonly execution?: unknown;
-  readonly simulation?: unknown;
   readonly importModule?: (specifier: string) => Promise<unknown>;
 };
 
@@ -55,8 +55,11 @@ export type ExecuteResult = { ok: true; value: unknown } | { ok: false; error: R
 
 // Capture import at module load time. This is the host realm's dynamic
 // import() — when injected into new Function, it resolves module
-// specifiers relative to the module that called executeScript.
-const _import = (specifier: string): Promise<unknown> => import(specifier);
+// specifiers relative to the module that called executeScript. The remote
+// package stays package-neutral: a host may inject a capability projection
+// through ExecuteContext.importModule, but the transport does not own any
+// engine package vocabulary.
+const _import = async (specifier: string): Promise<unknown> => import(specifier);
 
 // Compile the script as an async function body. Tries expression mode first
 // (auto-return a lone expression), falling back to statement mode on a
@@ -67,10 +70,10 @@ function compile(script: string): FunctionConstructor['prototype'] {
     'world',
     'renderer',
     'assets',
-    'debugAdapter',
+    'rhiCapture',
+    'simulation',
     'profiler',
     'execution',
-    'simulation',
     '_import',
   ] as const;
   try {
@@ -97,8 +100,8 @@ function compile(script: string): FunctionConstructor['prototype'] {
  * injected _import. The script is the body of an async function; a lone
  * expression is auto-returned, and top-level `await` / `return` are legal.
  *   - _import is available as a parameter for dynamic ESM imports.
- *   - debugAdapter is available as a 4th eval-scope root for rhi-debug
- *     CLI commands (captureFrames / inspectAt; plan-strategy D-4).
+ *   - rhiCapture is available as a 4th eval-scope root for the RHI capture
+ *     capability (plan-strategy D-4).
  *   - No sandbox — full access reads and writes.
  *   - No timeout — host realm eval cannot be interrupted (see R6).
  */
@@ -111,10 +114,10 @@ export async function executeScript(script: string, ctx: ExecuteContext): Promis
       ctx.world,
       ctx.renderer,
       ctx.assets,
-      ctx.debugAdapter,
+      ctx.rhiCapture,
+      ctx.simulation,
       ctx.profiler,
       ctx.execution,
-      ctx.simulation,
       ctx.importModule ?? _import,
     );
 

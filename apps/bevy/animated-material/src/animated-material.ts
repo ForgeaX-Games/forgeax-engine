@@ -70,6 +70,7 @@ export function stepAnimatedMaterials(world: World, scene: AnimatedMaterialScene
     const values = result.value.values as Record<string, unknown> | undefined;
     if (values === undefined) continue;
     values.baseColor = [...hslToRgb(material.baseHue + hueDelta), 1];
+    world.sharedRefs.markChanged(material.handle).unwrap();
   }
   return hueDelta;
 }

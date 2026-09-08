@@ -1,15 +1,18 @@
+// @perf-budget-skip: intentional real file-watcher integration regression gate.
+
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ASSET_CHANGED_EVENT, type AssetChangedPayload, pluginPack } from '../index.js';
+import { CATALOG_DELTA_EVENT } from '../catalog-transport.js';
+import { createPluginPackInternal as pluginPack } from '../plugin-pack.js';
 
 interface RecordedMessage {
   readonly type: string;
   readonly payload: {
     readonly type: string;
     readonly event?: string;
-    readonly data?: AssetChangedPayload;
+    readonly data?: unknown;
   };
 }
 
@@ -64,41 +67,21 @@ describe('dev watcher regression', () => {
 
     await writeFile(join(root, 'assets', 'hud.ui.html'), '<div>HUD v2</div>');
     await waitFor(() => server.ws.calls.some((call) => call.type === 'full-reload'));
-    const htmlEvent = server.ws.calls.find(
-      (call) =>
-        call.payload.event === ASSET_CHANGED_EVENT &&
-        call.payload.data?.file.includes('hud.ui.html'),
-    );
-    expect(htmlEvent?.payload.data?.kind).toBe('sidecar');
+    expect(server.ws.calls.some((call) => call.payload.event === CATALOG_DELTA_EVENT)).toBe(false);
 
     server.ws.calls.length = 0;
     await writeFile(join(root, 'assets', 'hud.ui.css'), '.hud { color: black; }');
     await waitFor(() => server.ws.calls.some((call) => call.type === 'full-reload'));
-    expect(
-      server.ws.calls.some(
-        (call) =>
-          call.payload.event === ASSET_CHANGED_EVENT && call.payload.data?.kind === 'sidecar',
-      ),
-    ).toBe(true);
+    expect(server.ws.calls.some((call) => call.payload.event === CATALOG_DELTA_EVENT)).toBe(false);
 
     server.ws.calls.length = 0;
     await writeFile(join(root, 'assets', 'hero.png'), new Uint8Array([2]));
     await waitFor(() => server.ws.calls.some((call) => call.type === 'full-reload'));
-    expect(
-      server.ws.calls.some(
-        (call) =>
-          call.payload.event === ASSET_CHANGED_EVENT && call.payload.data?.kind === 'source',
-      ),
-    ).toBe(true);
+    expect(server.ws.calls.some((call) => call.payload.event === CATALOG_DELTA_EVENT)).toBe(false);
 
     server.ws.calls.length = 0;
     await writeFile(join(root, 'assets', 'level.reel.json'), '{"version":2}');
     await waitFor(() => server.ws.calls.some((call) => call.type === 'full-reload'));
-    expect(
-      server.ws.calls.some(
-        (call) =>
-          call.payload.event === ASSET_CHANGED_EVENT && call.payload.data?.kind === 'source',
-      ),
-    ).toBe(true);
+    expect(server.ws.calls.some((call) => call.payload.event === CATALOG_DELTA_EVENT)).toBe(false);
   });
 });

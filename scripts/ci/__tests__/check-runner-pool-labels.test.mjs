@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
 
@@ -69,13 +68,4 @@ test('rejects a dynamic matrix that can select self-hosted without a pool', () =
 test('rejects a job without a runner selector or reusable workflow', () => {
   const result = checkWorkflowText('jobs:\n  orphan:\n    timeout-minutes: 5\n', 'broken.yml');
   assert.match(result.errors[0], /must declare runs-on or use a reusable workflow/);
-});
-
-test('the required workflow invokes the pool contract against PR-head definitions', () => {
-  const workflow = readFileSync(
-    resolve(repoRoot, '.github/workflows/required-ci-checks.yml'),
-    'utf8',
-  );
-  assert.match(workflow, /Validate self-hosted runner pool labels/);
-  assert.match(workflow, /--workflows-dir pr-head\/\.github\/workflows/);
 });

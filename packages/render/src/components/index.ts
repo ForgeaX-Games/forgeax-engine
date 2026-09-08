@@ -2,10 +2,17 @@ export * from './camera';
 export * from './directional-light';
 export { Instances, type InstancesData } from './instances';
 export { Layer } from './layer';
+export { Lines } from './lines';
 export * from './mesh-filter';
 export * from './mesh-renderer';
 export { PointLight } from './point-light';
 export { PointLightShadow } from './point-light-shadow';
+export {
+  type PointShape,
+  PointShapeValue,
+  Points,
+  pointShapeFromU32,
+} from './points';
 export { PostProcessParams } from './post-process-params';
 export {
   SceneInstance,

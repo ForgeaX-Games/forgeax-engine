@@ -22,50 +22,16 @@ import { createDefaultLoaderRegistry, wireDefaultLoaders } from '../wire-default
 const emptyCtx = {} as LoadContext;
 
 describe('meshLoader', () => {
-  it('restores extra UV attributes from a v2 mesh binary', () => {
-    const bytes = new Uint8Array(28 + 14 * Float32Array.BYTES_PER_ELEMENT);
-    const header = new DataView(bytes.buffer);
-    header.setUint32(0, 2, true); // mesh binary v2
-    header.setUint32(4, 2, true); // uv + uv1
-    header.setUint32(8, 14, true); // 12F base + 2F uv1
-    header.setUint32(12, 14, true); // one vertex
-    const vertex = new Float32Array(bytes.buffer, 28, 14);
-    vertex[12] = 0.25;
-    vertex[13] = 0.75;
-
-    const loadPack = meshLoader.loadPack;
-    expect(loadPack).toBeDefined();
-    if (!loadPack) throw new Error('meshLoader.loadPack must be registered');
-
-    const out = loadPack({ payload: {}, artifacts: { body: { bytes } } } as never, emptyCtx) as {
-      attributes: { uv1?: unknown };
-    };
-
-    expect(out.attributes.uv1).toEqual(new Float32Array([0.25, 0.75]));
-  });
-
-  it('preserves the packed AABB from the v2 mesh binary', () => {
-    const tail = new TextEncoder().encode(JSON.stringify({ aabb: [1, 2, 3, 4, 5, 6] }));
-    const bytes = new Uint8Array(28 + 12 * Float32Array.BYTES_PER_ELEMENT + tail.length);
-    const header = new DataView(bytes.buffer);
-    header.setUint32(0, 2, true); // mesh binary v2
-    header.setUint32(4, 1, true); // one UV set
-    header.setUint32(8, 12, true); // base 12F layout
-    header.setUint32(12, 12, true); // one vertex
-    header.setUint32(16, 0, true); // non-indexed
-    header.setUint32(20, 0, true);
-    header.setUint32(24, tail.length, true);
-    bytes.set(tail, 28 + 12 * Float32Array.BYTES_PER_ELEMENT);
-
-    const loadPack = meshLoader.loadPack;
-    expect(loadPack).toBeDefined();
-    if (!loadPack) throw new Error('meshLoader.loadPack must be registered');
-
-    const out = loadPack({ payload: {}, artifacts: { body: { bytes } } } as never, emptyCtx) as {
-      aabb?: Float32Array;
-    };
-
-    expect(out.aabb).toEqual(new Float32Array([1, 2, 3, 4, 5, 6]));
+  it('rejects legacy mesh binaries without a white/default fallback', () => {
+    const output = meshLoader.loadPack?.(
+      {
+        guid: 'mesh-legacy',
+        payload: {},
+        artifacts: { body: { bytes: new Uint8Array([2, 0, 0]) } },
+      } as never,
+      emptyCtx,
+    );
+    expect(output).toMatchObject({ ok: false, error: { sourceKey: 'mesh-legacy' } });
   });
 
   it('normalises Array vertices/indices into typed arrays with a default submesh', () => {
@@ -123,6 +89,34 @@ describe('meshLoader', () => {
         emptyCtx,
       ),
     ).toBeUndefined();
+  });
+});
+
+describe('meshLoader strict v4 inline artifact', () => {
+  it('routes a malformed inline mesh artifact as a structured error and publishes no asset', () => {
+    const output = meshLoader.loadPack?.(
+      {
+        guid: 'mesh-guid',
+        kind: 'mesh',
+        payload: {},
+        refs: [],
+        artifacts: {
+          body: {
+            descriptor: {
+              path: 'mesh.bin',
+              mediaType: 'application/x-forgeax-mesh',
+              assetCodec: { name: 'mesh-binary', version: '4' },
+            },
+            bytes: new Uint8Array([3, 0, 0]),
+          },
+        },
+      } as never,
+      emptyCtx,
+    );
+    expect(output).toMatchObject({
+      ok: false,
+      error: { sourceKey: 'mesh-guid', recovery: expect.stringContaining('re-cook') },
+    });
   });
 });
 
@@ -304,8 +298,81 @@ describe('materialLoader', () => {
     expect(out.values.metallic).toBe(0);
   });
 
+  it('removes identity coordinates from structured texture references', () => {
+    const ctx = {
+      getMaterialShaderTextureFieldNames: () => new Set(['baseColorTexture']),
+    } as unknown as LoadContext;
+    const out = materialLoader.load(
+      {
+        passes: [{ program: { module: 'forgeax::pbr' } }],
+        values: {
+          baseColorTexture: {
+            texture: 0,
+            coordinates: { set: 0, transform: { offset: [0, 0], scale: [1, 1], rotation: 0 } },
+          },
+        },
+      },
+      ['tex-guid'],
+      ctx,
+    ) as MaterialAsset;
+
+    expect(out.values?.baseColorTexture).toEqual({ texture: 'tex-guid' });
+  });
+
+  it('preserves coordinate extension metadata instead of treating it as identity', () => {
+    const ctx = {
+      getMaterialShaderTextureFieldNames: () => new Set(['baseColorTexture']),
+    } as unknown as LoadContext;
+    const out = materialLoader.load(
+      {
+        passes: [{ program: { module: 'forgeax::pbr' } }],
+        values: {
+          baseColorTexture: {
+            texture: 0,
+            coordinates: { transform: { metadata: 'keep' } },
+          },
+        },
+      },
+      ['tex-guid'],
+      ctx,
+    ) as { values: Record<string, unknown> };
+
+    expect(out.values.baseColorTexture).toEqual({
+      texture: 'tex-guid',
+      coordinates: { transform: { metadata: 'keep' } },
+    });
+  });
+
   it('returns undefined for a passes-less, parent-less material', () => {
     expect(materialLoader.load({}, undefined, emptyCtx)).toBeUndefined();
+  });
+});
+
+describe('inline ordinary asset matrix', () => {
+  it('loads render-pipeline and tileset descriptors after a JSON roundtrip', () => {
+    const registry = createDefaultLoaderRegistry();
+    expect(registry.get('render-pipeline')).toBeDefined();
+    expect(registry.get('tileset')).toBeDefined();
+
+    const renderPipeline = registry
+      .get('render-pipeline')
+      ?.load({ kind: 'render-pipeline', pipelineId: 'forgeax::urp' }, undefined, emptyCtx);
+    const tileset = registry.get('tileset')?.load(
+      {
+        kind: 'tileset',
+        atlases: ['019d0000-0000-7000-8000-000000000001'],
+        tileWidth: 1,
+        tileHeight: 1,
+        columns: 1,
+        rows: 1,
+        regions: [{ x: 0, y: 0, width: 1, height: 1 }],
+        tiles: [{ regionIndex: 0 }],
+      },
+      undefined,
+      emptyCtx,
+    );
+    expect(renderPipeline).toMatchObject({ kind: 'render-pipeline' });
+    expect(tileset).toMatchObject({ kind: 'tileset' });
   });
 });
 
@@ -467,7 +534,7 @@ describe('wireDefaultLoaders / createDefaultLoaderRegistry', () => {
     expect(reg.get('shader')).toBeUndefined();
   });
 
-  it('appends extraLoaders after the defaults', () => {
+  it('selects an explicit host owner before default seeding', () => {
     const audio = { kind: 'audio', load: () => undefined } as never;
     const reg = wireDefaultLoaders(new LoaderRegistry(), [audio]);
     expect(reg.get('audio')).toBe(audio);
@@ -476,6 +543,6 @@ describe('wireDefaultLoaders / createDefaultLoaderRegistry', () => {
   it('createDefaultLoaderRegistry returns a fresh pre-wired registry', () => {
     const reg = createDefaultLoaderRegistry();
     expect(reg.get('mesh')).toBeDefined();
-    expect(INLINE_PACK_LOADERS.length).toBe(8); // +1 sampler +1 animationGraphLoader
+    expect(INLINE_PACK_LOADERS.length).toBe(12); // ordinary inline loader matrix
   });
 });

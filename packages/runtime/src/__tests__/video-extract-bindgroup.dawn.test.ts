@@ -30,13 +30,7 @@
 import { AssetRegistry, HANDLE_CUBE, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  extractFrame,
-  MeshFilter,
-  MeshRenderer,
-  prepareExtractContext,
-} from '@forgeax/engine-render/internal';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import type {
   Handle,
@@ -46,7 +40,13 @@ import type {
   VideoAsset,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { createRenderer } from '../index';
+import {
+  Camera as SourceCamera,
+  MeshFilter as SourceMeshFilter,
+  MeshRenderer as SourceMeshRenderer,
+} from '../../../render/src/components';
+import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
+import { constructRuntimeRendererHost } from '../renderer-host';
 import { drawPublished } from './draw-published';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
@@ -74,9 +74,15 @@ function registerTestMesh(world: World) {
     kind: 'mesh',
     vertices: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
     indices: new Uint16Array([0, 1, 2]),
-    attributes: {},
+    attributes: {
+      position: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+    },
     aabb: new Float32Array([0, 0, 0, 1, 1, 1]),
-    submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+    submeshes: [
+      { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list', materialSlot: 0 },
+    ],
+
+    materialSlots: [{ slotName: 'Default' }],
   };
   return world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', mesh);
 }
@@ -121,20 +127,20 @@ describe('AC-06 / R-7 — video GUID in values is a recognised texture field (M4
 
     world
       .spawn(
-        { component: Transform, data: transformData(0, 0, 0) },
-        { component: MeshFilter, data: { assetHandle: mesh } },
-        { component: MeshRenderer, data: { materials: [matHandle] } },
+        { component: Transform, data: transformData(0, 0, 5) },
+        { component: SourceCamera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
       )
       .unwrap();
     world
       .spawn(
-        { component: Transform, data: transformData(0, 0, 5) },
-        { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
+        { component: Transform, data: transformData(0, 0, 0) },
+        { component: SourceMeshFilter, data: { assetHandle: mesh } },
+        { component: SourceMeshRenderer, data: { materials: [matHandle] } },
       )
       .unwrap();
 
     propagateTransforms(world);
-    const frame = extractFrame(world, prepareExtractContext(world, { assets }));
+    const frame = extractFrame(world, prepareExtractContext(world, { assets, cull: 'none' }));
     expect(frame.renderables.length).toBe(1);
     const mat = frame.renderables[0]?.material;
     expect(mat).toBeDefined();
@@ -150,7 +156,8 @@ describe('AC-06 / R-7 — video GUID in values is a recognised texture field (M4
 });
 
 interface DawnHarness {
-  renderer: Awaited<ReturnType<typeof createRenderer>>;
+  renderer: import('@forgeax/engine-render').Renderer;
+  assets: AssetRegistry;
   device: GPUDevice;
 }
 
@@ -219,28 +226,32 @@ async function bootDawn(): Promise<DawnHarness | null> {
     removeEventListener() {},
   } as unknown as HTMLCanvasElement;
 
-  let renderer: Awaited<ReturnType<typeof createRenderer>>;
+  let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
   try {
-    renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+    host = await constructRuntimeRendererHost(
+      mockCanvas,
+      {},
+      {
+        shaderManifestUrl: ENGINE_MANIFEST_URL,
+      },
+    );
   } finally {
     globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
   }
-  const ready = await renderer.ready;
-  expect(ready.ok).toBe(true);
-  if (!ready.ok) return null;
+  expect(host.ok).toBe(true);
+  if (!host.ok) throw host.error;
+  const { renderer, assets } = host.value;
+  expect(renderer.inspect().state).toBe('alive');
   if (sharedDevice === undefined) throw new Error('dawn device never captured');
   ensureRenderTarget(sharedDevice, 'rgba8unorm');
-  return { renderer, device: sharedDevice };
+  return { renderer, assets, device: sharedDevice };
 }
 
 describe('AC-06 — extract->record->bind group does not blow up on a video field (dawn) (M4 / w13)', () => {
   it('a renderer frame with a video-sourced baseColorTexture draws with 0 RhiError', async () => {
     const harness = await bootDawn();
     if (harness === null) return;
-    const { renderer, device } = harness;
-
-    const assets = renderer.assets;
-    if (assets === null) throw new Error('AssetRegistry is null');
+    const { renderer, assets, device } = harness;
 
     const videoGuid = AssetGuid.random();
     const videoGuidStr = AssetGuid.format(videoGuid);
@@ -251,12 +262,21 @@ describe('AC-06 — extract->record->bind group does not blow up on a video fiel
     const materialPayload = {
       kind: 'material' as const,
       passes: [FORWARD_PBR_PASS],
-      values: { baseColor: [1, 1, 1], baseColorTexture: videoGuidStr },
+      values: {
+        baseColor: [1, 1, 1],
+        baseColorTexture: { texture: videoGuidStr as never },
+      },
     };
 
-    const errorCodes: string[] = [];
-    const unsub = renderer.onError((e) => {
-      errorCodes.push(e.code);
+    const errorCodes: Array<{ code: string; causeCode?: string }> = [];
+    const unsub = renderer.subscribe((event) => {
+      if (event.kind !== 'error') return;
+      errorCodes.push({
+        code: event.error.code,
+        ...(event.error.code === 'device-operation-failed'
+          ? { causeCode: event.error.detail.cause.code }
+          : {}),
+      });
     });
 
     const world = new World();
@@ -284,7 +304,10 @@ describe('AC-06 — extract->record->bind group does not blow up on a video fiel
     // (the bind group is well-formed; the field falls back to the default view).
     // The expected, structured `video-upload-unsupported` signal (AC-10, asserted
     // below) is NOT a validation error and is excluded here.
-    const validationErrors = errorCodes.filter((c) => c !== 'video-upload-unsupported');
+    const validationErrors = errorCodes.filter(
+      (event) =>
+        event.code !== 'video-upload-unsupported' && event.causeCode !== 'video-upload-unsupported',
+    );
     expect(
       validationErrors,
       'a video-sourced texture field must not trip any WebGPU validation error',
@@ -301,10 +324,7 @@ describe('AC-06 — extract->record->bind group does not blow up on a video fiel
   it('AC-10: production draw fires video-upload-unsupported on capability double-miss', async () => {
     const harness = await bootDawn();
     if (harness === null) return;
-    const { renderer, device } = harness;
-
-    const assets = renderer.assets;
-    if (assets === null) throw new Error('AssetRegistry is null');
+    const { renderer, assets, device } = harness;
 
     const videoGuid = AssetGuid.random();
     const videoGuidStr = AssetGuid.format(videoGuid);
@@ -326,12 +346,22 @@ describe('AC-06 — extract->record->bind group does not blow up on a video fiel
           renderState: { tags: { LightMode: 'Forward' } },
         },
       ],
-      values: { baseColor: [1, 1, 1], baseColorTexture: videoGuidStr },
+      values: {
+        baseColor: [1, 1, 1],
+        baseColorTexture: { texture: videoGuidStr as never },
+      },
     };
 
-    const fired: { code: string; hint: string }[] = [];
-    const unsub = renderer.onError((e) => {
-      fired.push({ code: e.code, hint: e.hint });
+    const fired: { code: string; causeCode?: string; hint: string }[] = [];
+    const unsub = renderer.subscribe((event) => {
+      if (event.kind !== 'error') return;
+      fired.push({
+        code: event.error.code,
+        ...(event.error.code === 'device-operation-failed'
+          ? { causeCode: event.error.detail.cause.code }
+          : {}),
+        hint: event.error.hint,
+      });
     });
 
     const world = new World();
@@ -358,7 +388,10 @@ describe('AC-06 — extract->record->bind group does not blow up on a video fiel
     await device.queue.onSubmittedWorkDone();
     if (typeof unsub === 'function') unsub();
 
-    const unsupported = fired.filter((e) => e.code === 'video-upload-unsupported');
+    const unsupported = fired.filter(
+      (event) =>
+        event.code === 'video-upload-unsupported' || event.causeCode === 'video-upload-unsupported',
+    );
     expect(
       unsupported.length,
       'production videoTextureView must fire video-upload-unsupported on double-miss (AC-10), not silently bind default',

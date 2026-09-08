@@ -25,4 +25,22 @@ describe('material generation cache', () => {
     expect(cache.getResolvedKey('mat-b')).toBe('key-a');
     expect(cache.getArtifact('key-a')).toBe(artifact);
   });
+
+  it('evicts a published specialization when a tracked dependency advances', async () => {
+    const cache = new MaterialGenerationCache();
+    let calls = 0;
+    const load = () =>
+      cache.loadWithGeneration('mat-a', ['shader/a'], async (generation) => ({
+        generation,
+        value: ++calls,
+      }));
+
+    const first = await cache.resolve('mat-a', 'key-a', load);
+    expect(first).toMatchObject({ ok: true, value: 1 });
+
+    cache.bump('shader/a');
+    const second = await cache.resolve('mat-a', 'key-a', load);
+    expect(second).toMatchObject({ ok: true, value: 2 });
+    expect(calls).toBe(2);
+  });
 });

@@ -26,7 +26,7 @@
 //     this file as "the thinnest LO 1.1 mapping"; this file is the
 //     leaf node, not a hub - no further indirection.
 //   - P3 (explicit failure):  `EngineEnvironmentError` surfaces the
-//     "no usable backend" path; `await renderer.ready` returns a
+//     "no usable backend" path; `await host initialization` returns a
 //     `Result` whose `.ok === false` branch is logged via console.error
 //     - we do not silently fall back to a console-only mode.
 //   - P4 (consistent abstraction):  the same `Engine.create({ canvas,
@@ -44,9 +44,10 @@
 // the LO §1.1 minimum semantic), so a single Camera entity is enough
 // to paint the swap-chain with `clearColor` every frame.
 import { World } from '@forgeax/engine-ecs';
+import { captureCanvasPixels } from '@forgeax/apps-shared/canvas-capture';
 import { Transform } from '@forgeax/engine-scene';
 import { Camera } from '@forgeax/engine-render';
-import { Engine, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
 
 // 2. example-specific glue - LO 1.1 ends `glClearColor(0.2f, 0.3f, 0.3f,
 // 1.0f); glClear(GL_COLOR_BUFFER_BIT);` once per frame. In forgeax the
@@ -90,7 +91,7 @@ function spawnCameraOnly(world: World): void {
 }
 
 // 3. bootstrap - locate the canvas the index.html document declares,
-// hand it to Engine.create, await renderer.ready (the engine internal
+// hand it to Engine.create, await host initialization (the engine internal
 // pipeline + RHI handshake), spawn one Camera entity, draw a single
 // clear-pass frame, then log the resolved backend so the AI user can
 // verify "WebGPU path live + cleared" without opening devtools.
@@ -105,10 +106,16 @@ void bootstrap(canvas);
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   try {
-    const renderer = await Engine.create(target, {
-    });
-    renderer.onError((e) => {
-      console.error('[learn-render 1.1 hello-window] renderer.onError:', e.code, e.hint);
+    const created = await createRenderer(target, {});
+    if (!created.ok) {
+      console.error('[learn-render 1.1 hello-window] renderer construction failed:', created.error);
+      return;
+    }
+    const renderer = created.value;
+    renderer.subscribe((event) => {
+      if (event.kind !== 'error') return;
+      const e = event.error;
+      console.error('[learn-render 1.1 hello-window] renderer error:', e.code, e.hint);
       // Test bus (opt-in): browser tests set globalThis.__learnRenderErrors
       // before dynamic-import; absent in dev/runtime, so this is a noop
       // outside vitest. Mirror the same 4-line block across all 7 LO
@@ -116,13 +123,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;
       if (bus !== undefined) bus.push({ code: e.code, hint: e.hint });
     });
-    const ready = await renderer.ready;
-    if (!ready.ok) {
-      console.error('[learn-render 1.1 hello-window] renderer.ready failed:', ready.error);
-      return;
-    }
     const world = new World();
-    const worldAttachment1 = renderer.attachWorld(world);
+    const worldAttachment1 = renderer.attach(world);
     if (!worldAttachment1.ok) throw worldAttachment1.error;
     spawnCameraOnly(world);
     // Drive the canvas through requestAnimationFrame so the swap-chain
@@ -132,7 +134,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // a stable cleared frame regardless of when they snapshot.
     const tick = (): void => {
       world.update().unwrap();
-      const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+      const drawn = renderer.draw({
+        leases: [worldAttachment1.value],
+        camera: { lease: worldAttachment1.value },
+        environment: { lease: worldAttachment1.value },
+      });
       if (!drawn.ok) {
         console.error('[learn-render 1.1 hello-window] draw failed:', drawn.error);
         return;
@@ -143,22 +149,25 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // Capture hook used by the M5 bench-screenshot recorder and any
     // downstream readback path: re-draw the world before sampling so
     // the canvas presents a fresh clear-pass on every snapshot. The
-    // hook body delegates to `renderer.readPixels()` (engine API since
-    // 2026-05-17; AGENTS.md §Breaking changes) -- the create
-    // ImageBitmap -> OffscreenCanvas -> getImageData recipe lives in
-    // packages/runtime/src/createRenderer.ts now (architecture
-    // principle 1 SSOT). The hook name stays so bench-screenshot.mjs
+    // hook body delegates to the host-owned canvas capture helper. The
+    // hook name stays so bench-screenshot.mjs
     // continues to page-evaluate window.__captureHelloWindow().
     type CaptureHook = () => Promise<Uint8Array>;
     const win = window as unknown as { __captureHelloWindow?: CaptureHook };
     win.__captureHelloWindow = async (): Promise<Uint8Array> => {
       world.update().unwrap();
-      renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-      const r = await renderer.readPixels();
-      if (!r.ok) throw new Error(`[learn-render 1.1 hello-window] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`);
+      renderer.draw({
+        leases: [worldAttachment1.value],
+        camera: { lease: worldAttachment1.value },
+        environment: { lease: worldAttachment1.value },
+      });
+      const r = await captureCanvasPixels(target);
+      if (!r.ok) throw new Error(`[learn-render 1.1 hello-window] canvas capture failed: ${r.error.hint}`);
       return r.value;
     };
-    console.warn(`[learn-render 1.1 hello-window] backend=${renderer.backend}`);
+    console.warn(
+      `[learn-render 1.1 hello-window] backend=${renderer.inspect().capabilities.backendKind}`,
+    );
   } catch (err: unknown) {
     if (err instanceof EngineEnvironmentError) {
       console.error('[learn-render 1.1 hello-window] no usable backend:', err);

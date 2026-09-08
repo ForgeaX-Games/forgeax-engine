@@ -58,15 +58,19 @@ export const BUILTIN_CUBE: TypesMeshAsset = Object.freeze(builtinCubeRes.value);
 // base = bottom-left / bottom-right). meshFromInterleaved expands the
 // 8-floats interleaved input (pos + normal + uv) to the runtime 12-floats
 // stride (adds tangent vec4 per `geometry/tangent.ts` path A).
-export const BUILTIN_TRIANGLE: TypesMeshAsset = Object.freeze(
-  meshFromInterleaved(
-    new Float32Array([
-      // pos.xyz                normal.xyz       uv.xy
-      0, 0.7, 0, 0, 0, 1, 0.5, 1, -0.7, -0.6, 0, 0, 0, 1, 0, 0, 0.7, -0.6, 0, 0, 0, 1, 1, 0,
-    ]),
-    new Uint16Array([0, 1, 2]),
-  ),
+const builtinTriangleRes = meshFromInterleaved(
+  new Float32Array([
+    // pos.xyz                normal.xyz       uv.xy
+    0, 0.7, 0, 0, 0, 1, 0.5, 1, -0.7, -0.6, 0, 0, 0, 1, 0, 0, 0.7, -0.6, 0, 0, 0, 1, 1, 0,
+  ]),
+  new Uint16Array([0, 1, 2]),
 );
+if (!builtinTriangleRes.ok) {
+  throw new Error(
+    `[builtin-asset-registry] builtin triangle geometry failed: ${builtinTriangleRes.error.code}`,
+  );
+}
+export const BUILTIN_TRIANGLE: TypesMeshAsset = Object.freeze(builtinTriangleRes.value);
 
 // BUILTIN_QUAD: unit-size plane on XY facing +Z (4 vertices, 2 triangles,
 // 6 indices). Synthesised from `createPlaneGeometry(1, 1)` (which itself

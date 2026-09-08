@@ -1,11 +1,6 @@
 import { ok } from '@forgeax/engine-types';
-import type {
-  PreparedKind,
-  RenderFeature,
-  RenderFeatureDrawRecord,
-  RenderFeatureGraphicsPassDescriptor,
-  RenderFeaturePreparedRef,
-} from '../index';
+import type { RenderFeatureDrawDeclaration } from '../features/plan';
+import type { RenderFeature, RenderFeaturePlan, RenderFeatureResourceDeclaration } from '../index';
 
 interface Frame {
   readonly vertexCount: number;
@@ -15,81 +10,64 @@ interface Frame {
 const feature = {
   identity: 'prepared.graphics.positive',
   extract: () => ok<Frame>({ vertexCount: 6, indexCount: 6 }),
-  prepare(data, context) {
-    const pipeline = context.graphics.preparePipeline('forward', {
-      shader: 'unlit',
-      vertexLayout: 'position',
-      colorFormats: ['rgba8unorm'],
-    });
-    if (!pipeline.ok) return pipeline;
-
-    const bindings = context.graphics.prepareBindings('forward', {
-      pipeline: pipeline.value,
-      values: { opacity: 1 },
-    });
-    if (!bindings.ok) return bindings;
-
-    const vertices = context.graphics.prepareVertexData('quad', {
-      layout: 'position',
-      data: new Float32Array(data.vertexCount),
-    });
-    if (!vertices.ok) return vertices;
-
-    const indices = context.graphics.prepareIndexData('quad', {
-      format: 'uint16',
-      data: new Uint16Array(data.indexCount),
-    });
-    if (!indices.ok) return indices;
-
-    const refs: readonly RenderFeaturePreparedRef<PreparedKind>[] = [
-      pipeline.value,
-      bindings.value,
-      vertices.value,
-      indices.value,
-    ];
-    void refs;
-    return ok(undefined);
-  },
-  contribute(data, context) {
-    const pipeline: RenderFeaturePreparedRef<'pipeline'> = {
-      kind: 'pipeline',
-      generation: 1,
-    };
-    const bindings: RenderFeaturePreparedRef<'bindings'> = {
-      kind: 'bindings',
-      generation: 1,
-    };
-    const vertices: RenderFeaturePreparedRef<'vertex-data'> = {
-      kind: 'vertex-data',
-      generation: 1,
-    };
-    const indices: RenderFeaturePreparedRef<'index-data'> = {
-      kind: 'index-data',
-      generation: 1,
-    };
-
-    const vertexOnly: RenderFeatureDrawRecord = {
-      kind: 'draw',
-      pipeline,
-      bindings: [bindings],
-      vertexData: [{ slot: 0, resource: vertices }],
-      command: { vertexCount: data.vertexCount, instanceCount: 1 },
-    };
-    const indexed: RenderFeatureDrawRecord = {
-      kind: 'draw-indexed',
-      pipeline,
-      bindings: [bindings],
-      vertexData: [{ slot: 0, resource: vertices }],
-      indexData: { resource: indices, format: 'uint16' },
-      command: { indexCount: data.indexCount, instanceCount: 1 },
-    };
-    const pass: RenderFeatureGraphicsPassDescriptor = {
-      attachments: {
-        colors: [{ resource: 'color', format: 'rgba8unorm', loadOp: 'load', storeOp: 'store' }],
+  plan(data, context) {
+    const target = context.targets.find((candidate) => candidate.kind === 'color');
+    const resources: readonly RenderFeatureResourceDeclaration[] = [
+      {
+        kind: 'graphics-program',
+        name: 'forward-program',
+        program: {
+          shader: 'unlit',
+          vertexLayout: 'position',
+          colorFormats: [target?.format ?? 'rgba8unorm'],
+        },
       },
-      draws: [vertexOnly, indexed],
+      {
+        kind: 'graphics-bindings',
+        name: 'forward-bindings',
+        program: 'forward-program',
+        values: { opacity: 1 },
+      },
+      {
+        kind: 'vertex-data',
+        name: 'quad-vertices',
+        layout: 'position',
+        data: new Float32Array(data.vertexCount),
+      },
+      {
+        kind: 'index-data',
+        name: 'quad-indices',
+        format: 'uint16',
+        data: new Uint16Array(data.indexCount),
+      },
+    ];
+    const vertexOnly: RenderFeatureDrawDeclaration = {
+      program: 'forward-program',
+      bindings: ['forward-bindings'],
+      vertexData: [{ slot: 0, resource: 'quad-vertices' }],
+      draw: { kind: 'draw', vertexCount: data.vertexCount, instanceCount: 1 },
     };
-    return context.staging.addGraphicsPass('forward', pass);
+    const indexed: RenderFeatureDrawDeclaration = {
+      program: 'forward-program',
+      bindings: ['forward-bindings'],
+      vertexData: [{ slot: 0, resource: 'quad-vertices' }],
+      indexData: { resource: 'quad-indices', format: 'uint16' },
+      draw: { kind: 'draw-indexed', indexCount: data.indexCount, instanceCount: 1 },
+    };
+    const plan: RenderFeaturePlan = {
+      resources,
+      passes: [
+        {
+          kind: 'raster',
+          name: 'forward',
+          colorAttachments: [
+            { target: target?.name ?? 'swapchain', loadOp: 'load', storeOp: 'store' },
+          ],
+          draws: [vertexOnly, indexed],
+        },
+      ],
+    };
+    return ok(plan);
   },
 } satisfies RenderFeature<Frame>;
 

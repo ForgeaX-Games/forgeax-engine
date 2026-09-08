@@ -7,7 +7,7 @@
 // package that depends on runtime.
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { type EntityHandle, type Handle, World } from '@forgeax/engine-ecs';
+import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   CAMERA_PROJECTION_ORTHOGRAPHIC,
@@ -17,11 +17,11 @@ import {
   MeshRenderer,
 } from '@forgeax/engine-render';
 import { ChildOf, propagateTransforms, Transform } from '@forgeax/engine-scene';
-
-import type { MaterialAsset, MeshAsset } from '@forgeax/engine-types';
+import type { Handle, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { type PickHit, pick } from '../pick';
 import { PickError } from '../pick-errors';
+import { pickVertex, pickVertexOnEntity } from '../pick-vertex';
 import { viewportToWorld } from '../viewport-to-world';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
@@ -126,8 +126,11 @@ function registerBox(world: World, assets: AssetRegistry): Handle<'MeshAsset', '
         indexCount: 3,
         vertexCount: vertices.length,
         topology: 'triangle-list',
+        materialSlot: 0,
       },
     ],
+
+    materialSlots: [{ slotName: 'Default' }],
   });
   if (!result.ok) throw new Error('mesh catalog failed');
   return world.allocSharedRef('MeshAsset', result.value);
@@ -359,6 +362,75 @@ describe('viewportToWorld', () => {
     expect(result?.[3]).toBeCloseTo(0, 4);
     expect(result?.[4]).toBeCloseTo(0, 4);
     expect(result?.[5]).toBeCloseTo(-1, 4);
+  });
+});
+
+describe('degenerate viewport recovery', () => {
+  it.each([
+    ['zero width', 0, VP],
+    ['negative width', -1, VP],
+    ['non-finite width NaN', Number.NaN, VP],
+    ['non-finite width Infinity', Number.POSITIVE_INFINITY, VP],
+    ['zero height', VP, 0],
+    ['negative height', VP, -1],
+    ['non-finite height NaN', VP, Number.NaN],
+    ['non-finite height Infinity', VP, Number.POSITIVE_INFINITY],
+  ])('returns the normal miss/no-ray form for %s and recovers on the same scene', (_label, width, height) => {
+    const scene = makeScene();
+    const camera = spawnPerspectiveCamera(scene.world, 5);
+    const box = spawnBox(scene, 0, 0, 0);
+    propagateTransforms(scene.world);
+
+    const expectedRay = viewportToWorld(scene.world, camera, VP / 2, VP / 2, VP, VP);
+    const expectedPick = pick(scene.world, camera, VP / 2, VP / 2, VP, VP);
+    const expectedSceneVertices = pickVertex(scene.world, camera, VP / 2, VP / 2, VP, VP, {
+      limit: 3,
+    });
+    const expectedEntityVertices = pickVertexOnEntity(
+      scene.world,
+      camera,
+      VP / 2,
+      VP / 2,
+      VP,
+      VP,
+      box,
+      { limit: 3 },
+    );
+
+    expect(expectedRay).toBeDefined();
+    expect(expectedPick?.entity).toBe(box);
+    expect(expectedSceneVertices.length).toBeGreaterThan(0);
+    expect(expectedEntityVertices.length).toBeGreaterThan(0);
+
+    expect(pick(scene.world, camera, VP / 2, VP / 2, width, height)).toBeUndefined();
+    expect(viewportToWorld(scene.world, camera, VP / 2, VP / 2, width, height)).toBeUndefined();
+    expect(pickVertex(scene.world, camera, VP / 2, VP / 2, width, height)).toBeUndefined();
+    expect(
+      pickVertexOnEntity(scene.world, camera, VP / 2, VP / 2, width, height, box),
+    ).toBeUndefined();
+    expect(pickVertex(scene.world, camera, VP / 2, VP / 2, width, height, { limit: 3 })).toEqual(
+      [],
+    );
+    expect(
+      pickVertexOnEntity(scene.world, camera, VP / 2, VP / 2, width, height, box, { limit: 3 }),
+    ).toEqual([]);
+
+    const recoveredRay = viewportToWorld(scene.world, camera, VP / 2, VP / 2, VP, VP);
+    expect(recoveredRay).toBeDefined();
+    expect(Array.from(recoveredRay ?? [])).toEqual(Array.from(expectedRay ?? []));
+    expect(pick(scene.world, camera, VP / 2, VP / 2, VP, VP)?.entity).toBe(box);
+    expect(pickVertex(scene.world, camera, VP / 2, VP / 2, VP, VP)).toEqual(
+      expectedSceneVertices[0],
+    );
+    expect(pickVertex(scene.world, camera, VP / 2, VP / 2, VP, VP, { limit: 3 })).toEqual(
+      expectedSceneVertices,
+    );
+    expect(
+      pickVertexOnEntity(scene.world, camera, VP / 2, VP / 2, VP, VP, box, { limit: 3 }),
+    ).toEqual(expectedEntityVertices);
+    expect(pickVertexOnEntity(scene.world, camera, VP / 2, VP / 2, VP, VP, box)).toEqual(
+      expectedEntityVertices[0],
+    );
   });
 });
 

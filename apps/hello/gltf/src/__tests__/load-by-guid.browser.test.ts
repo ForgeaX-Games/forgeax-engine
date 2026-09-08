@@ -35,7 +35,6 @@
 // test can stay deterministic and inside vitest's 30s budget per
 // plan-strategy section 4 risk R7.
 
-import type { Result } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
 import {
   type GltfDoc,
@@ -48,12 +47,20 @@ import {
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { parsePackV2 } from '@forgeax/engine-pack';
 import { AssetRegistry, type MeshAsset } from '@forgeax/engine-assets-runtime';
+import {
+  Camera,
+  MeshFilter,
+  MeshRenderer,
+  SceneInstance,
+} from '@forgeax/engine-render';
+import { ChildOf, Children, Transform } from '@forgeax/engine-scene';
 import { type Handle, type MaterialAsset, type RhiError } from '@forgeax/engine-runtime';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
 import type {
   AssetError,
   ImageError,
   LocalEntityId,
+  Result,
   SceneAsset,
   SceneEntity,
 } from '@forgeax/engine-types';
@@ -133,8 +140,10 @@ function meshIrToPod(mesh: GltfMeshIr): MeshAsset {
         indexCount: mesh.indices.length,
         vertexCount: vertices.length,
         topology: 'triangle-list',
+        materialSlot: 0,
       },
     ],
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 
@@ -186,6 +195,20 @@ function gltfDocToSceneAsset(
     });
   }
   return { kind: 'scene', entities: nodes };
+}
+
+function registerSceneVocabulary(world: World): void {
+  for (const component of [
+    Camera,
+    ChildOf,
+    Children,
+    MeshFilter,
+    MeshRenderer,
+    SceneInstance,
+    Transform,
+  ]) {
+    world.components.register(component).unwrap();
+  }
 }
 
 describe('hello-gltf w27 - loadByGuid<SceneAsset> spine + AC-07 + AC-15', () => {
@@ -305,6 +328,7 @@ describe('hello-gltf w27 - loadByGuid<SceneAsset> spine + AC-07 + AC-15', () => 
     if (meshIr === undefined || matIr === undefined) return;
 
     const world = new World();
+    registerSceneVocabulary(world);
 
     // D-17: catalog feeds loadByGuid; allocSharedRef mints the material handle.
     reg.catalog<MeshAsset>(meshGuid, meshIrToPod(meshIr));

@@ -209,6 +209,177 @@ hud = await page.evaluate(() => document.getElementById('level-switch-hud')?.inn
 console.log(`[smoke-browser] after key '3': ${hud}`);
 if (!hud.includes('main-menu')) fail(`HUD expected 'main-menu', got: ${hud}`);
 
+// --- M29: same App/World/page partial-commit recovery ---
+
+const MIN_STDDEV = 6.0;
+const MIN_LUMA = 8.0;
+
+await page.waitForFunction(() => globalThis.__forgeax_level_switch__?.m29 !== undefined, null, { timeout: 10000 });
+const m29Failed = await page.evaluate(() => globalThis.__forgeax_level_switch__.m29.runFault());
+const failed = m29Failed.snapshot;
+if (
+  m29Failed.ok !== true ||
+  m29Failed.frameCode !== 'app-system-update-failed' ||
+  failed.level !== 'tutorial' ||
+  failed.previousLevel !== 'main-menu' ||
+  failed.session !== 'boot' ||
+  failed.mainMenuExitAlive !== false ||
+  failed.tutorialEnterAlive !== false ||
+  failed.meshEntityCount !== 2 ||
+  failed.appErrorCount !== 1 ||
+  failed.lastAppErrorCode !== 'app-system-update-failed' ||
+  failed.lastCauseMatches !== true
+) {
+  fail(`M29 failure snapshot did not preserve partial commit and original App cause: ${JSON.stringify(m29Failed)}`);
+}
+console.log(`[smoke-browser] M29 fault: ${JSON.stringify(failed)}`);
+
+const m29Recovered = await page.evaluate(() => globalThis.__forgeax_level_switch__.m29.repairAndRetry());
+const recovered = m29Recovered.snapshot;
+if (
+  m29Recovered.ok !== true ||
+  m29Recovered.staleFrameCode !== null ||
+  m29Recovered.retryFrameCode !== null ||
+  m29Recovered.resumeCode !== null ||
+  recovered.worldIdentity !== failed.worldIdentity ||
+  recovered.level !== 'tutorial' ||
+  recovered.session !== 'ready' ||
+  recovered.repairedCallbackRuns !== 1 ||
+  recovered.repairedScopeAlive !== true ||
+  recovered.meshEntityCount !== 2 ||
+  recovered.appErrorCount !== 1
+) {
+  fail(`M29 forced retry did not recover in the same App/World: ${JSON.stringify(m29Recovered)}`);
+}
+await page.waitForTimeout(700);
+const recoveredStats = await shootAndDecode('m29-recovered');
+if (recoveredStats.stddevLuma < MIN_STDDEV && recoveredStats.meanLuma < MIN_LUMA) {
+  fail(`M29 recovered frame is near-uniform dark: ${JSON.stringify(recoveredStats)}`);
+}
+
+await page.keyboard.press('3');
+await page.waitForTimeout(1800);
+hud = await page.evaluate(() => document.getElementById('level-switch-hud')?.innerText ?? '');
+if (!hud.includes('main-menu')) fail(`M29 cleanup expected 'main-menu', got: ${hud}`);
+const m29Cleaned = await page.evaluate(() => globalThis.__forgeax_level_switch__.m29.snapshot());
+if (
+  m29Cleaned.worldIdentity !== failed.worldIdentity ||
+  m29Cleaned.meshEntityCount !== 1 ||
+  m29Cleaned.repairedScopeAlive !== false ||
+  m29Cleaned.appErrorCount !== 1
+) {
+  fail(`M29 cleanup was not single-pass and idempotent: ${JSON.stringify(m29Cleaned)}`);
+}
+console.log(`[smoke-browser] M29 PASS: ${JSON.stringify({ failed, recovered, cleaned: m29Cleaned })}`);
+
+// --- M41: invalid variants must be refused atomically in the same App/World/page ---
+
+const m41BeforeStats = await shootAndDecode('m41-before-invalid');
+const m41Invalid = await page.evaluate(() => globalThis.__forgeax_level_switch__.m41.runInvalid());
+const invalidDetail = {
+  code: 'invalid-variant',
+  name: 'LevelId',
+  got: 'm41-runtime-invalid',
+  valid: ['main-menu', 'tutorial', 'street-a'],
+};
+const m41StableFields = [
+  'worldIdentity',
+  'level',
+  'previousLevel',
+  'session',
+  'previousSession',
+  'pendingNextState',
+  'mainMenuExitAlive',
+  'tutorialEnterAlive',
+  'repairedScopeAlive',
+  'callbackRuns',
+  'entityCount',
+  'meshEntityCount',
+  'activeComponents',
+  'execution',
+  'appErrorCount',
+];
+function m41SnapshotsEqual(left, right) {
+  return m41StableFields.every((field) => JSON.stringify(left[field]) === JSON.stringify(right[field]));
+}
+if (
+  m41Invalid.ok !== true ||
+  m41Invalid.request?.ok !== false ||
+  m41Invalid.request?.code !== 'invalid-variant' ||
+  JSON.stringify(m41Invalid.request?.detail) !== JSON.stringify(invalidDetail) ||
+  m41Invalid.forceRequest?.ok !== false ||
+  m41Invalid.forceRequest?.code !== 'invalid-variant' ||
+  JSON.stringify(m41Invalid.forceRequest?.detail) !== JSON.stringify(invalidDetail) ||
+  m41Invalid.frameCode !== null ||
+  !m41SnapshotsEqual(m41Invalid.before, m41Invalid.afterRequest) ||
+  !m41SnapshotsEqual(m41Invalid.before, m41Invalid.afterFrame)
+) {
+  fail(`M41 invalid variant was not an atomic structured refusal: ${JSON.stringify(m41Invalid)}`);
+}
+const m41AfterInvalidStats = await shootAndDecode('m41-after-invalid');
+const invalidPixelDelta =
+  Math.abs(m41BeforeStats.meanR - m41AfterInvalidStats.meanR) +
+  Math.abs(m41BeforeStats.meanG - m41AfterInvalidStats.meanG) +
+  Math.abs(m41BeforeStats.meanB - m41AfterInvalidStats.meanB);
+if (invalidPixelDelta > 5.0) {
+  fail(`M41 invalid request changed the rendered frame: pixelDelta=${invalidPixelDelta.toFixed(2)}`);
+}
+console.log(`[smoke-browser] M41 invalid refusal PASS: ${JSON.stringify({ invalid: m41Invalid, pixelDelta: invalidPixelDelta })}`);
+
+const m41Repaired = await page.evaluate(() => globalThis.__forgeax_level_switch__.m41.repair());
+const repaired = m41Repaired.snapshot;
+if (
+  m41Repaired.ok !== true ||
+  m41Repaired.request?.ok !== true ||
+  m41Repaired.frameCode !== null ||
+  repaired.worldIdentity !== m41Invalid.before.worldIdentity ||
+  repaired.level !== 'tutorial' ||
+  repaired.previousLevel !== 'main-menu' ||
+  repaired.session !== m41Invalid.before.session ||
+  repaired.previousSession !== m41Invalid.before.previousSession ||
+  repaired.pendingNextState !== null ||
+  repaired.mainMenuExitAlive !== false ||
+  repaired.tutorialEnterAlive !== false ||
+  repaired.repairedScopeAlive !== true ||
+  repaired.callbackRuns !== 1 ||
+  repaired.appErrorCount !== m41Invalid.before.appErrorCount
+) {
+  fail(`M41 valid same-page repair did not transition exactly once: ${JSON.stringify(m41Repaired)}`);
+}
+const m41RepairedStats = await shootAndDecode('m41-repaired');
+if (m41RepairedStats.stddevLuma < MIN_STDDEV && m41RepairedStats.meanLuma < MIN_LUMA) {
+  fail(`M41 repaired frame is near-uniform dark: ${JSON.stringify(m41RepairedStats)}`);
+}
+
+const m41Cleaned = await page.evaluate(() => globalThis.__forgeax_level_switch__.m41.cleanup());
+const cleaned = m41Cleaned.snapshot;
+if (
+  m41Cleaned.ok !== true ||
+  m41Cleaned.cleanupRequest?.ok !== true ||
+  m41Cleaned.cleanupFrameCode !== null ||
+  m41Cleaned.forceCleanupRequest?.ok !== true ||
+  m41Cleaned.forceCleanupFrameCode !== null ||
+  m41Cleaned.resumeCode !== null ||
+  cleaned.worldIdentity !== m41Invalid.before.worldIdentity ||
+  cleaned.level !== 'main-menu' ||
+  cleaned.previousLevel !== 'main-menu' ||
+  cleaned.pendingNextState !== null ||
+  cleaned.repairedScopeAlive !== false ||
+  cleaned.callbackRuns !== 1 ||
+  cleaned.appErrorCount !== m41Invalid.before.appErrorCount
+) {
+  fail(`M41 cleanup was not idempotent and stale-request free: ${JSON.stringify(m41Cleaned)}`);
+}
+const m41CleanedAgain = await page.evaluate(() => globalThis.__forgeax_level_switch__.m41.cleanup());
+if (
+  m41CleanedAgain.ok !== true ||
+  m41CleanedAgain.reason !== 'already-clean' ||
+  JSON.stringify(m41CleanedAgain.snapshot) !== JSON.stringify(cleaned)
+) {
+  fail(`M41 second cleanup changed the same World: ${JSON.stringify(m41CleanedAgain)}`);
+}
+console.log(`[smoke-browser] M41 PASS: ${JSON.stringify({ invalid: m41Invalid, repaired: m41Repaired, cleaned: m41Cleaned })}`);
+
 // Fatal page errors only.
 if (pageErrors.length > 0) {
   pageErrors.forEach((e) => console.error(`  ${e}`));
@@ -218,8 +389,6 @@ if (pageErrors.length > 0) {
 // GATE B/C: each level frame must have rendered geometry (the floor plane fills
 // roughly the top half of the frame). A black/empty frame is near-uniform with
 // near-zero luma. The orange/blue floor gives clear luma + spatial variance.
-const MIN_STDDEV = 6.0;
-const MIN_LUMA = 8.0;
 for (const [name, st] of [['tutorial', tutorialStats], ['street-a', streetStats]]) {
   if (st.stddevLuma < MIN_STDDEV && st.meanLuma < MIN_LUMA) {
     fail(
@@ -247,7 +416,19 @@ if (colorDelta < MIN_COLOR_DELTA) {
 // Record machine-readable stats next to the PNGs for the verify visual gate.
 writeFileSync(
   resolve(SCREENSHOT_DIR, 'stats.json'),
-  JSON.stringify({ tutorial: tutorialStats, streetA: streetStats, colorDelta }, null, 2),
+  JSON.stringify(
+    {
+      tutorial: tutorialStats,
+      streetA: streetStats,
+      colorDelta,
+      m41BeforeInvalid: m41BeforeStats,
+      m41AfterInvalid: m41AfterInvalidStats,
+      m41Repaired: m41RepairedStats,
+      m41InvalidPixelDelta: invalidPixelDelta,
+    },
+    null,
+    2,
+  ),
 );
 
 console.log('\n[smoke-browser] GREEN - canvas rendered per level + frames differ across switch.');

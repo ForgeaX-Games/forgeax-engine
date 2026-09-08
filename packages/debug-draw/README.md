@@ -34,7 +34,7 @@ All shapes are **line-list** wireframe (never filled). No persistent storage -- 
 
 ## Package positioning
 
-`@forgeax/engine-debug-draw` sits at the **leaf-nodear-leaf layer**, alongside `@forgeax/engine-math`. Dependencies: `@forgeax/engine-rhi` + `@forgeax/engine-math` + `@forgeax/engine-types` only. It does **not** depend on `engine-ecs` / `engine-runtime` / `engine-render-graph` / `engine-shader`.
+`@forgeax/engine-debug-draw` keeps shape generation at the leaf layer alongside `@forgeax/engine-math`; its RenderFeature adapter consumes only the declarative render contract. Dependencies are `@forgeax/engine-render` + `@forgeax/engine-rhi` + `@forgeax/engine-math` + `@forgeax/engine-types`. It does **not** depend on `engine-ecs` / `engine-runtime` / `engine-render-graph` / `engine-shader`.
 
 | Layer | Package | Depends on |
 |:--|:--|:--|
@@ -105,6 +105,8 @@ flush(
 
 If staging is empty (no shape calls this frame), the flush returns `ok(undefined)` immediately and **skips the GPU pass entirely** -- no `beginRenderPass`, no draw calls, zero visual side effect.
 
+`dd.encode(pass, viewProj)` is the graph-owned variant: it performs the same upload and draw but accepts an already-open `RhiRenderPassEncoder`. The caller owns attachments and `pass.end()`; runtime pipelines use this form so debug drawing cannot create a nested render-pass lifetime outside RenderGraph.
+
 > [!NOTE]
 > `viewProj` is required. Omitting it returns `Result.err({ code: 'viewProj-required', hint: 'Pass a viewProj Mat4 to flush(encoder, view, viewProj).' })`.
 
@@ -159,9 +161,11 @@ The CPU staging buffer starts at `initialVertexCapacity` (default: **1024 vertic
 | Condition | Behavior |
 |:--|:--|
 | Staging count exceeds current capacity but under `maxVertexCapacity` | **Double-resize**: capacity grows to $2 \times n$ (capped at `maxVertexCapacity`); `console.warn` emitted with old and new capacities |
-| Would exceed `maxVertexCapacity` (default: **1,000,000 vertices**, approx 16 MB) | **Truncation**: vertices up to the limit are flushed; excess is discarded; `console.warn` emitted with the overflowing count |
+| Would exceed `maxVertexCapacity` (default: **1,000,000 vertices**, approx 16 MB) | **Truncation**: vertices up to the limit are flushed; excess is discarded; one bounded `console.warn` is emitted for that frame |
 
-Both warnings are written to `console.warn` once per trigger event -- not every frame, not every vertex.
+Resize warnings describe a resize event. A truncation warning is emitted at most once between
+successful `flush()` calls; the warning state and CPU staging reset together after each successful
+flush, so a small next frame is quiet and starts with no overflow geometry.
 
 The `INITIAL_VERTEX_CAPACITY` / `MAX_VERTEX_CAPACITY` / `VERTEX_STRIDE_BYTES` constants are exported for unit-test consumption:
 

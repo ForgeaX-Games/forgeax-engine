@@ -1,13 +1,27 @@
 import { World } from '@forgeax/engine-ecs';
-import { TileLayer, Tilemap, tilemapChunkExtractSystem } from '@forgeax/engine-render/authoring';
-import { resetTilemapChunkExtractCache } from '@forgeax/engine-render/internal';
+import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
 import { ChildOf, Transform } from '@forgeax/engine-scene';
-import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import {
+  resetTilemapChunkExtractCache,
+  tilemapChunkExtractSystem,
+} from '../../../render/src/tilemap-chunk-extract-system';
+import { makeTilemapAssetLookup } from './helpers/tilemap-assets';
 
 describe('tilemap extraction owner boundary', () => {
   it('recognizes canonical scene ChildOf and Transform tokens', () => {
     const world = new World();
+    const tileset = {
+      kind: 'tileset' as const,
+      atlases: ['test/atlas'],
+      tileWidth: 1,
+      tileHeight: 1,
+      columns: 1,
+      rows: 1,
+      regions: [{ x: 0, y: 0, width: 1, height: 1 }],
+      tiles: [{ regionIndex: 0 }],
+    };
+    const lookup = makeTilemapAssetLookup(tileset);
     const tilemap = world
       .spawn(
         {
@@ -17,17 +31,7 @@ describe('tilemap extraction owner boundary', () => {
             rows: 1,
             tileSize: [1, 1],
             chunkSize: 1,
-            tileset: world.allocSharedRef('TilesetAsset', {
-              kind: 'tileset',
-              guid: 'test/tileset',
-              atlases: [toShared(101)],
-              tileWidth: 1,
-              tileHeight: 1,
-              columns: 1,
-              rows: 1,
-              regions: [{ x: 0, y: 0, width: 1, height: 1 }],
-              tiles: [{ regionIndex: 0 }],
-            }),
+            tileset: 'test/tileset',
           },
         },
         { component: Transform, data: {} },
@@ -49,7 +53,7 @@ describe('tilemap extraction owner boundary', () => {
       .unwrap();
 
     resetTilemapChunkExtractCache();
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
 
     const derived = world
       .inspect()

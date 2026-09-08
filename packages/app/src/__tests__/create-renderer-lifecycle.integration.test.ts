@@ -5,13 +5,18 @@ describe('app-facing renderer lifecycle', () => {
   it('consumes the three lifecycle Result boundaries without casts', async () => {
     const events: string[] = [];
     const renderer = {
-      ready: Promise.resolve({ ok: true as const, value: undefined }),
-      draw: () => ({ ok: true as const, value: undefined }),
+      attach: () => ({ ok: false as const, error: {} }),
+      draw: () => ({ ok: false as const, error: {} }),
+      observe: async () => ({ ok: false as const, error: {} }),
+      releaseSurface: () => ({ ok: true as const, value: undefined }),
+      restoreSurface: () => ({ ok: true as const, value: undefined }),
+      recover: async () => ({ ok: true as const, value: undefined }),
       dispose: () => events.push('dispose'),
+      onError: () => () => undefined,
+      onLost: () => () => undefined,
     } as unknown as Renderer;
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
-    expect(renderer.draw([], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
+    expect(renderer.attach({} as never).ok).toBe(false);
+    expect(renderer.draw({} as never).ok).toBe(false);
     renderer.dispose();
     renderer.dispose();
     expect(events).toEqual(['dispose', 'dispose']);

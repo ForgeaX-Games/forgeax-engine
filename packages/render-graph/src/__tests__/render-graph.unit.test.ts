@@ -2,7 +2,7 @@
 // biome-ignore-all lint/complexity/noUselessLoneBlockStatements: scope isolation between merged source files
 //
 // Source files (N=7):
-//   - packages/render-graph/src/__tests__/barrier-backend-kind.test.ts
+//   - packages/render-graph/src/__tests__/pass-order.test.ts
 //   - packages/render-graph/src/__tests__/bloom-topo.test.ts
 //   - packages/render-graph/src/__tests__/compile-fail-fast.test.ts
 //   - packages/render-graph/src/__tests__/errors.test.ts
@@ -14,12 +14,7 @@
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
 import { describe, expect, it } from 'vitest';
-import type {
-  CapMissingDetail,
-  CyclicDependencyDetail,
-  DanglingReadDetail,
-  DuplicateResourceDetail,
-} from '../errors.js';
+import type { CapMissingDetail, DanglingReadDetail, DuplicateResourceDetail } from '../errors.js';
 import { err, ok, RenderGraphError, type RenderGraphErrorCode } from '../errors.js';
 import { RenderGraph } from '../graph.js';
 
@@ -190,7 +185,7 @@ import { RenderGraph } from '../graph.js';
 }
 
 {
-  // --- from barrier-backend-kind.test.ts ---
+  // --- from pass-order.test.ts ---
   // ── Helpers ──────────────────────────────────────────────────────
 
   function mockCaps() {
@@ -217,82 +212,15 @@ import { RenderGraph } from '../graph.js';
     };
   }
 
-  // ── barrier backend-kind ─────────────────────────────────────────
-
-  describe('barrier backend-kind conditional insertion (D-1)', () => {
-    it('inserts barriers when backendKind=wgpu-native', () => {
-      const g = new RenderGraph();
-      g.addResource('X', { kind: 'texture', lifetime: 'transient' });
-      // Pass A writes X; pass B reads X — cross-pass dependency.
-      g.addPass('A', { reads: [], writes: ['X'] });
-      g.addPass('B', { reads: ['X'], writes: [] });
-
-      const r = g.compile({
-        backendKind: 'wgpu-native',
-        caps: mockCaps(),
-      });
-
-      expect(r.ok).toBe(true);
-      if (r.ok) {
-        const graph = r.value;
-        const barrierCount = graph.passes.reduce((sum, p) => sum + p.barriers.length, 0);
-        expect(barrierCount).toBeGreaterThanOrEqual(1);
-      }
-    });
-
-    it('does not insert barriers when backendKind=webgpu', () => {
-      const g = new RenderGraph();
-      g.addResource('X', { kind: 'texture', lifetime: 'transient' });
-      g.addPass('A', { reads: [], writes: ['X'] });
-      g.addPass('B', { reads: ['X'], writes: [] });
-
-      const r = g.compile({
-        backendKind: 'webgpu',
-        caps: mockCaps(),
-      });
-
-      expect(r.ok).toBe(true);
-      if (r.ok) {
-        const graph = r.value;
-        const barrierCount = graph.passes.reduce((sum, p) => sum + p.barriers.length, 0);
-        expect(barrierCount).toBe(0);
-      }
-    });
-
-    it('does not insert barriers when backendKind=wgpu-webgl2', () => {
-      const g = new RenderGraph();
-      g.addResource('X', { kind: 'texture', lifetime: 'transient' });
-      g.addPass('A', { reads: [], writes: ['X'] });
-      g.addPass('B', { reads: ['X'], writes: [] });
-
-      const r = g.compile({
-        backendKind: 'wgpu-webgl2',
-        caps: mockCaps(),
-      });
-
-      expect(r.ok).toBe(true);
-      if (r.ok) {
-        const graph = r.value;
-        const barrierCount = graph.passes.reduce((sum, p) => sum + p.barriers.length, 0);
-        expect(barrierCount).toBe(0);
-      }
-    });
-  });
-
-  // ── w14: per-frame 4-pass graph barrier + encoder semantics ──────
+  // ── Per-frame pass order ─────────────────────────────────────────
   //
   // feat-20260529-rendergraph-pass-abstraction M4 / w14. Mirrors the EXACT
-  // reads/writes the runtime declares in render-system-record.ts for the 4
-  // per-frame passes so the integration-level barrier plan is asserted on the
-  // real shape (not a synthetic 2-pass toy):
+  // reads/writes the runtime declares for the per-frame passes so the
+  // integration-level declaration order is asserted on the real shape:
   //   shadow  : reads []                 writes ['shadowDepth']
   //   main    : reads ['shadowDepth']    writes ['hdrColor', 'depth']
   //   tonemap : reads ['hdrColor']       writes []
   //   fxaa    : reads []                 writes ['fxaaIntermediate']
-  // The shadow -> main hazard (shadowDepth written then sampled) is the
-  // runtime's independent-encoder manual barrier (RD-4); on wgpu-native the
-  // graph also plans an explicit barrier for it. On webgpu (spec-managed) and
-  // wgpu-webgl2 (GL implicit sync) no explicit barrier is planned.
 
   function buildPerFrameGraph() {
     const g = new RenderGraph();
@@ -307,20 +235,20 @@ import { RenderGraph } from '../graph.js';
     return g;
   }
 
-  describe('w14: per-frame 4-pass graph barrier + encoder semantics', () => {
-    it('executes compiled pass closures in topological order', () => {
+  describe('per-frame pass order', () => {
+    it('executes compiled pass closures in declaration order', () => {
       const calls: string[] = [];
       const g = new RenderGraph<{ readonly frame: number }>();
       g.addResource('X', { kind: 'texture', lifetime: 'transient' });
-      g.addPass('consumer', {
-        reads: ['X'],
-        writes: [],
-        execute: () => calls.push('consumer'),
-      });
       g.addPass('producer', {
         reads: [],
         writes: ['X'],
         execute: () => calls.push('producer'),
+      });
+      g.addPass('consumer', {
+        reads: ['X'],
+        writes: [],
+        execute: () => calls.push('consumer'),
       });
 
       const compiled = g.compile({ backendKind: 'webgpu', caps: mockCaps() });
@@ -333,44 +261,6 @@ import { RenderGraph } from '../graph.js';
 
       expect(calls).toEqual(['producer', 'consumer']);
       expect(executedPasses).toEqual(['producer', 'consumer']);
-    });
-
-    it('wgpu-native plans an explicit barrier for the shadow -> main hazard', () => {
-      const r = buildPerFrameGraph().compile({
-        backendKind: 'wgpu-native',
-        caps: mockCaps(),
-      });
-      expect(r.ok).toBe(true);
-      if (!r.ok) return;
-      const total = r.value.passes.reduce((s, p) => s + p.barriers.length, 0);
-      expect(total).toBeGreaterThanOrEqual(1);
-
-      // The shadow -> main dependency surfaces as a 'shadowDepth' barrier on
-      // the 'main' pass (it reads what 'shadow' wrote).
-      const mainPass = r.value.passes.find((p) => p.name === 'main');
-      expect(mainPass).toBeDefined();
-      expect(mainPass?.barriers).toContain('shadowDepth');
-
-      // The shadow pass itself reads nothing -> no inbound barrier (its own
-      // hazard is handled by the runtime's independent encoder + submit).
-      const shadowPass = r.value.passes.find((p) => p.name === 'shadow');
-      expect(shadowPass?.barriers).toEqual([]);
-    });
-
-    it('webgpu plans zero explicit barriers (spec-managed)', () => {
-      const r = buildPerFrameGraph().compile({ backendKind: 'webgpu', caps: mockCaps() });
-      expect(r.ok).toBe(true);
-      if (!r.ok) return;
-      const total = r.value.passes.reduce((s, p) => s + p.barriers.length, 0);
-      expect(total).toBe(0);
-    });
-
-    it('wgpu-webgl2 plans zero explicit barriers (GL implicit sync)', () => {
-      const r = buildPerFrameGraph().compile({ backendKind: 'wgpu-webgl2', caps: mockCaps() });
-      expect(r.ok).toBe(true);
-      if (!r.ok) return;
-      const total = r.value.passes.reduce((s, p) => s + p.barriers.length, 0);
-      expect(total).toBe(0);
     });
 
     it('preserves shadow -> main pass ordering (shadow before main in compiled order)', () => {
@@ -412,7 +302,7 @@ import { RenderGraph } from '../graph.js';
     };
   }
 
-  // ── Bloom topo-sort assertion (w11) ──────────────────────────────
+  // ── Bloom declaration-order assertion ────────────────────────────
 
   describe('bloom graph topology (feat-20260531-bloom)', () => {
     it('compiles an 8-pass graph with bloom resources without error', () => {
@@ -492,15 +382,12 @@ import { RenderGraph } from '../graph.js';
       expect(blurVIdx).toBeLessThan(compIdx);
     });
 
-    it('in-place writes via hdrComposited avoids multi-writer cycle', () => {
-      // bloom-bright reads hdrColor (only main writes it — no cycle).
+    it('uses hdrComposited to make the temporal version explicit', () => {
+      // bloom-bright reads the hdrColor version written by main.
       // bloom-composite reads hdrColor + bloomBlurV, writes hdrComposited.
       // tonemap reads hdrComposited.
       // The chain: main -> bloom-bright -> blur-h -> blur-v -> composite -> tonemap.
-      // If composite wrote hdrColor, bloom-bright would depend on BOTH main and
-      // composite (the graph resolution can't distinguish "data from main"
-      // from "data from composite" for the same resource key). The
-      // hdrComposited resource name breaks the cycle while keeping the real
+      // The hdrComposited resource name makes the post-composite version explicit while keeping the real
       // GPU texture the same hdrColor slot (composite writes in-place, tonemap
       // reads from it).
       const g = new RenderGraph();
@@ -686,21 +573,16 @@ import { RenderGraph } from '../graph.js';
     });
   });
 
-  // ── cyclic-dependency ────────────────────────────────────────────
-
-  describe('compile fail-fast: cyclic-dependency', () => {
-    it('returns err with code cyclic-dependency and detail { cycle }', () => {
+  describe('declaration-order temporal validation', () => {
+    it('rejects a read whose writer appears only in the future', () => {
       const g = new RenderGraph();
       g.addResource('X', { kind: 'texture', lifetime: 'transient' });
       g.addResource('Y', { kind: 'texture', lifetime: 'transient' });
       g.addResource('Z', { kind: 'texture', lifetime: 'transient' });
-      // A writes X + reads Y, B reads X + writes Y, C reads Y + writes X.
-      // Cycle: A -> C (via Y) -> B (via X) -> A (via X).
+      // A reads Y before any prior writer; later declarations cannot initialize it retroactively.
       g.addPass('A', { reads: ['Y'], writes: ['X'] });
       g.addPass('B', { reads: ['X'], writes: ['Y'] });
       g.addPass('C', { reads: [], writes: ['Z'] });
-      // A reads Y (from B), B reads X (from A). 2-node cycle A <-> B.
-
       const r = g.compile({
         backendKind: 'webgpu',
         caps: mockCaps({}),
@@ -709,12 +591,8 @@ import { RenderGraph } from '../graph.js';
       expect(r.ok).toBe(false);
       if (!r.ok) {
         const e = r.error as RenderGraphError;
-        expect(e.code).toBe('cyclic-dependency');
-        const detail = e.detail as CyclicDependencyDetail;
-        expect(detail.cycle.length).toBeGreaterThanOrEqual(2);
-        // The cycle A <-> B must contain both.
-        expect(detail.cycle).toContain('A');
-        expect(detail.cycle).toContain('B');
+        expect(e.code).toBe('dangling-read');
+        expect(e.detail).toMatchObject({ resourceKey: 'Y', passName: 'A' });
       }
     });
   });
@@ -751,8 +629,8 @@ import { RenderGraph } from '../graph.js';
       const allCodes: RenderGraphErrorCode[] = [
         'dangling-read',
         'cap-missing',
-        'cyclic-dependency',
         'duplicate-resource',
+        'alias-source-missing',
         'unknown-resource',
         'resource-alloc-failed',
         'invalid-format',
@@ -765,8 +643,23 @@ import { RenderGraph } from '../graph.js';
         'observation-missing-copy-src',
         'observation-stale',
         'observation-retired',
+        'duplicate-pass-name',
+        'duplicate-resource-label',
+        'builder-sealed',
+        'foreign-resource-handle',
+        'resource-not-declared-by-pass',
+        'uninitialized-read',
+        'access-conflict',
+        'capability-missing',
+        'resource-descriptor-invalid',
+        'import-usage-mismatch',
+        'resource-allocation-failed',
+        'resource-resolution-failed',
+        'pass-encode-failed',
+        'compiled-graph-retired',
+        'resource-retire-failed',
       ];
-      expect(allCodes).toHaveLength(16);
+      expect(allCodes).toHaveLength(31);
     });
 
     it('allows exhaustive switch without default covering every member', () => {
@@ -776,10 +669,10 @@ import { RenderGraph } from '../graph.js';
             return 'dangling';
           case 'cap-missing':
             return 'cap';
-          case 'cyclic-dependency':
-            return 'cycle';
           case 'duplicate-resource':
             return 'dup';
+          case 'alias-source-missing':
+            return 'alias-source-missing';
           case 'unknown-resource':
             return 'unknown';
           case 'resource-alloc-failed':
@@ -804,13 +697,29 @@ import { RenderGraph } from '../graph.js';
             return 'observation-stale';
           case 'observation-retired':
             return 'observation-retired';
+          case 'duplicate-pass-name':
+          case 'duplicate-resource-label':
+          case 'builder-sealed':
+          case 'foreign-resource-handle':
+          case 'resource-not-declared-by-pass':
+          case 'uninitialized-read':
+          case 'access-conflict':
+          case 'capability-missing':
+          case 'resource-descriptor-invalid':
+          case 'import-usage-mismatch':
+          case 'resource-allocation-failed':
+          case 'resource-resolution-failed':
+          case 'pass-encode-failed':
+          case 'compiled-graph-retired':
+          case 'resource-retire-failed':
+            return code;
         }
       }
 
       expect(handle('dangling-read')).toBe('dangling');
       expect(handle('cap-missing')).toBe('cap');
-      expect(handle('cyclic-dependency')).toBe('cycle');
       expect(handle('duplicate-resource')).toBe('dup');
+      expect(handle('alias-source-missing')).toBe('alias-source-missing');
       expect(handle('unknown-resource')).toBe('unknown');
       expect(handle('resource-alloc-failed')).toBe('alloc');
       expect(handle('invalid-format')).toBe('format');
@@ -918,17 +827,6 @@ import { RenderGraph } from '../graph.js';
       expect(d.passName).toBe('computePass');
     });
 
-    it('cyclic-dependency detail has cycle array', () => {
-      const e = new RenderGraphError({
-        code: 'cyclic-dependency',
-        expected: '',
-        hint: '',
-        detail: { cycle: ['A', 'B', 'C'] },
-      });
-      const d = e.detail as { cycle: readonly string[] };
-      expect(d.cycle).toEqual(['A', 'B', 'C']);
-    });
-
     it('duplicate-resource detail has resourceKey', () => {
       const e = new RenderGraphError({
         code: 'duplicate-resource',
@@ -938,6 +836,18 @@ import { RenderGraph } from '../graph.js';
       });
       const d = e.detail as { resourceKey: string };
       expect(d.resourceKey).toBe('dupKey');
+    });
+
+    it('alias-source-missing detail has aliasKey and sourceKey', () => {
+      const e = new RenderGraphError({
+        code: 'alias-source-missing',
+        expected: '',
+        hint: '',
+        detail: { aliasKey: 'alias', sourceKey: 'source' },
+      });
+      const d = e.detail as { aliasKey: string; sourceKey: string };
+      expect(d.aliasKey).toBe('alias');
+      expect(d.sourceKey).toBe('source');
     });
 
     it('unknown-resource detail has resourceKey and passName', () => {
@@ -985,7 +895,7 @@ import { RenderGraph } from '../graph.js';
       const r1 = ok('hello');
       const r2 = err(
         new RenderGraphError({
-          code: 'cyclic-dependency',
+          code: 'dangling-read',
           expected: '',
           hint: '',
         }),
@@ -1180,13 +1090,98 @@ import { RenderGraph } from '../graph.js';
   // ── AC-02(b): persistent resource behaviour ───────────────────────
 
   describe('persistent resource lifecycle', () => {
-    it.todo(
-      'persistent resource survives across two compile() calls (same physical texture retained)',
-    );
+    it('reuses persistent targets until size drift, then replaces only the drifted target once', async () => {
+      const created: Array<{
+        readonly texture: object;
+        readonly width: number;
+        readonly height: number;
+      }> = [];
+      const destroyed: object[] = [];
+      const device = {
+        createTexture: (descriptor: {
+          readonly size: { readonly width: number; readonly height: number };
+        }) => {
+          const texture = { id: `texture-${created.length + 1}` };
+          created.push({ texture, width: descriptor.size.width, height: descriptor.size.height });
+          return { ok: true as const, value: texture };
+        },
+        createTextureView: (texture: object) => ({
+          ok: true as const,
+          value: { id: `view-${created.length}`, texture },
+        }),
+        destroyTexture: (texture: object) => {
+          destroyed.push(texture);
+          return { ok: true as const, value: undefined };
+        },
+        queue: { onSubmittedWorkDone: () => Promise.resolve(undefined) },
+      };
+      const caps = { backendKind: 'webgpu', compute: true, storageBuffer: true } as never;
+      const graph = new RenderGraph();
+      graph.addColorTarget('persistent', {
+        format: 'rgba16float',
+        size: 'swapchain',
+        lifetime: 'persistent',
+        usage: 0,
+      });
+      graph.addColorTarget('sibling', {
+        format: 'rgba16float',
+        size: { w: 16, h: 16 },
+        lifetime: 'persistent',
+        usage: 0,
+      });
+      graph.addPass('main', { reads: [], writes: ['persistent', 'sibling'] });
 
-    it.todo('persistent resource with size drift triggers rebuild on second compile');
+      graph.setSwapChainSize(64, 32);
+      expect(graph.compile({ backendKind: 'webgpu', caps, device: device as never }).ok).toBe(true);
+      const persistentTexture = graph.getColorTargetTexture('persistent');
+      const persistentView = graph.getColorTargetView('persistent');
+      const siblingTexture = graph.getColorTargetTexture('sibling');
+      expect(
+        graph.listResources().find((resource) => resource.key === 'persistent')?.lifetime,
+      ).toBe('persistent');
+      expect(created.map(({ width, height }) => [width, height])).toEqual([
+        [64, 32],
+        [16, 16],
+      ]);
 
-    it.todo('persistent resource with unchanged size reuses same physical texture across compiles');
+      graph.setSwapChainSize(64, 32);
+      expect(graph.compile({ backendKind: 'webgpu', caps, device: device as never }).ok).toBe(true);
+      expect(graph.getColorTargetTexture('persistent')).toBe(persistentTexture);
+      expect(graph.getColorTargetView('persistent')).toBe(persistentView);
+      expect(graph.getColorTargetTexture('sibling')).toBe(siblingTexture);
+      expect(created).toHaveLength(2);
+
+      graph.setSwapChainSize(128, 32);
+      expect(graph.compile({ backendKind: 'webgpu', caps, device: device as never }).ok).toBe(true);
+      const replacementTexture = graph.getColorTargetTexture('persistent');
+      const replacementView = graph.getColorTargetView('persistent');
+      expect(replacementTexture).not.toBe(persistentTexture);
+      expect(replacementView).not.toBe(persistentView);
+      expect(graph.getColorTargetTexture('sibling')).toBe(siblingTexture);
+      expect(graph.getColorTargetDescriptor('persistent')?.size).toEqual({
+        width: 128,
+        height: 32,
+      });
+      expect(created.map(({ width, height }) => [width, height])).toEqual([
+        [64, 32],
+        [16, 16],
+        [128, 32],
+      ]);
+      expect(destroyed).toEqual([]);
+
+      await graph.reclaimRetiredTransients();
+      expect(destroyed).toEqual([persistentTexture]);
+
+      graph.setSwapChainSize(128, 32);
+      expect(graph.compile({ backendKind: 'webgpu', caps, device: device as never }).ok).toBe(true);
+      expect(graph.getColorTargetTexture('persistent')).toBe(replacementTexture);
+      expect(graph.getColorTargetView('persistent')).toBe(replacementView);
+      expect(created).toHaveLength(3);
+
+      graph.drain();
+      graph.drain();
+      expect(destroyed).toEqual([persistentTexture, replacementTexture, siblingTexture]);
+    });
   });
 
   // ── AC-02(c): alias folding (D-2 / KB-1) ─────────────────────────
@@ -1198,9 +1193,171 @@ import { RenderGraph } from '../graph.js';
   // ── compile fail-fast with device errors ───────────────────────────
 
   describe('compile fail-fast with device errors (w6)', () => {
-    it.todo('returns resource-alloc-failed when device.createTexture fails');
+    it('refuses allocation atomically and preserves the active graph for clean retry', () => {
+      const created: object[] = [];
+      const destroyed: object[] = [];
+      let createCalls = 0;
+      let failOnCreateCall: number | undefined;
+      const device = {
+        createTexture: () => {
+          createCalls += 1;
+          if (createCalls === failOnCreateCall) {
+            return { ok: false as const, error: { code: 'oom' } };
+          }
+          const texture = { id: `texture-${createCalls}` };
+          created.push(texture);
+          return { ok: true as const, value: texture };
+        },
+        createTextureView: (texture: object) => ({
+          ok: true as const,
+          value: { texture },
+        }),
+        destroyTexture: (texture: object) => {
+          destroyed.push(texture);
+          return { ok: true as const, value: undefined };
+        },
+        queue: { onSubmittedWorkDone: () => Promise.resolve(undefined) },
+      };
+      const caps = {
+        backendKind: 'webgpu',
+        compute: true,
+        storageBuffer: true,
+      } as never;
 
-    it.todo('returns invalid-format when addColorTarget format is not a valid GPU texture format');
+      const graph = new RenderGraph();
+      graph.addColorTarget('healthy', {
+        format: 'rgba16float',
+        size: { w: 32, h: 32 },
+        usage: 0,
+      });
+      graph.addPass('healthy-pass', { reads: [], writes: ['healthy'] });
+
+      const initial = graph.compile({ backendKind: 'webgpu', caps, device: device as never });
+      expect(initial.ok).toBe(true);
+      const healthyTexture = graph.getColorTargetTexture('healthy');
+      const healthyView = graph.getColorTargetView('healthy');
+      expect(healthyTexture).toBeDefined();
+      expect(healthyView).toBeDefined();
+
+      graph.addColorTarget('new-target', {
+        format: 'rgba16float',
+        size: { w: 32, h: 32 },
+        usage: 0,
+      });
+      graph.addColorTarget('faulty-target', {
+        format: 'rgba16float',
+        size: { w: 32, h: 32 },
+        usage: 0,
+      });
+      graph.addPass('new-pass', { reads: [], writes: ['new-target'] });
+      graph.addPass('faulty-pass', { reads: [], writes: ['faulty-target'] });
+      failOnCreateCall = createCalls + 2;
+
+      const refused = graph.compile({ backendKind: 'webgpu', caps, device: device as never });
+      expect(refused.ok).toBe(false);
+      if (refused.ok) return;
+      expect(refused.error.code).toBe('resource-alloc-failed');
+      expect(refused.error.detail).toEqual({
+        resourceKey: 'faulty-target',
+        rhiCode: 'oom',
+      });
+      expect(destroyed).toEqual([created[1]]);
+      expect(graph.getColorTargetTexture('healthy')).toBe(healthyTexture);
+      expect(graph.getColorTargetView('healthy')).toBe(healthyView);
+      expect(graph.getColorTargetTexture('new-target')).toBeUndefined();
+      expect(graph.getColorTargetTexture('faulty-target')).toBeUndefined();
+
+      failOnCreateCall = undefined;
+      const recovered = graph.compile({ backendKind: 'webgpu', caps, device: device as never });
+      expect(recovered.ok).toBe(true);
+      expect(graph.getColorTargetTexture('new-target')).not.toBe(created[1]);
+      expect(graph.getColorTargetTexture('faulty-target')).toBeDefined();
+
+      graph.drain();
+      graph.drain();
+      expect(new Set(destroyed)).toEqual(new Set(created));
+      expect(destroyed).toHaveLength(created.length);
+    });
+
+    it('returns invalid-format before allocation and preserves the active graph', () => {
+      let createTextureCalls = 0;
+      let createTextureViewCalls = 0;
+      const device = {
+        createTexture: () => {
+          createTextureCalls += 1;
+          return { ok: true as const, value: { id: `texture-${createTextureCalls}` } };
+        },
+        createTextureView: () => {
+          createTextureViewCalls += 1;
+          return { ok: true as const, value: { id: `view-${createTextureViewCalls}` } };
+        },
+        destroyTexture: () => ({ ok: true as const, value: undefined }),
+        queue: { onSubmittedWorkDone: () => Promise.resolve(undefined) },
+      };
+      const caps = {
+        backendKind: 'webgpu',
+        compute: true,
+        storageBuffer: true,
+      } as never;
+
+      const graph = new RenderGraph();
+      graph.addColorTarget('healthy', {
+        format: 'rgba8unorm',
+        size: { w: 1, h: 1 },
+        usage: 0,
+      });
+      graph.addPass('healthy-pass', { reads: [], writes: ['healthy'] });
+      const initial = graph.compile({ backendKind: 'webgpu', caps, device: device as never });
+      expect(initial.ok).toBe(true);
+      const healthyTexture = graph.getColorTargetTexture('healthy');
+      const healthyView = graph.getColorTargetView('healthy');
+      expect(createTextureCalls).toBe(1);
+      expect(createTextureViewCalls).toBe(1);
+
+      graph.addColorTarget('candidate', {
+        // Runtime malformed input is intentionally injected past the closed
+        // declaration type so the validation error remains covered.
+        format: 'not-a-gpu-texture-format' as never,
+        size: { w: 1, h: 1 },
+        usage: 0,
+      });
+      graph.addPass('candidate-pass', { reads: [], writes: ['candidate'] });
+
+      const refused = graph.compile({ backendKind: 'webgpu', caps, device: device as never });
+      expect(refused.ok).toBe(false);
+      if (refused.ok) return;
+      expect(refused.error.code).toBe('invalid-format');
+      expect(refused.error.detail).toMatchObject({
+        resourceKey: 'candidate',
+        format: 'not-a-gpu-texture-format',
+      });
+      const detail = refused.error.detail as {
+        readonly resourceKey: string;
+        readonly format: string;
+        readonly expected: readonly string[];
+      };
+      expect(detail.expected).toContain('rgba8unorm');
+      expect(createTextureCalls).toBe(1);
+      expect(createTextureViewCalls).toBe(1);
+      expect(graph.getColorTargetTexture('healthy')).toBe(healthyTexture);
+      expect(graph.getColorTargetView('healthy')).toBe(healthyView);
+      expect(graph.getColorTargetTexture('candidate')).toBeUndefined();
+
+      const duplicateCandidate = graph.addColorTarget('candidate', {
+        format: 'rgba8unorm',
+        size: { w: 1, h: 1 },
+        usage: 0,
+      });
+      expect(duplicateCandidate.ok).toBe(false);
+      if (duplicateCandidate.ok) return;
+      expect(duplicateCandidate.error.code).toBe('duplicate-resource');
+      expect(duplicateCandidate.error.detail).toEqual({ resourceKey: 'candidate' });
+      expect(createTextureCalls).toBe(1);
+      expect(createTextureViewCalls).toBe(1);
+      expect(graph.getColorTargetTexture('healthy')).toBe(healthyTexture);
+      expect(graph.getColorTargetView('healthy')).toBe(healthyView);
+      expect(graph.getColorTargetTexture('candidate')).toBeUndefined();
+    });
   });
 }
 
@@ -1304,26 +1461,13 @@ import { RenderGraph } from '../graph.js';
     it('drain destroys every persistent texture entry and clears the map', () => {
       const probe: DrainProbe = { created: 0, destroyed: 0, destroyedHandles: [] };
       const g = new RenderGraph();
-      g.addResource('shadowDepth', { kind: 'texture', lifetime: 'persistent' });
-      // addColorTarget with persistent lifetime through resourceRegistry overrides
-      // is not exposed; use addColorTarget for the transient + persistent branch
-      // via a separate register call. The persistent path is exercised by
-      // resourceRegistry's 'persistent' lifetime + colorTarget metadata, which the
-      // engine sets via the addColorTarget+resource interplay; for the unit test
-      // we exercise both pools via the public API by registering a transient and
-      // a persistent color target in two compiles.
-      // The persistent map population path requires colorTarget metadata; we go
-      // through resourceRegistry directly is not public. Instead we stage a
-      // persistent target via addColorTarget + addResource overrides — but
-      // addColorTarget hard-codes lifetime to transient inside resource-registry,
-      // so persistent coverage falls to the implementation invariant: both maps
-      // share the same drain pathway. The transient branch above already proves
-      // the destroy walk; the persistent branch is structurally identical
-      // (same Map.values() + destroyTexture forward).
+      g.addColorTarget('shadowDepth', {
+        format: 'depth32float',
+        size: { w: 64, h: 64 },
+        lifetime: 'persistent',
+        usage: 0,
+      });
       g.addPass('shadow', { reads: [], writes: ['shadowDepth'] });
-      // No device passed -> allocateColorTargets is a no-op for shadowDepth
-      // (kind:texture w/o colorTarget metadata is not pool-allocated).
-      // The empty-drain path must still be safe.
       const r = g.compile({
         backendKind: 'webgpu',
         caps: drainMockCaps(),
@@ -1331,9 +1475,12 @@ import { RenderGraph } from '../graph.js';
         device: makeDrainDevice(probe) as any,
       });
       expect(r.ok).toBe(true);
+      expect(probe.created).toBe(1);
 
-      // Drain on an empty (or near-empty) pool is safe (idempotency).
+      g.drain();
+      expect(probe.destroyed).toBe(1);
       expect(() => g.drain()).not.toThrow();
+      expect(probe.destroyed).toBe(1);
     });
 
     it('drain is idempotent: a second drain after a cleared pool is a no-op', () => {
@@ -1693,20 +1840,19 @@ import { RenderGraph } from '../graph.js';
     it('drainTransient only clears transientPool, not persistentTextures', () => {
       const probe: ResizeDrainProbe = { created: 0, destroyed: 0, destroyedHandles: [] };
       const g = new RenderGraph();
-      // Persistent resource via addResource (not addColorTarget — persistent
-      // textures in the color-target path require addColorTarget which hard-codes
-      // lifetime: 'transient' in resource-registry). The persistent texture pool
-      // is populated through the resource-registry entries with
-      // lifetime==='persistent' + colorTarget metadata. We verify the structural
-      // invariant: transient pool is cleared but the drainTransient logic does
-      // not iterate persistentTextures.
       g.addColorTarget('hdrColor', {
         format: 'rgba16float',
         size: 'swapchain',
         sample: 1,
         usage: 0,
       });
-      g.addPass('main', { reads: [], writes: ['hdrColor'] });
+      g.addColorTarget('history', {
+        format: 'rgba16float',
+        size: { w: 32, h: 32 },
+        lifetime: 'persistent',
+        usage: 0,
+      });
+      g.addPass('main', { reads: [], writes: ['hdrColor', 'history'] });
 
       g.setSwapChainSize(64, 64);
       const r1 = g.compile({
@@ -1721,6 +1867,7 @@ import { RenderGraph } from '../graph.js';
       // biome-ignore lint/suspicious/noExplicitAny: internal pool access in unit test
       const ptexBefore = (g as any).persistentTextures as Map<string, unknown>;
       const ptexSizeBefore = ptexBefore.size;
+      const historyBefore = g.getColorTargetTexture('history');
 
       // Resize.
       g.setSwapChainSize(128, 128);
@@ -1734,6 +1881,8 @@ import { RenderGraph } from '../graph.js';
 
       // Persistent textures untouched by drainTransient.
       expect(ptexBefore.size).toBe(ptexSizeBefore);
+      expect(g.getColorTargetTexture('history')).toBe(historyBefore);
+      expect(probe.created).toBe(3);
     });
   });
 }

@@ -1,32 +1,8 @@
-import { Entity, type EntityHandle, World } from '@forgeax/engine-ecs';
+import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
 import { ChildOf, Transform } from '../index';
 import { projectHierarchy } from '../systems';
-
-function setParent(world: World, child: EntityHandle, parent: EntityHandle): void {
-  const graph = (
-    world as unknown as {
-      _getGraph(): {
-        tables: ReadonlyArray<
-          | {
-              size: number;
-              storage: Map<number, { fields: Map<string, { view: Uint32Array }> }>;
-            }
-          | undefined
-        >;
-      };
-    }
-  )._getGraph();
-  for (const table of graph.tables) {
-    if (table === undefined) continue;
-    const entities = table.storage.get(Entity.id)?.fields.get('self')?.view;
-    const parents = table.storage.get(ChildOf.id)?.fields.get('parent')?.view;
-    if (entities === undefined || parents === undefined) continue;
-    for (let row = 0; row < table.size; row++) {
-      if (entities[row] === child) parents[row] = parent;
-    }
-  }
-}
+import { setMalformedParentEdge } from './fixtures/malformed-hierarchy-edge';
 
 function childOf(world: World, parent: EntityHandle): EntityHandle {
   return world
@@ -50,8 +26,9 @@ describe('scene hierarchy projection', () => {
     const world = new World();
     const parent = world.spawn().unwrap();
     const child = childOf(world, parent);
-    const staleParent = 0xffffffff as EntityHandle;
-    setParent(world, child, staleParent);
+    const staleParent = world.spawn().unwrap();
+    world.despawn(staleParent).unwrap();
+    setMalformedParentEdge(world, child, staleParent);
 
     const snapshot = projectHierarchy(world);
     const diagnostic = snapshot.diagnostics[0];
@@ -70,10 +47,10 @@ describe('scene hierarchy projection', () => {
     const a = childOf(world, world.spawn().unwrap());
     const b = childOf(world, world.spawn().unwrap());
     const c = childOf(world, world.spawn().unwrap());
-    setParent(world, self, self);
-    setParent(world, a, b);
-    setParent(world, b, c);
-    setParent(world, c, a);
+    setMalformedParentEdge(world, self, self);
+    setMalformedParentEdge(world, a, b);
+    setMalformedParentEdge(world, b, c);
+    setMalformedParentEdge(world, c, a);
 
     const snapshot = projectHierarchy(world);
     const cycleDiagnostics = snapshot.diagnostics.filter((item) => item.code === 'hierarchy-cycle');

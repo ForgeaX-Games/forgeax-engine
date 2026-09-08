@@ -14,6 +14,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs"
     },
+    "./build": {
+      "types": "./dist/build.d.ts",
+      "node": "./dist/build.mjs",
+      "default": null
+    },
     "./schema": {
       "types": "./dist/schema-compiled.d.ts",
       "import": "./dist/schema.mjs"
@@ -21,6 +26,10 @@
     "./guid": {
       "types": "./dist/guid.d.ts",
       "import": "./dist/guid.mjs"
+    },
+    "./builtin": {
+      "types": "./dist/builtin.d.ts",
+      "import": "./dist/builtin.mjs"
     },
     "./errors": {
       "types": "./dist/errors.d.ts",
@@ -33,6 +42,22 @@
     "./scanner": {
       "types": "./dist/scanner.d.ts",
       "import": "./dist/scanner.mjs"
+    },
+    "./runtime": {
+      "types": "./dist/runtime.d.ts",
+      "import": "./dist/runtime.mjs"
+    },
+    "./artifact-path": {
+      "types": "./dist/artifact-path.d.ts",
+      "import": "./dist/artifact-path.mjs"
+    },
+    "./material-cook": {
+      "types": "./dist/material-cook.d.ts",
+      "import": "./dist/material-cook.mjs"
+    },
+    "./mesh-bin-contract": {
+      "types": "./dist/mesh-bin-contract.d.ts",
+      "import": "./dist/mesh-bin-contract.mjs"
     },
     "./cli-asset": {
       "types": "./dist/cli-asset.d.ts",
@@ -56,6 +81,15 @@
     "./native-cooker": {
       "types": "./dist/native-cooker.d.ts",
       "node": "./dist/native-cooker.mjs",
+      "default": null
+    },
+    "./source": {
+      "types": "./dist/scriptable-pack.d.ts",
+      "import": "./dist/scriptable-pack.mjs"
+    },
+    "./source-node": {
+      "types": "./dist/scriptable-pack-node.d.ts",
+      "node": "./dist/scriptable-pack-node.mjs",
       "default": null
     },
     "./package.json": "./package.json"
@@ -82,8 +116,7 @@
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "tsup": "^8.3.5",
-    "typescript": "^5.8.3",
-    "vitest": "4.1.5"
+    "vitest": "4.1.11"
   },
   "forgeax": {
     "metrics": {
@@ -114,6 +147,7 @@
     "@forgeax/engine-types": "workspace:*",
     "@noble/hashes": "^2.2.0",
     "fast-glob": "^3.3.3",
+    "typescript": "^5.8.3",
     "upng-js": "^2.1.0",
     "uuidv7": "^1.2.1"
   }

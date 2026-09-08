@@ -2,6 +2,16 @@
 
 ## Authoring and recovery index
 
+ScriptablePack sources use the public `@forgeax/engine-import` producer bridge.
+The output is the same Pack v2 durable payload used by ordinary importers. The
+16 `SCRIPTABLE_PACK_ASSET_KINDS` are `mesh`, `material`, `scene`, `texture`,
+`equirect`, `sampler`, `font`, `render-pipeline`, `tileset`, `video`,
+`skeleton`, `skin`, `animation-clip`, `animation-graph`, `audio`, and
+`particle-effect`; all are loadable by GUID, while `refs`,
+`artifacts`, `mediaType`, and `programFingerprint` remain producer facts.
+Producer or dependency failures return `code`, `expected`, `hint`, and
+`detail`; inspect the owning evidence, rebuild or cold-cook, and retry.
+
 The import contract is [`asset-authority.schema.json`](../../asset-authority.schema.json). `ImporterRegistry` and `runImport` are the build-time owner for external source plus Meta; every writable multi-output declaration uses a stable `sourceKey`, while `sourceIndex` remains diagnostic evidence only.
 
 | Need | Entry | Boundary |
@@ -47,7 +57,7 @@ export default {
 1. **GUID import-stable**. The `*.meta.json` sidecar pins every target GUID at
    declare time. Import only reproduces those GUIDs, never mints new ones.
 2. **Lazy**. The runtime reads meta only to build a *catalog* (which GUIDs
-   exist, with which `kind`). Only a real `loadByGuid(guid)` triggers import
+   exist, with which `kind`). Only a real `AssetRegistry.load(guid, kind)` triggers import
    (when the DDC is absent) + load. No eager full-import on startup.
 3. **One-way dependency**. The engine owns the `Importer` interface; concrete
    importers are injected. The engine never reverse-imports `gltfImporter` /
@@ -60,7 +70,7 @@ flowchart LR
   src["source\n(.gltf / .png / .ttf)"] -->|"importer.import(ctx)"| ia["ImportedAsset[]\n(Asset PODs + GUIDs)"]
   meta["*.meta.json\nimporter + subAssets[].guid"] --> ia
   ia -->|"import runner\n(GUID iron law)"| ddc["DDC\n.pack.json / .bin"]
-  ddc -->|"loadByGuid"| runtime["runtime Loader\n(@forgeax/engine-runtime)"]
+  ddc -->|"AssetRegistry.load(guid, kind)"| runtime["runtime Loader\n(@forgeax/engine-assets-runtime)"]
 ```
 
 - An **`Importer`** (`{ key, import }`) turns one external source + its
@@ -80,6 +90,53 @@ flowchart LR
   import.
 
 ## Injection shape
+
+### ScriptablePack build bridge
+
+`buildScriptablePack` decorates a host-provided Asset snapshot source with the ordinary `AssetReader`. Each GUID is fixed to one generation/digest and cloned for the current Build. The adapter validates the exact output-key/kind closure, stamps descriptor identity, dispatches each Asset to the reusable `AssetOutputProducerRegistry`, and derives external usage from actual reads plus serialized refs. Scene output uses the source definition's neutral `sceneComponents` schema; it never consults a global ECS component registry.
+
+| Derived usage | Input fingerprint | Runtime ref |
+|:--|:--|:--|
+| `content` | Asset generation and digest | No |
+| `reference` | GUID only | Yes |
+| `both` | Asset generation and digest | Yes |
+
+Domain producers return structured `ImportError`; the generic bridge contains no per-kind switch. `createStandardAssetOutputProducerRegistry(sceneComponents)` composes the production Scene, Material, and Mesh owners with the definition-bound scene schema. Scene refs use the ECS externalization kernel shared with runtime save, Material refs cover parent/texture/sampler GUIDs, and Mesh emits the versioned binary artifact. The fingerprint covers canonical Meta, the definition-bound scene schema, the recursive source closure, observed external evidence, authoring contract version, and registered producer versions.
+
+`createScriptablePackStagedAssetSnapshotSource()` owns clean-build content reads. It resolves a GUID to its local source owner, lazily builds that owner inside one fixed generation, memoizes private clones and digests, and reports `pack-source-build-cycle` without consulting an older fallback generation. A fallback is only an explicit prebuilt authority for GUIDs with no local owner.
+
+`createStandardAssetOutputProducerRegistry(sceneComponents)` registers the production
+Material, Mesh, and Scene producers. Material output derives
+parent/texture/sampler refs; Mesh output derives default-material refs and emits
+the `mesh-binary/4` body; Scene output uses the definition-bound neutral schema
+through the shared ECS externalization contract. A specialized host may instead
+register only the admitted kinds:
+
+```ts
+const outputs = new AssetOutputProducerRegistry();
+outputs.register(materialAssetOutputProducer);
+outputs.register(meshAssetOutputProducer);
+```
+
+### Mesh binary v4 producer contract
+
+The Mesh producer calls [`packMeshBinV4`](src/mesh-bin.ts), which delegates
+projection facts to geometry and records one stable digest, mask, stride,
+cardinality, and payload length in the artifact header. Material defaults are
+references into the producer refs table; GUID strings are not duplicated in the
+binary metadata.
+
+> [!IMPORTANT]
+> A producer Result error contains `subject`, `sourceKey`, `expected`,
+> `actual`, and a re-cook recovery hint. Failed validation returns no artifact,
+> so the importer cannot publish a partial mesh product. v2/v3 mesh binaries
+> are not compatibility inputs.
+
+At the low-level `buildScriptablePack` boundary, `assetSource` is optional only
+when `build` never calls `reader.readByGuid`. The first attempted content read
+without a source returns structured `asset-not-found`; no empty snapshot or
+stale content is invented. Production Vite hosts provide the staged generation
+source described above.
 
 `ImporterRegistry` mirrors the runtime `LoaderRegistry` and the Console
 `Registry`: `register(importer)` (fail-fast on a malformed importer, idempotent
@@ -127,7 +184,7 @@ no `default:`). `ImportError` carries the four-field structured surface
 | `source-read-failed` | `meta.source` could not be read |
 | `import-produced-no-assets` | importer produced nothing, or omitted a declared GUID |
 | `guid-mismatch` | importer produced a GUID not declared in `meta.subAssets[]` |
-| `import-internal-error` | importer threw; the runner wraps it |
+| `import-internal-error` | importer conversion or finalization failed; the runner wraps it in the existing structured Result. Finalization/digest failures carry a `detail.reason` prefixed with `finalization/digest`, and no CookProduct or Pack is returned for the failed attempt |
 
 ## Dual-form transport (M4)
 
@@ -157,6 +214,11 @@ Use this sequence when an import or Pack consumer reports a missing product:
    and the projected Catalog row.
 5. **Retry** the same GUID after verification. Never parse an error message or
    turn an unverified source file into a runtime payload.
+
+`runImport` keeps conversion and finalization failures inside its structured
+Result boundary. A digest-capability refusal during CookProduct finalization
+does not publish a partial product; repair that capability and retry the same
+Meta/GUID through the same `ImporterRegistry`.
 
 The import package stops at build-time source conversion and product
 publication. It does not write authoring state, own Editor operations, or add

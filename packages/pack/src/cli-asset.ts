@@ -27,6 +27,8 @@ import { readSourceInventory } from './evidence/source-inventory.js';
 import { isValidAssetGuidString } from './guid.js';
 import { parsePackV2 } from './index.js';
 import { scan } from './scanner.js';
+import { isRecord, projectScriptablePackMeta } from './scriptable-pack.js';
+import { loadScriptablePack } from './scriptable-pack-node.js';
 
 export interface PackEntry {
   readonly guid: string;
@@ -136,6 +138,33 @@ export async function scanEntries(
       }
     }
   }
+  for (const sourcePath of result.value.filter((path) => path.endsWith('.pack.ts'))) {
+    const loaded = await loadScriptablePack(sourcePath, { metadataOnly: true });
+    if (!loaded.ok) {
+      emitError(ctx, loaded.error);
+      return { ok: false };
+    }
+    const meta = projectScriptablePackMeta(loaded.value, sourcePath);
+    for (const sub of meta.subAssets) {
+      entries.push({ guid: sub.guid, kind: sub.kind, sourcePath });
+    }
+  }
+  const firstByGuid = new Map<string, PackEntry>();
+  for (const entry of entries) {
+    const guid = entry.guid.toLowerCase();
+    const first = firstByGuid.get(guid);
+    if (first !== undefined) {
+      emitError(ctx, {
+        code: 'pack-guid-collision',
+        expected:
+          'one author declaration per GUID across Meta, Pack v2, and ScriptablePack sources',
+        hint: 'allocate a new durable GUID through the asset authoring gateway, then rerun verify',
+        detail: { guid, paths: [first.sourcePath, entry.sourcePath] },
+      });
+      return { ok: false };
+    }
+    firstByGuid.set(guid, entry);
+  }
   return { ok: true, value: entries };
 }
 
@@ -147,6 +176,7 @@ function helpBody(): string {
     '  forgeax-engine-remote-asset scan [--roots <dir>]',
     '  forgeax-engine-remote-asset lookup <guid>',
     '  forgeax-engine-remote-asset verify',
+    '  forgeax-engine-remote-asset meta <source.pack.ts> --json',
     '  forgeax-engine-remote-asset lookup --guid <guid> --project <dir> --catalog <path> --json',
     '  forgeax-engine-remote-asset verify --guid <guid> --project <dir> --catalog <path> --json',
     '  forgeax-engine-remote-asset atlas --input <glob> --name <prefix> [--output <dir>] [--max-atlas-size <n>]',
@@ -178,6 +208,8 @@ export async function runCliAsset(rest: string[], ctx: AssetCtx): Promise<number
       return runVerify(subRest, ctx);
     case 'atlas':
       return runAtlas(subRest, ctx);
+    case 'meta':
+      return runMeta(subRest, ctx);
     case 'inspect':
     case 'rebuild':
     case 'cold-cook':
@@ -189,11 +221,39 @@ export async function runCliAsset(rest: string[], ctx: AssetCtx): Promise<number
     default:
       return emitError(ctx, {
         code: 'unknown-subcommand',
-        expected: 'subcommand in {scan, lookup, verify, atlas}',
+        expected: 'subcommand in {scan, lookup, verify, atlas, meta}',
         hint: "run 'forgeax-engine-remote-asset --help' for usage",
         detail: { subcommand: sub },
       });
   }
+}
+
+async function runMeta(rest: string[], ctx: AssetCtx): Promise<number> {
+  let source: string | undefined;
+  try {
+    const parsed = parseArgs({
+      args: rest,
+      allowPositionals: true,
+      strict: true,
+      options: { json: { type: 'boolean' } },
+    });
+    source = parsed.positionals[0];
+    if (source === undefined || parsed.positionals.length !== 1) {
+      throw new Error('exactly one ScriptablePack source path is required');
+    }
+  } catch (error) {
+    return emitError(ctx, {
+      code: 'cli-parse-error',
+      expected: 'forgeax-engine-remote-asset meta <source.pack.ts> --json',
+      hint: 'pass one trusted ScriptablePack module path',
+      detail: { message: error instanceof Error ? error.message : String(error) },
+    });
+  }
+  const cwd = ctx.cwd ?? process.cwd();
+  const loaded = await loadScriptablePack(absolutePath(source, cwd), { metadataOnly: true });
+  if (!loaded.ok) return emitError(ctx, loaded.error);
+  ctx.stdoutWrite(JSON.stringify(projectScriptablePackMeta(loaded.value, source)));
+  return 0;
 }
 
 /** Emit a canonical host-operation request so recovery actions are executable
@@ -391,10 +451,6 @@ function catalogRows(value: unknown): readonly Record<string, unknown>[] | undef
   if (Array.isArray(value)) return value.filter(isRecord);
   if (!isRecord(value) || !Array.isArray(value.entries)) return undefined;
   return value.entries.filter(isRecord);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 function packagePath(projectRoot: string, packageUrl: string): string {

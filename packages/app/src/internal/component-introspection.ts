@@ -1,4 +1,5 @@
-import { type Component, type FieldReflection, getRegisteredComponents } from '@forgeax/engine-ecs';
+import { type Component, componentDefinition, type FieldReflection } from '@forgeax/engine-ecs';
+import { componentSchema } from '@forgeax/engine-ecs/internal';
 
 export type JsonValue =
   | null
@@ -90,21 +91,22 @@ function projectField(reflection: FieldReflection): ComponentIntrospectionField 
 }
 
 function projectComponent(component: Component): ComponentIntrospectionDescriptor {
+  const definition = componentDefinition(component);
   const fields: Record<string, ComponentIntrospectionField> = {};
-  for (const [name, reflection] of Object.entries(component.fields)) {
+  for (const [name, reflection] of Object.entries(definition.fields)) {
     fields[name] = projectField(reflection);
   }
   return Object.freeze({
     name: component.name,
-    schema: Object.freeze({ ...component.schema }),
+    schema: Object.freeze({ ...componentSchema(component) }),
     fields: Object.freeze(fields),
-    meta: Object.freeze(projectMeta(component.meta)),
+    meta: Object.freeze(projectMeta(definition.policy.meta)),
   });
 }
 
-/** Project the global ECS component registry into transport-safe data. */
+/** Project one World-local component catalog into transport-safe data. */
 export function projectComponentIntrospection(
-  components: ReadonlyMap<string, Component> = getRegisteredComponents(),
+  components: ReadonlyMap<string, Component>,
 ): readonly ComponentIntrospectionDescriptor[] {
   return Object.freeze(
     [...components.values()]

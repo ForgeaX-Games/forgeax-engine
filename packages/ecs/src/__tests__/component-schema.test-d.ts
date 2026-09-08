@@ -1,12 +1,12 @@
-// Compile-time + runtime test for Component.schema literal preservation +
+// Compile-time + runtime test for Component field-schema literal preservation +
 // 4-probe quintet over SchemaVocabKeyword (w3, AC-09).
 //
 // Locks two invariants:
 //
 //   1. Literal preservation: defineComponent('Foo', { value: 'string' } as
-//      const) yields `Foo.schema['value']` typed as the literal `'string'`,
+//      const) yields `SchemaOf<typeof Foo>['value']` typed as the literal `'string'`,
 //      not widened to plain `string`. AI users that read
-//      `Component.schema[fieldName]` get the runtime keyword as a literal
+//      `SchemaOf<typeof Component>` gets the schema keyword as a literal
 //      type --- the basis of `isManagedField` switch / cascade discrimination.
 //
 //   2. 4-probe quintet (w4, plan-strategy §2.2 / D-R3 predicate merge):
@@ -26,19 +26,31 @@ import {
   isManagedArrayField,
   isManagedBufferField,
   isManagedField,
+  type SchemaOf,
   type SchemaVocabKeyword,
 } from '../component';
 
 describe('component schema --- literal preservation (w3, AC-09)', () => {
   it("defineComponent('Foo', { value: 'string' }) preserves 'string' literal", () => {
     const Foo = defineComponent('Foo', { value: 'string' });
-    type ValueField = typeof Foo.schema.value;
+    type ValueField = SchemaOf<typeof Foo>['value'];
     expectTypeOf<ValueField>().toEqualTypeOf<'string'>();
+
+    // The token intentionally exposes only name/fields/storage. These
+    // negative probes keep removed convenience facts out of autocomplete.
+    // @ts-expect-error Component.schema was removed; use SchemaOf<typeof Foo>.
+    void Foo.schema;
+    // @ts-expect-error Component.id is an ECS-owner fact, not token data.
+    void Foo.id;
+    // @ts-expect-error Component.defaults lives in componentDefinition(Foo).
+    void Foo.defaults;
+    // @ts-expect-error Component.toSchemaJSON was removed with the duplicate projection.
+    void Foo.toSchemaJSON;
   });
 
   it('schema literal is *not* widened to plain `string`', () => {
     const Foo = defineComponent('Foo', { value: 'string' });
-    type ValueField = typeof Foo.schema.value;
+    type ValueField = SchemaOf<typeof Foo>['value'];
     // The literal must NOT widen to base `string` --- AI users rely on the
     // narrow type for switch / cascade discrimination.
     expectTypeOf<ValueField>().not.toEqualTypeOf<string>();
@@ -50,9 +62,9 @@ describe('component schema --- literal preservation (w3, AC-09)', () => {
       mass: 'f32',
       target: 'entity',
     });
-    expectTypeOf<typeof Bar.schema.name>().toEqualTypeOf<'string'>();
-    expectTypeOf<typeof Bar.schema.mass>().toEqualTypeOf<'f32'>();
-    expectTypeOf<typeof Bar.schema.target>().toEqualTypeOf<'entity'>();
+    expectTypeOf<SchemaOf<typeof Bar>['name']>().toEqualTypeOf<'string'>();
+    expectTypeOf<SchemaOf<typeof Bar>['mass']>().toEqualTypeOf<'f32'>();
+    expectTypeOf<SchemaOf<typeof Bar>['target']>().toEqualTypeOf<'entity'>();
   });
 });
 

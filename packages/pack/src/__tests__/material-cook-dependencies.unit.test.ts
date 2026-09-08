@@ -1,6 +1,8 @@
 import type { AssetGuid } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { collectMaterialCookRefs } from '../evidence/material-cook.js';
+import { NativeCookerRegistry } from '../native-cooker-registry.js';
+import { createRuntimePackPublication } from '../runtime-publication.js';
 
 describe('material cook dependency closure', () => {
   it('collects parent, texture, sampler, and module references', () => {
@@ -21,5 +23,90 @@ describe('material cook dependency closure', () => {
       samplers: ['sampler/linear'],
       modules: ['module/pbr'],
     });
+  });
+
+  it('collects string shorthands only from declared texture parameters', () => {
+    expect(
+      collectMaterialCookRefs({
+        parameters: [
+          { name: 'surface', type: 'texture' },
+          { name: 'label', type: 'f32' },
+        ],
+        values: { surface: 'texture/albedo', label: 'not-a-texture-ref' },
+      }),
+    ).toEqual({ parent: [], textures: ['texture/albedo'], samplers: [], modules: [] });
+  });
+
+  it('treats a string value as a texture shorthand when parameters are omitted', () => {
+    expect(
+      collectMaterialCookRefs({
+        values: { baseColorTexture: 'texture/albedo' },
+      }),
+    ).toEqual({ parent: [], textures: ['texture/albedo'], samplers: [], modules: [] });
+  });
+
+  it('keeps the last known good candidate when a generation fails before publication', async () => {
+    const registry = new NativeCookerRegistry();
+    let fail = false;
+    registry.register({
+      key: 'material',
+      cook: () => {
+        if (fail) throw new Error('candidate rejected');
+        return {
+          guid: 'material-child',
+          payload: { kind: 'material' },
+          refs: ['texture/albedo'],
+          artifacts: {
+            'material-child/shader.wgsl': {
+              mediaType: 'text/wgsl',
+              bytes: new TextEncoder().encode('shader'),
+            },
+          },
+          inputFingerprint: 'sha256:material-candidate',
+        };
+      },
+    });
+
+    const committed = await registry.runTransaction({ key: 'material', input: {} });
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) throw new Error(committed.error.hint);
+    fail = true;
+    const recovered = await registry.runTransaction({
+      key: 'material',
+      input: {},
+      previous: committed.value,
+    });
+
+    expect(recovered).toMatchObject({
+      ok: true,
+      value: {
+        status: 'recovered',
+        generation: 1,
+        candidateGeneration: 2,
+        lastKnownGoodGeneration: 1,
+        lastKnownGood: committed.value.draft,
+      },
+    });
+  });
+
+  it('keeps runtime publication identity independent from source-path diagnostics', () => {
+    const input = {
+      pack: {
+        assets: [{ guid: 'material-child', kind: 'material', payload: { roughness: 0.5 } }],
+      },
+      scopeId: 'project',
+      sourceRevision: 'rev-1',
+      packageUrl: '/packs/materials.json',
+    };
+    const first = createRuntimePackPublication({ ...input, sourcePath: '/src/materials.json' });
+    const moved = createRuntimePackPublication({ ...input, sourcePath: '/moved/materials.json' });
+
+    expect(moved.pack.digest).toBe(first.pack.digest);
+    expect(moved.publication.digest).toBe(first.publication.digest);
+    expect(moved.publication.outputSetDigest).toBe(first.publication.outputSetDigest);
+    expect(moved.publication.receipt.inputFingerprint).toBe(
+      first.publication.receipt.inputFingerprint,
+    );
+    expect(moved.publication.sourcePath).toBe('/moved/materials.json');
   });
 });

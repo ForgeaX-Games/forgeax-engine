@@ -1,7 +1,8 @@
-import { getRegisteredComponents, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import { ChildOf } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import { resolveVisibility, Visibility, VisibilityStateValue } from '../index';
+import { Visibility, VisibilityStateValue } from '../components/visibility';
+import { resolveVisibility } from '../extract/visibility';
 
 describe('visibility snapshot contract', () => {
   it('projects intent and effective state without writing a derived component', () => {
@@ -21,7 +22,7 @@ describe('visibility snapshot contract', () => {
 
     expect(childResult).toMatchObject({ intent: 'inherited', effective: 'hidden' });
     expect(snapshot.diagnostics).toEqual([]);
-    expect(getRegisteredComponents().has('EffectiveVisibility')).toBe(false);
+    expect(world.components.resolve('EffectiveVisibility')).toBeUndefined();
   });
 
   it('is read-only and does not retain a previous World result', () => {

@@ -389,21 +389,27 @@ async function recordDemo(demo) {
     globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
   }
 
-  const ready = await renderer.ready;
-  if (!ready.ok) {
-    console.error(`  SKIP - renderer.ready failed: ${ready.error?.code}`);
+  const attached = renderer.attach(world);
+  if (!attached.ok) {
+    console.error(`  SKIP - renderer attach failed: ${attached.error.code}`);
     return null;
   }
-
-  console.log(`  backend=${renderer.backend}`);
-  renderer.attachWorld(world).unwrap();
+  const lease = attached.value;
+  const drawFrame = () =>
+    renderer.draw({
+      leases: [lease],
+      camera: { lease },
+      environment: { lease },
+    });
+  console.log(`  backend=${renderer.inspect().capabilities.backendKind}`);
 
   // 5. Run frames 0..29 (warm-up), capture at frame 29 (0-indexed = frame 30 1-indexed)
   // We track the frame number from draw() calls.
   for (let frame = 0; frame < TARGET_FRAME; frame++) {
     currentFrame = frame;
     world.update().unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const drawn = drawFrame();
+    if (!drawn.ok) return null;
     await delay(0); // yield event loop
   }
 

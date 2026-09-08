@@ -1,5 +1,5 @@
-import { SkinMaterialMismatchError } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
+import { SkinMaterialMismatchError } from '../../../render/src/errors/render';
 
 describe('render skin errors stay outside skinning binding', () => {
   it('retains material failures in runtime render error cluster', () => {

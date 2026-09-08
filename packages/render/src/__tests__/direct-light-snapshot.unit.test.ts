@@ -43,7 +43,10 @@ describe('one direct-light snapshot proof', () => {
 
   it('keeps extract and shader owners single-source', async () => {
     const extract = await readFile(new URL('../render-system-extract.ts', import.meta.url), 'utf8');
-    const hdrp = await readFile(new URL('../hdrp-pipeline.ts', import.meta.url), 'utf8');
+    const lighting = await readFile(
+      new URL('../record/frame-lighting.ts', import.meta.url),
+      'utf8',
+    );
     const shader = await readFile(
       new URL('../../../shader/src/hdrp-cluster-forward.wgsl', import.meta.url),
       'utf8',
@@ -51,7 +54,8 @@ describe('one direct-light snapshot proof', () => {
 
     expect(extract.match(/const spotLightQuery =/g)).toHaveLength(1);
     expect(extract).toContain('direction: dirN');
-    expect(hdrp).toContain('shared LightSlot packer');
+    expect(lighting).toContain('packLightSlot(pl');
+    expect(lighting).toContain('packLightSlot(sl)');
     expect(shader).not.toContain('normalize(light.direction.xyz)');
   });
 });

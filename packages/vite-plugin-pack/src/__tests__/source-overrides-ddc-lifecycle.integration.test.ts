@@ -1,14 +1,19 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DdcEntryStore, DdcLifecycle, ddcOutputDigest } from '@forgeax/engine-ddc';
+import {
+  type BuildDdcInput,
+  DdcEntryStore,
+  DdcLifecycle,
+  ddcOutputDigest,
+  semanticBuildKey,
+} from '@forgeax/engine-ddc';
 import { afterEach, describe, expect, it } from 'vitest';
-import { type SemanticDdcInput, semanticDdcKey } from '../ddc-cache.js';
 
 const GUID = '11111111-1111-4111-8111-111111111111';
 const roots: string[] = [];
 
-function semantic(sourceOverrides?: Record<string, unknown>): SemanticDdcInput {
+function semantic(sourceOverrides?: Record<string, unknown>): BuildDdcInput {
   return {
     schemaVersion: '2.0.0',
     importerVersion: 'fixture@1',
@@ -18,7 +23,7 @@ function semantic(sourceOverrides?: Record<string, unknown>): SemanticDdcInput {
     declaredGuids: [GUID],
     cookProfile: 'dev',
     ...(sourceOverrides === undefined ? {} : { sourceOverrides }),
-  } as SemanticDdcInput;
+  } as BuildDdcInput;
 }
 
 async function publish(root: string, key: string, payload: unknown) {
@@ -50,16 +55,16 @@ afterEach(async () => {
 
 describe('source override DDC lifecycle', () => {
   it('makes a non-empty source override part of desired semantic identity', () => {
-    const legacy = semanticDdcKey(semantic());
-    const override = semanticDdcKey(semantic({ 'mesh/main': { lod: 2 } }));
+    const legacy = semanticBuildKey(semantic());
+    const override = semanticBuildKey(semantic({ 'mesh/main': { lod: 2 } }));
     expect(override).not.toBe(legacy);
   });
 
   it('keeps the old current as LKG after validation failure', async () => {
     const root = await mkdtemp(join(tmpdir(), 'forgeax-source-overrides-ddc-'));
     roots.push(root);
-    const oldKey = semanticDdcKey(semantic());
-    const desiredKey = semanticDdcKey(semantic({ 'mesh/main': { lod: 2 } }));
+    const oldKey = semanticBuildKey(semantic());
+    const desiredKey = semanticBuildKey(semantic({ 'mesh/main': { lod: 2 } }));
     await publish(root, oldKey, { version: 'old' });
 
     const lifecycle = new DdcLifecycle(root);
@@ -80,7 +85,7 @@ describe('source override DDC lifecycle', () => {
   it('publishes current only after a validated entry is available', async () => {
     const root = await mkdtemp(join(tmpdir(), 'forgeax-source-overrides-ddc-'));
     roots.push(root);
-    const key = semanticDdcKey(semantic({ 'mesh/main': { lod: 1 } }));
+    const key = semanticBuildKey(semantic({ 'mesh/main': { lod: 1 } }));
     const lifecycle = new DdcLifecycle(root);
     const lease = await lifecycle.begin(GUID, key);
     expect((await lifecycle.commit(lease, key)).result).toBe('invalid');

@@ -7,4 +7,8 @@ it('discovers execution from the public App surface', () => {
   expectTypeOf(app.execution).toEqualTypeOf<ExecutionControl>();
   expectTypeOf(app.execution.report()).toEqualTypeOf<ExecutionReport>();
   expectTypeOf(options.execution?.bootstrap).toEqualTypeOf<string | URL | undefined>();
+  expectTypeOf(options.execution?.assetCatalog?.url).toEqualTypeOf<string | undefined>();
+  expectTypeOf(options.execution?.assetCatalog?.expectedScope).toEqualTypeOf<
+    { readonly scopeId: string; readonly generation: number } | undefined
+  >();
 });

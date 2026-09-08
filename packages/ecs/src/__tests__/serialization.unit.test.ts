@@ -1,9 +1,11 @@
 // biome-ignore-all lint/complexity/noUselessLoneBlockStatements: scope isolation between merged source files
 // Consolidated by feat-20260609-test-pool-startup-reduction-merge-tiny-test-files
+
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { Update } from '../schedule-token';
 //
 // Source files (N=29):
-//   - packages/ecs/__tests__/cli-ecs-scripts.test.ts
 //   - packages/ecs/__tests__/managed-ref-on-release.test.ts
 //   - packages/ecs/__tests__/register-ecs-inspector.test.ts
 //   - packages/ecs/src/__tests__/ai-user-sandbox-trial.test.ts
@@ -45,10 +47,7 @@ import { Update } from '../schedule-token';
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import type { Handle } from '@forgeax/engine-types';
-import { err } from '@forgeax/engine-types';
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { BufferPool } from '../buffer-pool';
 import {
@@ -59,84 +58,25 @@ import {
   MANAGED_ARRAY_ELEMENT_TYPES,
   parseManagedArraySchema,
   type SchemaFieldType,
+  type SchemaOf,
   type ShapeOf,
   type TypedArrayFor,
 } from '../component';
-import { ENTITY_NULL_RAW, type EntityHandle } from '../entity-handle';
+import { ENTITY_NULL_RAW } from '../entity-handle';
 import {
-  ArrayPopEmptyError,
-  CyclicDependencyError,
   type EcsErrorCode,
   type EcsErrorDetail,
-  FixedArrayOverflowError,
   FixedSizeMismatchError,
   type ManagedArrayElementTypeNotAllowedError,
   ResourceNotFoundError,
-  UniqueRefStaleError,
 } from '../errors';
-import { type ErrorContext, matchSeverity, Severity } from '../schedule';
 import { UniqueRefStore } from '../unique-ref-store';
 import { World, type WorldInspection } from '../world';
-import {
-  COMPONENTS_SCRIPT,
-  ENTITIES_SCRIPT_BY_NAMES,
-  RESOURCES_SCRIPT,
-  SYSTEMS_SCRIPT,
-  WORLD_SCRIPT,
-} from './__fixtures__/inspect-scripts.snapshot';
+
+import { worldInternal } from '../world-internal';
 import { handleNumeric } from './utils/handle-numeric';
 
 {
-  // --- from cli-ecs-scripts.test.ts ---
-  describe('feat-20260517 M3 w10 cli-ecs 5 scripts byte-identical', () => {
-    it('(a) entities script with empty filters matches fixture', async () => {
-      const mod = await import('../cli-ecs');
-      const actual = mod.buildEntitiesScript([], []);
-      const expected = ENTITIES_SCRIPT_BY_NAMES([], []);
-      expect(actual).toBe(expected);
-    });
-
-    it('(b) entities script with non-empty filters matches fixture', async () => {
-      const mod = await import('../cli-ecs');
-      const actual = mod.buildEntitiesScript(['Transform'], ['Camera']);
-      const expected = ENTITIES_SCRIPT_BY_NAMES(['Transform'], ['Camera']);
-      expect(actual).toBe(expected);
-    });
-
-    it('(c) components script matches fixture', async () => {
-      const mod = await import('../cli-ecs');
-      expect(mod.buildComponentsScript()).toBe(COMPONENTS_SCRIPT());
-    });
-
-    it('(d) systems script matches fixture', async () => {
-      const mod = await import('../cli-ecs');
-      expect(mod.buildSystemsScript()).toBe(SYSTEMS_SCRIPT());
-    });
-
-    it('(e) resources script matches fixture', async () => {
-      const mod = await import('../cli-ecs');
-      expect(mod.buildResourcesScript()).toBe(RESOURCES_SCRIPT());
-    });
-
-    it('(f) world script matches fixture', async () => {
-      const mod = await import('../cli-ecs');
-      expect(mod.buildWorldScript()).toBe(WORLD_SCRIPT());
-    });
-
-    it('(g) cli-ecs help body lists 5 subcommands (entities/components/systems/resources/world)', async () => {
-      const mod = await import('../cli-ecs');
-      const help = mod.helpBody();
-      expect(help).toMatch(/forgeax-engine-remote-ecs/);
-      for (const sub of ['entities', 'components', 'systems', 'resources', 'world']) {
-        expect(help).toContain(sub);
-      }
-      // packs is asset plugin's territory; must not appear in the ecs help
-      expect(help).not.toContain('packs');
-    });
-  });
-}
-{
-  // --- from managed-ref-on-release.test.ts ---
   describe('feat-20260528 M1 t1 UniqueRefStore onRelease callback', () => {
     it('alloc with onRelease stores the callback and calls it on release before delete', () => {
       const store = new UniqueRefStore();
@@ -409,169 +349,10 @@ import { handleNumeric } from './utils/handle-numeric';
     });
   });
 }
-{
-  // --- from array-remove-by-value.test.ts ---
-  function makeWorldWithList(values: number[]): {
-    world: World;
-    parent: EntityHandle;
-    Bag: ReturnType<typeof defineComponent<'RbvBag', { items: 'array<entity>' }>>;
-  } {
-    const Bag = defineComponent('RbvBag', { items: { type: 'array<entity>' } });
-    const world = new World();
-    const parent = world.spawn({ component: Bag, data: {} }).unwrap();
-    for (const v of values) {
-      world.push(parent, Bag, 'items', v as EntityHandle).unwrap();
-    }
-    return { world, parent, Bag };
-  }
-
-  function readList(
-    world: World,
-    parent: EntityHandle,
-    Bag: ReturnType<typeof defineComponent<'RbvBag', { items: 'array<entity>' }>>,
-  ): number[] {
-    const snap = world.get(parent, Bag).unwrap().items;
-    return Array.from(snap);
-  }
-
-  describe('World._removeArrayElementByValue', () => {
-    it('removes a mid element and shrinks length by 1', () => {
-      const { world, parent, Bag } = makeWorldWithList([10, 20, 30, 40]);
-      const r = world._removeArrayElementByValue(parent, Bag, 'items', 20 as EntityHandle);
-      expect(r.ok).toBe(true);
-      const list = readList(world, parent, Bag);
-      expect(list).toHaveLength(3);
-      expect(list).toContain(10);
-      expect(list).toContain(30);
-      expect(list).toContain(40);
-      expect(list).not.toContain(20);
-    });
-
-    it('removes the first element', () => {
-      const { world, parent, Bag } = makeWorldWithList([10, 20, 30]);
-      world._removeArrayElementByValue(parent, Bag, 'items', 10 as EntityHandle).unwrap();
-      const list = readList(world, parent, Bag);
-      expect(list).toHaveLength(2);
-      expect(list).not.toContain(10);
-      expect(list).toContain(20);
-      expect(list).toContain(30);
-    });
-
-    it('removes the last element', () => {
-      const { world, parent, Bag } = makeWorldWithList([10, 20, 30]);
-      world._removeArrayElementByValue(parent, Bag, 'items', 30 as EntityHandle).unwrap();
-      const list = readList(world, parent, Bag);
-      expect(list).toHaveLength(2);
-      expect(list).not.toContain(30);
-    });
-
-    it('is idempotent when the value is not present', () => {
-      const { world, parent, Bag } = makeWorldWithList([10, 20, 30]);
-      const r = world._removeArrayElementByValue(parent, Bag, 'items', 99 as EntityHandle);
-      expect(r.ok).toBe(true);
-      const list = readList(world, parent, Bag);
-      expect(list).toHaveLength(3);
-    });
-
-    it('drains the list to empty across repeated removals + slot is released', () => {
-      const { world, parent, Bag } = makeWorldWithList([10, 20, 30]);
-      world._removeArrayElementByValue(parent, Bag, 'items', 10 as EntityHandle).unwrap();
-      world._removeArrayElementByValue(parent, Bag, 'items', 20 as EntityHandle).unwrap();
-      world._removeArrayElementByValue(parent, Bag, 'items', 30 as EntityHandle).unwrap();
-      const list = readList(world, parent, Bag);
-      expect(list).toHaveLength(0);
-      // Idempotent on an already-empty list.
-      const r = world._removeArrayElementByValue(parent, Bag, 'items', 10 as EntityHandle);
-      expect(r.ok).toBe(true);
-    });
-
-    it('removes only the first matching occurrence when duplicates exist', () => {
-      const { world, parent, Bag } = makeWorldWithList([10, 20, 10]);
-      world._removeArrayElementByValue(parent, Bag, 'items', 10 as EntityHandle).unwrap();
-      const list = readList(world, parent, Bag);
-      expect(list).toHaveLength(2);
-      expect(list.filter((v) => v === 10)).toHaveLength(1);
-      expect(list).toContain(20);
-    });
-  });
-}
+// The old public array-remove-by-value fixture was deleted with the push/pop
+// facade. Relationship detach now uses its owner-side slot backpointer.
 {
   // --- from hook-despawn.test.ts ---
-  describe('despawn onRemove hook', () => {
-    it('despawn triggers onRemove for a component with the hook declared', () => {
-      const onRemove = vi.fn();
-      const Pos = defineComponent(
-        'DespawnHookPos',
-        { x: { type: 'f32' }, y: { type: 'f32' } },
-        { onRemove: onRemove as (entity: EntityHandle, value: Record<string, unknown>) => void },
-      );
-      const world = new World();
-      const e = world.spawn({ component: Pos, data: { x: 1, y: 2 } }).unwrap();
-
-      const r = world.despawn(e);
-      expect(r.ok).toBe(true);
-      expect(onRemove).toHaveBeenCalledTimes(1);
-    });
-
-    it('despawn triggers onRemove for every component with the hook declared', () => {
-      const onRemovePos = vi.fn();
-      const onRemoveVel = vi.fn();
-      const Pos = defineComponent(
-        'DespawnMultiA',
-        { x: { type: 'f32' }, y: { type: 'f32' } },
-        { onRemove: onRemovePos as (entity: EntityHandle, value: Record<string, unknown>) => void },
-      );
-      const Vel = defineComponent(
-        'DespawnMultiB',
-        { vx: { type: 'f32' }, vy: { type: 'f32' } },
-        { onRemove: onRemoveVel as (entity: EntityHandle, value: Record<string, unknown>) => void },
-      );
-      const world = new World();
-      const e = world
-        .spawn({ component: Pos, data: { x: 1, y: 2 } }, { component: Vel, data: { vx: 3, vy: 4 } })
-        .unwrap();
-
-      world.despawn(e).unwrap();
-      expect(onRemovePos).toHaveBeenCalledTimes(1);
-      expect(onRemoveVel).toHaveBeenCalledTimes(1);
-    });
-
-    it('despawn does NOT trigger onRemove for components without the hook declared', () => {
-      const onRemove = vi.fn();
-      const HookComp = defineComponent(
-        'DespawnHookC',
-        { v: { type: 'f32' } },
-        { onRemove: onRemove as (entity: EntityHandle, value: Record<string, unknown>) => void },
-      );
-      const NoHookComp = defineComponent('DespawnNoHook', { v: { type: 'f32' } });
-      const world = new World();
-      const e = world
-        .spawn({ component: HookComp, data: { v: 1 } }, { component: NoHookComp, data: { v: 2 } })
-        .unwrap();
-
-      world.despawn(e).unwrap();
-      // Only the hook-declaring component should trigger onRemove.
-      expect(onRemove).toHaveBeenCalledTimes(1);
-    });
-
-    it('despawn passes the old value snapshot to onRemove (AC-04 + D-6)', () => {
-      let capturedOldValue: Record<string, unknown> | null = null;
-      const onRemove = vi.fn((_entity: EntityHandle, value: Record<string, unknown>) => {
-        capturedOldValue = value;
-      });
-      const Pos = defineComponent(
-        'DespawnSnapPos',
-        { x: { type: 'f32' }, y: { type: 'f32' } },
-        { onRemove: onRemove as (entity: EntityHandle, value: Record<string, unknown>) => void },
-      );
-      const world = new World();
-      const e = world.spawn({ component: Pos, data: { x: 42, y: 99 } }).unwrap();
-
-      world.despawn(e).unwrap();
-      expect(onRemove).toHaveBeenCalledTimes(1);
-      expect(capturedOldValue).toEqual({ x: 42, y: 99 });
-    });
-  });
 }
 {
   // --- from hook-no-regression.test.ts ---
@@ -633,175 +414,9 @@ import { handleNumeric } from './utils/handle-numeric';
 }
 {
   // --- from hook-on-insert.test.ts ---
-  describe('onInsert hook', () => {
-    it('defineComponent accepts onInsert in the options third parameter', () => {
-      const onInsert = vi.fn();
-      const Pos = defineComponent(
-        'HookInsPos',
-        { x: { type: 'f32' }, y: { type: 'f32' } },
-        { onInsert },
-      );
-      // Token is created without throw — the option is legal syntax.
-      expect(Pos.name).toBe('HookInsPos');
-      // onInsert callback is stored on the token.
-      expect(Pos.onInsert).toBe(onInsert);
-    });
-
-    it('addComponent triggers the onInsert callback', () => {
-      const onInsert = vi.fn();
-      const Pos = defineComponent(
-        'HookInsPos2',
-        { x: { type: 'f32' }, y: { type: 'f32' } },
-        { onInsert },
-      );
-      const world = new World();
-      const e = world.spawn({ component: Pos, data: { x: 0, y: 0 } }).unwrap();
-
-      // addComponent on an entity without the hook — should still work
-      const Tag = defineComponent('HookInsTag', {});
-      const r = world.addComponent(e, { component: Tag, data: {} });
-      expect(r.ok).toBe(true);
-
-      // Now check: the hook was called for Pos during spawn (addComponent path)
-      // In this test, spawn itself goes through addComponent path, so the hook
-      // should fire on spawn as well.
-      expect(onInsert).toHaveBeenCalledTimes(1);
-    });
-
-    it('onInsert callback receives the entity and the written value', () => {
-      let capturedEntity: EntityHandle | null = null;
-      let capturedValue: Record<string, unknown> | null = null;
-      const onInsert = vi.fn((entity: EntityHandle, value: Record<string, unknown>) => {
-        capturedEntity = entity;
-        capturedValue = value;
-      });
-      const Pos = defineComponent(
-        'HookInsPos3',
-        { x: { type: 'f32' }, y: { type: 'f32' } },
-        { onInsert: onInsert as (entity: EntityHandle, value: Record<string, unknown>) => void },
-      );
-      const world = new World();
-      const e = world.spawn({ component: Pos, data: { x: 3, y: 4 } }).unwrap();
-
-      expect(onInsert).toHaveBeenCalledTimes(1);
-      expect(capturedEntity).toBe(e);
-      expect(capturedValue).toEqual({ x: 3, y: 4 });
-    });
-
-    it('onInsert fires for addComponent on an existing entity', () => {
-      const onInsert = vi.fn();
-      const TagHook = defineComponent('HookInsTag2', {}, { onInsert });
-      const world = new World();
-      const e = world.spawn().unwrap();
-
-      const r = world.addComponent(e, { component: TagHook, data: {} });
-      expect(r.ok).toBe(true);
-      expect(onInsert).toHaveBeenCalledTimes(1);
-    });
-
-    it('component without onInsert declaration does not trigger any hook', () => {
-      // No hook declared: the path must be identical to pre-feat behavior.
-      const Pos = defineComponent('NoHookPos', { x: { type: 'f32' }, y: { type: 'f32' } });
-      const world = new World();
-      const e = world.spawn({ component: Pos, data: { x: 1, y: 2 } }).unwrap();
-
-      // Verify the component is readable and correct.
-      const pos = world.get(e, Pos).unwrap();
-      expect(pos).toEqual({ x: 1, y: 2 });
-
-      // addComponent on a component without onInsert still works.
-      const Tag = defineComponent('NoHookTag', {});
-      const e2 = world.spawn().unwrap();
-      const r = world.addComponent(e2, { component: Tag, data: {} });
-      expect(r.ok).toBe(true);
-      const tag = world.get(e2, Tag).unwrap();
-      expect(tag).toEqual({});
-    });
-  });
 }
 {
   // --- from hook-on-remove.test.ts ---
-  describe('onRemove hook', () => {
-    it('defineComponent accepts onRemove in the options third parameter', () => {
-      const onRemove = vi.fn();
-      const Pos = defineComponent(
-        'HookRemPos',
-        { x: { type: 'f32' }, y: { type: 'f32' } },
-        { onRemove },
-      );
-      expect(Pos.name).toBe('HookRemPos');
-      expect(Pos.onRemove).toBe(onRemove);
-    });
-
-    it('removeComponent triggers the onRemove callback', () => {
-      const onRemove = vi.fn();
-      const Pos = defineComponent(
-        'HookRemPos2',
-        { x: { type: 'f32' }, y: { type: 'f32' } },
-        { onRemove: onRemove as (entity: EntityHandle, value: Record<string, unknown>) => void },
-      );
-      const world = new World();
-      const e = world.spawn({ component: Pos, data: { x: 1, y: 2 } }).unwrap();
-
-      // removeComponent should trigger onRemove.
-      const r = world.removeComponent(e, Pos);
-      expect(r.ok).toBe(true);
-      expect(onRemove).toHaveBeenCalledTimes(1);
-    });
-
-    it('onRemove callback receives the entity and the old value (AC-03)', () => {
-      let capturedEntity: EntityHandle | null = null;
-      let capturedOldValue: Record<string, unknown> | null = null;
-      const onRemove = vi.fn((entity: EntityHandle, value: Record<string, unknown>) => {
-        capturedEntity = entity;
-        capturedOldValue = value;
-      });
-      const Pos = defineComponent(
-        'HookRemPos3',
-        { x: { type: 'f32' }, y: { type: 'f32' } },
-        { onRemove: onRemove as (entity: EntityHandle, value: Record<string, unknown>) => void },
-      );
-      const world = new World();
-      const e = world.spawn({ component: Pos, data: { x: 7, y: 8 } }).unwrap();
-
-      world.removeComponent(e, Pos).unwrap();
-      expect(onRemove).toHaveBeenCalledTimes(1);
-      expect(capturedEntity).toBe(e);
-      // The old value snapshot is the value that was on the component before removal.
-      expect(capturedOldValue).toEqual({ x: 7, y: 8 });
-    });
-
-    it('onRemove old value is a snapshot — readable inside the callback (AC-03)', () => {
-      const onRemove = vi.fn((_entity: EntityHandle, value: Record<string, unknown>) => {
-        // The old value must be a readable snapshot, not a live reference.
-        // Verify the value fields are accessible.
-        expect(value.x).toBe(10);
-        expect(value.y).toBe(20);
-      });
-      const Pos = defineComponent(
-        'HookRemPos4',
-        { x: { type: 'f32' }, y: { type: 'f32' } },
-        { onRemove: onRemove as (entity: EntityHandle, value: Record<string, unknown>) => void },
-      );
-      const world = new World();
-      const e = world.spawn({ component: Pos, data: { x: 10, y: 20 } }).unwrap();
-      world.removeComponent(e, Pos).unwrap();
-      expect(onRemove).toHaveBeenCalledTimes(1);
-    });
-
-    it('component without onRemove declaration does not trigger any hook on remove', () => {
-      const Pos = defineComponent('NoHookRemPos', { x: { type: 'f32' }, y: { type: 'f32' } });
-      const world = new World();
-      const e = world.spawn({ component: Pos, data: { x: 3, y: 4 } }).unwrap();
-
-      const r = world.removeComponent(e, Pos);
-      expect(r.ok).toBe(true);
-
-      // Component is gone — get should return ComponentNotPresentError.
-      const result = world.get(e, Pos);
-      expect(result.ok).toBe(false);
-    });
-  });
 }
 {
   // --- from inspect.test.ts ---
@@ -970,150 +585,15 @@ import { handleNumeric } from './utils/handle-numeric';
 }
 {
   // --- from managed-array-carry-over.test.ts ---
-  const ent = (n: number): EntityHandle => n as unknown as EntityHandle;
-
   // ---------------------------------------------------------------------------
   // (a) addComponent triggers migrate; array<entity> bytes + length + capacity preserved.
   // ---------------------------------------------------------------------------
-
-  describe('w12 - array<entity> variable carry-over via addComponent migrate', () => {
-    it('byte-equal Uint32 buffer + length + capacity preserved across migrate', () => {
-      const Children = defineComponent('Children', { entities: { type: 'array<entity>' } });
-      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
-      const w = new World();
-
-      // Spawn empty so we can grow via world.push and exercise the count column.
-      const e = w.spawn({ component: Children, data: { entities: new Uint32Array(0) } }).unwrap();
-
-      // Push three entities so capacity > 0 and length === 3.
-      w.push(e, Children, 'entities', ent(101)).unwrap();
-      w.push(e, Children, 'entities', ent(202)).unwrap();
-      w.push(e, Children, 'entities', ent(303)).unwrap();
-
-      const before = w.get(e, Children);
-      if (!before.ok) throw new Error('expected ok pre-migrate');
-      // expectType (AC-02 anchor c, w13: direct world.get call site):
-      // before.value.entities is Uint32Array (TypedArrayFor<'u32'>).
-      const snap0: Uint32Array = before.value.entities;
-      expect(snap0.length).toBe(3);
-      const capacity0 = w.capacity(e, Children, 'entities').unwrap();
-      expect(capacity0).toBeGreaterThanOrEqual(3);
-
-      // Snapshot the underlying bytes (length0 * 4 bytes) by reading via
-      // the live snapshot.
-      const bytes0: number[] = [];
-      for (let i = 0; i < snap0.length; i++) bytes0.push(snap0[i] ?? 0);
-
-      // Trigger archetype migrate by adding an unrelated component.
-      w.addComponent(e, { component: Anchor, data: { x: 1 } }).unwrap();
-
-      // Re-read after migrate.
-      const after = w.get(e, Children);
-      if (!after.ok) throw new Error('expected ok post-migrate');
-      const snap1 = after.value.entities;
-      const capacity1 = w.capacity(e, Children, 'entities').unwrap();
-
-      // length + capacity preserved.
-      expect(snap1.length).toBe(snap0.length);
-      expect(capacity1).toBe(capacity0);
-
-      // Byte-equal: each u32 element identical.
-      for (let i = 0; i < snap1.length; i++) {
-        expect(snap1[i]).toBe(bytes0[i]);
-      }
-    });
-  });
-
   // ---------------------------------------------------------------------------
   // (b) array<f32, 16> fixed-capacity migrate carry-over.
   // ---------------------------------------------------------------------------
-
-  describe('w12 - array<f32,16> fixed carry-over via addComponent migrate', () => {
-    it('byte-equal 16 f32 elements + length preserved across migrate', () => {
-      const Mat4 = defineComponent('Mat4', { mat: { type: 'array<f32, 16>' } });
-      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
-      const w = new World();
-
-      // Init payload: 16 distinct f32 values so byte-equal is meaningful.
-      const init = new Float32Array(16);
-      for (let i = 0; i < 16; i++) init[i] = (i + 1) * 1.5;
-
-      const e = w.spawn({ component: Mat4, data: { mat: init } }).unwrap();
-
-      const before = w.get(e, Mat4);
-      if (!before.ok) throw new Error('expected ok pre-migrate');
-      // expectType (AC-02 anchor a, w13: system fn callback would see this
-      // shape via world.get -- here we assert the explicit Float32Array
-      // annotation matches the schema-derived TypedArray).
-      const snap0: Float32Array = before.value.mat;
-      const capacity0 = w.capacity(e, Mat4, 'mat').unwrap();
-      expect(snap0.length).toBe(16);
-      expect(capacity0).toBe(16);
-      const bytes0: number[] = [];
-      for (let i = 0; i < snap0.length; i++) bytes0.push(snap0[i] ?? 0);
-
-      // Trigger migrate.
-      w.addComponent(e, { component: Anchor, data: { x: 7 } }).unwrap();
-
-      const after = w.get(e, Mat4);
-      if (!after.ok) throw new Error('expected ok post-migrate');
-      const snap1 = after.value.mat;
-      const capacity1 = w.capacity(e, Mat4, 'mat').unwrap();
-
-      expect(snap1.length).toBe(snap0.length);
-      expect(capacity1).toBe(capacity0);
-      for (let i = 0; i < snap1.length; i++) {
-        expect(snap1[i]).toBe(bytes0[i]);
-      }
-    });
-  });
-
   // ---------------------------------------------------------------------------
   // (c) removeComponent migrate carry-over (the reverse direction).
   // ---------------------------------------------------------------------------
-
-  describe('w12 - array<entity> variable carry-over via removeComponent migrate', () => {
-    it('removing a sibling component preserves array bytes + length + capacity', () => {
-      const Children = defineComponent('Children', { entities: { type: 'array<entity>' } });
-      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
-      const w = new World();
-
-      const e = w
-        .spawn(
-          { component: Children, data: { entities: new Uint32Array(0) } },
-          { component: Anchor, data: { x: 11 } },
-        )
-        .unwrap();
-
-      w.push(e, Children, 'entities', ent(7)).unwrap();
-      w.push(e, Children, 'entities', ent(8)).unwrap();
-
-      const before = w.get(e, Children);
-      if (!before.ok) throw new Error('expected ok pre-migrate');
-      // expectType (AC-02 anchor b, w13: QueryRow path -- Children
-      // .entities snapshot type-equals TypedArrayFor<'u32'> (Uint32Array)
-      // when the field crosses a query-loop boundary).
-      const snap0: Uint32Array = before.value.entities;
-      const capacity0 = w.capacity(e, Children, 'entities').unwrap();
-      const bytes0: number[] = [];
-      for (let i = 0; i < snap0.length; i++) bytes0.push(snap0[i] ?? 0);
-
-      // Trigger migrate by removing the sibling.
-      w.removeComponent(e, Anchor).unwrap();
-
-      const after = w.get(e, Children);
-      if (!after.ok) throw new Error('expected ok post-migrate');
-      const snap1 = after.value.entities;
-      const capacity1 = w.capacity(e, Children, 'entities').unwrap();
-
-      expect(snap1.length).toBe(snap0.length);
-      expect(capacity1).toBe(capacity0);
-      for (let i = 0; i < snap1.length; i++) {
-        expect(snap1[i]).toBe(bytes0[i]);
-      }
-    });
-  });
-
   // ---------------------------------------------------------------------------
   // (d) BufferPool slot id stays bit-equal across migrate (Negative invariant).
   //
@@ -1123,46 +603,6 @@ import { handleNumeric } from './utils/handle-numeric';
   // erroneously released A's slot, A's bytes would be reset by B's
   // alloc-and-zero path.
   // ---------------------------------------------------------------------------
-
-  describe('w12 - BufferPool slot id Negative invariant (no release on migrate)', () => {
-    it("migrating A does not release A's slot; foreign alloc cannot disturb A bytes", () => {
-      const Children = defineComponent('Children', { entities: { type: 'array<entity>' } });
-      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
-      const w = new World();
-
-      // Spawn A with 3 elements.
-      const a = w.spawn({ component: Children, data: { entities: new Uint32Array(0) } }).unwrap();
-      w.push(a, Children, 'entities', ent(0xdead)).unwrap();
-      w.push(a, Children, 'entities', ent(0xbeef)).unwrap();
-      w.push(a, Children, 'entities', ent(0xcafe)).unwrap();
-      const beforeA = w.get(a, Children);
-      if (!beforeA.ok) throw new Error('expected ok');
-      const snapA = beforeA.value.entities;
-      const aBytes: number[] = [snapA[0] ?? 0, snapA[1] ?? 0, snapA[2] ?? 0];
-
-      // Migrate A by adding Anchor.
-      w.addComponent(a, { component: Anchor, data: { x: 0 } }).unwrap();
-
-      // Spawn B with the same shape; if migrate had mis-released A's slot, B's
-      // alloc-and-zero path would clobber A's bytes via LIFO same-bucket reuse.
-      const b = w.spawn({ component: Children, data: { entities: new Uint32Array(0) } }).unwrap();
-      w.push(b, Children, 'entities', ent(0x1111)).unwrap();
-      w.push(b, Children, 'entities', ent(0x2222)).unwrap();
-      w.push(b, Children, 'entities', ent(0x3333)).unwrap();
-
-      // Re-read A's snapshot; bytes must survive migrate + foreign alloc.
-      const afterA = w.get(a, Children);
-      if (!afterA.ok) throw new Error('expected ok');
-      const snapA2 = afterA.value.entities;
-      expect(snapA2.length).toBe(3);
-      const capA = w.capacity(a, Children, 'entities').unwrap();
-      expect(capA).toBeGreaterThanOrEqual(3);
-      expect(snapA2[0]).toBe(aBytes[0]);
-      expect(snapA2[1]).toBe(aBytes[1]);
-      expect(snapA2[2]).toBe(aBytes[2]);
-    });
-  });
-
   // ---------------------------------------------------------------------------
   // (e) Sidecar count column survives migrate for variable arrays.
   //
@@ -1172,27 +612,6 @@ import { handleNumeric } from './utils/handle-numeric';
   // count column, length would default to zero and the loop body would not
   // see prior elements.
   // ---------------------------------------------------------------------------
-
-  describe('w12 - sidecar count column carry-over (length stays in sync after migrate)', () => {
-    it('snapshot.length matches pre-migrate length after archetype move', () => {
-      const Children = defineComponent('Children', { entities: { type: 'array<entity>' } });
-      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
-      const w = new World();
-
-      const e = w.spawn({ component: Children, data: { entities: new Uint32Array(0) } }).unwrap();
-      w.push(e, Children, 'entities', ent(99)).unwrap();
-      w.push(e, Children, 'entities', ent(100)).unwrap();
-
-      w.addComponent(e, { component: Anchor, data: { x: 0 } }).unwrap();
-
-      const after = w.get(e, Children);
-      if (!after.ok) throw new Error('expected ok');
-      const snap = after.value.entities;
-      expect(snap.length).toBe(2);
-      expect(snap[0]).toBe(99);
-      expect(snap[1]).toBe(100);
-    });
-  });
 }
 {
   // --- from managed-array-element-type.test.ts ---
@@ -1288,22 +707,8 @@ import { handleNumeric } from './utils/handle-numeric';
 }
 {
   // --- from managed-array-errors.test.ts ---
-  interface CollectedError {
-    readonly code: EcsErrorCode;
-    readonly detail: unknown;
-  }
-
-  function makeHarness(): { world: World; collected: CollectedError[] } {
-    const collected: CollectedError[] = [];
-    const world = new World();
-    world.setErrorHandler((err) => {
-      const e = err as { code?: EcsErrorCode; detail?: unknown };
-      if (e.code !== undefined) {
-        collected.push({ code: e.code, detail: e.detail });
-      }
-    });
-    return { world, collected };
-  }
+  // Error routing is now returned at the mutation boundary; there is no
+  // World-level ErrorHandler registration.
 
   // ---------------------------------------------------------------------------
   // (a) fixed-size-mismatch -- error class shape.
@@ -1324,86 +729,8 @@ import { handleNumeric } from './utils/handle-numeric';
   });
 
   // ---------------------------------------------------------------------------
-  // (b) fixed-array-overflow -- world.push on fixed-capacity array.
-  // ---------------------------------------------------------------------------
-
-  describe('w12 - fixed-array-overflow runtime path (world.push on array<T, N>)', () => {
-    it('returns FixedArrayOverflowError with detail.capacity / detail.attemptedCount', () => {
-      const Mat4 = defineComponent('Mat4', { mat: { type: 'array<f32, 16>' } });
-      const w = new World();
-      const init = new Float32Array(16);
-      const e = w.spawn({ component: Mat4, data: { mat: init } }).unwrap();
-
-      // world.push on a fixed-capacity field is a contract violation regardless
-      // of count -- fixed arrays are written whole-row via spawn / set, not
-      // grown element-wise.
-      const r = w.push(e, Mat4, 'mat', 1.5);
-      expect(r.ok).toBe(false);
-      if (r.ok) return;
-      expect(r.error.code).toBe('fixed-array-overflow');
-      expect(r.error).toBeInstanceOf(FixedArrayOverflowError);
-      const detail = (r.error as FixedArrayOverflowError).detail;
-      expect(detail.capacity).toBe(16);
-      expect(detail.attemptedCount).toBe(16);
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // (c) array-pop-empty -- world.pop on empty variable array.
-  // ---------------------------------------------------------------------------
-
-  describe('w12 - array-pop-empty runtime path (world.pop on empty array<T>)', () => {
-    it('returns ArrayPopEmptyError with detail.count === 0', () => {
-      const Children = defineComponent('Children', { entities: { type: 'array<entity>' } });
-      const w = new World();
-      const e = w.spawn({ component: Children, data: { entities: new Uint32Array(0) } }).unwrap();
-
-      const r = w.pop(e, Children, 'entities');
-      expect(r.ok).toBe(false);
-      if (r.ok) return;
-      expect(r.error.code).toBe('array-pop-empty');
-      expect(r.error).toBeInstanceOf(ArrayPopEmptyError);
-      const detail = (r.error as ArrayPopEmptyError).detail;
-      expect(detail.count).toBe(0);
-    });
-
-    it('returns array-pop-empty for world.pop on a fixed-capacity field too', () => {
-      const Mat4 = defineComponent('Mat4', { mat: { type: 'array<f32, 16>' } });
-      const w = new World();
-      const init = new Float32Array(16);
-      const e = w.spawn({ component: Mat4, data: { mat: init } }).unwrap();
-
-      const r = w.pop(e, Mat4, 'mat');
-      expect(r.ok).toBe(false);
-      if (r.ok) return;
-      expect(r.error.code).toBe('array-pop-empty');
-    });
-  });
-
-  // ---------------------------------------------------------------------------
   // (d) world.pop on a non-empty variable array succeeds and shrinks count.
   // ---------------------------------------------------------------------------
-
-  describe('w12 - world.pop on non-empty variable array', () => {
-    it('returns the last element and shrinks live snapshot length by 1', () => {
-      const Indices = defineComponent('Indices', { values: { type: 'array<u32>' } });
-      const w = new World();
-      const e = w.spawn({ component: Indices, data: { values: new Uint32Array(0) } }).unwrap();
-
-      w.push(e, Indices, 'values', 11).unwrap();
-      w.push(e, Indices, 'values', 22).unwrap();
-      w.push(e, Indices, 'values', 33).unwrap();
-      expect(w.get(e, Indices).unwrap().values.length).toBe(3);
-
-      const popped = w.pop(e, Indices, 'values').unwrap();
-      expect(popped).toBe(33);
-      expect(w.get(e, Indices).unwrap().values.length).toBe(2);
-
-      const second = w.pop(e, Indices, 'values').unwrap();
-      expect(second).toBe(22);
-      expect(w.get(e, Indices).unwrap().values.length).toBe(1);
-    });
-  });
 
   // ---------------------------------------------------------------------------
   // (e) managed-array-element-type-not-allowed (surviving member; sample path).
@@ -1426,45 +753,30 @@ import { handleNumeric } from './utils/handle-numeric';
   });
 
   // ---------------------------------------------------------------------------
-  // (f) Exhaustive switch over the 5 collapsed-vocab codes -- no default arm.
+  // (f) Exhaustive switch over the surviving core collapsed-vocab code.
   // ---------------------------------------------------------------------------
 
   describe('w12 - exhaustive switch over collapsed-vocab codes', () => {
-    it('no default branch is needed when the switch covers all 5 members', () => {
-      const codes: EcsErrorCode[] = [
-        'fixed-size-mismatch',
-        'fixed-array-overflow',
-        'array-pop-empty',
-        'instance-transforms-stride-mismatch',
-        'managed-array-element-type-not-allowed',
-      ];
+    it('covers the fixed-size member', () => {
+      const codes: EcsErrorCode[] = ['fixed-size-mismatch'];
       let hits = 0;
       for (const code of codes) {
         switch (code) {
           case 'fixed-size-mismatch':
-          case 'fixed-array-overflow':
-          case 'array-pop-empty':
-          case 'instance-transforms-stride-mismatch':
-          case 'managed-array-element-type-not-allowed':
             hits += 1;
             break;
           default:
             // The exhaustive narrowing is performed by `EcsErrorCode` over the
-            // entire union; this default arm is unreachable for the 5 codes
+            // entire union; this default arm is unreachable for the code
             // listed above. We use `void` rather than assertNever to keep the
             // test focused on collapsed-vocab membership without coupling to
-            // the 22 surviving members.
+            // the remaining members.
             void code;
         }
       }
-      expect(hits).toBe(5);
+      expect(hits).toBe(1);
     });
   });
-
-  // Reserved harness import keeps the helper available for future code-path
-  // fail-safe additions; suppress unused warnings while the harness has no
-  // active call site in this rewrite.
-  void makeHarness;
 }
 {
   // --- from managed-array-release.test.ts ---
@@ -1474,21 +786,7 @@ import { handleNumeric } from './utils/handle-numeric';
     component: Component,
     fieldName: string,
   ): number {
-    const graph = (
-      world as unknown as {
-        _getGraph(): {
-          archetypes: Array<{
-            tableId: number;
-            rows: Uint32Array;
-            size: number;
-            components: Component[];
-          }>;
-          tables: Array<{
-            storage: Map<number, { fields: Map<string, { view: { [k: number]: number } }> }>;
-          }>;
-        };
-      }
-    )._getGraph();
+    const graph = world[worldInternal].getGraph();
     const slotIndex = entityRaw & 0xffffff; // lower 24 bits -- index slot
     for (const arch of graph.archetypes) {
       if (!arch) continue;
@@ -1752,78 +1050,7 @@ import { handleNumeric } from './utils/handle-numeric';
     });
   });
 }
-{
-  // --- from managed-array-stride.test.ts ---
-  interface CollectedError {
-    readonly code: EcsErrorCode;
-  }
-
-  function makeHarness(): { world: World; collected: CollectedError[] } {
-    const collected: CollectedError[] = [];
-    const world = new World();
-    world.setErrorHandler((err) => {
-      const e = err as { code?: EcsErrorCode };
-      if (e.code !== undefined) collected.push({ code: e.code });
-    });
-    return { world, collected };
-  }
-
-  describe('w12 - managed-array stride: ECS-layer negative invariant (AC-06)', () => {
-    it('(a) spawn with 17 f32: no stride error fires from the ECS write path', () => {
-      const Instances = defineComponent('Instances', { transforms: { type: 'array<f32>' } });
-      const { world, collected } = makeHarness();
-      const e = world
-        .spawn({ component: Instances, data: { transforms: new Float32Array(17) } })
-        .unwrap();
-      void e;
-      expect(
-        collected.filter((c) => (c.code as string) === 'managed-array-stride-mismatch').length,
-      ).toBe(0);
-      expect(collected.filter((c) => c.code === 'instance-transforms-stride-mismatch').length).toBe(
-        0,
-      );
-    });
-
-    it('(b) set to 15 f32 after spawning 16: no stride error fires from the ECS write path', () => {
-      const Instances = defineComponent('Instances', { transforms: { type: 'array<f32>' } });
-      const { world, collected } = makeHarness();
-      const e = world
-        .spawn({ component: Instances, data: { transforms: new Float32Array(16) } })
-        .unwrap();
-      world.set(e, Instances, { transforms: new Float32Array(15) }).unwrap();
-      expect(
-        collected.filter((c) => (c.code as string) === 'managed-array-stride-mismatch').length,
-      ).toBe(0);
-      expect(collected.filter((c) => c.code === 'instance-transforms-stride-mismatch').length).toBe(
-        0,
-      );
-    });
-
-    it('(c) push that crosses a non-multiple count: no stride error fires', () => {
-      const Instances = defineComponent('Instances', { transforms: { type: 'array<f32>' } });
-      const { world, collected } = makeHarness();
-      const e = world
-        .spawn({ component: Instances, data: { transforms: new Float32Array(0) } })
-        .unwrap();
-      world.push(e, Instances, 'transforms', 1.5).unwrap();
-      expect(
-        collected.filter((c) => (c.code as string) === 'managed-array-stride-mismatch').length,
-      ).toBe(0);
-    });
-
-    it('(d) Children is stride-agnostic at the ECS layer', () => {
-      const Children = defineComponent('Children', { entities: { type: 'array<entity>' } });
-      const { world, collected } = makeHarness();
-      const e = world
-        .spawn({ component: Children, data: { entities: new Uint32Array(7) } })
-        .unwrap();
-      world.push(e, Children, 'entities', 11 as unknown as EntityHandle).unwrap();
-      expect(
-        collected.filter((c) => (c.code as string) === 'managed-array-stride-mismatch').length,
-      ).toBe(0);
-    });
-  });
-}
+// Managed-array stride validation belongs to render consumers, not ECS.
 {
   // --- from managed-array-vocab.test.ts ---
   describe('array vocab - keyword recognition (w12, AC-01)', () => {
@@ -1868,7 +1095,7 @@ import { handleNumeric } from './utils/handle-numeric';
     // the inferred type must be `Uint32Array` without an `as` cast.
     it('application point (a) -- inside world.addSystem fn callback', () => {
       type Foo = ReturnType<typeof defineComponent<'Foo', { entities: 'array<entity>' }>>;
-      type FooShape = ShapeOf<Foo['schema']>;
+      type FooShape = ShapeOf<SchemaOf<Foo>>;
       // expectType: array<entity> resolves to Uint32Array at the system call site.
       expectTypeOf<FooShape['entities']>().toEqualTypeOf<Uint32Array>();
       const dummy: FooShape['entities'] = new Uint32Array(0);
@@ -1880,7 +1107,7 @@ import { handleNumeric } from './utils/handle-numeric';
     // crosses a function boundary).
     it('application point (b) -- inside a QueryRow loop', () => {
       type Foo = ReturnType<typeof defineComponent<'Foo', { entities: 'array<entity>' }>>;
-      type FooShape = ShapeOf<Foo['schema']>;
+      type FooShape = ShapeOf<SchemaOf<Foo>>;
       // expectType: QueryRow access sees the same Uint32Array shape as system fn.
       expectTypeOf<FooShape['entities']>().toEqualTypeOf<Uint32Array>();
     });
@@ -1890,7 +1117,7 @@ import { handleNumeric } from './utils/handle-numeric';
     // TypedArray inference to the schema literal.
     it('application point (c) -- direct world.get call site', () => {
       type Foo = ReturnType<typeof defineComponent<'Foo', { entities: 'array<entity>' }>>;
-      type FooShape = ShapeOf<Foo['schema']>;
+      type FooShape = ShapeOf<SchemaOf<Foo>>;
       // expectType: direct world.get(e, C).unwrap().entities matches TypedArrayFor<'u32'>.
       const arr: TypedArrayFor<'u32'> = new Uint32Array(0);
       expectTypeOf(arr).toEqualTypeOf<FooShape['entities']>();
@@ -2402,39 +1629,6 @@ import { handleNumeric } from './utils/handle-numeric';
       expect(resolved.ok).toBe(true);
       expect(after.value.vertices.byteLength).toBe(32);
     });
-
-    it('migrate does not route any error through the Layer 3 ErrorHandler', () => {
-      const Mesh = defineComponent('Mesh', {
-        material: { type: 'unique<MaterialAsset>' },
-        vertices: { type: 'buffer<32>' },
-      });
-      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
-      const Tag = defineComponent('Tag', { v: { type: 'u32' } });
-      const w = new World();
-      const store = refsOf(w);
-      let handlerCalls = 0;
-      w.setErrorHandler(() => {
-        handlerCalls++;
-      });
-      const h = store.alloc('MaterialAsset', { id: 1 });
-      const seed = new Uint8Array(32);
-      fillSequential(seed, 23);
-      const e = w
-        .spawn({
-          component: Mesh,
-          data: {
-            material: h,
-            vertices: seed,
-          },
-        })
-        .unwrap();
-
-      w.addComponent(e, { component: Anchor, data: { x: 0 } }).unwrap();
-      w.addComponent(e, { component: Tag, data: { v: 1 } }).unwrap();
-      w.removeComponent(e, Anchor).unwrap();
-
-      expect(handlerCalls).toBe(0);
-    });
   });
 }
 {
@@ -2586,14 +1780,8 @@ import { handleNumeric } from './utils/handle-numeric';
     it('null ref<T> field on spawn does not call release on despawn (boundary)', () => {
       // Boundary case: ref<T> field can hold null; despawn must not attempt to
       // release a null slot (would surface as unique-ref-double-release noise).
-      // We probe by giving the World an ErrorHandler that throws on any call -
-      // a clean despawn means no release happened.
       const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
       const w = new World();
-      let handlerCalls = 0;
-      w.setErrorHandler(() => {
-        handlerCalls++;
-      });
       // Use 0 as the "null/unset" sentinel encoded as a managed handle. The
       // store's release path must short-circuit on this sentinel - documented
       // by D-3 (the wrapper for slot 0 is never allocated, so resolve returns
@@ -2601,143 +1789,12 @@ import { handleNumeric } from './utils/handle-numeric';
       const sentinel = 0 as Handle<'MaterialAsset', 'unique'>;
       const e = w.spawn({ component: Mat, data: { handle: sentinel } }).unwrap();
       w.despawn(e).unwrap();
-      expect(handlerCalls).toBe(0);
     });
   });
 
   // ---------------------------------------------------------------------------
   // (c) w9 - Layer 3 ErrorHandler routing on release failure (AC-05).
   // ---------------------------------------------------------------------------
-
-  interface CapturedCall {
-    readonly error: unknown;
-    readonly context: ErrorContext;
-  }
-
-  describe('w9 - release failure routes through Layer 3 ErrorHandler', () => {
-    it('manual release + World.despawn -> ErrorHandler captures unique-ref-stale (gen mismatch, M4)', () => {
-      // Real World-driven stale handle: AI user calls store.release(h)
-      // themselves (gen 0->1), then despawns the holder entity. The column
-      // still carries h with gen=0, so World.despawn -> release(h) returns
-      // err(unique-ref-stale) which routes to Layer 3.
-      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
-      const w = new World();
-      const store = refsOf(w);
-      const captured: CapturedCall[] = [];
-      w.setErrorHandler((error, context) => {
-        captured.push({ error, context });
-      });
-      const h = store.alloc('MaterialAsset', { id: 1 });
-      const e = w
-        .spawn({
-          component: Mat,
-          data: { handle: h },
-        })
-        .unwrap();
-      // Drop the handle out from under the World — gen goes 0->1.
-      store.release(h).unwrap();
-      // Despawn must not throw - the chain continues despite release err.
-      expect(() => w.despawn(e).unwrap()).not.toThrow();
-      expect(captured).toHaveLength(1);
-      const c0 = captured[0];
-      if (c0 === undefined) throw new Error('expected captured');
-      // gen mismatch surfaces stale, not double-release (M4).
-      expect(c0.error).toBeInstanceOf(UniqueRefStaleError);
-      const errClass = c0.error as UniqueRefStaleError;
-      expect(errClass.code).toBe('unique-ref-stale');
-      expect(errClass.hint.length).toBeGreaterThan(0);
-      expect(errClass.expected.length).toBeGreaterThan(0);
-      expect(typeof errClass.detail.slot).toBe('number');
-      // ErrorContext shape (severity=Error -> chain continues, not Panic).
-      expect(c0.context.severity).toBe(Severity.Error);
-      expect(c0.context.systemName).toContain('World.release');
-      expect(c0.context.systemName).toContain('Mat.handle');
-    });
-
-    it('release loop never aborts despawn chain on multi-component entity (AC-05)', () => {
-      // Multi-component entity: Mat (with managed ref) + Anchor. After
-      // manual store.release(h), World.despawn surfaces the err on Mat.handle
-      // through the ErrorHandler but continues - the entity is fully
-      // removed (Anchor's path runs untouched).
-      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
-      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
-      const w = new World();
-      const store = refsOf(w);
-      const handlerErrors: unknown[] = [];
-      w.setErrorHandler((error) => {
-        handlerErrors.push(error);
-      });
-      const h = store.alloc('MaterialAsset', { id: 1 });
-      const e = w
-        .spawn(
-          {
-            component: Mat,
-            data: { handle: h },
-          },
-          { component: Anchor, data: { x: 42 } },
-        )
-        .unwrap();
-      store.release(h).unwrap();
-      expect(() => w.despawn(e).unwrap()).not.toThrow();
-      // Subsequent get on the despawned entity returns stale-entity err -
-      // confirms the chain completed despite mid-loop release failure.
-      const r = w.get(e, Anchor);
-      expect(r.ok).toBe(false);
-      if (r.ok) throw new Error('expected stale');
-      expect(r.error.code).toBe('stale-entity');
-      // One double-release surface for Mat.handle, no extra noise.
-      expect(handlerErrors).toHaveLength(1);
-      expect(handlerErrors[0]).toBeInstanceOf(UniqueRefStaleError);
-    });
-
-    it('removeComponent path also routes double-release through ErrorHandler', () => {
-      // Mirror of the despawn case but for the removeComponent path.
-      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
-      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
-      const w = new World();
-      const store = refsOf(w);
-      const captured: CapturedCall[] = [];
-      w.setErrorHandler((error, context) => {
-        captured.push({ error, context });
-      });
-      const h = store.alloc('MaterialAsset', { id: 1 });
-      const e = w
-        .spawn(
-          {
-            component: Mat,
-            data: { handle: h },
-          },
-          { component: Anchor, data: { x: 0 } },
-        )
-        .unwrap();
-      store.release(h).unwrap();
-      expect(() => w.removeComponent(e, Mat).unwrap()).not.toThrow();
-      expect(captured).toHaveLength(1);
-      const c0 = captured[0];
-      if (c0 === undefined) throw new Error('expected captured');
-      expect((c0.error as UniqueRefStaleError).code).toBe('unique-ref-stale');
-      // feat-20260614 M2 D-2: SSOT release-dispatch -> uniform systemName.
-      expect(c0.context.systemName).toContain('World.release');
-      expect(c0.context.systemName).toContain('Mat.handle');
-    });
-
-    it('UniqueRefStaleError carries the {code, hint, expected, detail} contract', () => {
-      // AC-11: stale error exposes .detail {slot, expectedGeneration, actualGeneration}.
-      // After M4 gen increment on release, the old handle's gen no longer
-      // matches — it surfaces stale rather than released.
-      const w = new World();
-      const store = refsOf(w);
-      const h = store.alloc('MaterialAsset', { id: 1 });
-      store.release(h).unwrap();
-      const r = store.resolve(h);
-      expect(r.ok).toBe(false);
-      if (r.ok) throw new Error('expected stale');
-      expect(r.error.code).toBe('unique-ref-stale');
-      expect(r.error.hint.length).toBeGreaterThan(0);
-      expect(r.error.expected.length).toBeGreaterThan(0);
-      expect(typeof (r.error as UniqueRefStaleError).detail.slot).toBe('number');
-    });
-  });
 }
 {
   // --- from resource.test.ts ---
@@ -3091,7 +2148,9 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem(Update, { name: 'B', queries: [], fn: () => {}, after: ['A'] });
       world.addSystem(Update, { name: 'C', queries: [], fn: () => {}, after: ['B'] });
 
-      expect(() => world.update()).toThrow(CyclicDependencyError);
+      const result = world.update();
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('cyclic-dependency');
     });
 
     it('CyclicDependencyError message contains cycle path', () => {
@@ -3101,18 +2160,16 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem(Update, { name: 'Y', queries: [], fn: () => {}, after: ['X'] });
       world.addSystem(Update, { name: 'Z', queries: [], fn: () => {}, after: ['Y'] });
 
-      try {
-        world.update();
-        expect.unreachable('should have thrown');
-      } catch (err) {
-        expect(err).toBeInstanceOf(CyclicDependencyError);
-        const msg = (err as CyclicDependencyError).message;
+      const result = world.update();
+      expect(result.ok).toBe(false);
+      if (!result.ok && result.error.code === 'cyclic-dependency') {
+        const msg = result.error.message;
         // Message should contain system names from the cycle (joined by ' -> ')
         expect(msg).toMatch(/X/);
         expect(msg).toMatch(/Y/);
         expect(msg).toMatch(/Z/);
         // detail.cycle is structured array
-        const cycle = (err as CyclicDependencyError).detail.cycle;
+        const cycle = result.error.detail.cycle;
         expect(cycle).toBeInstanceOf(Array);
         expect(cycle.length).toBeGreaterThanOrEqual(2);
         expect(cycle).toContain('X');
@@ -3138,7 +2195,9 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem(Update, { name: 'cyc1', queries: [], fn: () => {}, after: ['cyc2'] });
       world.addSystem(Update, { name: 'cyc2', queries: [], fn: () => {}, after: ['cyc1'] });
 
-      expect(() => world.update()).toThrow(CyclicDependencyError);
+      const result = world.update();
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('cyclic-dependency');
     });
 
     it('4-node cycle: A→B→C→D→A with an uncycled system E', () => {
@@ -3150,16 +2209,14 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem(Update, { name: 'C', queries: [], fn: () => {}, after: ['B'] });
       world.addSystem(Update, { name: 'D', queries: [], fn: () => {}, after: ['C'] });
 
-      try {
-        world.update();
-        expect.unreachable('should have thrown');
-      } catch (err) {
-        expect(err).toBeInstanceOf(CyclicDependencyError);
-        const msg = (err as CyclicDependencyError).message;
+      const result = world.update();
+      expect(result.ok).toBe(false);
+      if (!result.ok && result.error.code === 'cyclic-dependency') {
+        const msg = result.error.message;
         // Cycle involves A, B, C, D
         expect(msg).toMatch(/A/);
         expect(msg).toMatch(/B/);
-        const cycle = (err as CyclicDependencyError).detail.cycle;
+        const cycle = result.error.detail.cycle;
         expect(cycle).toBeInstanceOf(Array);
         expect(cycle.length).toBeGreaterThanOrEqual(2);
       }
@@ -3257,149 +2314,11 @@ import { handleNumeric } from './utils/handle-numeric';
       world.update();
       expect(bodyExecuted).toBe(true);
     });
-
-    it('Resource missing → invalid path (error collected by ErrorHandler)', () => {
-      const world = new World();
-      const errors: unknown[] = [];
-
-      // Set a non-throwing error handler to collect errors
-      world.setErrorHandler((error: unknown) => {
-        errors.push(error);
-      });
-
-      // System that needs a Resource that doesn't exist
-      let bodyExecuted = false;
-      world.addSystem(Update, {
-        name: 'resourceSystem',
-        queries: [],
-        resources: ['missingResource'],
-        fn: () => {
-          bodyExecuted = true;
-        },
-      });
-
-      // The system should not execute because the required resource is missing
-      // and the error should be collected by the ErrorHandler
-      world.update();
-      expect(bodyExecuted).toBe(false);
-      expect(errors.length).toBe(1);
-      expect((errors[0] as Error).message).toContain('missingResource');
-    });
   });
 
   // ────────────────────────────────────────────────────────────────────────────
   // [w18] Layer 3 ErrorHandler + Severity tests (red phase — AP-8 Layer 3)
   // ────────────────────────────────────────────────────────────────────────────
-
-  describe('Layer 3 — ErrorHandler + Severity (AP-8)', () => {
-    it('Severity enum has 7 levels', () => {
-      expect(Severity.Ignore).toBeDefined();
-      expect(Severity.Trace).toBeDefined();
-      expect(Severity.Debug).toBeDefined();
-      expect(Severity.Info).toBeDefined();
-      expect(Severity.Warning).toBeDefined();
-      expect(Severity.Error).toBeDefined();
-      expect(Severity.Panic).toBeDefined();
-      // 7 distinct values
-      const values = new Set([
-        Severity.Ignore,
-        Severity.Trace,
-        Severity.Debug,
-        Severity.Info,
-        Severity.Warning,
-        Severity.Error,
-        Severity.Panic,
-      ]);
-      expect(values.size).toBe(7);
-    });
-
-    it('matchSeverity: Panic → throws', () => {
-      const testError = new Error('test');
-      expect(() => {
-        matchSeverity(testError, { severity: Severity.Panic, systemName: 'test' });
-      }).toThrow('test');
-    });
-
-    it('matchSeverity: Error → does not throw (logs)', () => {
-      const testError = new Error('test error');
-      // Should not throw — just logs
-      expect(() => {
-        matchSeverity(testError, { severity: Severity.Error, systemName: 'test' });
-      }).not.toThrow();
-    });
-
-    it('matchSeverity: Warning → does not throw', () => {
-      expect(() => {
-        matchSeverity(new Error('w'), { severity: Severity.Warning, systemName: 'test' });
-      }).not.toThrow();
-    });
-
-    it('matchSeverity: Info → does not throw', () => {
-      expect(() => {
-        matchSeverity(new Error('i'), { severity: Severity.Info, systemName: 'test' });
-      }).not.toThrow();
-    });
-
-    it('matchSeverity: Debug → does not throw', () => {
-      expect(() => {
-        matchSeverity(new Error('d'), { severity: Severity.Debug, systemName: 'test' });
-      }).not.toThrow();
-    });
-
-    it('matchSeverity: Trace → does not throw', () => {
-      expect(() => {
-        matchSeverity(new Error('t'), { severity: Severity.Trace, systemName: 'test' });
-      }).not.toThrow();
-    });
-
-    it('matchSeverity: Ignore → silent', () => {
-      const testError = new Error('test');
-      expect(() => {
-        matchSeverity(testError, { severity: Severity.Ignore, systemName: 'test' });
-      }).not.toThrow();
-    });
-
-    it('system fn returning Result.err triggers ErrorHandler', () => {
-      const world = new World();
-      const errors: unknown[] = [];
-
-      // Configure custom error handler
-      world.setErrorHandler((error: unknown, _ctx: unknown) => {
-        errors.push(error);
-      });
-
-      world.addSystem(Update, {
-        name: 'failingSystem',
-        queries: [],
-        fn: () => {
-          return err(new Error('system failure'));
-        },
-      });
-
-      world.update();
-      expect(errors.length).toBe(1);
-    });
-
-    it('system fn returning void is treated as ok — ErrorHandler not called', () => {
-      const world = new World();
-      const errors: unknown[] = [];
-
-      world.setErrorHandler((error: unknown, _ctx: unknown) => {
-        errors.push(error);
-      });
-
-      world.addSystem(Update, {
-        name: 'voidSystem',
-        queries: [],
-        fn: () => {
-          // returns void — treated as ok
-        },
-      });
-
-      world.update();
-      expect(errors.length).toBe(0);
-    });
-  });
 }
 {
   // --- from string-carry-over.test.ts ---

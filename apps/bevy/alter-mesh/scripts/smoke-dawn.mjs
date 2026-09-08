@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -90,39 +91,37 @@ const manifestUrl = `data:application/json,${encodeURIComponent(readFileSync(res
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: manifestUrl });
+  renderer = await createSmokeRenderer(createRenderer, mockCanvas, {}, { shaderManifestUrl: manifestUrl });
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 }
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
-const ready = await renderer.ready;
-if (!ready.ok) { console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code}`); process.exit(1); }
+subscribeSmokeErrors(renderer, (err) => errors.push({ code: err.code, hint: err.hint }));
 
 const { buildAlterMeshWorld, mutateSharedMesh, swapRightMesh } = await import(resolve(here, '..', 'src', 'alter-mesh.ts'));
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const state = buildAlterMeshWorld(world);
 
 world.update().unwrap();
-await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+await drawSmokeFrame(renderer, world);
 await delay(50);
 const before = await capture();
 swapRightMesh(world, state);
 world.update().unwrap();
-await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+await drawSmokeFrame(renderer, world);
 await delay(50);
 const afterSwap = await capture();
-mutateSharedMesh(state, renderer.store);
+mutateSharedMesh(world, state);
 world.update().unwrap();
-await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+await drawSmokeFrame(renderer, world);
 await delay(50);
 const afterMutation = await capture();
 for (let i = 3; i < SMOKE_MIN_FRAMES; i++) {
   world.update().unwrap();
-  await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  await drawSmokeFrame(renderer, world);
 }
 mkdirSync(resolve(here, '..', 'artifacts'), { recursive: true });
 writeFileSync(resolve(here, '..', 'artifacts', 'alter-mesh-ref.png'), writeReferencePng(afterMutation, WIDTH, HEIGHT));
@@ -144,7 +143,7 @@ for (let i = 0; i < afterMutation.length; i += 4) {
 const swapDiff = diff(before, afterSwap);
 const mutationDiff = diff(afterSwap, afterMutation);
 const checks = [
-  ['backend=webgpu', renderer.backend === 'webgpu'],
+  ['backend=webgpu', rendererBackend(renderer) === 'webgpu'],
   ['not-black', notBlack],
   ['mesh-handle-swap-changed-pixels', swapDiff.pixels > 100],
   ['shared-mesh-mutation-changed-pixels', mutationDiff.pixels > 100],

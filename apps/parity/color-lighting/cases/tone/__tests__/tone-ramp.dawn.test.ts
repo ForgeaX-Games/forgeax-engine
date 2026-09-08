@@ -6,8 +6,14 @@ import {
   MeshFilter,
   MeshRenderer,
   orthographic,
-  tonemapToU32,
+  TONEMAP_ACES_FILMIC,
+  TONEMAP_AGX,
+  TONEMAP_CINEON,
+  TONEMAP_LINEAR,
+  TONEMAP_NEUTRAL,
+  TONEMAP_REINHARD,
 } from '@forgeax/engine-render';
+import type { Renderer } from '@forgeax/engine-render';
 import { createRenderer } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
@@ -21,6 +27,25 @@ const TEXTURE_USAGE_COPY_SRC = 0x01;
 const MAP_READ = 0x0001;
 const COPY_DST = 0x0008;
 const dawnReady = typeof navigator !== 'undefined' && navigator.gpu !== undefined;
+
+function tonemapToU32(mode: string): number {
+  switch (mode) {
+    case 'linear':
+      return TONEMAP_LINEAR;
+    case 'reinhard':
+      return TONEMAP_REINHARD;
+    case 'cineon':
+      return TONEMAP_CINEON;
+    case 'aces-filmic':
+      return TONEMAP_ACES_FILMIC;
+    case 'agx':
+      return TONEMAP_AGX;
+    case 'neutral':
+      return TONEMAP_NEUTRAL;
+    default:
+      throw new Error(`unknown tone mode: ${mode}`);
+  }
+}
 
 const ENGINE_MANIFEST = await (async () => {
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
@@ -95,22 +120,27 @@ async function captureMode(mode: (typeof TONE_REQUIRED_MODES)[number]): Promise<
     removeEventListener() {},
   } as unknown as HTMLCanvasElement;
 
-  let renderer: Awaited<ReturnType<typeof createRenderer>>;
+  let renderer: Renderer;
   try {
-    renderer = await createRenderer(canvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+    const created = await createRenderer(canvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+    if (!created.ok) throw created.error;
+    renderer = created.value;
   } finally {
     navigator.gpu.requestAdapter = originalRequestAdapter;
   }
-  const ready = await renderer.ready;
-  expect(ready.ok).toBe(true);
-  if (!ready.ok || device === undefined) throw new Error('runtime Dawn renderer not ready');
+  if (device === undefined) throw new Error('runtime Dawn renderer did not expose a device');
 
   const plane = createPlaneGeometry(0.75, 0.75);
   expect(plane.ok).toBe(true);
   if (!plane.ok) throw new Error(`tone ramp plane failed: ${plane.error.code}`);
   const world = new World();
-  const worldAttachment1 = renderer.attachWorld(world);
+  const worldAttachment1 = renderer.attach(world);
   if (!worldAttachment1.ok) throw worldAttachment1.error;
+  const frameRequest = {
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  };
   const meshHandle = world.allocSharedRef('MeshAsset', plane.value);
   const cases = TONE_REQUIRED_CASES.filter((entry) => entry.tone.mode === mode);
   expect(cases).toHaveLength(TONE_REQUIRED_SAMPLE_COUNT);
@@ -141,10 +171,12 @@ async function captureMode(mode: (typeof TONE_REQUIRED_MODES)[number]): Promise<
   ).unwrap();
 
   world.update().unwrap();
-  const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const drawn = renderer.draw(frameRequest);
   expect(drawn.ok).toBe(true);
   if (!drawn.ok) throw new Error(`tone ramp draw failed: ${drawn.error.code}`);
-  await device.queue.onSubmittedWorkDone();
+  const completed = await drawn.value.completed;
+  expect(completed.ok).toBe(true);
+  if (!completed.ok) throw completed.error;
   if (target === undefined) throw new Error('tone ramp target was not created');
   const bytes = await readPixels(device, target);
   for (const [index, sceneCase] of cases.entries()) {
@@ -156,7 +188,7 @@ async function captureMode(mode: (typeof TONE_REQUIRED_MODES)[number]): Promise<
       1 / 255 + Number.EPSILON,
     );
   }
-  renderer.dispose();
+  await renderer.dispose();
   return bytes;
 }
 

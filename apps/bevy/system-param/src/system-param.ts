@@ -10,7 +10,6 @@ import {
   Update,
   World,
   defineComponent,
-  defineSystemParam,
   type EntityHandle,
 } from '@forgeax/engine-ecs';
 import { Camera, Materials, MeshFilter, MeshRenderer, orthographic } from '@forgeax/engine-render';
@@ -75,20 +74,6 @@ function counterX(playerCount: number, elapsed: number): number {
   return COUNTER_START + Math.sin(elapsed * 1.4) * (24 + playerCount * 12);
 }
 
-const PlayerCounter = defineSystemParam({
-  name: 'player-counter',
-  queries: [{ with: [SystemParamPlayer] }],
-  resources: [SYSTEM_PARAM_COUNT],
-  resolve: (world, queryResults) => {
-    let playerCount = 0;
-    for (const _row of queryResults[0]) playerCount += 1;
-    return {
-      playerCount,
-      resource: world.getResource<PlayerCountResource>(SYSTEM_PARAM_COUNT),
-    };
-  },
-});
-
 export function buildSystemParamWorld(world: World): SystemParamState {
   const playerPositions: readonly [number, number, number][] = [
     [PLAYER_START, 120, 0],
@@ -121,9 +106,14 @@ export function buildSystemParamWorld(world: World): SystemParamState {
 
   world.addSystem(Update, {
     name: 'system-param-counter',
-    queries: [],
-    params: [PlayerCounter],
-    fn: (world, _queryResults, _commands, [counter]) => {
+    queries: [{ with: [SystemParamPlayer] }],
+    fn: (world, queryResults) => {
+      let playerCount = 0;
+      for (const _row of queryResults[0]) playerCount += 1;
+      const counter = {
+        playerCount,
+        resource: world.getResource<PlayerCountResource>(SYSTEM_PARAM_COUNT),
+      };
       state.elapsed += world.getResource<typeof Time>(Time).delta;
       state.runs += 1;
       counter.resource.value = counter.playerCount;

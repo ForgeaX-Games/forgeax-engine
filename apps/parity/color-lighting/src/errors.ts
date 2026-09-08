@@ -1,16 +1,4 @@
-export type ColorLightingParityErrorCode =
-  | 'schema-invalid'
-  | 'non-finite-value'
-  | 'file-read-failed'
-  | 'provenance-conflict'
-  | 'primary-capture-missing'
-  | 'capture-envelope-invalid'
-  | 'aggregate-only-input'
-  | 'metric-non-finite'
-  | 'budget-exceeded'
-  | 'unsupported-capability'
-  | 'observation-evidence-missing'
-  | 'status-incomplete';
+export type ColorLightingParityErrorCode = ColorLightingParityErrorDetail['code'];
 
 export interface ProvenanceConflictDetail {
   readonly forgeaxImplementation: string;

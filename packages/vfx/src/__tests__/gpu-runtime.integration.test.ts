@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { World } from '@forgeax/engine-ecs';
-import { runPlugins } from '@forgeax/engine-plugin';
+import { createWorldContext, World } from '@forgeax/engine-ecs';
+import type { ParticleEffectAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { createVfxEffectContract } from '../effect-contract.js';
 import type { VfxGpuEffectAsset } from '../gpu-program.js';
@@ -46,6 +46,12 @@ const effect: VfxGpuEffectAsset = {
 };
 
 describe('GPU VFX fixed-tick intents', () => {
+  it('uses the ordinary asset program as the playback source', () => {
+    const asset: ParticleEffectAsset = effect;
+    expect(asset.program.fingerprint).toBe(asset.programFingerprint);
+    expect(asset.program.emitters).toHaveLength(1);
+  });
+
   it('keeps stage recovery scoped to the cooked generation', () => {
     const source = readFileSync(new URL('../gpu-runtime.ts', import.meta.url), 'utf8');
     expect(source).toContain('instanceGeneration');
@@ -78,7 +84,7 @@ describe('GPU VFX fixed-tick intents', () => {
         data: { effect: handle, playing: true, seed: 9, timeScale: 1 },
       })
       .unwrap();
-    await runPlugins(world, [], [vfxGpuRuntimePlugin({ maxQueuedTicks: 2 })]);
+    await createWorldContext(world, [vfxGpuRuntimePlugin({ maxQueuedTicks: 2 })]);
     const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
     world.update(1 / 60).unwrap();
     const instance = runtime.getInstance(player);
@@ -118,8 +124,7 @@ describe('GPU VFX fixed-tick intents', () => {
       fingerprint: 'sha256:atomic-patch',
     });
     const instance = new ParticleEffectInstance(contract);
-    const installed = await runPlugins(world, [], [vfxGpuRuntimePlugin()]);
-    expect(installed.ok).toBe(true);
+    await createWorldContext(world, [vfxGpuRuntimePlugin()]);
     const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
     runtime.attachInstance(player, instance);
     expect(instance.patch({}).ok).toBe(true);
@@ -145,7 +150,7 @@ describe('GPU VFX fixed-tick intents', () => {
         data: { effect: handle, playing: true, seed: 9, timeScale: 1 },
       })
       .unwrap();
-    await runPlugins(world, [], [vfxGpuRuntimePlugin()]);
+    await createWorldContext(world, [vfxGpuRuntimePlugin()]);
     const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
 
     world.update(1 / 60).unwrap();
@@ -181,8 +186,7 @@ describe('GPU VFX fixed-tick intents', () => {
       data: { effect: handle, playing: true, seed: 9, timeScale: 1 },
     });
     expect(spawned.ok).toBe(true);
-    const installed = await runPlugins(world, [], [vfxGpuRuntimePlugin({ maxQueuedTicks: 2 })]);
-    expect(installed.ok).toBe(true);
+    await createWorldContext(world, [vfxGpuRuntimePlugin({ maxQueuedTicks: 2 })]);
 
     expect(world.update(1 / 60).ok).toBe(true);
     const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
@@ -208,7 +212,7 @@ describe('GPU VFX fixed-tick intents', () => {
         data: { effect: handle, playing: false, seed: 9, timeScale: 1 },
       })
       .unwrap();
-    await runPlugins(world, [], [vfxGpuRuntimePlugin()]);
+    await createWorldContext(world, [vfxGpuRuntimePlugin()]);
     world.update(1 / 60).unwrap();
     const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
     expect(runtime.snapshot()).toHaveLength(0);
@@ -241,7 +245,7 @@ describe('GPU VFX fixed-tick intents', () => {
         data: { effect: handle, playing: true, seed: 1, timeScale: 1 },
       })
       .unwrap();
-    await runPlugins(world, [], [vfxGpuRuntimePlugin({ maxQueuedTicks: 1 })]);
+    await createWorldContext(world, [vfxGpuRuntimePlugin({ maxQueuedTicks: 1 })]);
     world.update(1 / 60).unwrap();
     world.update(1 / 60).unwrap();
     const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
@@ -254,6 +258,95 @@ describe('GPU VFX fixed-tick intents', () => {
     expect(runtime.diagnostics().at(-1)?.code).toBe('vfx-intent-queue-overflow');
     runtime.commit(runtime.snapshot().at(-1)?.sequence ?? -1);
     expect(runtime.diagnostics()).toEqual([]);
+  });
+
+  it('makes an explicit replay boundary discard an overflowing player queue', async () => {
+    const world = new World();
+    const handle = world.allocSharedRef('ParticleEffectAsset', effect);
+    const player = world
+      .spawn({
+        component: ParticleEffectPlayer,
+        data: { effect: handle, playing: true, seed: 1, timeScale: 1 },
+      })
+      .unwrap();
+    await createWorldContext(world, [vfxGpuRuntimePlugin({ maxQueuedTicks: 1 })]);
+    const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
+
+    world.update(1 / 60).unwrap();
+    runtime.commit(runtime.snapshot()[0]?.sequence ?? -1);
+    world.update(1 / 60).unwrap();
+    world.update(1 / 60).unwrap();
+    expect(runtime.diagnostics()).toHaveLength(1);
+    expect(runtime.diagnostics()[0]).toMatchObject({
+      code: 'vfx-intent-queue-overflow',
+      detail: { player, maxQueuedTicks: 1 },
+    });
+    expect(runtime.inspectPlayer(player)).toMatchObject({
+      queuedIntents: 1,
+      queuedTicks: 1,
+      lastCommitted: {
+        tick: 1,
+        phaseTick: 0,
+        playCycle: 0,
+        firstParticleId: 0,
+      },
+    });
+
+    runtime.replay(player);
+
+    expect(runtime.snapshot()).toHaveLength(0);
+    expect(runtime.diagnostics()).toEqual([]);
+    world.update(1 / 60).unwrap();
+    expect(runtime.snapshot()[0]).toMatchObject({
+      player,
+      reset: true,
+      phaseTick: 0,
+      playCycle: 1,
+      firstParticleId: 0,
+    });
+    expect(runtime.inspectPlayer(player)).toMatchObject({
+      queuedIntents: 1,
+      queuedTicks: 1,
+      emitters: [{ phaseTick: 0, playCycle: 1, firstParticleId: 0, reset: true }],
+      lastCommitted: {
+        tick: 1,
+        phaseTick: 0,
+        playCycle: 0,
+        firstParticleId: 0,
+      },
+    });
+  });
+
+  it('deduplicates active overflow diagnostics after another diagnostic interleaves', async () => {
+    const world = new World();
+    const handle = world.allocSharedRef('ParticleEffectAsset', effect);
+    const player = world
+      .spawn({
+        component: ParticleEffectPlayer,
+        data: { effect: handle, playing: true, seed: 1, timeScale: 1 },
+      })
+      .unwrap();
+    await createWorldContext(world, [vfxGpuRuntimePlugin({ maxQueuedTicks: 1 })]);
+    const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
+
+    world.update(1 / 60).unwrap();
+    runtime.commit(runtime.snapshot()[0]?.sequence ?? -1);
+    world.update(1 / 60).unwrap();
+    world.update(1 / 60).unwrap();
+    expect(runtime.diagnostics()).toHaveLength(1);
+
+    world.set(player, ParticleEffectPlayer, { timeScale: -1 }).unwrap();
+    world.update(1 / 60).unwrap();
+    expect(runtime.diagnostics()).toHaveLength(2);
+
+    world.set(player, ParticleEffectPlayer, { timeScale: 1 }).unwrap();
+    world.update(1 / 60).unwrap();
+
+    expect(runtime.diagnostics()).toHaveLength(1);
+    expect(runtime.diagnostics()[0]).toMatchObject({
+      code: 'vfx-intent-queue-overflow',
+      detail: { player, maxQueuedTicks: 1 },
+    });
   });
 
   it('bounds each player independently', async () => {
@@ -271,7 +364,7 @@ describe('GPU VFX fixed-tick intents', () => {
         data: { effect: handle, playing: true, seed: 2, timeScale: 1 },
       })
       .unwrap();
-    await runPlugins(world, [], [vfxGpuRuntimePlugin({ maxQueuedTicks: 1 })]);
+    await createWorldContext(world, [vfxGpuRuntimePlugin({ maxQueuedTicks: 1 })]);
     world.update(1 / 60).unwrap();
     const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
     expect(runtime.snapshot()).toHaveLength(2);
@@ -313,7 +406,7 @@ describe('GPU VFX fixed-tick intents', () => {
         data: { effect: handle, playing: true, seed: 2, timeScale: 1 },
       })
       .unwrap();
-    await runPlugins(world, [], [vfxGpuRuntimePlugin()]);
+    await createWorldContext(world, [vfxGpuRuntimePlugin()]);
     world.update(1 / 60).unwrap();
     const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
 
@@ -322,6 +415,8 @@ describe('GPU VFX fixed-tick intents', () => {
         player: first,
         assetGuid: 'effect-guid',
         programFingerprint: 'sha256:test',
+        seed: 1,
+        fixedDelta: 1 / 60,
         emitters: [
           expect.objectContaining({
             id: 'sparks',
@@ -364,7 +459,7 @@ describe('GPU VFX fixed-tick intents', () => {
         data: { effect: unavailable, playing: true, seed: 3, timeScale: -1 },
       })
       .unwrap();
-    await runPlugins(world, [], [vfxGpuRuntimePlugin()]);
+    await createWorldContext(world, [vfxGpuRuntimePlugin()]);
     const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
 
     world.update(1 / 60).unwrap();
@@ -398,7 +493,7 @@ describe('GPU VFX fixed-tick intents', () => {
         data: { effect: handle, playing: true, seed: 9, timeScale: 1 },
       })
       .unwrap();
-    await runPlugins(world, [], [vfxGpuRuntimePlugin()]);
+    await createWorldContext(world, [vfxGpuRuntimePlugin()]);
     world.update(1 / 60).unwrap();
     const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
     runtime.commit(runtime.snapshot().at(0)?.sequence ?? -1);
@@ -425,7 +520,7 @@ describe('GPU VFX fixed-tick intents', () => {
         data: { effect: handle, playing: true, seed: 4, timeScale: 1 },
       })
       .unwrap();
-    await runPlugins(world, [], [vfxGpuRuntimePlugin()]);
+    await createWorldContext(world, [vfxGpuRuntimePlugin()]);
     world.update(1 / 60).unwrap();
     const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
     runtime.commit(runtime.snapshot().at(0)?.sequence ?? -1);

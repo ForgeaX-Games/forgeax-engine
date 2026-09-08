@@ -16,6 +16,7 @@
 //   research Finding 2: 4 call sites at L1036/1100/1124/3905
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import { packMeshBinV4 } from '@forgeax/engine-import';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -39,29 +40,9 @@ function parseGuid(g: string): AssetGuid {
  * + Uint16Array indices + JSON tail. Compatible with unpackMeshBin.
  */
 function makeMeshBinPayload(): Uint8Array {
-  const floatsPerVertex = 12;
-  const vertexCount = 3;
-  const vlen = vertexCount * floatsPerVertex;
-  const ilen = 3;
-  const iwidth = 2;
-  const jsonTail =
-    '{"submeshes":[{"indexOffset":0,"indexCount":3,"vertexCount":36,"topology":"triangle-list"}],"aabb":[0,0,0,0,1,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0]}';
-  const jsonBytes = new TextEncoder().encode(jsonTail);
-  const jsonlen = jsonBytes.length;
-
-  const header = new ArrayBuffer(28);
-  const dv = new DataView(header);
-  dv.setUint32(0, 2, true);
-  dv.setUint32(4, 1, true);
-  dv.setUint32(8, 12, true);
-  dv.setUint32(12, vlen, true);
-  dv.setUint32(16, ilen, true);
-  dv.setUint32(20, iwidth, true);
-  dv.setUint32(24, jsonlen, true);
-
-  const vertices = new Float32Array(vlen);
-  for (let i = 0; i < vertexCount; i++) {
-    const base = i * floatsPerVertex;
+  const vertices = new Float32Array(36);
+  for (let i = 0; i < 3; i++) {
+    const base = i * 12;
     vertices[base + 0] = i * 1.0;
     vertices[base + 1] = 0;
     vertices[base + 2] = 0;
@@ -78,17 +59,31 @@ function makeMeshBinPayload(): Uint8Array {
 
   const indices = new Uint16Array([0, 1, 2]);
 
-  const totalSize = 28 + vlen * 4 + ilen * iwidth + jsonlen;
-  const total = new Uint8Array(totalSize);
-  let offset = 0;
-  total.set(new Uint8Array(header), offset);
-  offset += 28;
-  total.set(new Uint8Array(vertices.buffer, vertices.byteOffset, vertices.byteLength), offset);
-  offset += vlen * 4;
-  total.set(new Uint8Array(indices.buffer, indices.byteOffset, indices.byteLength), offset);
-  offset += ilen * iwidth;
-  total.set(jsonBytes, offset);
-  return total;
+  const packed = packMeshBinV4(
+    {
+      vertices,
+      indices,
+      attributes: {
+        position: new Float32Array(9),
+        normal: new Float32Array(9),
+        uv: new Float32Array(6),
+        tangent: new Float32Array(12),
+      },
+      submeshes: [
+        {
+          indexOffset: 0,
+          indexCount: 3,
+          vertexCount: 3,
+          topology: 'triangle-list',
+          materialSlot: 0,
+        },
+      ],
+      aabb: new Float32Array([0, 0, 0, 1, 1, 1]),
+    },
+    'runtime://fetch-binary',
+  );
+  if (!packed.ok) throw new Error(packed.error.actual);
+  return packed.value;
 }
 
 let originalFetch: typeof globalThis.fetch;

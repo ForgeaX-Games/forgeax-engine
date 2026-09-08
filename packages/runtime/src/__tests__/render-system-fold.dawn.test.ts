@@ -1,4 +1,4 @@
-// render-system-fold.dawn.test.ts -- feat-20260622-chunk-gpu-instancing-sprite-tilemap
+// record fold Dawn coverage -- feat-20260622-chunk-gpu-instancing-sprite-tilemap
 // M1 / w7.
 //
 // Integration test for the record-stage fold operator. Exercises the
@@ -39,18 +39,20 @@
 // observe drawIndexedCount through the device mock); this file pins the
 // fold-plan invariants the swap relies on.
 
-import type { DispatchEntry } from '@forgeax/engine-render/internal';
+import { RenderQueue } from '@forgeax/engine-types';
+import { describe, expect, it } from 'vitest';
 import {
   buildFoldDispatchPlan,
   type FoldRenderableLike,
   foldDispatchBuckets,
+} from '../../../render/src/record/mesh-ssbo';
+import type { DispatchEntry } from '../../../render/src/render-system-extract';
+import {
   TRANSPARENT_SORT_MODE_DISTANCE,
   TRANSPARENT_SORT_MODE_LAYER_Y,
   TRANSPARENT_SORT_MODE_LAYER_YZ,
   TRANSPARENT_SORT_MODE_LAYER_Z,
-} from '@forgeax/engine-render/internal';
-import { RenderQueue } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
+} from '../../../render/src/systems/transparent-sort-config';
 
 function mockDispatchEntry(opts: {
   renderableIndex: number;

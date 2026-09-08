@@ -2,10 +2,9 @@
 //
 // feat-20260608-mesh-multi-section-primitive-multi-material-slot M2 / w7:
 // the single `material` field is replaced with `materials` — an
-// `array<shared<MaterialAsset>>` indexed by submesh. Each submesh gets one
-// material slot; `materials.length` must equal `MeshAsset.submeshes.length`.
-// The previous single-material path is unified into the array: AI users
-// always write `materials: [handle]`, even for single-prim meshes.
+// `array<shared<MaterialAsset>>` indexed by MeshAsset.materialSlots. Entries
+// are sparse positional overrides: a missing/zero entry inherits the Mesh
+// slot default, while a defaultless slot inherits the neutral engine material.
 //
 // The schema-vocab keyword `'array<shared<MaterialAsset>>'` (feat-20260614
 // M5 -- migrated from `'array<handle<MaterialAsset>>'`) stores as a u32
@@ -32,15 +31,16 @@ import { defineComponent } from '@forgeax/engine-ecs';
  * Mesh renderer (ECS component, multi-material array).
  *
  * Stores `materials: readonly Handle<'MaterialAsset','shared'>[]`
- * (u32-stored array, indexed by submesh). The asset's `passes[].shader`
+ * (u32-stored array, indexed by MeshAsset.materialSlots). Submeshes point to
+ * those stable slots through `Submesh.materialSlot`. The asset's `passes[].shader`
  * identity is the SSOT for which pipeline RenderSystem routes the entity
  * to (record stage dispatches on `materialShaderId`).
  *
- * Defaults map carries `materials: []` — this routes through the D-Q7
- * case B path (extract reads empty materials array -> defaultMaterialSnapshot
- * fallback, mid-grey unlit material).
+ * Defaults map carries `materials: []`: every slot inherits its Mesh-owned
+ * default, or the neutral engine material when that slot is intentionally
+ * defaultless.
  *
- * @example Spawn with data: {} (D-Q7 case B; mid-grey default):
+ * @example Spawn while inheriting every Mesh slot default:
  *   world.spawn({ component: MeshRenderer, data: {} });
  *
  * @example Spawn an unlit-targeted entity:
@@ -56,10 +56,6 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *   const matHandle = world.allocSharedRef('MaterialAsset', matPayload);
  *   world.spawn({ component: MeshRenderer, data: { materials: [matHandle] } });
  */
-export const MeshRenderer = defineComponent(
-  'MeshRenderer',
-  {
-    materials: { type: 'array<shared<MaterialAsset>>', default: [] },
-  },
-  { simulationTransient: true },
-);
+export const MeshRenderer = defineComponent('MeshRenderer', {
+  materials: { type: 'array<shared<MaterialAsset>>', default: [] },
+});

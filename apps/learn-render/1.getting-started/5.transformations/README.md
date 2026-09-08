@@ -47,7 +47,7 @@ flowchart LR
 // 1. engine usage - 引擎公开符号集
 import { Update, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { Engine, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { Camera, MeshRenderer, MeshFilter } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
@@ -62,9 +62,9 @@ const SCALE_MAX = 1.0;
 const SCALE_PULSE_RADIANS_PER_SECOND = 1.5;
 
 // 3. bootstrap - loadByGuid + spawn + addSystem + rAF
-const renderer = await Engine.create(canvas, { /* clearColor / shaderManifestUrl */ });
+const renderer = await createRenderer(canvas, { /* clearColor / shaderManifestUrl */ });
 const assets = renderer.assets;
-assets.configurePackIndex('/pack-index.json');
+configureRuntimeAssetCatalog(assets, runtimeBinding);
 
 // pre-register cube + material via GUID; loadByGuid resolves on Map fast path
 assets.registerWithGuid<MeshAsset>(cubeGuid, cubeAsset.value);

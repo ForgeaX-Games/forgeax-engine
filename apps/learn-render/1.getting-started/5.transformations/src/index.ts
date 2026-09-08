@@ -1,3 +1,4 @@
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { Time, Update } from '@forgeax/engine-ecs';
 // apps/learn-render/1.getting-started/5.transformations/src/index.ts
 // LearnOpenGL section 1.5 - Transformations (forgeax mapping with the
@@ -56,6 +57,7 @@ import { Time, Update } from '@forgeax/engine-ecs';
 // the system fn reads `world.getResource(Time).delta`
 // for the elapsed delta -- no fn-signature extension to ECS surface.
 import { createApp } from '@forgeax/engine-app';
+import { captureCanvasPixels } from '@forgeax/apps-shared/canvas-capture';
 import type { World } from '@forgeax/engine-ecs';
 import type { CanvasAppError } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
@@ -63,10 +65,10 @@ import { HANDLE_CUBE, resolveAssetHandle } from '@forgeax/engine-assets-runtime'
 import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 
 import type { MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
-import { createStandaloneRuntimeAssetBinding, unwrapHandle } from '@forgeax/engine-types';
+import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import materialPackJson from '../assets/material-wood.pack.json';
 import { computeTransformAt } from './transform-animation';
@@ -94,13 +96,10 @@ import { computeTransformAt } from './transform-animation';
 const WOOD_TEXTURE_GUID = '019e3969-1d46-773e-988c-a10e305ff2a4';
 const CUBE_MESH_GUID = '019e3968-6007-71ae-856e-1fd6c9728cfb';
 const CUBE_MATERIAL_GUID = '019e4906-23d4-72f8-bca5-7f18f5465e9a';
-// Stable across dev (configureServer middleware) + prod (generateBundle
-// emit) per @forgeax/engine-vite-plugin-pack (charter P4 consistent
-// abstraction).
-const PACK_INDEX_URL = '/pack-index.json';
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-1-5-transformations',
-);
+// Dev uses the binding's scoped catalog route; build emits the static
+// `/pack-index.json` file. `configureRuntimeAssetCatalog` selects the route
+// for the current Vite mode.
+
 
 interface MaterialPackEntry {
   readonly guid: string;
@@ -140,14 +139,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // four-verb redesign 2026-06-06: dev lazy-import transport for
     // raw-source texture rows (container.jpg). Absent => `loadByGuid`
     // returns `asset-not-imported` and the demo aborts.
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     reportBootstrapError(appRes.error);
     return;
   }
   const app = appRes.value;
-  const renderer = app.renderer;
   const world = app.world;
 
   app.onError((e) => {
@@ -156,9 +154,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     if (bus !== undefined) bus.push({ code: e.code, hint: e.hint });
   });
 
-  const assets = renderer.assets;
-  assets.configureRuntimeBinding(runtimeBinding);
-  assets.configurePackIndex(PACK_INDEX_URL);
+  const assets = app.assets;
+  if (assets === undefined) throw new Error('[learn-render 1.5 transformations] asset host is unavailable');
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   // Parse the 3 GUID literals once (charter F1 single-grep entry).
   const woodGuidRes = AssetGuid.parse(WOOD_TEXTURE_GUID);
@@ -172,7 +170,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   // The texture handle resolves through the production fetch chain
-  // (configurePackIndex -> /pack-index.json -> container.jpg ->
+  // (catalog configuration -> container.jpg ->
   // parseImage -> uploadTexture); the cube handle resolves through the
   // Map fast-path seeded by registerWithGuid below (alias to engine-
   // builtin HANDLE_CUBE); the material handle resolves through the
@@ -298,8 +296,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Capture hooks used by the bench-screenshot recorder + the multi-
   // frame browser test. __captureTransformationsState exposes the
   // latest system-driven Transform values; __captureTransformations
-  // re-issues a fresh draw and reads canvas pixels via
-  // renderer.readPixels() (engine API since 2026-05-17).
+  // re-issues a fresh host draw and captures canvas pixels.
   type CaptureHook = () => Promise<Uint8Array>;
   type StateHook = () => {
     readonly quat: readonly [number, number, number, number];
@@ -321,11 +318,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
   win.__captureTransformations = async (): Promise<Uint8Array> => {
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    const r = await renderer.readPixels();
+    const r = await captureCanvasPixels(target);
     if (!r.ok) {
       throw new Error(
-        `[learn-render 1.5 transformations] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
+        `[learn-render 1.5 transformations] canvas capture failed: ${r.error.hint}`,
       );
     }
     return r.value;
@@ -336,7 +332,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[learn-render 1.5 transformations] app.start failed:', startRes.error);
     return;
   }
-  console.warn(`[learn-render 1.5 transformations] backend=${renderer.backend}`);
+  console.warn('[learn-render 1.5 transformations] Standard pipeline active');
 }
 
 function reportBootstrapError(err: CanvasAppError): void {

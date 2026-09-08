@@ -33,7 +33,7 @@
 // Falsify hooks: FALSIFY=skip-shapes skips all shape calls → foreground==0
 // (proves the readback measures real geometry, not clear color).
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { deflateSync } from 'node:zlib';
@@ -134,6 +134,10 @@ const SCREENSHOTS_DIR = resolve(
   'smoke-baselines',
   'hello-debug-draw',
 );
+const OUTPUT_DIR = process.env.FORGEAX_M31_ARTIFACT_DIR
+  ? resolve(process.env.FORGEAX_M31_ARTIFACT_DIR)
+  : SCREENSHOTS_DIR;
+mkdirSync(OUTPUT_DIR, { recursive: true });
 
 // --- 1. dawn.node setup ------------------------------------------------------
 
@@ -299,6 +303,20 @@ function countForeground(pixels) {
   return fg;
 }
 
+function countCapColors(pixels) {
+  const counts = { red: 0, green: 0, blue: 0, yellow: 0 };
+  for (let i = 0; i < pixels.length; i += 4) {
+    const r = pixels[i] ?? 0;
+    const g = pixels[i + 1] ?? 0;
+    const b = pixels[i + 2] ?? 0;
+    if (r >= 128 && g < 96 && b < 96) counts.red++;
+    if (g >= 128 && r < 96 && b < 96) counts.green++;
+    if (b >= 128 && r < 96 && g < 96) counts.blue++;
+    if (r >= 128 && g >= 128 && b < 96) counts.yellow++;
+  }
+  return counts;
+}
+
 /** Max red-channel value across all pixels. */
 function maxRedChannel(pixels) {
   let maxR = 0;
@@ -389,7 +407,7 @@ async function runMode(mode, label) {
       const foreground = countForeground(pixels);
 
       const pngName = mode === 'low' ? 'frame-060.png' : 'frame-060-empty.png';
-      const pngPath = resolve(SCREENSHOTS_DIR, pngName);
+      const pngPath = resolve(OUTPUT_DIR, pngName);
       const pngBuffer = writePng(WIDTH, HEIGHT, pixels);
       writeFileSync(pngPath, pngBuffer);
       console.log(
@@ -416,6 +434,131 @@ async function runMode(mode, label) {
   renderTarget = null;
 
   console.log(`[smoke] mode=${mode} PASS (${FRAMES} frames, draw count check passed)`);
+  return true;
+}
+
+// --- 8. M31 hard-cap truncation + same-device next-frame recovery -----------
+
+async function runCapRecoveryMode() {
+  console.log('[smoke] --- mode=cap-recovery (hard cap 10, same device) ---');
+
+  const adapterResult = await rhi.requestAdapter();
+  if (!adapterResult.ok) throw new Error(`requestAdapter failed: ${adapterResult.error.code}`);
+  const deviceResult = await adapterResult.value.requestDevice({ requiredFeatures: [] });
+  if (!deviceResult.ok) throw new Error(`requestDevice failed: ${deviceResult.error.code}`);
+  const device = deviceResult.value;
+  const rawDevice = _internal_getRawDevice(device);
+  const format = 'bgra8unorm';
+  mockCanvas.getContext('webgpu').configure({
+    device: rawDevice, format, alphaMode: 'premultiplied',
+  });
+
+  let deviceErrors = 0;
+  rawDevice.addEventListener('uncapturederror', (event) => {
+    deviceErrors++;
+    console.error(`[smoke] cap-recovery uncapturederror: ${event.error?.message ?? event}`);
+  });
+
+  const maxVertexCapacity = 10;
+  const ddResult = await createDebugDraw({
+    device,
+    queue: device.queue,
+    createShaderModule,
+    format,
+    initialVertexCapacity: maxVertexCapacity,
+    maxVertexCapacity,
+  });
+  if (!ddResult.ok) throw new Error(`createDebugDraw failed: ${ddResult.error.code}`);
+  const dd = ddResult.value;
+  const viewProj = buildViewProj();
+
+  async function renderStage(phase) {
+    const encResult = device.createCommandEncoder();
+    if (!encResult.ok) throw new Error(`cap-recovery createCommandEncoder failed: ${encResult.error.code}`);
+    const encoder = encResult.value;
+    const clearPass = encoder.beginRenderPass({
+      colorAttachments: [{
+        view: renderTarget.createView(),
+        loadOp: 'clear',
+        storeOp: 'store',
+        clearValue: { r: 0, g: 0, b: 0, a: 1 },
+      }],
+    });
+    clearPass.end();
+
+    if (phase === 'baseline') {
+      dd.line(vec3.create(-1.4, -0.55, 0), vec3.create(1.4, -0.55, 0), [1, 0, 0, 1]);
+      dd.line(vec3.create(0, -1.1, 0), vec3.create(0, 1.1, 0), [0, 1, 0, 1]);
+    } else if (phase === 'overflow') {
+      for (let i = 0; i < 5; i++) {
+        const y = -0.8 + i * 0.4;
+        dd.line(vec3.create(-1.35, y, 0), vec3.create(1.35, y, 0), [1, 0, 0, 1]);
+      }
+      dd.line(vec3.create(-1.2, -1.1, 0), vec3.create(1.2, -1.1, 0), [1, 1, 0, 1]);
+      dd.aabb(vec3.create(-0.3, -0.3, 0), vec3.create(0.3, 0.3, 0), [0, 1, 0, 1]);
+    } else {
+      dd.line(vec3.create(-1.1, 0.8, 0), vec3.create(1.1, -0.8, 0), [0, 0, 1, 1]);
+    }
+
+    const queued = dd._stagingVertexCount;
+    const flushResult = dd.flush(encoder, renderTarget.createView(), viewProj);
+    if (!flushResult.ok) throw new Error(`cap-recovery flush failed: ${flushResult.error.code}`);
+    const draw = dd._lastFlushVertexCount;
+    const cbResult = encoder.finish();
+    if (!cbResult.ok) throw new Error(`cap-recovery finish failed: ${cbResult.error.code}`);
+    const submitResult = device.queue.submit([cbResult.value]);
+    if (!submitResult.ok) throw new Error(`cap-recovery submit failed: ${submitResult.error.code}`);
+    await rawDevice.queue.onSubmittedWorkDone();
+    const pixels = await readPixels(rawDevice, renderTarget);
+    const pngPath = resolve(OUTPUT_DIR, `cap-recovery-${phase}.png`);
+    writeFileSync(pngPath, writePng(WIDTH, HEIGHT, pixels));
+    return {
+      phase,
+      queued,
+      staged: dd._stagingVertexCount,
+      draw,
+      foreground: countForeground(pixels),
+      colors: countCapColors(pixels),
+      pngPath,
+    };
+  }
+
+  const baseline = await renderStage('baseline');
+  const overflow = await renderStage('overflow');
+  const recovery = await renderStage('recovery');
+
+  for (const [label, stage, expectedQueued, expectedDraw] of [
+    ['baseline', baseline, 4, 4],
+    ['overflow', overflow, 10, 10],
+    ['recovery', recovery, 2, 2],
+  ]) {
+    if (
+      stage.queued !== expectedQueued ||
+      stage.staged !== 0 ||
+      stage.draw !== expectedDraw ||
+      stage.draw > maxVertexCapacity ||
+      stage.foreground === 0
+    ) {
+      throw new Error(`${label} cap-recovery invariant failed: ${JSON.stringify(stage)}`);
+    }
+  }
+  if (baseline.colors.red === 0 || baseline.colors.green === 0 || baseline.colors.blue !== 0) {
+    throw new Error(`cap-recovery baseline colors invalid: ${JSON.stringify(baseline)}`);
+  }
+  if (overflow.colors.red === 0 || overflow.colors.green !== 0 || overflow.colors.yellow !== 0) {
+    throw new Error(`cap-recovery overflow rendered discarded geometry: ${JSON.stringify(overflow)}`);
+  }
+  if (recovery.colors.blue === 0 || recovery.colors.red !== 0 || recovery.colors.green !== 0 || recovery.colors.yellow !== 0) {
+    throw new Error(`cap-recovery recovery contains stale geometry: ${JSON.stringify(recovery)}`);
+  }
+  if (deviceErrors !== 0) throw new Error(`cap-recovery had ${deviceErrors} uncaptured device errors`);
+
+  dd.destroy();
+  dd.destroy();
+  renderTarget = null;
+  console.log(
+    `[smoke] cap-recovery PASS - same device baseline=${JSON.stringify(baseline)} overflow=${JSON.stringify(overflow)} recovery=${JSON.stringify(recovery)} deviceErrors=${deviceErrors}`,
+  );
   return true;
 }
 
@@ -479,7 +622,7 @@ async function runRuntimeMode() {
       const pixels = await readPixels(rawDevice, renderTarget);
       const foreground = countForeground(pixels);
 
-      const pngPath = resolve(SCREENSHOTS_DIR, 'frame-060-runtime.png');
+      const pngPath = resolve(OUTPUT_DIR, 'frame-060-runtime.png');
       const pngBuffer = writePng(WIDTH, HEIGHT, pixels);
       writeFileSync(pngPath, pngBuffer);
       console.log(
@@ -556,7 +699,7 @@ async function runDepthMode() {
         const pixels = await readPixels(rawDevice, renderTarget);
         alwaysForeground = countForeground(pixels);
 
-        const pngPath = resolve(SCREENSHOTS_DIR, 'frame-060-depth-always.png');
+        const pngPath = resolve(OUTPUT_DIR, 'frame-060-depth-always.png');
         const pngBuffer = writePng(WIDTH, HEIGHT, pixels);
         writeFileSync(pngPath, pngBuffer);
         console.log(
@@ -820,7 +963,7 @@ async function runDepthMode() {
         const pixels = await readPixels(rawDevice, renderTarget);
         const foreground = countForeground(pixels);
 
-        const pngPath = resolve(SCREENSHOTS_DIR, 'frame-060-depth-less-equal.png');
+        const pngPath = resolve(OUTPUT_DIR, 'frame-060-depth-less-equal.png');
         const pngBuffer = writePng(WIDTH, HEIGHT, pixels);
         writeFileSync(pngPath, pngBuffer);
         console.log(
@@ -904,7 +1047,7 @@ async function runHdrpTonemapMode() {
       const foreground = countForeground(pixels);
       const maxR = maxRedChannel(pixels);
 
-      const pngPath = resolve(SCREENSHOTS_DIR, 'frame-060-hdrp-tonemap.png');
+      const pngPath = resolve(OUTPUT_DIR, 'frame-060-hdrp-tonemap.png');
       const pngBuffer = writePng(WIDTH, HEIGHT, pixels);
       writeFileSync(pngPath, pngBuffer);
       console.log(
@@ -942,10 +1085,11 @@ async function runHdrpTonemapMode() {
 try {
   await runMode('low', '4 shapes via createDebugDraw + manual flush');
   await runMode('empty', 'no shape calls, flush skips GPU pass');
+  await runCapRecoveryMode();
   await runRuntimeMode();
   await runDepthMode();
   await runHdrpTonemapMode();
-  console.log('[smoke] PASS - all 5 modes');
+  console.log('[smoke] PASS - all 6 modes');
   process.exit(0);
 } catch (err) {
   console.error(`[smoke] FAIL - ${err instanceof Error ? err.message : String(err)}`);

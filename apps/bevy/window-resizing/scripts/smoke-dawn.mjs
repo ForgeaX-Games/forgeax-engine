@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // bevy-window-resizing headless dawn smoke — proves Bevy window/window_resizing
 // behavior: canvas resize, renderer survives, camera aspect syncs.
 // Browser and smoke share the same src/window-resizing.ts scene.
@@ -110,31 +111,26 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  renderer = await createSmokeRenderer(createRenderer, mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 }
-console.log(`[bevy-window-resizing] backend=${renderer.backend}`);
+console.log(`[bevy-window-resizing] backend=${rendererBackend(renderer)}`);
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+subscribeSmokeErrors(renderer, (err) => errors.push({ code: err.code, hint: err.hint }));
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 const { buildWindowResizingWorld } = await import(resolve(here, '..', 'src', 'window-resizing.ts'));
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 buildWindowResizingWorld(world);
 
 // --- render at initial size + verify not black ---
 world.update().unwrap();
-await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+await drawSmokeFrame(renderer, world);
 await delay(50);
 const initialPixels = await capture(WIDTH, HEIGHT);
 const initialIdx = (Math.floor(HEIGHT / 2) * WIDTH + Math.floor(WIDTH / 2)) * 4;
@@ -146,7 +142,7 @@ const initialNotBlack = initialR > 10 || initialG > 10 || initialB > 10;
 // --- render at SMOKE_MIN_FRAMES ---
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   world.update().unwrap();
-  await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  await drawSmokeFrame(renderer, world);
 }
 await delay(50);
 const afterPixels = await capture(WIDTH, HEIGHT);
@@ -176,7 +172,7 @@ for (const row of cameraQuery) {
 
 for (let i = 0; i < 10; i++) {
   world.update().unwrap();
-  await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  await drawSmokeFrame(renderer, world);
 }
 await delay(50);
 const resizedPixels = await capture(640, 360);
@@ -226,5 +222,5 @@ if (!allPass) {
   process.exit(1);
 }
 
-console.log(`[smoke] PASS - ${SMOKE_MIN_FRAMES} frames, initial not-black=${initialNotBlack}, resized not-black=${resizedNotBlack}, aspect=${cameraAspect.toFixed(4)}, backend=${renderer.backend}`);
+console.log(`[smoke] PASS - ${SMOKE_MIN_FRAMES} frames, initial not-black=${initialNotBlack}, resized not-black=${resizedNotBlack}, aspect=${cameraAspect.toFixed(4)}, backend=${rendererBackend(renderer)}`);
 process.exit(0);

@@ -1,271 +1,31 @@
 // @forgeax/engine-runtime/__tests__/ssao-passes.test.ts -
-// SSAO pass topology test (M3 / w13).
+// SSAO record-owner tests (M8 / w35-w46).
 // feat-20260612-hdrp-ssao.
 //
-// plan-strategy D-2: exactly 2 pass (ssao-calc + ssao-blur).
-// requirements: half-res, r8unorm transient color targets.
-//
-// Tests:
-//   (a) addSsaoPasses wires 2 pass nodes into an isolated RenderGraph
-//   (b) pass names are 'ssao-calc' and 'ssao-blur'
-//   (c) ssao-calc reads gbuf0 + hdrDepth, writes ssaoRaw
-//   (d) ssao-blur reads ssaoRaw, writes ssaoBlurred
-//   (e) graph compiles without errors with valid caps + g-buffer producer
-//   (f) ssao-calc comes before ssao-blur in topological order
+// The tests invoke recordSsaoCalcPass/recordSsaoBlurPass through a minimal
+// typed graph fixture and keep the GPU dispatch/binding predicates intact.
 
-import type {
-  _InternalRenderPipelineContext,
-  RenderPipelineContext,
-  RenderSystemRuntime,
-} from '@forgeax/engine-render/internal';
+import { RenderGraph } from '@forgeax/engine-render-graph';
+import type { RhiDevice } from '@forgeax/engine-rhi';
+import { describe, expect, it, vi } from 'vitest';
 import {
-  addSsaoPasses,
   recordBloomBlurHPass,
   recordBloomBlurVPass,
   recordBloomBrightPass,
   recordBloomCompositePass,
   recordFxaaPass,
   recordSkyboxPass,
-} from '@forgeax/engine-render/internal';
-import { RenderGraph } from '@forgeax/engine-render-graph';
-import type { RhiCaps, RhiDevice } from '@forgeax/engine-rhi';
-import { describe, expect, it, vi } from 'vitest';
+} from '../../../render/src/record/skybox-post-pass';
+import type { RenderPipelineContext } from '../../../render/src/render-contract';
+import {
+  recordSsaoBlurPass,
+  recordSsaoCalcPass,
+} from '../../../render/src/render-graph-primitives';
+import type {
+  _InternalRenderPipelineContext,
+  RenderSystemRuntime,
+} from '../../../render/src/render-system';
 
-function mockRuntime(capsOverride: Partial<RhiCaps> = {}): RenderSystemRuntime {
-  const errorRegistry = {
-    fire: vi.fn(),
-    listeners: new Set(),
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-  };
-
-  const device = {
-    caps: {
-      backendKind: 'webgpu' as const,
-      storageBuffer: true,
-      float32Filterable: true,
-      maxColorAttachments: 8,
-      maxStorageBuffersPerShaderStage: 4,
-      ...capsOverride,
-    },
-    createBuffer: vi.fn().mockReturnValue({
-      ok: true,
-      value: { label: 'mock-buffer' },
-    }),
-    createTexture: vi.fn().mockReturnValue({
-      ok: true,
-      value: { label: 'mock-tex' },
-    }),
-    createTextureView: vi.fn().mockReturnValue({
-      ok: true,
-      value: { label: 'mock-tex-view' },
-    }),
-    createSampler: vi.fn().mockReturnValue({
-      ok: true,
-      value: { label: 'mock-sampler' },
-    }),
-    createBindGroupLayout: vi.fn().mockReturnValue({
-      ok: true,
-      value: { label: 'mock-bgl' },
-    }),
-    queue: {
-      writeBuffer: vi.fn().mockReturnValue({ ok: true, value: undefined }),
-      writeTexture: vi.fn().mockReturnValue({ ok: true, value: undefined }),
-    },
-  } as unknown as RhiDevice;
-
-  return {
-    device,
-    errorRegistry,
-    shaderCache: { get: vi.fn() },
-  } as unknown as RenderSystemRuntime;
-}
-
-function mockCtx(runtime: RenderSystemRuntime): RenderPipelineContext {
-  return {
-    runtime,
-    assets: { get: vi.fn(), register: vi.fn() },
-    store: { ensureResident: vi.fn(), getTextureView: vi.fn() },
-    pipelineState: {},
-    encoder: {},
-    view: {},
-    clear: [0, 0, 0, 1],
-    targetW: 800,
-    targetH: 600,
-    currentTexture: {},
-    camera: {},
-    validated: [],
-    validatedOrdered: [],
-    viewBindGroup: null,
-    meshBindGroup: null,
-    frameState: { perFrameGraph: null, isHdrpActive: true },
-    dispatchCounts: {},
-    bindGroupCounts: {},
-    skylight: undefined,
-    skylightCount: 0,
-    skybox: undefined,
-    msaaActive: false,
-    geometryColorResolveView: null,
-    ldrSpriteColorView: null,
-  } as unknown as RenderPipelineContext;
-}
-
-/**
- * Declares the minimal HDRP g-buffer targets + half-swapchain SSAO
- * targets that addSsaoPasses expects. Also adds a producer 'g-buffer'
- * pass that writes gbuf0 + hdrDepth so the compile dangling-read
- * validation passes.
- */
-function setupGraph(graph: RenderGraph<RenderPipelineContext>): void {
-  graph.addColorTarget('gbuf0', {
-    format: 'rgba16float',
-    size: 'swapchain',
-    sample: 1,
-  });
-  graph.addColorTarget('hdrDepth', {
-    format: 'depth24plus-stencil8',
-    size: 'swapchain',
-    sample: 1,
-  });
-  graph.addColorTarget('ssaoRaw', {
-    format: 'r8unorm',
-    size: 'half-swapchain',
-    sample: 1,
-  });
-  graph.addColorTarget('ssaoBlurred', {
-    format: 'r8unorm',
-    size: 'half-swapchain',
-    sample: 1,
-  });
-}
-
-describe('addSsaoPasses topology (M3 / w13)', () => {
-  it('(a) wires 2 pass nodes: ssao-calc + ssao-blur', () => {
-    const runtime = mockRuntime();
-    const ctx = mockCtx(runtime);
-    const graph = new RenderGraph<RenderPipelineContext>();
-    setupGraph(graph);
-
-    addSsaoPasses(graph, {
-      gbuf0: 'gbuf0',
-      hdrDepth: 'hdrDepth',
-      ssaoRaw: 'ssaoRaw',
-      ssaoBlurred: 'ssaoBlurred',
-      ctx,
-    });
-
-    const passes = graph.listPasses();
-    const passNames = passes.map((p) => p.name);
-
-    expect(passNames).toContain('ssao-calc');
-    expect(passNames).toContain('ssao-blur');
-    const ssaoPassNames = passNames.filter((n) => n.startsWith('ssao-'));
-    expect(ssaoPassNames).toHaveLength(2);
-  });
-
-  it('(b) ssao-calc reads gbuf0 + hdrDepth, writes ssaoRaw', () => {
-    const runtime = mockRuntime();
-    const ctx = mockCtx(runtime);
-    const graph = new RenderGraph<RenderPipelineContext>();
-    setupGraph(graph);
-
-    addSsaoPasses(graph, {
-      gbuf0: 'gbuf0',
-      hdrDepth: 'hdrDepth',
-      ssaoRaw: 'ssaoRaw',
-      ssaoBlurred: 'ssaoBlurred',
-      ctx,
-    });
-
-    const passes = graph.listPasses();
-    const calcPass = passes.find((p) => p.name === 'ssao-calc');
-    expect(calcPass).toBeDefined();
-    if (!calcPass) return;
-
-    expect(calcPass.reads).toContain('gbuf0');
-    expect(calcPass.reads).toContain('hdrDepth');
-    expect(calcPass.reads).toHaveLength(2);
-    expect(calcPass.writes).toContain('ssaoRaw');
-    expect(calcPass.writes).toHaveLength(1);
-  });
-
-  it('(c) ssao-blur reads ssaoRaw, writes ssaoBlurred', () => {
-    const runtime = mockRuntime();
-    const ctx = mockCtx(runtime);
-    const graph = new RenderGraph<RenderPipelineContext>();
-    setupGraph(graph);
-
-    addSsaoPasses(graph, {
-      gbuf0: 'gbuf0',
-      hdrDepth: 'hdrDepth',
-      ssaoRaw: 'ssaoRaw',
-      ssaoBlurred: 'ssaoBlurred',
-      ctx,
-    });
-
-    const passes = graph.listPasses();
-    const blurPass = passes.find((p) => p.name === 'ssao-blur');
-    expect(blurPass).toBeDefined();
-    if (!blurPass) return;
-
-    expect(blurPass.reads).toContain('ssaoRaw');
-    expect(blurPass.writes).toContain('ssaoBlurred');
-    expect(blurPass.writes).toHaveLength(1);
-  });
-
-  it('(d) graph compiles with valid caps + producer g-buffer pass', () => {
-    const runtime = mockRuntime();
-    const ctx = mockCtx(runtime);
-    const graph = new RenderGraph<RenderPipelineContext>();
-    setupGraph(graph);
-
-    // Producer pass: g-buffer writes gbuf0 + hdrDepth so ssao-calc's reads
-    // have a valid writer (compile dangling-read validation).
-    graph.addPass('g-buffer', {
-      reads: [],
-      writes: ['gbuf0', 'hdrDepth'],
-    });
-
-    addSsaoPasses(graph, {
-      gbuf0: 'gbuf0',
-      hdrDepth: 'hdrDepth',
-      ssaoRaw: 'ssaoRaw',
-      ssaoBlurred: 'ssaoBlurred',
-      ctx,
-    });
-
-    // Verify the compile succeeds (proves topology + resources are valid)
-    const compileResult = graph.compile({
-      backendKind: runtime.device.caps.backendKind,
-      caps: runtime.device.caps,
-      device: runtime.device,
-    });
-    expect(compileResult.ok).toBe(true);
-  });
-
-  it('(e) ssao-calc comes before ssao-blur in topological order', () => {
-    const runtime = mockRuntime();
-    const ctx = mockCtx(runtime);
-    const graph = new RenderGraph<RenderPipelineContext>();
-    setupGraph(graph);
-
-    addSsaoPasses(graph, {
-      gbuf0: 'gbuf0',
-      hdrDepth: 'hdrDepth',
-      ssaoRaw: 'ssaoRaw',
-      ssaoBlurred: 'ssaoBlurred',
-      ctx,
-    });
-
-    const passes = graph.listPasses();
-    const calcIdx = passes.findIndex((p) => p.name === 'ssao-calc');
-    const blurIdx = passes.findIndex((p) => p.name === 'ssao-blur');
-    expect(calcIdx).toBeGreaterThanOrEqual(0);
-    expect(blurIdx).toBeGreaterThanOrEqual(0);
-    // calc must come before blur (calc writes ssaoRaw, blur reads ssaoRaw)
-    expect(calcIdx).toBeLessThan(blurIdx);
-  });
-});
 // ── M8 / w35-w36-w46 GPU dispatch + intensity write RED tests ───────────────
 //
 // plan-strategy §D-A: record closures must call setPipeline + setBindGroup + draw(3,1,0,0).
@@ -516,6 +276,37 @@ function setupGraphForDispatch(graph: RenderGraph<RenderPipelineContext>): void 
   });
 }
 
+function addSsaoRecordPasses(
+  graph: RenderGraph<RenderPipelineContext>,
+  _ctx: RenderPipelineContext,
+): void {
+  graph.addPass('ssao-calc', {
+    reads: ['gbuf0', 'hdrDepth'],
+    writes: ['ssaoRaw'],
+    execute: (c, resolveCtx) =>
+      recordSsaoCalcPass(
+        c as _InternalRenderPipelineContext,
+        resolveCtx,
+        'ssaoRaw',
+        'gbuf0',
+        'hdrDepth',
+      ),
+  });
+  graph.addPass('ssao-blur', {
+    reads: ['ssaoRaw', 'gbuf0', 'hdrDepth'],
+    writes: ['ssaoBlurred'],
+    execute: (c, resolveCtx) =>
+      recordSsaoBlurPass(
+        c as _InternalRenderPipelineContext,
+        resolveCtx,
+        'ssaoBlurred',
+        'ssaoRaw',
+        'gbuf0',
+        'hdrDepth',
+      ),
+  });
+}
+
 describe('recordSsaoCalcPass GPU dispatch (M8 / w35 — RED)', () => {
   it('(g) recordSsaoCalcPass calls setPipeline(ssaoCalcPipeline) once per frame', () => {
     const calcPipeline = { __label: 'ssao-calc-pipeline' };
@@ -523,13 +314,7 @@ describe('recordSsaoCalcPass GPU dispatch (M8 / w35 — RED)', () => {
 
     const graph = new RenderGraph<RenderPipelineContext>();
     setupGraphForDispatch(graph);
-    addSsaoPasses(graph, {
-      gbuf0: 'gbuf0',
-      hdrDepth: 'hdrDepth',
-      ssaoRaw: 'ssaoRaw',
-      ssaoBlurred: 'ssaoBlurred',
-      ctx,
-    });
+    addSsaoRecordPasses(graph, ctx);
 
     const execute = findPassExecute(graph, 'ssao-calc');
     expect(execute).toBeDefined();
@@ -558,13 +343,7 @@ describe('recordSsaoCalcPass GPU dispatch (M8 / w35 — RED)', () => {
 
     const graph = new RenderGraph<RenderPipelineContext>();
     setupGraphForDispatch(graph);
-    addSsaoPasses(graph, {
-      gbuf0: 'gbuf0',
-      hdrDepth: 'hdrDepth',
-      ssaoRaw: 'ssaoRaw',
-      ssaoBlurred: 'ssaoBlurred',
-      ctx,
-    });
+    addSsaoRecordPasses(graph, ctx);
 
     const execute = findPassExecute(graph, 'ssao-calc');
     if (!execute) return;
@@ -599,13 +378,7 @@ describe('recordSsaoCalcPass GPU dispatch (M8 / w35 — RED)', () => {
 
     const graph = new RenderGraph<RenderPipelineContext>();
     setupGraphForDispatch(graph);
-    addSsaoPasses(graph, {
-      gbuf0: 'gbuf0',
-      hdrDepth: 'hdrDepth',
-      ssaoRaw: 'ssaoRaw',
-      ssaoBlurred: 'ssaoBlurred',
-      ctx,
-    });
+    addSsaoRecordPasses(graph, ctx);
 
     const execute = findPassExecute(graph, 'ssao-calc');
     if (!execute) return;
@@ -638,13 +411,7 @@ describe('recordSsaoCalcPass GPU dispatch (M8 / w35 — RED)', () => {
 
     const graph = new RenderGraph<RenderPipelineContext>();
     setupGraphForDispatch(graph);
-    addSsaoPasses(graph, {
-      gbuf0: 'gbuf0',
-      hdrDepth: 'hdrDepth',
-      ssaoRaw: 'ssaoRaw',
-      ssaoBlurred: 'ssaoBlurred',
-      ctx,
-    });
+    addSsaoRecordPasses(graph, ctx);
 
     const execute = findPassExecute(graph, 'ssao-calc');
     if (!execute) return;
@@ -672,13 +439,7 @@ describe('recordSsaoBlurPass GPU dispatch + ssaoRaw input (M8 / w36 — RED)', (
 
     const graph = new RenderGraph<RenderPipelineContext>();
     setupGraphForDispatch(graph);
-    addSsaoPasses(graph, {
-      gbuf0: 'gbuf0',
-      hdrDepth: 'hdrDepth',
-      ssaoRaw: 'ssaoRaw',
-      ssaoBlurred: 'ssaoBlurred',
-      ctx,
-    });
+    addSsaoRecordPasses(graph, ctx);
 
     const execute = findPassExecute(graph, 'ssao-blur');
     if (!execute) return;
@@ -709,13 +470,7 @@ describe('recordSsaoBlurPass GPU dispatch + ssaoRaw input (M8 / w36 — RED)', (
 
     const graph = new RenderGraph<RenderPipelineContext>();
     setupGraphForDispatch(graph);
-    addSsaoPasses(graph, {
-      gbuf0: 'gbuf0',
-      hdrDepth: 'hdrDepth',
-      ssaoRaw: 'ssaoRaw',
-      ssaoBlurred: 'ssaoBlurred',
-      ctx,
-    });
+    addSsaoRecordPasses(graph, ctx);
 
     const execute = findPassExecute(graph, 'ssao-blur');
     if (!execute) return;
@@ -746,13 +501,7 @@ describe('recordSsaoBlurPass GPU dispatch + ssaoRaw input (M8 / w36 — RED)', (
 
     const graph = new RenderGraph<RenderPipelineContext>();
     setupGraphForDispatch(graph);
-    addSsaoPasses(graph, {
-      gbuf0: 'gbuf0',
-      hdrDepth: 'hdrDepth',
-      ssaoRaw: 'ssaoRaw',
-      ssaoBlurred: 'ssaoBlurred',
-      ctx,
-    });
+    addSsaoRecordPasses(graph, ctx);
 
     const execute = findPassExecute(graph, 'ssao-blur');
     if (!execute) return;
@@ -791,13 +540,7 @@ describe('recordSsaoBlurPass GPU dispatch + ssaoRaw input (M8 / w36 — RED)', (
 
     const graph = new RenderGraph<RenderPipelineContext>();
     setupGraphForDispatch(graph);
-    addSsaoPasses(graph, {
-      gbuf0: 'gbuf0',
-      hdrDepth: 'hdrDepth',
-      ssaoRaw: 'ssaoRaw',
-      ssaoBlurred: 'ssaoBlurred',
-      ctx,
-    });
+    addSsaoRecordPasses(graph, ctx);
 
     const execute = findPassExecute(graph, 'ssao-blur');
     if (!execute) return;
@@ -835,13 +578,7 @@ describe('recordSsaoCalcPass per-frame intensity write (M8 / w46 — RED)', () =
 
     const graph = new RenderGraph<RenderPipelineContext>();
     setupGraphForDispatch(graph);
-    addSsaoPasses(graph, {
-      gbuf0: 'gbuf0',
-      hdrDepth: 'hdrDepth',
-      ssaoRaw: 'ssaoRaw',
-      ssaoBlurred: 'ssaoBlurred',
-      ctx,
-    });
+    addSsaoRecordPasses(graph, ctx);
 
     const execute = findPassExecute(graph, 'ssao-calc');
     if (!execute) return;
@@ -868,11 +605,12 @@ describe('recordSsaoCalcPass per-frame intensity write (M8 / w46 — RED)', () =
       (ssaoUniformWrites[0]?.data as Float32Array).byteOffset,
       64,
     );
-    // intensityPad starts at float index 48 (offset 192). x = 1.0 (default
-    // — config.ssao.intensity=1.0 in spy ctx). y/z/w = 0.
+    // intensityPad starts at float index 48 (offset 192). The spy supplies
+    // only enabled+intensity, so the parameter authority contributes the
+    // documented radius/bias defaults.
     expect(data[48]).toBe(1.0);
-    expect(data[49]).toBe(0);
-    expect(data[50]).toBe(0);
+    expect(data[49]).toBe(0.5);
+    expect(data[50]).toBeCloseTo(0.025, 6);
     expect(data[51]).toBe(0);
   });
 
@@ -881,13 +619,7 @@ describe('recordSsaoCalcPass per-frame intensity write (M8 / w46 — RED)', () =
 
     const graph = new RenderGraph<RenderPipelineContext>();
     setupGraphForDispatch(graph);
-    addSsaoPasses(graph, {
-      gbuf0: 'gbuf0',
-      hdrDepth: 'hdrDepth',
-      ssaoRaw: 'ssaoRaw',
-      ssaoBlurred: 'ssaoBlurred',
-      ctx,
-    });
+    addSsaoRecordPasses(graph, ctx);
 
     const execute = findPassExecute(graph, 'ssao-calc');
     if (!execute) return;
@@ -1046,6 +778,10 @@ describe('post-process bindgroup identity cache (issue #670)', () => {
       views.bloomBlurV,
     );
     expect(bindGroupCreates[5]?.entries[0]?.resource.value).toBe(views.cubemap);
+    expect(bindGroupCreates[5]?.entries[2]?.resource.value).toEqual({
+      buffer: ctx.pipelineState.viewUniformBuffer,
+      size: 960,
+    });
 
     recordAll();
     expect(bindGroupCreates).toHaveLength(6);
@@ -1080,13 +816,7 @@ describe('bindgroup resize invalidation (R-BGCACHE)', () => {
     const { ctx, spy } = makeDispatchSpyCtx();
     const graph = new RenderGraph<RenderPipelineContext>();
     setupGraphForDispatch(graph);
-    addSsaoPasses(graph, {
-      gbuf0: 'gbuf0',
-      hdrDepth: 'hdrDepth',
-      ssaoRaw: 'ssaoRaw',
-      ssaoBlurred: 'ssaoBlurred',
-      ctx,
-    });
+    addSsaoRecordPasses(graph, ctx);
     const execute = findPassExecute(graph, 'ssao-calc');
     if (!execute) throw new Error('ssao-calc pass missing');
 
@@ -1122,13 +852,7 @@ describe('bindgroup resize invalidation (R-BGCACHE)', () => {
     const { ctx, spy } = makeDispatchSpyCtx();
     const graph = new RenderGraph<RenderPipelineContext>();
     setupGraphForDispatch(graph);
-    addSsaoPasses(graph, {
-      gbuf0: 'gbuf0',
-      hdrDepth: 'hdrDepth',
-      ssaoRaw: 'ssaoRaw',
-      ssaoBlurred: 'ssaoBlurred',
-      ctx,
-    });
+    addSsaoRecordPasses(graph, ctx);
     const execute = findPassExecute(graph, 'ssao-calc');
     if (!execute) throw new Error('ssao-calc pass missing');
 
@@ -1151,13 +875,7 @@ describe('bindgroup resize invalidation (R-BGCACHE)', () => {
     const { ctx, spy } = makeDispatchSpyCtx();
     const graph = new RenderGraph<RenderPipelineContext>();
     setupGraphForDispatch(graph);
-    addSsaoPasses(graph, {
-      gbuf0: 'gbuf0',
-      hdrDepth: 'hdrDepth',
-      ssaoRaw: 'ssaoRaw',
-      ssaoBlurred: 'ssaoBlurred',
-      ctx,
-    });
+    addSsaoRecordPasses(graph, ctx);
     const execute = findPassExecute(graph, 'ssao-blur');
     if (!execute) throw new Error('ssao-blur pass missing');
 

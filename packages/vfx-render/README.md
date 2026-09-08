@@ -18,7 +18,9 @@ const vfx = createVfxRuntimeHost({
 const attached = await vfx.attachWorld({ world, assets });
 if (!attached.ok) return attached;
 
-const renderer = await createRenderer(canvas, { features: [vfx.feature] });
+const created = await createRenderer(canvas, { features: [vfx.feature] });
+if (!created.ok) throw created.error;
+const renderer = created.value;
 ```
 
 Create the host before the Renderer and pass `host.feature` at Renderer
@@ -32,8 +34,8 @@ resource. Material and mesh GUIDs resolve through the attached World's
 | Stage | Work |
 |:--|:--|
 | Extract | Read camera and ordered GPU tick intents from each attached World |
-| Prepare | Reuse/create program, particle, scan, indirect, per-tick uniform, per-renderer projection, mesh, and graphics resources |
-| Contribute | Record spawn/update/scan/compact, one projection dispatch per renderer, then dependent indirect draws |
+| Plan | Declare program, particle, scan, indirect, per-tick uniform, per-renderer projection, mesh, and graphics resources |
+| Record | Compile the plan into spawn/update/scan/compact dispatches, then dependent indirect draws |
 | Recover | Drop generation-owned GPU state and restart affected runtime players |
 | Dispose | Release feature-owned state; the Renderer resolver destroys RHI resources exactly once |
 

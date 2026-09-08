@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // bevy-plugin headless dawn smoke — structural-only.
 // Verifies webgpu backend + no RHI errors.
 // Bevy plugin demo has no visible scene; the smoke gate proves the app boots
@@ -93,20 +94,15 @@ const _origErr = console.error;
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  renderer = await createSmokeRenderer(createRenderer, mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 }
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+subscribeSmokeErrors(renderer, (err) => errors.push({ code: err.code, hint: err.hint }));
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code}`);
-  process.exit(1);
-}
 
 // Build world with the custom plugin
 const { printMessagePlugin } = await import(resolve(here, '..', 'src', 'plugin.ts'));
@@ -115,14 +111,11 @@ const { perspective } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const { quat } = await import('@forgeax/engine-math');
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const plugin = printMessagePlugin(0, 'This is an example plugin');
-const buildResult = plugin.build(world);
-if (!buildResult.ok) {
-  console.error(`[smoke] FAIL - plugin.build: ${buildResult.error.code}`);
-  process.exit(1);
-}
+const { createWorldContext } = await import('@forgeax/engine-ecs');
+await createWorldContext(world, [plugin]);
 
 // Minimal camera — the renderer needs at least one camera to render.
 const eye = [-2, 2.5, 5];
@@ -133,7 +126,7 @@ world.spawn(
 
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   world.update(0.016);
-  await renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  await drawSmokeFrame(renderer, world);
 }
 await delay(50);
 
@@ -141,7 +134,7 @@ await delay(50);
 console.log = _origLog;
 
 const checks = [
-  ['backend=webgpu', renderer.backend === 'webgpu'],
+  ['backend=webgpu', rendererBackend(renderer) === 'webgpu'],
   ['rhi-error-count=0', errors.length === 0],
   ['plugin-message-printed', consoleLogCalls.length > 0 && consoleLogCalls.some(c => c.includes('This is an example plugin'))],
 ];
@@ -155,5 +148,5 @@ if (!allPass) {
   console.error(`[smoke] FAIL - ${checks.filter(([, ok]) => !ok).map(([n]) => n).join(', ')}`);
   process.exit(1);
 }
-console.log(`[smoke] PASS - ${SMOKE_MIN_FRAMES} frames, backend=${renderer.backend}`);
+console.log(`[smoke] PASS - ${SMOKE_MIN_FRAMES} frames, backend=${rendererBackend(renderer)}`);
 process.exit(0);

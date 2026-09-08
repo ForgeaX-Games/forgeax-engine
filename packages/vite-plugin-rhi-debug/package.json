@@ -5,7 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Vite plugin: dev-server POST /__forgeax-debug/tape capture endpoint + config.define injection for the forgeax engine RHI debug layered browser capture path.",
+  "description": "Vite serve-only raw .rhitape capture provider with strict validation and atomic persistence.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -49,7 +49,7 @@
       },
       "bench": {
         "enabled": false,
-        "reason": "thin middleware shell reusing @forgeax/engine-rhi-debug assembleReport; no perf-critical hot path"
+        "reason": "thin middleware shell validates and persists raw tape bytes; no perf-critical hot path"
       },
       "gate": {
         "enabled": false,

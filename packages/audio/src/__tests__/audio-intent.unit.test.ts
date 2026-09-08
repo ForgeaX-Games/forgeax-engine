@@ -15,6 +15,7 @@ describe('AudioIntent producer', () => {
     const clip = {
       kind: 'audio' as const,
       sourceKey: 'laser',
+      mediaType: 'audio/ogg' as const,
       bytes: new Uint8Array([1, 2, 3]),
     };
 
@@ -32,6 +33,31 @@ describe('AudioIntent producer', () => {
       entityId: 2,
       sourceKey: 'laser',
       options: PLAY_OPTIONS,
+    });
+  });
+
+  it('republishes bytes when a stable sourceKey receives changed content', () => {
+    const emit = vi.fn();
+    const backend = createAudioIntentBackend({ emit });
+    const clipA = {
+      kind: 'audio' as const,
+      sourceKey: 'laser',
+      mediaType: 'audio/ogg' as const,
+      bytes: new Uint8Array([1, 2, 3]),
+    };
+    const clipB = { ...clipA, bytes: new Uint8Array([1, 2, 4]) };
+
+    backend.play(1, clipA, PLAY_OPTIONS);
+    backend.play(2, clipA, PLAY_OPTIONS);
+    backend.play(3, clipB, PLAY_OPTIONS);
+
+    expect(emit).toHaveBeenCalledTimes(3);
+    expect(emit.mock.calls[1]?.[0]).not.toHaveProperty('bytes');
+    expect(emit.mock.calls[2]?.[0]).toMatchObject({
+      kind: 'play',
+      entityId: 3,
+      sourceKey: 'laser',
+      bytes: clipB.bytes,
     });
   });
 

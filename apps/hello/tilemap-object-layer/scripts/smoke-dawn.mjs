@@ -11,7 +11,7 @@
 //   - Spawns a Tilemap (cols=32 rows=32 chunkSize=16) + one TileLayer
 //     with anchor-cell encoding for sub-scenes (a)..(e), plus one sprite
 //     entity at world (16.5, 28.5) for sub-scene (e) AC-13 interleave.
-//   - Calls renderer.draw(world) for TARGET_FRAMES (280 default).
+//   - Calls the lease-bound renderer draw for TARGET_FRAMES (280 default).
 //   - Pixel readback samples one directed (x, y) per sub-scene + records
 //     `nearestPaletteFamily` ∈ {red|green|blue|yellow|gray|magenta|
 //     unknown} (charter F2 debug-fallback signal — soft check that
@@ -129,7 +129,6 @@ const mockCanvas = {
   removeEventListener() {},
 };
 
-let runtime;
 let ecs;
 let types;
 let graphicsExtras;
@@ -137,7 +136,6 @@ let render;
 let authoring;
 let scene;
 try {
-  runtime = await import('@forgeax/engine-runtime');
   ecs = await import('@forgeax/engine-ecs');
   types = await import('@forgeax/engine-types');
   graphicsExtras = await import('@forgeax/engine-graphics-extras');
@@ -156,13 +154,12 @@ const {
   MeshFilter,
   MeshRenderer,
 } = render;
-const { encodeSortScope, SPRITE_PREMULTIPLIED_ALPHA_BLEND, TileLayer, Tilemap } = authoring;
-const { createRenderer } = runtime;
+const { TilemapSort, SPRITE_PREMULTIPLIED_ALPHA_BLEND, TileLayer, Tilemap } = authoring;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { ChildOf, Transform } = scene;
 const { HANDLE_QUAD } = await import('@forgeax/engine-assets-runtime');
 const { encodeTileBits } = graphicsExtras;
 const { World } = ecs;
-const { toShared } = types;
 
 const TILE_GRASS = 1;
 const TILE_BIG_TREE = 2;
@@ -195,29 +192,53 @@ function buildAnchorTiles() {
 
 const world = new World();
 let renderer;
+let assets;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: manifestUrl });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: manifestUrl });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  assets = constructed.value.assets;
 } catch (createErr) {
   await deferred(
     `createRenderer threw: ${createErr instanceof Error ? createErr.message : String(createErr)}`,
   );
 }
-const worldAttachment1 = renderer.attachWorld(world);
+if (assets === undefined) throw new Error('host assets unavailable');
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const errors = [];
-renderer.onError((e) => errors.push({ code: e.code }));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') errors.push({ code: event.error.code });
+});
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  await deferred(`renderer.ready failed: ${ready.error.code}`);
+
+const atlasAPayload = {
+  kind: 'texture',
+  width: 64,
+  height: 64,
+  format: 'rgba8unorm-srgb',
+  data: new Uint8Array(64 * 64 * 4).fill(255),
+  colorSpace: 'srgb',
+  mipmap: false,
+};
+const atlasBPayload = { ...atlasAPayload, data: new Uint8Array(64 * 64 * 4).fill(128) };
+for (const [guid, payload] of [
+  ['hello-tilemap-object-layer/atlas-a', atlasAPayload],
+  ['hello-tilemap-object-layer/atlas-b', atlasBPayload],
+]) {
+  const result = assets.catalog(guid, payload);
+  if (!result.ok) {
+    console.error(`[hello-tilemap-object-layer smoke] atlas catalog failed: ${result.error.code}`);
+    process.exit(1);
+  }
 }
 
-const atlasA = toShared(201);
-const atlasB = toShared(202);
+const atlasA = 'hello-tilemap-object-layer/atlas-a';
+const atlasB = 'hello-tilemap-object-layer/atlas-b';
+const atlasAHandle = world.internSharedRef('TextureAsset', atlasAPayload);
 
 const tileset = {
   kind: 'tileset',
-  guid: 'hello-tilemap-object-layer/tileset',
   atlases: [atlasA, atlasB],
   tileWidth: 16,
   tileHeight: 16,
@@ -238,7 +259,11 @@ const tileset = {
     { regionIndex: 4, widthCells: 2, heightCells: 2, pivotX: 0.5, pivotY: 0.5 },
   ],
 };
-const tilesetHandle = world.allocSharedRef('TilesetAsset', tileset);
+const tilesetCatalog = assets.catalog('hello-tilemap-object-layer/tileset', tileset);
+if (!tilesetCatalog.ok) {
+  console.error(`[hello-tilemap-object-layer smoke] tileset catalog failed: ${tilesetCatalog.error.code}`);
+  process.exit(1);
+}
 
 const tilemap = world
   .spawn(
@@ -249,7 +274,7 @@ const tilemap = world
         rows: ROWS,
         tileSize: [1, 1],
         chunkSize: CHUNK_SIZE,
-        tileset: tilesetHandle,
+        tileset: 'hello-tilemap-object-layer/tileset',
       },
     },
     { component: Transform, data: {} },
@@ -264,7 +289,7 @@ world
         tiles: buildAnchorTiles(),
         layerOrder: 0,
         dirty: 1,
-        sortScope: encodeSortScope('per-cell'),
+        sortScope: TilemapSort.perCell,
       },
     },
     { component: ChildOf, data: { parent: tilemap } },
@@ -290,7 +315,7 @@ const spriteMaterialHandle = world.allocSharedRef('MaterialAsset', {
   values: {
     // feat-20260625 M3/w11 (D-4): UBO-aligned 1:1 with sprite.material.json.
     colorTint: [1, 1, 1, 1],
-    baseColorTexture: atlasA,
+    baseColorTexture: atlasAHandle,
     region: [0, 0, 1, 1],
     pivotAndSize: [0.5, 0.5, 1, 1],
   },
@@ -324,7 +349,11 @@ world.spawn(
 let framesDrawn = 0;
 for (let f = 0; f < TARGET_FRAMES; f++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = renderer.draw({
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  });
   if (!r.ok) {
     console.error(`[hello-tilemap-object-layer smoke] draw frame ${f} error: ${r.error.code}`);
     process.exit(1);

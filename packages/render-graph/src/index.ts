@@ -6,6 +6,7 @@
 // - Result<T, E> / ok / err -- binary result type
 // - PassInfo / ResourceInfo -- query interfaces
 
+export { RenderGraphBuilder } from './builder.js';
 export {
   err,
   type InvalidFormatDetail,
@@ -24,6 +25,7 @@ export type {
   ColorTargetHandle,
   ColorTargetSize,
   CompileOptions,
+  ComputePassDescriptor,
   InternalizedGraph,
   InternalizedPass,
   PassDescriptor,
@@ -60,3 +62,36 @@ export {
   serializeColorValueDomain,
   validateColorDomainConnection,
 } from './pipeline/color-value-domain.js';
+export type {
+  CompiledRenderGraph,
+  CompiledRenderGraphInfo,
+  ComputeGraphPass,
+  CopyGraphPass,
+  GraphAccess,
+  GraphAccessInfo,
+  GraphBuffer,
+  GraphBufferAccess,
+  GraphBufferDescriptor,
+  GraphExtent,
+  GraphPass,
+  GraphPassKind,
+  GraphResource,
+  GraphResourceKind,
+  GraphResourceOrigin,
+  GraphResourceResolver,
+  GraphTexture,
+  GraphTextureAccess,
+  GraphTextureDescriptor,
+  GraphTextureView,
+  GraphTextureViewDescriptor,
+  ImportedBufferDescriptor,
+  ImportedTextureDescriptor,
+  ImportedTextureViewResolver,
+  RasterColorAttachment,
+  RasterDepthStencilAttachment,
+  RasterGraphPass,
+  RenderGraphCompileOptions,
+  RenderGraphFrame,
+  RenderGraphPassExecution,
+  RenderGraphPassRunner,
+} from './types.js';

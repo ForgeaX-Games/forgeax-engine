@@ -2,7 +2,8 @@
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
 #pragma variant_axis PER_INSTANCE_REGION
 
-#import forgeax_view::common::{View, Mesh, InstanceData, view, meshes, instances, sampleMaterialTexture}
+#import forgeax_view::common::{View, FogViewParams, FogRay, Mesh, InstanceData, view, meshes, instances, sampleMaterialTexture, packSceneTemporal}
+#import forgeax_view::fog::{apply_fog}
 
 // @forgeax/engine-shader - sprite.wgsl (feat-20260520-2d-sprite-layer-mvp /
 // M-3 / w19). 2D sprite material — third variant of the MaterialAsset
@@ -33,8 +34,8 @@
 //     time; ShaderRegistry manifest path loadEngineShaderEntries adds a
 //     4th entry in w20)
 //
-// Bindings (mirror unlit.wgsl / pbr.wgsl byte-for-byte so the existing
-// 4-BindGroupLayout chain is reused without a per-pipeline BGL):
+// Material bindings are derived from the sprite paramSchema; view, mesh and
+// instance groups remain shared with the ordinary material pipeline:
 //
 //   @group(0) @binding(0) view                       uniform   (sprite reads
 //                                                               view.worldViewProj
@@ -46,17 +47,6 @@
 //                                                               vec4; 48 B)
 //   @group(1) @binding(1) baseColorSampler           sampler
 //   @group(1) @binding(2) baseColorTexture           texture_2d<f32>
-//   @group(1) @binding(3) metallicRoughnessSampler   sampler   (UNUSED; bound
-//                                                               to pipelineState
-//                                                               .defaultSampler
-//                                                               — D-1 candidate b)
-//   @group(1) @binding(4) metallicRoughnessTexture   texture_2d<f32> (UNUSED;
-//                                                               bound to
-//                                                               pipelineState
-//                                                               .defaultWhiteTextureView
-//                                                               — D-1 candidate b)
-//   @group(1) @binding(5) normalSampler              sampler   (UNUSED)
-//   @group(1) @binding(6) normalTexture              texture_2d<f32> (UNUSED)
 //   @group(2) @binding(0) meshes                     storage   (sprite reads
 //                                                               meshes[0]
 //                                                               .worldFromLocal
@@ -119,27 +109,13 @@ struct Material {
   // because slicesAndMode is never sampled in the vertex / fragment paths
   // when slices=[0,0,0,0] (zero-branch GPU path).
   slicesAndMode : vec4<f32>,
-  textureScalePadding : vec4<f32>,
-  baseColorUvScale : vec2<f32>,
-  metallicRoughnessUvScale : vec2<f32>,
-  normalUvScale : vec2<f32>,
-  emissiveUvScale : vec2<f32>,
-  occlusionUvScale : vec2<f32>,
+  baseColorTextureCoordinatesTransform : vec4<f32>,
+  baseColorTextureCoordinatesMetadata : vec4<f32>,
 };
 
 @group(1) @binding(0) var<uniform> material : Material;
 @group(1) @binding(1) var baseColorSampler : sampler;
 @group(1) @binding(2) var baseColorTexture : texture_2d<f32>;
-// Unused but declared so the BindGroupLayout binding-set matches the
-// shared PBR layout byte-for-byte (D-1 candidate b — 4 placeholder slots
-// bound to pipelineState.defaultSampler / defaultWhiteTextureView at the
-// host side; this shader never references them but the WGPU pipeline
-// validation requires layout congruence).
-@group(1) @binding(3) var metallicRoughnessSampler : sampler;
-@group(1) @binding(4) var metallicRoughnessTexture : texture_2d<f32>;
-@group(1) @binding(5) var normalSampler : sampler;
-@group(1) @binding(6) var normalTexture : texture_2d<f32>;
-
 // Preserve filtering reflection for the bound texture passed to the helper.
 fn materialTextureFilteringWitness() {
   let base = baseColorTexture;
@@ -160,10 +136,15 @@ struct VsOut {
   // `in.uv_atlas` without any host-side region
   // re-write per draw.
   @location(0) uv_atlas       : vec2<f32>,
+  @location(1) worldPos        : vec3<f32>,
 };
 
-@vertex
-fn vs_main(in : VsIn, @builtin(instance_index) idx : u32, @builtin(vertex_index) vertex_index : u32) -> VsOut {
+struct SpriteVertex {
+  posLocal : vec3<f32>,
+  uvAtlas : vec2<f32>,
+};
+
+fn resolveSpriteVertex(in : VsIn, idx : u32, vertex_index : u32) -> SpriteVertex {
   // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w11 (D-6):
   // pos_local = (uv - pivot) * 1, NOT (uv - pivot) * size. The sprite quad
   // is now a UNIT QUAD in local space ([-pivot, 1-pivot]) and world scale
@@ -261,10 +242,9 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32, @builtin(vertex_index)
     // from the material UBO. The 9-slice branch above keeps reading
     // `material.region` regardless — 9-slice config is material-level by
     // construction (OOS-3 + D-5) and the two region semantics do not mix.
+    var region_src = material.region;
 #if PER_INSTANCE_REGION == true
-    let region_src = instances[idx].region;
-#else
-    let region_src = material.region;
+    region_src = instances[idx].region;
 #endif
     uv_atlas = uv_eff * region_src.zw + region_src.xy;
   }
@@ -273,11 +253,37 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32, @builtin(vertex_index)
   // entity world from meshes[0] (dynamic-offset window already aimed at
   // this entity), per-instance local from instances[idx].localFromInstance.
   // sprite is unlit — normal matrix unused.
-  let world = meshes[0].worldFromLocal * instances[idx].localFromInstance * vec4<f32>(pos_local, 1.0);
+  var out : SpriteVertex;
+  out.posLocal = pos_local;
+  out.uvAtlas = uv_atlas;
+  return out;
+}
+
+@vertex
+fn vs_main(in : VsIn, @builtin(instance_index) idx : u32, @builtin(vertex_index) vertex_index : u32) -> VsOut {
+  let vertex = resolveSpriteVertex(in, idx, vertex_index);
+  let world = meshes[0].worldFromLocal * instances[idx].localFromInstance * vec4<f32>(vertex.posLocal, 1.0);
   var out : VsOut;
   out.clip = view.worldViewProj * world;
-  out.uv_atlas = uv_atlas;
+  out.uv_atlas = vertex.uvAtlas;
+  out.worldPos = world.xyz;
   return out;
+}
+
+fn applySceneFog(viewParams : View, color : vec3<f32>, alpha : f32, worldPos : vec3<f32>) -> vec4<f32> {
+  var origin = viewParams.cameraPos;
+  var direction = normalize(worldPos - origin);
+  var rayDistance = length(worldPos - origin);
+  if (viewParams.temporalProjection.z >= 0.5) {
+    let nearH = viewParams.inverseViewProj * vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    let farH = viewParams.inverseViewProj * vec4<f32>(0.0, 0.0, 1.0, 1.0);
+    let nearPoint = nearH.xyz / nearH.w;
+    let farPoint = farH.xyz / farH.w;
+    direction = normalize(farPoint - nearPoint);
+    origin = worldPos - direction * dot(worldPos - viewParams.cameraPos, direction);
+    rayDistance = max(dot(worldPos - origin, direction), 0.0);
+  }
+  return apply_fog(viewParams.fog, FogRay(origin, direction, rayDistance), vec4<f32>(color, alpha));
 }
 
 // linear_to_srgb: per-channel IEC 61966-2-1 transfer function used by the
@@ -292,12 +298,13 @@ fn linear_to_srgb(linear : f32) -> f32 {
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  let texel = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv_atlas, material.baseColorUvScale);
+  let texel = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv_atlas, material.baseColorTextureCoordinatesMetadata.zw);
   // R6 mitigation: strict clamp 0..1 before premultiplied alpha multiply.
   let rgba = clamp(texel * material.colorTint, vec4<f32>(0.0), vec4<f32>(1.0));
   // Premultiplied alpha: rgb pre-multiplied by alpha for srcFactor='one' /
   // dstFactor='one-minus-src-alpha' blend.
-  let premult = vec4<f32>(rgba.rgb * rgba.a, rgba.a);
+  let fogged = applySceneFog(view, rgba.rgb, rgba.a, in.worldPos);
+  let premult = vec4<f32>(fogged.rgb * fogged.a, fogged.a);
   // LDR target is bgra8unorm (blendable per WebGPU spec); hardware does not
   // sRGB-encode bgra8unorm, so apply the transfer function in the shader.
   // Only RGB channels are encoded; alpha is linear throughout the blend.
@@ -313,10 +320,46 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
 // offscreen target; the tonemap fullscreen pass handles sRGB encoding.
 @fragment
 fn fs_main_hdr(in : VsOut) -> @location(0) vec4<f32> {
-  let texel = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv_atlas, material.baseColorUvScale);
+  let texel = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv_atlas, material.baseColorTextureCoordinatesMetadata.zw);
   // R6 mitigation: strict clamp 0..1 before premultiplied alpha multiply.
   let rgba = clamp(texel * material.colorTint, vec4<f32>(0.0), vec4<f32>(1.0));
-  return vec4<f32>(rgba.rgb * rgba.a, rgba.a);
+  let fogged = applySceneFog(view, rgba.rgb, rgba.a, in.worldPos);
+  return vec4<f32>(fogged.rgb * fogged.a, fogged.a);
+}
+
+struct TemporalVsOut {
+  @builtin(position) clip : vec4<f32>,
+  @location(0) uvAtlas : vec2<f32>,
+  @location(1) @interpolate(linear) currentClip : vec4<f32>,
+  @location(2) @interpolate(linear) previousClip : vec4<f32>,
+};
+
+@vertex
+fn vs_temporal(in : VsIn, @builtin(instance_index) idx : u32, @builtin(vertex_index) vertex_index : u32) -> TemporalVsOut {
+  let vertex = resolveSpriteVertex(in, idx, vertex_index);
+  let currentWorld = meshes[0].worldFromLocal *
+    instances[idx].localFromInstance * vec4<f32>(vertex.posLocal, 1.0);
+  var previousWorld = currentWorld;
+#if STORAGE_BUFFER_AVAILABLE == true
+  previousWorld = meshes[0].previousWorldFromLocal *
+    instances[idx].previousLocalFromInstance * vec4<f32>(vertex.posLocal, 1.0);
+#endif
+  var out : TemporalVsOut;
+  out.currentClip = view.temporalCurrentViewProj * currentWorld;
+  out.clip = out.currentClip;
+  out.previousClip = view.temporalPreviousViewProj * previousWorld;
+  out.uvAtlas = vertex.uvAtlas;
+  return out;
+}
+
+@fragment
+fn fs_temporal(in : TemporalVsOut) -> @location(0) vec4<f32> {
+  let texel = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uvAtlas, material.baseColorTextureCoordinatesMetadata.zw);
+  let alpha = clamp(texel.a * material.colorTint.a, 0.0, 1.0);
+  if (alpha <= 0.0) {
+    discard;
+  }
+  return packSceneTemporal(in.currentClip, in.previousClip, 1.0);
 }
 // sprite is unlit; do NOT read the directional-light fields of the View
 // UBO -- same SSOT hard rule as the header comment above; R5 mitigation.

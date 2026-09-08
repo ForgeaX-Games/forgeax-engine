@@ -1,6 +1,6 @@
-import { type EntityHandle, err, ManagedBufferOutOfBoundsError, World } from '@forgeax/engine-ecs';
+import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import { ChildOf, Name, Transform } from '@forgeax/engine-scene';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { AnimationPlayer } from '../animation-player';
 import {
   AnimatedBy,
@@ -69,10 +69,8 @@ describe('bindAnimationTargets', () => {
     expect(world.get(existing, AnimatedBy).unwrap().player).toBe(player);
     expect([...world.get(player, AnimationTargets).unwrap().targets]).toEqual([derived, existing]);
 
-    const beforeCapacity = world.capacity(player, AnimationTargets, 'targets').unwrap();
     expect(bindAnimationTargets(world, player, [existing, derived, existing]).ok).toBe(true);
     expect([...world.get(player, AnimationTargets).unwrap().targets]).toEqual([derived, existing]);
-    expect(world.capacity(player, AnimationTargets, 'targets').unwrap()).toBe(beforeCapacity);
   });
 
   it('creates a missing mirror and replaces a stale owner', () => {
@@ -159,62 +157,11 @@ describe('bindAnimationTargets', () => {
       .unwrap();
     expect(bindAnimationTargets(world, player, [first]).ok).toBe(true);
     const beforeTargets = [...world.get(player, AnimationTargets).unwrap().targets];
-    const beforeCapacity = world.capacity(player, AnimationTargets, 'targets').unwrap();
-    const beforeTicks = { ...world._getComponentChange(player, AnimationTargets.id) };
 
     expectBindCode(bindAnimationTargets(world, player, [second]), 'animation-target-id-duplicate');
 
     expect(world.get(first, AnimatedBy).unwrap().player).toBe(player);
     expect(world.get(second, AnimatedBy).ok).toBe(false);
     expect([...world.get(player, AnimationTargets).unwrap().targets]).toEqual(beforeTargets);
-    expect(world.capacity(player, AnimationTargets, 'targets').unwrap()).toBe(beforeCapacity);
-    expect(world._getComponentChange(player, AnimationTargets.id)).toEqual(beforeTicks);
-  });
-
-  it('leaves IDs, owners, mirror, capacity, and changed state untouched on reserve failure', () => {
-    const world = new World();
-    const player = spawnPlayer(world);
-    const first = spawnTarget(world, player, 'First');
-    const second = spawnTarget(world, player, 'Second');
-    const beforeTargets = [...world.get(player, AnimationTargets).unwrap().targets];
-    const beforeCapacity = world.capacity(player, AnimationTargets, 'targets').unwrap();
-    const beforeTicks = { ...world._getComponentChange(player, AnimationTargets.id) };
-    const reserve = vi
-      .spyOn(world, 'reserveArrayCapacity')
-      .mockReturnValue(err(new ManagedBufferOutOfBoundsError(70_000, 65_536)));
-
-    const result = bindAnimationTargets(world, player, [first, second]);
-
-    expect(result.ok).toBe(false);
-    expect(world.get(first, AnimationTargetId).ok).toBe(false);
-    expect(world.get(second, AnimationTargetId).ok).toBe(false);
-    expect(world.get(first, AnimatedBy).ok).toBe(false);
-    expect(world.get(second, AnimatedBy).ok).toBe(false);
-    expect([...world.get(player, AnimationTargets).unwrap().targets]).toEqual(beforeTargets);
-    expect(world.capacity(player, AnimationTargets, 'targets').unwrap()).toBe(beforeCapacity);
-    expect(world._getComponentChange(player, AnimationTargets.id)).toEqual(beforeTicks);
-    expect(reserve).toHaveBeenCalledOnce();
-  });
-
-  it('keeps a missing mirror absent on reserve failure', () => {
-    const world = new World();
-    const player = spawnPlayer(world, false);
-    const target = spawnTarget(world, player);
-    const beforeMirror = world.get(player, AnimationTargets);
-    const beforeCapacity = world.capacity(player, AnimationTargets, 'targets');
-    const beforeTicks = world._getComponentChange(player, AnimationTargets.id);
-    const reserve = vi
-      .spyOn(world, 'reserveArrayCapacity')
-      .mockReturnValue(err(new ManagedBufferOutOfBoundsError(70_000, 65_536)));
-
-    const result = bindAnimationTargets(world, player, [target]);
-
-    expect(result.ok).toBe(false);
-    expect(world.get(target, AnimationTargetId).ok).toBe(false);
-    expect(world.get(target, AnimatedBy).ok).toBe(false);
-    expect(world.get(player, AnimationTargets).ok).toBe(beforeMirror.ok);
-    expect(world.capacity(player, AnimationTargets, 'targets').ok).toBe(beforeCapacity.ok);
-    expect(world._getComponentChange(player, AnimationTargets.id)).toBe(beforeTicks);
-    expect(reserve).toHaveBeenCalledOnce();
   });
 });

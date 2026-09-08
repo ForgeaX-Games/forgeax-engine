@@ -19,7 +19,7 @@
 // sides consistent themselves" contract.
 //   - mirror: 'Children'  -- the reverse-list component name (string, not a
 //     type reference, so engine-ecs never imports the runtime ChildOf/Children
-//     types; AC-29). Resolved at defineComponent time via resolveComponent.
+//     types; AC-29). Relationship roles are resolved by the scene owner.
 //   - field: 'entities'   -- the `array<entity>` field on Children holding the
 //     reverse list. Validated to be exactly `'array<entity>'` at defineComponent time.
 //   - exclusive: true     -- re-adding ChildOf with a new parent auto-reparents
@@ -44,7 +44,7 @@
 //
 // propagateTransforms system (./systems/propagate-transforms.ts) consumes
 // this component by reading the archetype Uint32Array column directly
-// (engine-internal `_getGraph()` access). When a parent has been despawned
+// (query-backed hierarchy access). When a parent has been despawned
 // but the child's stale ChildOf is left in place, the live-map lookup surfaces
 // `RhiError({ code: 'hierarchy-broken' })` - a deliberate per-frame fail-fast
 // (the consumer is expected to despawn the subtree or remove the stale
@@ -57,10 +57,7 @@
 // (consistent abstraction: the schema-vocab 'entity' keyword is the SSOT
 // for entity-typed columns across the engine).
 
-import { defineComponent } from '@forgeax/engine-ecs';
-import { Children } from './children';
-
-void Children.id;
+export { ChildOf } from './children';
 
 /**
  * Hierarchy back-reference: pointer from child entity to its parent.
@@ -91,15 +88,3 @@ void Children.id;
  *   ).unwrap();
  *   // root now carries Children with [child] in its `entities` list.
  */
-export const ChildOf = defineComponent(
-  'ChildOf',
-  { parent: { type: 'entity' } },
-  {
-    relationship: {
-      mirror: 'Children',
-      field: 'entities',
-      exclusive: true,
-      linkedSpawn: true,
-    },
-  },
-);

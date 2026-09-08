@@ -31,6 +31,8 @@ export interface WebSocketConstructor {
 export interface WebSocketClientCoreOptions {
   readonly url: string;
   readonly maxQueuedEvents?: number | undefined;
+  readonly peerId?: PeerId;
+  readonly signal?: AbortSignal;
   readonly toBytes: (data: unknown) => Uint8Array | Promise<Uint8Array | undefined> | undefined;
 }
 
@@ -41,6 +43,21 @@ export function createWebSocketClientEndpoint(
   options: WebSocketClientCoreOptions,
 ): Promise<Result<NetEndpoint, EndpointError>> {
   return new Promise((resolve) => {
+    const clientPeerId = options.peerId ?? CLIENT_PEER_ID;
+    const signal = options.signal ?? new AbortController().signal;
+    if (signal.aborted) {
+      resolve(connectionFailed(options.url, 'WebSocket connection aborted.'));
+      return;
+    }
+
+    let queue: BoundedEventQueue;
+    try {
+      queue = new BoundedEventQueue(options.maxQueuedEvents ?? DEFAULT_MAX_QUEUED_EVENTS);
+    } catch (cause) {
+      resolve(connectionFailed(options.url, cause));
+      return;
+    }
+
     let socket: WebSocketLike;
     try {
       socket = new WebSocket(options.url);
@@ -50,7 +67,6 @@ export function createWebSocketClientEndpoint(
       return;
     }
 
-    const queue = new BoundedEventQueue(options.maxQueuedEvents ?? DEFAULT_MAX_QUEUED_EVENTS);
     const terminalEvents: EndpointEvent[] = [];
     let opened = false;
     let settled = false;
@@ -58,18 +74,40 @@ export function createWebSocketClientEndpoint(
     let locallyClosed = false;
     let messageTail = Promise.resolve();
 
+    const removeAbortListener = (): void => {
+      signal.removeEventListener('abort', abortPendingConnection);
+    };
+
+    const abortPendingConnection = (): void => {
+      if (opened || settled) return;
+      settled = true;
+      try {
+        socket.close();
+      } catch {
+        // Closing a partially opened platform socket is best effort.
+      }
+      removeAbortListener();
+      resolve(connectionFailed(options.url, 'WebSocket connection aborted.'));
+    };
+
+    signal.addEventListener('abort', abortPendingConnection, { once: true });
+    if (signal.aborted) {
+      abortPendingConnection();
+      return;
+    }
+
     const disconnect = (reason: string): void => {
       if (closed) return;
       closed = true;
       queue.close(reason);
-      terminalEvents.push({ kind: 'peer-disconnected', peerId: CLIENT_PEER_ID });
+      terminalEvents.push({ kind: 'peer-disconnected', peerId: clientPeerId });
     };
 
     const endpoint: NetEndpoint = {
       poll: () => [...queue.drain(), ...terminalEvents.splice(0)],
       send: (peerId, data) => {
         if (closed) return locallyClosed ? alreadyClosed() : connectionClosed(peerId);
-        if (peerId !== CLIENT_PEER_ID)
+        if (peerId !== clientPeerId)
           return err(
             new EndpointError({
               code: 'peer-not-found',
@@ -120,32 +158,37 @@ export function createWebSocketClientEndpoint(
 
     socket.onopen = () => {
       if (settled) return;
+      removeAbortListener();
       opened = true;
       settled = true;
-      queue.enqueue({ kind: 'peer-connected', peerId: CLIENT_PEER_ID });
+      queue.enqueue({ kind: 'peer-connected', peerId: clientPeerId });
       resolve(ok(endpoint));
     };
     socket.onmessage = ({ data }) => {
       // Blob.arrayBuffer() is asynchronous. Serialize conversion so that
       // ordered WebSocket messages retain their wire order after decoding.
-      messageTail = messageTail.then(async () => {
-        const bytes = await options.toBytes(data);
-        if (!bytes || closed) return;
-        if (!queue.enqueue({ kind: 'message', peerId: CLIENT_PEER_ID, data: bytes })) {
-          socket.close();
-        }
-      });
+      messageTail = messageTail
+        .then(async () => {
+          const bytes = await options.toBytes(data);
+          if (!bytes || closed) return;
+          if (!queue.enqueue({ kind: 'message', peerId: clientPeerId, data: bytes })) {
+            socket.close();
+          }
+        })
+        .catch(() => undefined);
     };
     socket.onerror = (cause) => {
       if (opened) disconnect(`WebSocket error: ${normalizeCause(cause)}`);
       else if (!settled) {
         settled = true;
+        removeAbortListener();
         resolve(connectionFailed(options.url, cause));
       }
     };
     socket.onclose = (cause) => {
       if (!opened && !settled) {
         settled = true;
+        removeAbortListener();
         resolve(connectionFailed(options.url, cause));
         return;
       }

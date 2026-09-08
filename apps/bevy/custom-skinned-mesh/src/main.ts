@@ -46,8 +46,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   evidence.__prepareCustomSkinnedMeshCapture = async (): Promise<void> => {
     const updated = app.world.update(1 / 60);
     if (!updated.ok) throw new Error(`capture preparation update failed: ${updated.error.code}`);
-    const drawn = app.renderer.draw([app.world], { cameraOwner: 0, resourceOwner: 0 });
-    if (!drawn.ok) throw new Error(`capture preparation draw failed: ${drawn.error.code}`);
   };
 }
 
@@ -164,6 +162,7 @@ function createWeightedRibbon(): MeshAsset {
     indices: new Uint16Array([0, 1, 3, 0, 3, 2, 2, 3, 5, 2, 5, 4, 4, 5, 7, 4, 7, 6, 6, 7, 9, 6, 9, 8]),
     attributes: { position: new Float32Array(positions), normal: normals, uv: uvs, tangent: tangents, skinIndex, skinWeight },
     aabb: new Float32Array([-0.45, 0, 0, 0.45, 2, 0]),
-    submeshes: [{ indexOffset: 0, indexCount: 24, vertexCount, topology: 'triangle-list' }],
+    submeshes: [{ indexOffset: 0, indexCount: 24, vertexCount, topology: 'triangle-list', materialSlot: 0 }],
+    materialSlots: [{ slotName: 'Default' }],
   };
 }

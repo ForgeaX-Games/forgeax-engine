@@ -8,37 +8,28 @@ import type { RenderFeature } from '../features/types';
 const caps = (compute: boolean): Readonly<RhiCaps> =>
   ({ backendKind: 'null', compute }) as unknown as RhiCaps;
 
-function feature(
-  mode: 'healthy' | 'failed',
-  recoverCalls: number[],
-): RenderFeature<{ readonly ready: true }> {
+function feature(mode: 'healthy' | 'failed'): RenderFeature<{ readonly ready: true }> {
   return {
     identity: `synthetic.diagnostics.${mode}`,
     requiredCapabilities: ['compute'],
     extract: () => ok({ ready: true }),
-    prepare: () =>
+    plan: () =>
       mode === 'failed'
         ? err(
             new RenderFeatureStageFailedError(
               `synthetic.diagnostics.${mode}`,
               0,
-              'prepare',
+              'plan',
               'next-frame',
             ),
           )
-        : ok(undefined),
-    contribute: () => ok(undefined),
-    recover: () => {
-      recoverCalls.push(1);
-      return ok(undefined);
-    },
+        : ok({ resources: [], passes: [] }),
   };
 }
 
 describe('render feature prepared diagnostics', () => {
   it('projects disabled and failed states with code-directed recovery data', () => {
-    const recoverCalls: number[] = [];
-    const disabledHost = createRenderFeatureHost([feature('healthy', recoverCalls)]).unwrap();
+    const disabledHost = createRenderFeatureHost([feature('healthy')]).unwrap();
     runRenderFeatureFrame(disabledHost, {
       worlds: [],
       owner: 0,
@@ -56,7 +47,7 @@ describe('render feature prepared diagnostics', () => {
     expect(disabled?.latestError?.expected).toContain('compute');
     expect(disabled?.latestError?.hint).toContain('disable');
 
-    const failedHost = createRenderFeatureHost([feature('failed', recoverCalls)]).unwrap();
+    const failedHost = createRenderFeatureHost([feature('failed')]).unwrap();
     runRenderFeatureFrame(failedHost, {
       worlds: [],
       owner: 0,
@@ -68,18 +59,16 @@ describe('render feature prepared diagnostics', () => {
       status: 'failed',
       latestError: {
         code: 'render-feature-stage-failed',
-        detail: { stage: 'prepare', recovery: 'next-frame' },
+        detail: { stage: 'plan', recovery: 'next-frame' },
       },
     });
     expect(failed?.latestError?.hint).toContain('next frame');
   });
 
   it('makes disposed diagnostics terminal and keeps repeated lifecycle calls side-effect free', () => {
-    const recoverCalls: number[] = [];
-    const host = createRenderFeatureHost([feature('healthy', recoverCalls)]).unwrap();
+    const host = createRenderFeatureHost([feature('healthy')]).unwrap();
     expect(host.recover({ frameNumber: 2, caps: caps(true) })).toEqual(ok(undefined));
     expect(host.recover({ frameNumber: 2, caps: caps(true) })).toEqual(ok(undefined));
-    expect(recoverCalls).toHaveLength(1);
 
     expect(host.dispose()).toEqual(ok(undefined));
     expect(host.dispose()).toEqual(ok(undefined));

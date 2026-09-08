@@ -58,6 +58,35 @@ with no timestamp or random seed, guaranteeing DDC cache safety.
 | `@forgeax/engine-image/parse-image` | `parseImage(bytes, mime, opts?)` — synchronous Node decoder using `jpeg-js` / `upng-js` | **Node-only** (`exports['./parse-image']` carries `node` condition + `default: null`) |
 | `@forgeax/engine-image/decode-image-from-file` | `decodeImageFromFile(path)` — async `node:fs` reader + sidecar resolver | **Node-only** (same `node` + `default: null` shape) |
 | `@forgeax/engine-image/hdr-decoder` | `decodeHdr` — Radiance .hdr decoder | browser-safe (no Node-only deps) |
+| `@forgeax/engine-image/image-importer` | `imageImporter` — public build-time `Importer` for PNG/JPEG/HDR/KTX2/Basis sources | **Node-only** |
+| `@forgeax/engine-image/ktx2-encode` | `encodeTextureToKtx2` — deterministic build-time Basis encode arm | **Node-only** |
+
+## Importer conversion diagnostics
+
+Register `imageImporter` in one `ImporterRegistry` and drive it through the public
+`runImport` entry point. Source bytes or image settings that fail an expected
+conversion return `ImportError.code === 'source-validation-failed'` before DDC,
+Pack, or Catalog publication. The first diagnostic has a stable
+`image-conversion-<stage>-<owner-code>` code and the `image-conversion-<stage>`
+rule; consumers should inspect those fields instead of parsing `Error.message`.
+
+```ts
+const registry = new ImporterRegistry();
+registry.register(imageImporter);
+const result = await runImport(meta, registry, fs);
+if (!result.ok && result.error.code === 'source-validation-failed') {
+  const diagnostic = result.error.detail.diagnostics[0];
+  // Repair the bytes or import settings, then call runImport again with the
+  // same registry and the same GUID declarations.
+}
+```
+
+The conversion boundary covers PNG/JPEG decode, HDR decode, KTX2/Basis source
+inspection, and Basis KTX2 encode refusal. `source-read-failed`, unsupported
+extension handling, output-topology validation, and healthy compression,
+color-space, and mipmap projection retain their existing semantics. A repaired
+same-process retry must produce fresh artifact bytes and Pack projection without
+retaining a rejected diagnostic.
 
 ## HDR equirect import path
 
@@ -77,8 +106,9 @@ import { decodeImageFromFile } from '@forgeax/engine-image/decode-image-from-fil
 // browser-safe main entry — POD envelope helper
 import { toAssetPack } from '@forgeax/engine-image';
 
-// 1. read disk -- decodeImageFromFile stats the sidecar (image-meta-missing
-//    if absent; charter P3 explicit failure) and returns DecodedImage POD
+// 1. read disk -- decodeImageFromFile checks the source before the sidecar,
+//    returning image-decode-failed for a missing source and image-meta-missing
+//    for an absent sidecar (charter P3 explicit failure)
 const r = await decodeImageFromFile('apps/learn-render/.../wood-container.jpg');
 if (!r.ok) {
   switch (r.error.code) {
@@ -127,7 +157,7 @@ function's documented result path.
 - **同型镜像 in-flight gltf loader** -- `subAssetKey { kind, name?, indexFallback }` 与 `feat-20260515-gltf-loader-via-asset-system` 完全等价（image 单子资产场景退化为 `kind='image'` / `indexFallback='images/0'`）
 - **disk schema 复用 meta.schema.json** -- `*.meta.json` 走 `external-asset-package` kind，不新增 schema kind（plan-strategy D-4）
 - **byte-identical reimport** -- 第二次 `forgeax-engine-console asset import` 产出与第一次 `git diff` 输出空（AC-16）
-- **OOS 远期** -- KTX2 / Basis / EXR / cubemap face / array layer / video texture 不在本 MVP（OOS-12 import 包独立 feat）
+- **Current source boundary** -- KTX2 / Basis are handled by the image importer; EXR, cubemap face, array layer, and video texture remain outside this package contract.
 
 ## 相关包
 

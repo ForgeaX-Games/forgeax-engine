@@ -3,16 +3,14 @@
 // bug-20260612 M1: unit tests for selectSwapChainFormat helper
 // (4 branches + AC-08 srgb pairing).
 //
-// TDD red phase: selectSwapChainFormat is not yet implemented in
-// createRenderer.ts; these assertions describe the expected contract.
+// TDD red phase: selectSwapChainFormat is not yet implemented in the
+// render-system surface owner; these assertions describe the expected contract.
 // They will turn green in M2 when the helper lands.
 
-// The helper is exported from createRenderer.ts module scope
-// (not from the public package index — module-private to the runtime,
-// marked @internal). M2: selectSwapChainFormat landed; @ts-expect-error
-// removed as the import now resolves.
-import { selectSwapChainFormat } from '@forgeax/engine-render/internal';
+// The helper is exported from render-system.ts module scope (not from the
+// public package index — module-private to the runtime, marked @internal).
 import { describe, expect, it, vi } from 'vitest';
+import { selectSwapChainFormat } from '../../../render/src/render-system';
 
 describe('bug-20260612: selectSwapChainFormat', () => {
   describe('Channel 2 (storageBufferCapable = true)', () => {

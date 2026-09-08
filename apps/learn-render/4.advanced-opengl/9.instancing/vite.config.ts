@@ -6,22 +6,26 @@ import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
+import { optionalAssetPack } from '../../../shared/src/optional-asset-pack.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
+const assetRoots = [
+  resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures'),
+  resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'objects'),
+];
 
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
-    pluginPack({
-      runtimeBinding: createStandaloneRuntimeAssetBinding('learn-render-4-9-instancing'),
-      refresh: reloadAssetHost(),
-      importers: [imageImporter, gltfImporter],
-      roots: [
-        resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures'),
-        resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'objects'),
-      ],
-    }),
+    ...optionalAssetPack(assetRoots, () =>
+      pluginPack({
+        runtimeBinding: createStandaloneRuntimeAssetBinding('learn-render-4-9-instancing'),
+        refresh: reloadAssetHost(),
+        importers: [imageImporter, gltfImporter],
+        roots: assetRoots,
+      }),
+    ),
   ],
   server: {
     port: 5180,

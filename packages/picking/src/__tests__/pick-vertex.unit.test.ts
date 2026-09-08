@@ -39,19 +39,10 @@ const VP = 600; // square viewport so screen-centre maps to the -Z axis ray
 
 // ── helpers ─────────────────────────────────────────────────────────────
 
-/** Column-level internal access to Transform.world (mirrors pick.ts readWorldMatrix). */
-type WorldInternalView = World & {
-  _getArrayView(
-    entity: EntityHandle,
-    component: { id: number },
-    fieldName: string,
-  ): ArrayLike<number> | undefined;
-};
-
 function readWorldMatrix(world: World, entity: EntityHandle): Float32Array | undefined {
-  const view = (world as WorldInternalView)._getArrayView(entity, Transform, 'world');
-  if (view === undefined) return undefined;
-  return new Float32Array(view as ArrayLike<number>);
+  const result = world.get(entity, Transform);
+  if (!result.ok) return undefined;
+  return new Float32Array(result.value.world);
 }
 
 function translateTransform(x: number, y: number, z: number) {
@@ -128,7 +119,11 @@ function registerTriangle(scene: Scene): Handle<'MeshAsset', 'shared'> {
     vertices: v,
     indices: new Uint16Array([0, 1, 2]),
     attributes: { position: positions },
-    submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+    submeshes: [
+      { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list', materialSlot: 0 },
+    ],
+
+    materialSlots: [{ slotName: 'Default' }],
   });
   if (!result.ok) throw new Error(`triangle mesh catalog failed: ${result.error.message}`);
   return scene.world.allocSharedRef('MeshAsset', result.value);
@@ -214,7 +209,17 @@ function registerCube(scene: Scene): Handle<'MeshAsset', 'shared'> {
     vertices: v,
     indices,
     attributes: { position: positions },
-    submeshes: [{ indexOffset: 0, indexCount: 36, vertexCount: 8, topology: 'triangle-list' }],
+    submeshes: [
+      {
+        indexOffset: 0,
+        indexCount: 36,
+        vertexCount: 8,
+        topology: 'triangle-list',
+        materialSlot: 0,
+      },
+    ],
+
+    materialSlots: [{ slotName: 'Default' }],
   });
   if (!result.ok) throw new Error(`cube mesh catalog failed: ${result.error.message}`);
   return scene.world.allocSharedRef('MeshAsset', result.value);
@@ -252,7 +257,11 @@ function registerSkinnedTriangle(scene: Scene): Handle<'MeshAsset', 'shared'> {
     vertices: v,
     indices: new Uint16Array([0, 1, 2]),
     attributes: attrs,
-    submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+    submeshes: [
+      { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list', materialSlot: 0 },
+    ],
+
+    materialSlots: [{ slotName: 'Default' }],
   });
   if (!result.ok) throw new Error(`skinned mesh catalog failed: ${result.error.message}`);
   return scene.world.allocSharedRef('MeshAsset', result.value);
@@ -1016,7 +1025,17 @@ describe('w6: degradation input + builtin fallback', () => {
         vertices: v,
         indices: new Uint16Array([0, 1, 2, 3]),
         attributes: { position: positions },
-        submeshes: [{ indexOffset: 0, indexCount: 4, vertexCount: 4, topology: 'triangle-strip' }],
+        submeshes: [
+          {
+            indexOffset: 0,
+            indexCount: 4,
+            vertexCount: 4,
+            topology: 'triangle-strip',
+            materialSlot: 0,
+          },
+        ],
+
+        materialSlots: [{ slotName: 'Default' }],
       });
       if (!result.ok) throw new Error(`strip mesh catalog failed: ${result.error.message}`);
       return scene.world.allocSharedRef('MeshAsset', result.value);
@@ -1056,7 +1075,17 @@ describe('w6: degradation input + builtin fallback', () => {
         vertices: v,
         indices: new Uint16Array([0, 1, 2]),
         attributes: { position: positions },
-        submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+        submeshes: [
+          {
+            indexOffset: 0,
+            indexCount: 3,
+            vertexCount: 3,
+            topology: 'triangle-list',
+            materialSlot: 0,
+          },
+        ],
+
+        materialSlots: [{ slotName: 'Default' }],
       });
       if (!result.ok) throw new Error(`u16 mesh catalog failed: ${result.error.message}`);
       return scene.world.allocSharedRef('MeshAsset', result.value);
@@ -1069,7 +1098,17 @@ describe('w6: degradation input + builtin fallback', () => {
         vertices: v,
         indices: new Uint16Array([0, 1, 2]),
         attributes: {},
-        submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+        submeshes: [
+          {
+            indexOffset: 0,
+            indexCount: 3,
+            vertexCount: 3,
+            topology: 'triangle-list',
+            materialSlot: 0,
+          },
+        ],
+
+        materialSlots: [{ slotName: 'Default' }],
       });
       if (!result.ok) throw new Error(`no-position mesh catalog failed: ${result.error.message}`);
       return scene.world.allocSharedRef('MeshAsset', result.value);
@@ -1113,7 +1152,17 @@ describe('w6: degradation input + builtin fallback', () => {
         kind: 'mesh',
         vertices: v,
         attributes: { position: positions },
-        submeshes: [{ indexOffset: 0, indexCount: 0, vertexCount: 3, topology: 'triangle-list' }],
+        submeshes: [
+          {
+            indexOffset: 0,
+            indexCount: 0,
+            vertexCount: 3,
+            topology: 'triangle-list',
+            materialSlot: 0,
+          },
+        ],
+
+        materialSlots: [{ slotName: 'Default' }],
       });
       if (!result.ok) throw new Error(`indexless mesh catalog failed: ${result.error.message}`);
       return scene.world.allocSharedRef('MeshAsset', result.value);
@@ -1146,7 +1195,17 @@ describe('w6: degradation input + builtin fallback', () => {
         kind: 'mesh',
         vertices: v,
         attributes: { position: positions },
-        submeshes: [{ indexOffset: 0, indexCount: 0, vertexCount: 0, topology: 'triangle-list' }],
+        submeshes: [
+          {
+            indexOffset: 0,
+            indexCount: 0,
+            vertexCount: 0,
+            topology: 'triangle-list',
+            materialSlot: 0,
+          },
+        ],
+
+        materialSlots: [{ slotName: 'Default' }],
       });
       if (!result.ok) throw new Error(`empty mesh catalog failed: ${result.error.message}`);
       return scene.world.allocSharedRef('MeshAsset', result.value);
@@ -1191,7 +1250,17 @@ describe('w6: degradation input + builtin fallback', () => {
         vertices: v,
         indices: new Uint16Array([0, 1, 2]),
         attributes: { position: positions },
-        submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+        submeshes: [
+          {
+            indexOffset: 0,
+            indexCount: 3,
+            vertexCount: 3,
+            topology: 'triangle-list',
+            materialSlot: 0,
+          },
+        ],
+
+        materialSlots: [{ slotName: 'Default' }],
       });
       if (!result.ok) throw new Error(`NaN mesh catalog failed: ${result.error.message}`);
       return scene.world.allocSharedRef('MeshAsset', result.value);
@@ -1230,7 +1299,17 @@ describe('w6: degradation input + builtin fallback', () => {
         vertices: v,
         indices: new Uint16Array([0, 1, 2]),
         attributes: { position: positions },
-        submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+        submeshes: [
+          {
+            indexOffset: 0,
+            indexCount: 3,
+            vertexCount: 3,
+            topology: 'triangle-list',
+            materialSlot: 0,
+          },
+        ],
+
+        materialSlots: [{ slotName: 'Default' }],
       });
       if (!result.ok) throw new Error('all-NaN mesh catalog failed');
       const mesh = scene.world.allocSharedRef('MeshAsset', result.value);
@@ -1461,7 +1540,17 @@ describe('w7: pickVertex full-scene', () => {
         vertices: v,
         indices: new Uint16Array([0, 1, 2]),
         attributes: { position: positions },
-        submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+        submeshes: [
+          {
+            indexOffset: 0,
+            indexCount: 3,
+            vertexCount: 3,
+            topology: 'triangle-list',
+            materialSlot: 0,
+          },
+        ],
+
+        materialSlots: [{ slotName: 'Default' }],
       });
       if (!result.ok) throw new Error(`small triangle catalog failed: ${result.error.message}`);
       return scene.world.allocSharedRef('MeshAsset', result.value);

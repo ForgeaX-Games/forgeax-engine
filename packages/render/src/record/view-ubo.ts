@@ -1,6 +1,6 @@
 // @forgeax/engine-runtime - RenderSystem record stage: view-ubo.
 // feat-20260704 M3/w18: the View UBO + CSM/spot-shadow matrix pack assembly
-// extracted verbatim from `recordFrame` (frame.ts). Builds the 196-float View
+// extracted verbatim from `recordFrame` (frame.ts). Builds the 240-float View
 // UBO payload (worldViewProj, directional light, camera pos, per-cascade
 // lightViewProj matrices, split planes, shadow bias, folded spot lightViewProj
 // lanes) and flushes it in one queue.writeBuffer round-trip. Kept as a
@@ -8,14 +8,71 @@
 
 import { mat4 } from '@forgeax/engine-math';
 import type { Buffer, RhiQueue } from '@forgeax/engine-rhi';
+import type { PointsLinesStyle } from '../points-lines/snapshot';
+import type { CameraSnapshot } from '../render-contract';
 import type {
-  CameraSnapshot,
   DirectionalLightSnapshot,
   ExtractedLights,
   SpotLightSnapshot,
 } from '../render-system-extract';
 import { clampPcfKernelSize } from './frame-snapshot';
 import { computeProjectionMatrix, computeViewMatrix } from './helpers';
+
+export const VIEW_UNIFORM_BYTES = 960;
+export const POINTS_LINES_VIEW_BYTES = 160;
+export const POINTS_LINES_VIEW_SLOT_STRIDE = 256;
+export const POINTS_LINES_VIEW_SLOT_COUNT = 1024;
+export const POINTS_LINES_VIEW_BUFFER_SIZE =
+  POINTS_LINES_VIEW_SLOT_STRIDE * POINTS_LINES_VIEW_SLOT_COUNT;
+export const VIEW_UNIFORM_SLOT_STRIDE = 1024;
+export const POINT_SHADOW_VIEW_SLOT_COUNT = 24;
+export const VIEW_UNIFORM_BUFFER_SIZE =
+  VIEW_UNIFORM_SLOT_STRIDE * (1 + POINT_SHADOW_VIEW_SLOT_COUNT);
+
+export function pointShadowViewOffset(layer: number, face: number): number {
+  return VIEW_UNIFORM_SLOT_STRIDE * (1 + layer * 6 + face);
+}
+
+export function writePointsLinesViewUbo(
+  queue: RhiQueue,
+  buffer: Buffer,
+  camera: CameraSnapshot,
+  width: number,
+  height: number,
+  model?: ArrayLike<number>,
+  style?: PointsLinesStyle,
+  byteOffset = 0,
+): void {
+  const projection = computeProjectionMatrix(camera);
+  const view = computeViewMatrix(camera);
+  const worldViewProj = mat4.create();
+  mat4.multiply(worldViewProj, projection, view);
+  const payload = new Float32Array(40);
+  payload.set(worldViewProj);
+  if (model === undefined) {
+    payload[16] = 1;
+    payload[21] = 1;
+    payload[26] = 1;
+    payload[31] = 1;
+  } else {
+    for (let index = 0; index < 16; index += 1) {
+      payload[16 + index] = model[index] ?? 0;
+    }
+  }
+  payload[32] = width;
+  payload[33] = height;
+  if (style?.kind === 'points') {
+    payload[36] = style.sizePx;
+    payload[38] = style.shape === 'circle' ? 1 : 0;
+  } else if (style?.kind === 'lines') {
+    payload[36] = style.widthPx;
+    payload[37] = 1;
+  } else {
+    payload[36] = 1;
+  }
+  const uploaded = queue.writeBuffer(buffer, byteOffset, payload);
+  if (!uploaded.ok) throw uploaded.error;
+}
 
 /**
  * feat-20260704 M3/w18: assemble + upload the per-frame View UBO payload.
@@ -29,7 +86,7 @@ import { computeProjectionMatrix, computeViewMatrix } from './helpers';
  * SSOT, no double-negation).
  *
  * feat-20260520-directional-light-shadow-mapping M1b / w7 + feat-20260613-csm
- * M4 / w16+w25: viewPayload is 196 floats. Layout matches common.wgsl View
+ * M4 / w16+w25: viewPayload is 240 floats. Layout matches common.wgsl View
  * struct byte-for-byte:
  *   [ 0..15] worldViewProj, [16..18] lightDir, [20..22] lightColor,
  *   [24..26] cameraPos, [28..43] lightViewProj0 (was lightSpaceMatrix),
@@ -60,9 +117,9 @@ export function writeViewUbo(
   const worldViewProj = mat4.create();
   mat4.multiply(worldViewProj, projMatrix, viewMatrix);
 
-  const VIEW_PAYLOAD_FLOATS = 196;
+  const VIEW_PAYLOAD_FLOATS = 240;
   const viewPayload = new Float32Array(VIEW_PAYLOAD_FLOATS);
-  for (let i = 0; i < 16; i++) viewPayload[i] = (worldViewProj as unknown as number[])[i] ?? 0;
+  for (let i = 0; i < 16; i++) viewPayload[i] = worldViewProj[i] ?? 0;
   viewPayload[16] = (light.direction[0] ?? 0) * light.intensity;
   viewPayload[17] = (light.direction[1] ?? -1) * light.intensity;
   viewPayload[18] = (light.direction[2] ?? 0) * light.intensity;
@@ -81,8 +138,7 @@ export function writeViewUbo(
   // per-pixel matrix inversion (charter P4 consistent abstraction).
   const inverseViewProj = mat4.create();
   mat4.invert(inverseViewProj, worldViewProj);
-  for (let i = 0; i < 16; i++)
-    viewPayload[44 + i] = (inverseViewProj as unknown as number[])[i] ?? 0;
+  for (let i = 0; i < 16; i++) viewPayload[44 + i] = inverseViewProj[i] ?? 0;
   // lightViewProj[1..3] at [60..107].
   if (lights.lightViewProj !== undefined) {
     for (let c = 1; c <= 3; c++) {
@@ -148,4 +204,19 @@ export function writeViewUbo(
 
   const viewUploadResult = queue.writeBuffer(viewUniformBuffer, 0, viewPayload);
   if (!viewUploadResult.ok) throw viewUploadResult.error;
+
+  for (const snapshot of lights.pointShadow ?? []) {
+    if (snapshot.shadowAtlasLayer < 0 || snapshot.shadowAtlasLayer >= 4) continue;
+    for (let face = 0; face < 6; face += 1) {
+      const facePayload = viewPayload.slice();
+      const matrix = snapshot.shadowMatrices.subarray(face * 16, (face + 1) * 16);
+      facePayload.set(matrix, 28);
+      const uploaded = queue.writeBuffer(
+        viewUniformBuffer,
+        pointShadowViewOffset(snapshot.shadowAtlasLayer, face),
+        facePayload,
+      );
+      if (!uploaded.ok) throw uploaded.error;
+    }
+  }
 }

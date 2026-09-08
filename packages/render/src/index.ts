@@ -1,4 +1,19 @@
-export type { CameraProjection, Tonemap } from './components/camera';
+// @forgeax/engine-render — AI-facing render vocabulary.
+//
+// The root is deliberately small: ECS render components, grouped closed
+// values, the renderer lifecycle/receipt contract, and the declarative
+// RenderFeature plan. Graph builders, prepared GPU state, pipeline
+// implementations, builtin feature factories, and diagnostic class names are
+// owner-local implementation details.
+
+export {
+  materialContribution,
+  renderPipelineContribution,
+  samplerContribution,
+} from './assets/asset-decoders';
+
+// ECS render vocabulary and grouped closed values.
+export type { Antialias, BloomEnabled, CameraProjection, Tonemap } from './components/camera';
 export {
   ANTIALIAS_FXAA,
   ANTIALIAS_MSAA,
@@ -19,27 +34,27 @@ export {
   TONEMAP_NONE,
   TONEMAP_REINHARD,
   TONEMAP_REINHARD_EXTENDED,
-  tonemapFromF32,
-  tonemapToU32,
 } from './components/camera';
 export * from './components/directional-light';
 export { Instances, type InstancesData } from './components/instances';
 export { Layer } from './components/layer';
+export { Lines } from './components/lines';
 export * from './components/mesh-filter';
 export * from './components/mesh-renderer';
 export { PointLight } from './components/point-light';
 export { PointLightShadow } from './components/point-light-shadow';
-export { PostProcessParams } from './components/post-process-params';
 export {
-  SceneInstance,
-  type SceneInstanceOverrideRecord,
-  type SceneInstanceState,
-} from './components/scene-instance';
+  type PointShape,
+  PointShapeValue,
+  Points,
+  pointShapeFromU32,
+} from './components/points';
+export { PostProcessParams } from './components/post-process-params';
+export { SceneInstance } from './components/scene-instance';
 export {
   SKYBOX_MODE_CUBEMAP,
   SkyboxBackground,
   type SkyboxMode,
-  skyboxModeFromF32,
 } from './components/skybox-background';
 export { Skylight } from './components/skylight';
 export { SortKey } from './components/sort-key';
@@ -50,107 +65,66 @@ export {
   VisibilityStateValue,
   visibilityStateFromU32,
 } from './components/visibility';
-export {
-  type EquirectProjectionFailedDetail,
-  ObservationUnavailableError,
-  type RenderError,
-  type RenderErrorCode,
-  RenderFeatureCapabilityMissingError,
-  RenderFeatureDrawRecordingFailedError,
-  RenderFeaturePassOrderConflictError,
-  RenderFeaturePreparationFailedError,
-  RenderFeaturePreparedStateMismatchError,
-  RenderFeatureRegistrationConflictError,
-  RenderFeatureStageFailedError,
-} from './errors/index';
-export { RecoverError, type RecoverErrorCode } from './errors/recover';
+// Public structured operation failure union. Concrete error classes stay
+// behind the Renderer Result/event boundary.
+export type { RenderError, RenderErrorCode } from './errors/render';
 export {
   resolveVisibility,
   type VisibilityResolution,
   type VisibilitySnapshot,
 } from './extract/visibility';
-/**
- * Public producer seam: RenderFeature, its narrow stage contexts, structured
- * diagnostics, graph contribution vocabulary, and prepared graphics facade.
- * This root declaration is the AI-discoverable API authority; host
- * construction details remain under the internal entry.
- */
-export * from './features';
+export type {
+  RenderFeatureLogicalTarget,
+  RenderFeatureMaterialShaderBindingContract,
+  RenderFeaturePassDeclaration,
+  RenderFeaturePlan,
+  RenderFeaturePlanContext,
+  RenderFeatureResourceDeclaration,
+} from './features/plan';
+// Minimal declarative extension contract. Implementations use relative
+// imports; the root does not expose prepared state, graph projectors, target
+// handles, or builtin feature factories.
+export type {
+  RenderFeature,
+  RenderFeatureCapabilityKey,
+  RenderFeatureDiagnostics,
+  RenderFeatureErrorDescriptor,
+  RenderFeatureExtractContext,
+  RenderFeatureHiddenEntityReport,
+  RenderFeatureStatus,
+  RenderFeatureWorldVisibilitySnapshot,
+} from './features/types';
 export { Materials } from './materials';
-export { PipelineError, type PipelineErrorCode } from './pipeline-errors';
-export { PostProcessError, type PostProcessErrorCode } from './post-process-errors';
+// The host-facing default is a stable profile value; implementation-only
+// pipeline helpers remain behind the package boundary.
+export { DEFAULT_STANDARD_PROFILE } from './pipeline/standard-profile';
+export { renderComponentsPlugin } from './plugin';
 export {
-  type FrameObservation,
-  type FrameObservationMetadata,
-  type FrameObservationOptions,
-  type FrameObservationReadback,
-  type FrameObservationSource,
-  observeCurrentFrame,
-} from './record/frame-observation';
-export {
-  // Evidence is producer-owned and fail-closed; acceptedGpu=16 is required for closure.
-  createMembershipTiming,
-  MEMBERSHIP_TIMING_REASON_CODES,
-  MEMBERSHIP_TIMING_REASON_MAPPING,
-  MEMBERSHIP_TIMING_REASON_SCHEMA,
-  type MembershipTimingController,
-  MembershipTimingError,
-  type MembershipTimingGpuOutputSource,
-  type MembershipTimingGpuReport,
-  type MembershipTimingOptions,
-  type MembershipTimingReasonCode,
-  type MembershipTimingReport,
-} from './record/membership-timing';
+  admitPointsLines,
+  type LinesStyleInput,
+  type PointsLinesAdmission,
+  type PointsLinesAdmissionError,
+  type PointsLinesAdmissionInput,
+  type PointsLinesAdmissionLimits,
+  type PointsStyleInput,
+} from './points-lines/admission';
+export type { PointsLinesInspection } from './points-lines/inspection';
+// Runtime contract: leases, frame receipts, detached inspection, profile,
+// lifecycle state, and the single renderer event stream.
 export type {
-  AddBloomPassesOptions,
-  AddFullscreenPassOptions,
-  AddScenePassOptions,
-  AddShadowPassOptions,
-  AddSkyboxPassOptions,
-  AddSpotShadowPassOptions,
-  AddSsaoPassesOptions,
-  AddSsaoPassesParams,
-  AddTonemapPassOptions,
-} from './render-graph-primitives';
-export {
-  addBloomPasses,
-  addFullscreenPass,
-  addPointShadowPass,
-  addScenePass,
-  addShadowPass,
-  addSkyboxPass,
-  addSpotShadowPass,
-  addSsaoPasses,
-  addTonemapPass,
-  TONEMAP_POST_PROCESS_ID,
-} from './render-graph-primitives';
-export {
-  type RenderColorDomain,
-  type RenderFeatureTargetContext,
-  type RenderPipeline,
-  type RenderPipelineData,
-  resolvePostColorDomainContract,
-  resolveToneOutputContract,
-  type ToneOutputContract,
-} from './render-pipeline';
-export type { RenderPipelineContext } from './render-pipeline-context';
-export type {
-  DrawOwnerOptions,
-  HealthChangeListener,
-  HealthDetailDeviceLost,
-  HealthDetailInternalFault,
-  HealthReason,
-  HealthSnapshot,
+  FrameCamera,
+  FrameEnvironment,
+  FrameObservationRequest,
+  FrameReceipt,
+  FrameReceiptObservation,
   Renderer,
-  RendererBackend,
-  RendererError,
-  RendererErrorListener,
-  RendererInstallError,
-  RendererLostInfo,
-  RendererLostListener,
+  RendererEvent,
   RendererOptions,
-  RenderPhase,
-  RenderPhaseSkipReason,
+  RendererState,
+  RenderFrameInput,
+  RenderInspection,
+  RenderProfile,
   RenderResult,
-} from './renderer';
-export { RENDER_PHASE_CATALOG } from './renderer';
+  RenderWorldLease,
+} from './render-contract';
+export { RENDER_PHASE_CATALOG } from './render-contract';

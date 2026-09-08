@@ -1,12 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { EngineToHostMessage } from '../execution/protocol';
 
-const probes = vi.hoisted(() => ({
-  audioDispose: vi.fn(),
-  inputDetach: vi.fn(),
-  sessionDispose: vi.fn(),
-  sessionListen: vi.fn(() => () => {}),
-  sessionPost: vi.fn(),
-}));
+type SessionListener = (message: EngineToHostMessage) => void;
+
+const probes = vi.hoisted(() => {
+  const sessionListeners: SessionListener[] = [];
+  return {
+    audioDispose: vi.fn(),
+    inputDetach: vi.fn(),
+    sessionDispose: vi.fn(),
+    sessionListen: vi.fn((listener: SessionListener) => {
+      sessionListeners.push(listener);
+      return () => {};
+    }),
+    sessionListeners,
+    sessionPost: vi.fn(),
+  };
+});
 
 vi.mock('../execution/engine-worker', async () => {
   const { ok } = await import('@forgeax/engine-types');
@@ -73,6 +83,7 @@ const capabilities = {
 describe('Worker ExecutionApp terminal stop', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    probes.sessionListeners.length = 0;
   });
 
   it('cleans every host owner once when stopped while paused and cannot restart', async () => {
@@ -112,5 +123,51 @@ describe('Worker ExecutionApp terminal stop', () => {
     expect(restart.ok).toBe(false);
     if (!restart.ok) expect(restart.error.code).toBe('app-not-started');
     expect(raf).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains the existing terminal fault identity for host inspection', async () => {
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      vi.fn(() => 7),
+    );
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    const result = await createWorkerExecutionApp({
+      canvas: {} as HTMLCanvasElement,
+      appOptions: { execution: { bootstrap: 'https://example.test/game.js' } } as never,
+      capabilities,
+      selection: {
+        requestedTier: 'engine-worker',
+        actualTier: 'engine-worker',
+        selectionReason: 'explicit-request',
+        missingCapabilities: [],
+        sharedEvidencePassed: false,
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    let observed: unknown;
+    result.value.onError((error) => {
+      observed = error;
+    });
+    const listener = probes.sessionListeners[0];
+    expect(listener).toBeTypeOf('function');
+
+    listener?.({
+      kind: 'fault',
+      worldIdentity: 'worker-world',
+      source: 'world',
+      code: 'app-system-update-failed',
+      expected: 'worker world update succeeds',
+      hint: 'inspect the retained cause',
+      detail: { cause: 'worker boom' },
+      partialWrite: true,
+      retryable: false,
+    });
+
+    expect(result.value.lastError).toBe(observed);
+    expect(result.value.lastError).toMatchObject({
+      code: 'app-system-update-failed',
+      detail: { cause: { cause: 'worker boom' } },
+    });
   });
 });

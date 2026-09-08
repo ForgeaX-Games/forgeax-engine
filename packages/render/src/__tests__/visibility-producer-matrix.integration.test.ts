@@ -1,21 +1,18 @@
-import { HANDLE_CUBE, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
+import { HANDLE_CUBE, HANDLE_QUAD, resolveTilesetRuntime } from '@forgeax/engine-assets-runtime';
 import { type EntityHandle, World } from '@forgeax/engine-ecs';
-import {
-  extractFrames,
-  Instances,
-  MeshFilter,
-  MeshRenderer,
-  SpriteInstances,
-  TileLayer,
-  Tilemap,
-  tilemapChunkExtractSystem,
-  Visibility,
-  VisibilityStateValue,
-} from '@forgeax/engine-render/internal';
 import { ChildOf, Transform } from '@forgeax/engine-scene';
 import { Skin } from '@forgeax/engine-skinning';
 import { type TilesetAsset, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { Instances } from '../components/instances';
+import { MeshFilter } from '../components/mesh-filter';
+import { MeshRenderer } from '../components/mesh-renderer';
+import { SpriteInstances } from '../components/sprite-instances';
+import { TileLayer } from '../components/tile-layer';
+import { Tilemap } from '../components/tilemap';
+import { Visibility, VisibilityStateValue } from '../components/visibility';
+import { extractFrames } from '../render-system-extract';
+import { tilemapChunkExtractSystem } from '../tilemap-chunk-extract-system';
 
 const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 
@@ -89,8 +86,7 @@ function explicitInstances(world: World): EntityHandle {
 function tilemap(world: World): EntityHandle {
   const tileset: TilesetAsset = {
     kind: 'tileset',
-    guid: 'visibility/producer-matrix',
-    atlases: [toShared<'TextureAsset'>(101)],
+    atlases: ['visibility/atlas'],
     tileWidth: 16,
     tileHeight: 16,
     columns: 1,
@@ -98,10 +94,10 @@ function tilemap(world: World): EntityHandle {
     regions: [{ x: 0, y: 0, width: 16, height: 16 }],
     tiles: [{ regionIndex: 0 }],
   };
-  const tilesetHandle = world.allocSharedRef<'TilesetAsset', TilesetAsset>('TilesetAsset', tileset);
+  const lookup = (guid: string) => (guid === 'test/tileset' ? tileset : undefined);
   const map = world
     .spawn(
-      { component: Tilemap, data: { cols: 1, rows: 1, tileset: tilesetHandle } },
+      { component: Tilemap, data: { cols: 1, rows: 1, tileset: 'test/tileset' } },
       { component: Transform, data: {} },
       { component: Visibility, data: { state: VisibilityStateValue.hidden } },
     )
@@ -110,7 +106,7 @@ function tilemap(world: World): EntityHandle {
     { component: TileLayer, data: { tiles: new Uint32Array([1]), dirty: 0 } },
     { component: ChildOf, data: { parent: map } },
   );
-  tilemapChunkExtractSystem(world);
+  tilemapChunkExtractSystem(world, lookup);
   return map;
 }
 
@@ -140,5 +136,33 @@ describe('visibility built-in producer matrix', () => {
     const restored = extractFrames([world], 0);
     expect(restored.renderables).toHaveLength(0);
     expect(restored.dispatch).toHaveLength(0);
+  });
+});
+
+describe('tileset durable atlas projection', () => {
+  it('projects the atlas GUID through the current World for the tilemap owner', () => {
+    const world = new World();
+    const atlas = { kind: 'texture', width: 1, height: 1 } as never;
+    const first = resolveTilesetRuntime(world, 'visibility/atlas', (guid) =>
+      guid === 'visibility/atlas' ? atlas : undefined,
+    );
+    const second = resolveTilesetRuntime(world, 'visibility/atlas', () => atlas);
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    if (first.ok && second.ok) expect(first.value.handle).toBe(second.value.handle);
+
+    const otherWorld = new World();
+    const other = resolveTilesetRuntime(otherWorld, 'visibility/atlas', () => atlas);
+    expect(other.ok).toBe(true);
+    if (first.ok && other.ok) {
+      expect(world.sharedRefs.resolve(first.value.handle).ok).toBe(true);
+      expect(otherWorld.sharedRefs.resolve(other.value.handle).ok).toBe(true);
+    }
+  });
+
+  it('fails closed for stale atlas payloads', () => {
+    const result = resolveTilesetRuntime(new World(), 'stale-atlas', () => ({ code: 'stale' }));
+    expect(result).toMatchObject({ ok: false, error: { code: 'tileset-atlas-stale' } });
   });
 });

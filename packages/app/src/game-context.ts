@@ -1,30 +1,12 @@
-// @forgeax/engine-app -- GameContext / BootstrapContext + GameEntry / BootstrapEntry type aliases.
+// @forgeax/engine-app -- Host service for asset-resident game plugins.
 //
-// GameContext is the narrow contract between the preview host (apps/preview/)
-// and game templates (templates/game-default/). It exposes the ECS World,
-// AssetRegistry, and App handle; per-frame work belongs to Update systems.
-//
-// BootstrapContext is the wider contract for the bootstrap(world, ctx?) entry
-// hook (D-2: world as first-class parameter, ctx carries non-world startup
-// context — renderer / defaultSceneRoot / defaultScene). The host assembles
-// this object from the resolved + instantiated defaultScene before calling
-// bootstrap(world, ctx).
-//
-// GameEntry is the legacy template entry signature: async (ctx: GameContext) => void.
-// BootstrapEntry is the new entry signature: (world: World, ctx?: BootstrapContext) => void | Promise<void>.
-//
-// Constraints from upstream:
-//   - requirements D-1: GameContext wraps App handle (does NOT own frame-loop)
-//   - plan-strategy D-2: bootstrap(world, ctx?) — world first param, ctx? preserves non-world startup context
-//   - plan-strategy D-5: GameContext/BootstrapContext are pure interfaces (no factory function);
-//     the host manually assembles the ctx object
-//
-// Charter awareness:
-//   - F1 context-limited: BootstrapEntry AI users see the full contract in one screen
-//   - P4 consistent abstraction: single ctx object wraps App/AssetRegistry, world as explicit first param
+// App, Preview, and Devkit provide one realm-local GameHost service. Project
+// code default-exports a native Cordis plugin that injects this service and
+// owns all non-ECS teardown through Fiber effects.
 
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import type { EntityHandle } from '@forgeax/engine-ecs';
+import type { Plugin } from '@forgeax/engine-plugin';
 import type { Renderer } from '@forgeax/engine-render';
 import type { SceneAsset } from '@forgeax/engine-types';
 
@@ -75,118 +57,17 @@ export interface GameReadDef {
 
 /**
  * Host-provided registration sink for one Play run. Games receive this only while
- * bootstrapping the fresh transient world; registrations are discarded on Stop.
+ * bootstrapping the fresh transient world; registrations are discarded when the run is disposed.
  */
 export interface GameProjectionRegistrar {
   registerAction(def: GameActionDef): () => void;
   registerRead(def: GameReadDef): () => void;
 }
 
-/** The stable wire identity for asset-resident gameplay producers. */
-export const GAMEPLAY_PRODUCER_CONTRACT = 'forgeax.gameplay-producer' as const;
-/** Bump only when the producer context or descriptor meaning changes. */
-export const GAMEPLAY_PRODUCER_CONTRACT_VERSION = 1 as const;
-
-/** Public identity a host can discover without importing game implementation code. */
-export interface GamePluginDescriptor {
-  readonly contract: typeof GAMEPLAY_PRODUCER_CONTRACT;
-  readonly version: typeof GAMEPLAY_PRODUCER_CONTRACT_VERSION;
-  readonly id: string;
-  readonly title: string;
-}
-
-export type GamePluginDiagnosticCode =
-  | 'producer-report'
-  | 'producer-registration-failed'
-  | 'producer-reload-failed'
-  | 'producer-dispose-failed';
-
-export interface GamePluginDiagnostic {
-  readonly code: GamePluginDiagnosticCode;
-  readonly severity: 'info' | 'warn' | 'error';
-  readonly pluginId: string;
-  readonly message: string;
-}
-
-/** Structured terminal result for a producer-owned source/module recovery pass. */
-export type GamePluginReloadResult =
-  | {
-      readonly ok: true;
-      readonly value: { readonly pluginId: string; readonly status: 'reloaded' };
-    }
-  | {
-      readonly ok: false;
-      readonly error: {
-        readonly code: 'game-plugin-reload-unsupported' | 'game-plugin-reload-failed';
-        readonly pluginId: string;
-        readonly hint: string;
-      };
-    };
-
-/** Lifecycle hooks are owned by the producer but flushed by the host at Stop/reload. */
-export interface GamePluginLifecycle {
-  registerCleanup(fn: () => void): () => void;
-  registerReload(fn: () => void | Promise<void>): () => void;
-}
-
-/** Host-neutral context for one producer installation on one fresh Play World. */
-export interface GamePluginProducerContext {
-  readonly world: World;
-  readonly gameProjection?: GameProjectionRegistrar;
-  readonly lifecycle: GamePluginLifecycle;
-  report(diagnostic: Omit<GamePluginDiagnostic, 'pluginId'>): void;
-}
-
-/** The canonical named export (`gameplay`) of an asset-resident producer module. */
-export interface GamePluginProducer {
-  readonly descriptor: GamePluginDescriptor;
-  register(context: GamePluginProducerContext): void | Promise<void>;
-}
-
-/**
- * Narrow contract between preview host and game template entry point.
- *
- * Exposes exactly 4 readonly fields covering all the surface a legacy
- * GameEntry needs. The host assembles this object manually from the App
- * handle (plan-strategy D-5: no factory function).
- */
-export interface GameContext {
-  /** The ECS World owned by the App. Templates spawn entities and add systems here. */
-  readonly world: World;
-  /** The AssetRegistry owned by the Renderer. Templates register materials and load assets here. */
-  readonly assets: AssetRegistry;
-  /** The App handle for lifecycle introspection (e.g. app.onError). */
-  readonly app: App;
-  /**
-   * Controlled UI container for this run. Games must mount their DOM UI here
-   * (`(ctx.uiRoot ?? document.body).appendChild(el)`) instead of appending
-   * directly to `document.body`. In the embedded editor viewport the host
-   * removes this whole container on ■ Stop — a single disposable boundary that
-   * makes UI-remnant-after-stop structurally impossible (the ECS-surgical undo
-   * in run-lifecycle cannot reach DOM). Absent → fall back to `document.body`.
-   */
-  readonly uiRoot?: HTMLElement;
-  /**
-   * Register a teardown callback for non-DOM side effects that outlive the ECS
-   * world (`removeEventListener` / `AudioContext.close` / `clearTimeout` /
-   * `cancelAnimationFrame`). The host flushes these on ■ Stop, in reverse
-   * registration order. Absent → the host does not support teardown (e.g. a
-   * reload-on-stop host); games should still register defensively.
-   */
-  readonly registerCleanup?: (fn: () => void) => void;
-}
-
-/**
- * Wider context for the bootstrap(world, ctx?) entry hook (plan-strategy D-2).
- *
- * world is the first parameter of bootstrap — not a field of this context.
- * The remaining surface is everything a game needs from the host after the
- * world already carries the defaultScene entities: the Renderer (optional,
- * some hosts may not provide it), the AssetRegistry, and the App handle.
- * Optional defaultSceneRoot / defaultScene fields carry the host-instantiated
- * scene when a defaultScene exists in forge.json.
- */
-export interface BootstrapContext {
+/** Realm-local Host capability injected into an asset-resident game plugin. */
+export interface GameHost {
+  /** Presentation canvas owned by this Host realm. */
+  readonly canvas: HTMLCanvasElement;
   /** The WebGPU Renderer (optional — some hosts may not expose it). */
   readonly renderer?: Renderer;
   /** The AssetRegistry owned by the Renderer. */
@@ -204,19 +85,10 @@ export interface BootstrapContext {
    * Controlled UI container for this run. Games must mount their DOM UI here
    * (`(ctx.uiRoot ?? document.body).appendChild(el)`) instead of appending
    * directly to `document.body`. In the embedded editor viewport the host
-   * removes this whole container on ■ Stop — a single disposable boundary that
-   * makes UI-remnant-after-stop structurally impossible (the ECS-surgical undo
-   * in run-lifecycle cannot reach DOM). Absent → fall back to `document.body`.
+   * removes this whole container when the run is disposed. Absent means game
+   * code falls back to `document.body`.
    */
   readonly uiRoot?: HTMLElement;
-  /**
-   * Register a teardown callback for non-DOM side effects that outlive the ECS
-   * world (`removeEventListener` / `AudioContext.close` / `clearTimeout` /
-   * `cancelAnimationFrame`). The host flushes these on ■ Stop, in reverse
-   * registration order. Absent → the host does not support teardown (e.g. a
-   * reload-on-stop host); games should still register defensively.
-   */
-  readonly registerCleanup?: (fn: () => void) => void;
   /**
    * M2 D-3: command-set pointer-lock gate. The game template calls this
    * when the view mode changes (e.g. `setPointerLockAllowed(mode === 'fps')`
@@ -229,30 +101,26 @@ export interface BootstrapContext {
   /**
    * Optional Play-only projection seam. A game registers its own action and read
    * capabilities here; the host may only discover/invoke/read those closures. It
-   * is deliberately absent outside a host that can clear registrations on Stop.
+   * is deliberately absent outside a host that can clear registrations on disposal.
    */
   readonly gameProjection?: GameProjectionRegistrar;
 }
 
 /**
- * Legacy game template entry point signature.
- *
- * The host (apps/preview/) calls `await entry(ctx)` on the resolved
- * GameEntry and starts the frame-loop afterward.
+ * Provide the Host boundary to a native Cordis game plugin.
  */
-export type GameEntry = (ctx: GameContext) => Promise<void>;
+export function gameHostPlugin(host: GameHost): Plugin {
+  return {
+    name: 'game-host',
+    provide: 'gameHost',
+    apply(ctx) {
+      ctx.provide('gameHost', host);
+    },
+  };
+}
 
-/**
- * New bootstrap entry hook signature (plan-strategy D-2).
- *
- * World is the first-class parameter. The optional second parameter carries
- * non-world startup context (renderer, defaultSceneRoot, defaultScene, etc.).
- * The host must call bootstrap AFTER instantiating the defaultScene (when one
- * exists), and must pass the world that already contains the instantiated
- * entities.
- *
- * A synchronous function `(world, ctx) => { ... }` naturally satisfies
- * `void | Promise<void>` — returning undefined is auto-wrapped by the JS
- * runtime.
- */
-export type BootstrapEntry = (world: World, ctx?: BootstrapContext) => void | Promise<void>;
+declare module '@forgeax/engine-plugin' {
+  interface EngineContextServices {
+    gameHost?: GameHost;
+  }
+}

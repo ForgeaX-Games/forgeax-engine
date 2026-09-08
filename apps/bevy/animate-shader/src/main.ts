@@ -3,7 +3,6 @@ import { Update } from '@forgeax/engine-ecs';
 import { quat } from '@forgeax/engine-math';
 import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } from '@forgeax/engine-render';
-import { createDevImportTransport } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -19,7 +18,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const result = await createApp(
     target,
     {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter() },
   );
   if (!result.ok) {
     console.error('[bevy-animate-shader] createApp failed:', result.error);
@@ -59,6 +58,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       const resolved = world.sharedRefs.resolve<'MaterialAsset', MaterialAsset>(material);
       if (!resolved.ok || resolved.value.values === undefined) return;
       (resolved.value.values as Record<string, unknown>).time = time;
+      world.sharedRefs.markChanged(material).unwrap();
     },
   });
   app.onError((error) => console.error('[bevy-animate-shader] app error:', error.code, error.hint));

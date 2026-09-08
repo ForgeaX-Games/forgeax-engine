@@ -68,7 +68,8 @@ import type { PointLightSnapshot, SpotLightSnapshot } from './render-system-extr
 //   [ 8..10] direction        vec3<f32>  (point: vec3(0))
 //   [  11 ] cosOuter          f32         (point: 0.0)
 //   [  12 ] kind              u32         (POINT = 0, SPOT = 1)
-//   [13..15] pad              u32x3 = 0   (std430 vec4 stride alignment)
+//   [  13 ] shadow identity   i32         (point layer / spot tile, -1 sentinel)
+//   [14..15] point depth       f32x2       (point near/far; spot zero)
 //
 // Design: research Finding 1 (Bevy GpuClusteredLight 152B -> forgeax 64B),
 // plan-strategy D-light-slot (kind bit-tag discriminant).
@@ -97,8 +98,8 @@ export type LightSlotKind = (typeof LightSlotKind)[keyof typeof LightSlotKind];
  *
  * feat-20260612-point-light-shadows-urp-hdrp M4 / T-M4-4 (plan-strategy §D-8):
  * the prior u32x3 pad lanes at byte 52..64 carry shadow-side data on the HDRP
- * path. `kind_and_pad.x = kind` (u32), `.y = shadowAtlasLayer` (i32, sentinel
- * -1 = no shadow / spot light), `.z = near` (f32 via bitcast), `.w = far`
+ * path. `kind_and_pad.x = kind` (u32), `.y = shadow identity` (i32, sentinel
+ * -1 = no shadow), `.z = near` (f32 via bitcast), `.w = far`
  * (f32 via bitcast). The shader reads near/far through `bitcast<f32>(...)`
  * to keep the WGSL struct as `vec4<u32>` (alignment + naga_oil unchanged).
  */
@@ -111,8 +112,9 @@ export const LIGHTSLOT_LAYOUT = {
   directionOffset: 32,
   cosOuterOffset: 44,
   kindOffset: 48,
-  padOffset: 52,
+  shadowPayloadOffset: 52,
   shadowAtlasLayerOffset: 52,
+  shadowAtlasTileOffset: 52,
   shadowNearOffset: 56,
   shadowFarOffset: 60,
   floatCount: 16,
@@ -271,13 +273,15 @@ export interface PointShadowSlotInfo {
  * that operation.
  *
  * feat-20260612-point-light-shadows-urp-hdrp M4 / T-M4-4 (plan-strategy §D-8):
- * the optional `shadow` info threads through to bytes 52..64 as
- * `(shadowAtlasLayer i32, near f32, far f32)`. The shader reads `near`/`far`
+ * the optional point `shadow` info threads through to bytes 52..64 as
+ * `(shadowAtlasLayer i32, near f32, far f32)`. Spot snapshots write their
+ * `shadowAtlasTile` directly into the same identity lane and keep near/far 0.
+ * The shader reads `near`/`far`
  * through `bitcast<f32>(kind_and_pad.zw)` so the WGSL struct stays
  * `kind_and_pad: vec4<u32>` (alignment + naga_oil compose unchanged). When
  * `shadow` is undefined (no PointLightShadow) the lanes default to
  * `(layer = -1, 0, 0)` -- shader gates on `layer >= 0` so unshadowed lights
- * stay on the `evaluate_point_light` path. Spot lights ignore the lanes.
+ * stay on the `evaluate_point_light` path. Spot lights write their tile or -1.
  *
  * Returns a fresh `Float32Array(16)` per call.
  */
@@ -301,15 +305,19 @@ export function packLightSlot(
   out[9] = snap.kind === 'point' ? 0 : (snap.direction[1] ?? 0);
   out[10] = snap.kind === 'point' ? 0 : (snap.direction[2] ?? 0);
   out[11] = snap.kind === 'point' ? 0.0 : snap.cosOuter;
-  // kind (u32) at byte 48
-  out[12] = snap.kind === 'point' ? LightSlotKind.POINT : LightSlotKind.SPOT;
-  // Pad lanes 13..15 carry shadow info on the HDRP path (T-M4-4).
-  // Sentinel default: layer = -1 (no shadow). near/far stay zero.
+  // Kind is a raw u32 discriminant at byte 48. Do not assign through the
+  // Float32Array: SPOT=1 must be 0x00000001, not f32(1.0) bits.
+  const u32 = new Uint32Array(out.buffer);
+  u32[12] = snap.kind === 'point' ? LightSlotKind.POINT : LightSlotKind.SPOT;
+  // Lanes 13..15 carry one kind-discriminated shadow identity. Point keeps
+  // layer/near/far; spot writes its snapshot tile and leaves near/far zero.
   const i32 = new Int32Array(out.buffer);
   if (snap.kind === 'point' && shadow !== undefined) {
     i32[13] = shadow.shadowAtlasLayer;
     out[14] = shadow.near;
     out[15] = shadow.far;
+  } else if (snap.kind === 'spot') {
+    i32[13] = snap.shadowAtlasTile;
   } else {
     i32[13] = POINT_LIGHT_SHADOW_LAYER_SENTINEL;
     // out[14] / out[15] remain zero (Float32Array zero-init).

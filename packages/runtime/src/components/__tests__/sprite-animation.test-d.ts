@@ -43,13 +43,13 @@
 // F1 (single-import surface), P3 (schema fail-fast at TS edge), P4
 // (consistent abstraction with M1 Tonemap encoding).
 
-import type { Component, ShapeOf } from '@forgeax/engine-ecs';
+import type { Component, SchemaOf, ShapeOf } from '@forgeax/engine-ecs';
 import type { SpriteAnimation } from '@forgeax/engine-render/authoring';
+import { describe, expectTypeOf, it } from 'vitest';
 import {
   SPRITE_PLAYBACK_MODE_CLAMP,
   SPRITE_PLAYBACK_MODE_LOOP,
-} from '@forgeax/engine-render/authoring';
-import { describe, expectTypeOf, it } from 'vitest';
+} from '../../../../render/src/components/sprite-playback-mode';
 
 describe('SpriteAnimation — Component token shape (AC-02 schema lock)', () => {
   it("name literal type is 'SpriteAnimation'", () => {
@@ -57,7 +57,7 @@ describe('SpriteAnimation — Component token shape (AC-02 schema lock)', () => 
   });
 
   it('schema is exactly the 6-field record from requirements section 2.3', () => {
-    expectTypeOf<typeof SpriteAnimation.schema>().toEqualTypeOf<
+    expectTypeOf<SchemaOf<typeof SpriteAnimation>>().toEqualTypeOf<
       Readonly<{
         readonly frameCount: 'u32';
         readonly frameDuration: 'f32';
@@ -85,18 +85,18 @@ describe('SpriteAnimation — Component token shape (AC-02 schema lock)', () => 
   });
 
   it('schema field literals narrow to their exact tier-2 vocab keywords', () => {
-    expectTypeOf<(typeof SpriteAnimation.schema)['frameCount']>().toEqualTypeOf<'u32'>();
-    expectTypeOf<(typeof SpriteAnimation.schema)['frameDuration']>().toEqualTypeOf<'f32'>();
-    expectTypeOf<(typeof SpriteAnimation.schema)['currentFrame']>().toEqualTypeOf<'u32'>();
-    expectTypeOf<(typeof SpriteAnimation.schema)['accumDt']>().toEqualTypeOf<'f32'>();
-    expectTypeOf<(typeof SpriteAnimation.schema)['regions']>().toEqualTypeOf<'array<f32>'>();
-    expectTypeOf<(typeof SpriteAnimation.schema)['playbackMode']>().toEqualTypeOf<'u32'>();
+    expectTypeOf<SchemaOf<typeof SpriteAnimation>['frameCount']>().toEqualTypeOf<'u32'>();
+    expectTypeOf<SchemaOf<typeof SpriteAnimation>['frameDuration']>().toEqualTypeOf<'f32'>();
+    expectTypeOf<SchemaOf<typeof SpriteAnimation>['currentFrame']>().toEqualTypeOf<'u32'>();
+    expectTypeOf<SchemaOf<typeof SpriteAnimation>['accumDt']>().toEqualTypeOf<'f32'>();
+    expectTypeOf<SchemaOf<typeof SpriteAnimation>['regions']>().toEqualTypeOf<'array<f32>'>();
+    expectTypeOf<SchemaOf<typeof SpriteAnimation>['playbackMode']>().toEqualTypeOf<'u32'>();
   });
 });
 
 describe('SpriteAnimation — data shape via ShapeOf (AC-02 + AC-08)', () => {
   it('ShapeOf<schema> exposes 6 fields with the documented JS types', () => {
-    type Data = ShapeOf<typeof SpriteAnimation.schema>;
+    type Data = ShapeOf<SchemaOf<typeof SpriteAnimation>>;
     expectTypeOf<keyof Data>().toEqualTypeOf<
       'frameCount' | 'frameDuration' | 'currentFrame' | 'accumDt' | 'regions' | 'playbackMode'
     >();
@@ -109,7 +109,7 @@ describe('SpriteAnimation — data shape via ShapeOf (AC-02 + AC-08)', () => {
   });
 
   it('world.spawn data is Partial<ShapeOf<schema>> — every field optional at consumer', () => {
-    type SpawnData = Partial<ShapeOf<typeof SpriteAnimation.schema>>;
+    type SpawnData = Partial<ShapeOf<SchemaOf<typeof SpriteAnimation>>>;
 
     // Empty payload type-checks (consumer surface accepts omission).
     const empty: SpawnData = {};
@@ -136,14 +136,14 @@ describe('SpriteAnimation — data shape via ShapeOf (AC-02 + AC-08)', () => {
 
 describe('SpriteAnimation — @ts-expect-error negative assertions (AC-08)', () => {
   it('1. plain number[] is not assignable to data.regions (Float32Array nominal)', () => {
-    type SpawnData = Partial<ShapeOf<typeof SpriteAnimation.schema>>;
+    type SpawnData = Partial<ShapeOf<SchemaOf<typeof SpriteAnimation>>>;
     // @ts-expect-error number[] lacks the Float32Array brand.
     const wrong: SpawnData = { regions: [0, 0, 1, 1] };
     void wrong;
   });
 
   it("2. string-literal 'loop' is not assignable to data.playbackMode (numeric u32)", () => {
-    type SpawnData = Partial<ShapeOf<typeof SpriteAnimation.schema>>;
+    type SpawnData = Partial<ShapeOf<SchemaOf<typeof SpriteAnimation>>>;
     // @ts-expect-error playbackMode is a u32 numeric column (D-5);
     // string-literal 'loop' is the type-level alias only — runtime
     // narrowing flows through `spritePlaybackModeFromU32`.
@@ -152,7 +152,7 @@ describe('SpriteAnimation — @ts-expect-error negative assertions (AC-08)', () 
   });
 
   it('3. mismatched scalar field types are TS errors', () => {
-    type SpawnData = Partial<ShapeOf<typeof SpriteAnimation.schema>>;
+    type SpawnData = Partial<ShapeOf<SchemaOf<typeof SpriteAnimation>>>;
     // @ts-expect-error frameCount is `number`; assigning a string is a TS error.
     const wrong: SpawnData = { frameCount: '4' };
     void wrong;

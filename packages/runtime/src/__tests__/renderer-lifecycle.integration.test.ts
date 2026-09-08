@@ -1,6 +1,7 @@
+import { World } from '@forgeax/engine-ecs';
 import { rhi } from '@forgeax/engine-rhi-null';
 import { describe, expect, it } from 'vitest';
-import { createRenderer } from '../createRenderer';
+import { requireRenderer } from './renderer-test-utils';
 
 function canvas(): HTMLCanvasElement {
   return { width: 32, height: 32, getContext: () => null } as unknown as HTMLCanvasElement;
@@ -18,12 +19,24 @@ const manifest = `data:application/json,${encodeURIComponent(
 )}`;
 
 describe('renderer lifecycle assembly', () => {
-  it('keeps dispose idempotent after ready and draw', async () => {
-    const renderer = await createRenderer(canvas(), { rhi }, { shaderManifestUrl: manifest });
-    await renderer.ready;
-    renderer.draw([], { cameraOwner: 0, resourceOwner: 0 });
+  it('keeps dispose idempotent after attach and draw', async () => {
+    const renderer = await requireRenderer(canvas(), { rhi }, { shaderManifestUrl: manifest });
+    const attached = renderer.attach(new World());
+    expect(attached.ok).toBe(true);
+    if (!attached.ok) return;
+    renderer.draw({
+      leases: [attached.value],
+      camera: { lease: attached.value },
+      environment: { lease: attached.value },
+    });
     renderer.dispose();
     renderer.dispose();
-    expect(renderer.draw([], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(false);
+    expect(
+      renderer.draw({
+        leases: [attached.value],
+        camera: { lease: attached.value },
+        environment: { lease: attached.value },
+      }).ok,
+    ).toBe(false);
   });
 });

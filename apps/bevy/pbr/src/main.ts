@@ -24,11 +24,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = appResult.value;
-  const ready = await app.renderer.ready;
-  if (!ready.ok) {
-    console.error('[bevy-pbr] renderer.ready failed:', ready.error);
-    return;
-  }
 
   buildPbrWorld(app.world);
 

@@ -55,12 +55,79 @@ export function validateMeshPayload(asset: Asset): AssetError | null {
     });
   }
 
+  const materialSlots = (asset as TypesMeshAsset).materialSlots;
+  if (!Array.isArray(materialSlots) || materialSlots.length === 0) {
+    return new AssetError({
+      code: 'mesh-asset-material-slot-index-out-of-range',
+      expected: 'a non-empty materialSlots table for a mesh with submeshes',
+      hint: ASSET_ERROR_HINTS['mesh-asset-material-slot-index-out-of-range'],
+      detail: {
+        meshAssetGuid: '<no-guid>',
+        submeshIndex: 0,
+        materialSlot: -1,
+        materialSlotCount: 0,
+      },
+    });
+  }
+  const slotNames = new Set<string>();
+  const sourceKeys = new Set<string>();
+  for (let slotIndex = 0; slotIndex < materialSlots.length; slotIndex++) {
+    const slot = materialSlots[slotIndex];
+    const slotName = slot?.slotName.trim() ?? '';
+    const sourceKey = slot?.sourceKey?.trim();
+    if (slotName.length === 0 || slotNames.has(slotName)) {
+      return new AssetError({
+        code: 'asset-invalid-value',
+        expected: `materialSlots[${slotIndex}].slotName is non-empty and unique`,
+        hint: 'give every Mesh material slot a stable unique slotName',
+        detail: {
+          field: `materialSlots[${slotIndex}].slotName`,
+          value: slotName,
+          reason: 'empty-or-duplicate',
+        },
+      });
+    }
+    slotNames.add(slotName);
+    if (sourceKey !== undefined && sourceKey.length > 0) {
+      if (sourceKeys.has(sourceKey)) {
+        return new AssetError({
+          code: 'asset-invalid-value',
+          expected: `materialSlots[${slotIndex}].sourceKey is unique when present`,
+          hint: 'derive a stable unique source identity for every imported Mesh material slot',
+          detail: {
+            field: `materialSlots[${slotIndex}].sourceKey`,
+            value: sourceKey,
+            reason: 'duplicate',
+          },
+        });
+      }
+      sourceKeys.add(sourceKey);
+    }
+  }
+
   const hasIndices = (asset.indices?.length ?? 0) > 0;
   const indexBufferLength = asset.indices?.length ?? 0;
   for (let i = 0; i < submeshes.length; i++) {
     const sm = submeshes[i];
     if (sm === undefined) continue;
     const topology = sm.topology;
+    if (
+      !Number.isInteger(sm.materialSlot) ||
+      sm.materialSlot < 0 ||
+      sm.materialSlot >= materialSlots.length
+    ) {
+      return new AssetError({
+        code: 'mesh-asset-material-slot-index-out-of-range',
+        expected: `submesh[${i}].materialSlot in [0, ${materialSlots.length})`,
+        hint: ASSET_ERROR_HINTS['mesh-asset-material-slot-index-out-of-range'],
+        detail: {
+          meshAssetGuid: '<no-guid>',
+          submeshIndex: i,
+          materialSlot: sm.materialSlot,
+          materialSlotCount: materialSlots.length,
+        },
+      });
+    }
     if ((topology === 'line-strip' || topology === 'triangle-strip') && !hasIndices) {
       return new AssetError({
         code: 'asset-invalid-value',
@@ -351,10 +418,11 @@ export function validateTilesetPayload(
   asset: TilesetAsset,
   opts: TilesetValidateOptions = {},
 ): AssetError | null {
+  const assetGuid = '<no-guid>';
   // (1) atlases empty fail-fast (M1 R-6 top-level invariant).
   if (asset.atlases.length < 1) {
     return tileEntryMalformed({
-      tilesetGuid: asset.guid,
+      tilesetGuid: assetGuid,
       field: 'atlases',
       scope: 'tileset-asset',
       expected: 'atlases.length >= 1',
@@ -387,7 +455,7 @@ export function validateTilesetPayload(
         hint: ASSET_ERROR_HINTS['tileset-region-index-out-of-range'],
         detail: {
           code: 'tileset-region-index-out-of-range',
-          tilesetGuid: asset.guid,
+          tilesetGuid: assetGuid,
           tileId: 0,
           regionIndex: i,
           regionCount,
@@ -399,7 +467,7 @@ export function validateTilesetPayload(
       const ai = region.atlasIndex;
       if (!Number.isInteger(ai) || ai < 0 || ai >= atlasesLength) {
         return tileEntryMalformed({
-          tilesetGuid: asset.guid,
+          tilesetGuid: assetGuid,
           field: 'atlasIndex',
           scope: 'tileset-asset',
           expected: `regions[${i}].atlasIndex in [0, ${atlasesLength})`,
@@ -419,7 +487,7 @@ export function validateTilesetPayload(
         hint: ASSET_ERROR_HINTS['tileset-region-index-out-of-range'],
         detail: {
           code: 'tileset-region-index-out-of-range',
-          tilesetGuid: asset.guid,
+          tilesetGuid: assetGuid,
           tileId: i + 1,
           regionIndex: ri,
           regionCount,
@@ -440,7 +508,7 @@ export function validateTilesetPayload(
       const w = entry.widthCells;
       if (!Number.isFinite(w) || w <= 0 || w > 64) {
         return tileEntryMalformed({
-          tilesetGuid: asset.guid,
+          tilesetGuid: assetGuid,
           field: 'widthCells',
           scope: 'tile-entry',
           tileEntryIndex: i,
@@ -452,7 +520,7 @@ export function validateTilesetPayload(
       const h = entry.heightCells;
       if (!Number.isFinite(h) || h <= 0 || h > 64) {
         return tileEntryMalformed({
-          tilesetGuid: asset.guid,
+          tilesetGuid: assetGuid,
           field: 'heightCells',
           scope: 'tile-entry',
           tileEntryIndex: i,
@@ -464,7 +532,7 @@ export function validateTilesetPayload(
       const px = entry.pivotX;
       if (!Number.isFinite(px) || px < 0 || px > 1) {
         return tileEntryMalformed({
-          tilesetGuid: asset.guid,
+          tilesetGuid: assetGuid,
           field: 'pivotX',
           scope: 'tile-entry',
           tileEntryIndex: i,
@@ -476,7 +544,7 @@ export function validateTilesetPayload(
       const py = entry.pivotY;
       if (!Number.isFinite(py) || py < 0 || py > 1) {
         return tileEntryMalformed({
-          tilesetGuid: asset.guid,
+          tilesetGuid: assetGuid,
           field: 'pivotY',
           scope: 'tile-entry',
           tileEntryIndex: i,
@@ -485,7 +553,7 @@ export function validateTilesetPayload(
       }
     }
     if (entry.collider !== undefined) {
-      const colliderErr = validateColliderShape(entry.collider, asset.guid, i);
+      const colliderErr = validateColliderShape(entry.collider, assetGuid, i);
       if (colliderErr !== null) return colliderErr;
     }
   }

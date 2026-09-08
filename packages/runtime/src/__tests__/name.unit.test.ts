@@ -4,18 +4,19 @@
 // name-mutation paragraphs) by tweak-20260612-ecs-concept-compression: Name's
 // authoritative location is now @forgeax/engine-runtime, not the ECS framework.
 
-import { World } from '@forgeax/engine-ecs';
+import { type SchemaOf, World } from '@forgeax/engine-ecs';
+import { componentSchema } from '@forgeax/engine-ecs/internal';
 import { Name } from '@forgeax/engine-scene';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
 describe('Name component --- schema literal (w2, AC-03 a/d)', () => {
-  it('Name.schema deep-equals { value: "string" } (KD-4 single field)', () => {
-    expect(Name.schema).toEqual({ value: 'string' });
-    expect(Object.keys(Name.schema)).toEqual(['value']);
+  it('componentSchema(Name) deep-equals { value: "string" } (KD-4 single field)', () => {
+    expect(componentSchema(Name)).toEqual({ value: 'string' });
+    expect(Object.keys(componentSchema(Name))).toEqual(['value']);
   });
 
-  it('Name.schema.value preserved as literal "string", not widened', () => {
-    type ValueField = typeof Name.schema.value;
+  it('componentSchema(Name).value preserved as literal "string", not widened', () => {
+    type ValueField = SchemaOf<typeof Name>['value'];
     expectTypeOf<ValueField>().toEqualTypeOf<'string'>();
   });
 });
@@ -34,9 +35,9 @@ describe('Name component --- single-import surface (w2, AC-03 c / AC-11)', () =>
 });
 
 describe('Name component --- AC-13 schema invariant (w20)', () => {
-  it("Name.schema['value'] is the literal 'string'", () => {
-    expect(Name.schema.value).toBe('string');
-    type ValueField = typeof Name.schema.value;
+  it("componentSchema(Name)['value'] is the literal 'string'", () => {
+    expect(componentSchema(Name).value).toBe('string');
+    type ValueField = SchemaOf<typeof Name>['value'];
     expectTypeOf<ValueField>().toEqualTypeOf<'string'>();
   });
 

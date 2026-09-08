@@ -6,7 +6,7 @@
 // test used the assemble form with a hand-copied registerListenerSyncSystem
 // helper — a shadow copy of the production code that left w25 untested.
 //
-// Approach: vi.mock createRenderer (only export overridden) so the canvas
+// Approach: vi.mock constructRuntimeRendererHost (only construction overridden) so the canvas
 // form does not attempt real WebGPU init; all other exports from
 // @forgeax/engine-runtime remain real (Transform, registerPropagateTransforms,
 // PROPAGATE_TRANSFORMS_SYSTEM, etc.).  globalThis.AudioContext is stubbed
@@ -29,46 +29,51 @@
 //       effective and the system does not suffer 1-frame lag).
 
 import { AudioListener as AudioListenerComponent, audioPlugin } from '@forgeax/engine-audio';
+import { webAudioPlugin } from '@forgeax/engine-audio-webaudio';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it, vi } from 'vitest';
 import { createApp } from '../create-app';
 
+const constructRuntimeRendererHost = vi.hoisted(() => vi.fn());
+
 // ---------------------------------------------------------------------------
-// Mock createRenderer so the canvas form does not attempt real WebGPU init.
+// Mock constructRuntimeRendererHost so the canvas form does not attempt real WebGPU init.
 // All other @forgeax/engine-runtime exports stay real (Transform,
 // registerPropagateTransforms, advanceAnimationPlayer, etc.).
 // ---------------------------------------------------------------------------
 
 vi.mock('@forgeax/engine-runtime', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@forgeax/engine-runtime')>();
-  const ready: Promise<{ ok: true; value: undefined }> = Promise.resolve({
-    ok: true,
-    value: undefined,
-  });
+  const lease = { dispose: vi.fn() };
   const rendererStub = {
-    backend: 'webgpu' as const,
-    ready,
-    draw(): { ok: true; value: undefined } {
-      return { ok: true, value: undefined };
+    attach(): { ok: true; value: object } {
+      return { ok: true, value: lease };
     },
-    attachWorld(): { ok: true; value: undefined } {
-      return { ok: true, value: undefined };
+    draw(): { ok: true; value: object } {
+      return { ok: true, value: {} };
     },
-    detachWorld(): void {},
-    onError(): () => void {
-      return () => {};
-    },
-    onLost(): () => void {
+    observe: async () => ({ ok: true as const, value: {} }),
+    releaseSurface: () => ({ ok: true as const, value: undefined }),
+    restoreSurface: () => ({ ok: true as const, value: undefined }),
+    recover: async () => ({ ok: true as const, value: undefined }),
+    subscribe(): () => void {
       return () => {};
     },
     dispose: vi.fn(),
-    assets: null,
   };
+  constructRuntimeRendererHost.mockResolvedValue({
+    ok: true,
+    value: { renderer: rendererStub, assets: undefined },
+  });
   return {
     ...actual,
-    createRenderer: vi.fn().mockResolvedValue(rendererStub),
   };
 });
+
+vi.mock('@forgeax/engine-runtime/internal/renderer-host', () => ({
+  constructRuntimeRendererHost,
+  loadRhiPack: vi.fn(),
+}));
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -227,7 +232,7 @@ describe('feat-20260619 M7: listener sync real consumption path (canvas form)', 
           height: 600,
         } as HTMLCanvasElement;
 
-        const result = await createApp(canvas, { plugins: [audioPlugin()] });
+        const result = await createApp(canvas, { plugins: [webAudioPlugin(), audioPlugin()] });
         expect(result.ok).toBe(true);
         if (!result.ok) return;
         const app = result.value;
@@ -280,7 +285,7 @@ describe('feat-20260619 M7: listener sync real consumption path (canvas form)', 
           height: 600,
         } as HTMLCanvasElement;
 
-        const result = await createApp(canvas, { plugins: [audioPlugin()] });
+        const result = await createApp(canvas, { plugins: [webAudioPlugin(), audioPlugin()] });
         expect(result.ok).toBe(true);
         if (!result.ok) return;
         const app = result.value;
@@ -326,7 +331,7 @@ describe('feat-20260619 M7: listener sync real consumption path (canvas form)', 
           height: 600,
         } as HTMLCanvasElement;
 
-        const result = await createApp(canvas, { plugins: [audioPlugin()] });
+        const result = await createApp(canvas, { plugins: [webAudioPlugin(), audioPlugin()] });
         expect(result.ok).toBe(true);
         if (!result.ok) return;
         const app = result.value;

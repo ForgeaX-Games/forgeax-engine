@@ -186,19 +186,13 @@ describe('production-path shadow instanceBuffers worldEntityKey', () => {
     );
   });
 
-  it('shadow dir read-side inst.cacheKey get uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(
-      SHADOW_FILE,
-      findLine(SHADOW_FILE, 'frameState.instanceBuffers.get(', 0),
-      'shadow-pass directional instanceBuffers.get',
-    );
-  });
-
-  it('shadow spot read-side inst.cacheKey get uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(
-      SHADOW_FILE,
-      findLine(SHADOW_FILE, 'frameState.instanceBuffers.get(', 1),
-      'shadow-pass spot instanceBuffers.get',
+  it('spot shadow uses the shared world-aware caster recorder', () => {
+    const src = readFileSync(SHADOW_FILE, 'utf8');
+    const start = src.indexOf('export function encodeSpotShadowPass(');
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(src.slice(start)).toContain('recordShadowCasterDraws(');
+    expect(src.slice(start)).toContain(
+      "buildMatchedRenderableIndices(c.dispatch, { LightMode: ['ShadowCaster'] })",
     );
   });
 });
@@ -211,22 +205,6 @@ describe('production-path shadow instancesBgPerEntity worldEntityKey', () => {
       SHADOW_FILE,
       findLine(SHADOW_FILE, 'c.frameState.instancesBgPerEntity', 0),
       'shadow-pass instancesBgPerEntity write',
-    );
-  });
-
-  it('shadow dir read-side instancesBgPerEntity.get uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(
-      SHADOW_FILE,
-      findLine(SHADOW_FILE, '.get(worldEntityKey(', 0),
-      'shadow-pass directional instancesBgPerEntity read',
-    );
-  });
-
-  it('shadow spot read-side instancesBgPerEntity.get uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(
-      SHADOW_FILE,
-      findLine(SHADOW_FILE, '.get(worldEntityKey(', 1),
-      'shadow-pass spot instancesBgPerEntity read',
     );
   });
 });

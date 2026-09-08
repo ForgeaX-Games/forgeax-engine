@@ -63,6 +63,11 @@ describe('EndpointError policy owner', () => {
   });
 
   it('preserves public record types and every correlated EndpointError variant', () => {
+    type EndpointPolicyCode = keyof typeof ENDPOINT_EXPECTED;
+
+    expectTypeOf<EndpointErrorCode>().toEqualTypeOf<EndpointPolicyCode>();
+    expectTypeOf<EndpointPolicyCode>().toEqualTypeOf<EndpointErrorCode>();
+    expectTypeOf<'not-an-endpoint-error'>().not.toExtend<EndpointErrorCode>();
     expectTypeOf(ENDPOINT_EXPECTED).toEqualTypeOf<Readonly<Record<EndpointErrorCode, string>>>();
     expectTypeOf(ENDPOINT_ERROR_HINTS).toEqualTypeOf<
       Readonly<Record<EndpointErrorCode, string>>

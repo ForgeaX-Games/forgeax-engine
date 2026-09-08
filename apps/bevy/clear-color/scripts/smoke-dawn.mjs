@@ -1,3 +1,4 @@
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // bevy-clear-color headless dawn smoke — proves Bevy window/clear_color
 // behavior: blue-ish clearColor → Space rising-edge toggle → purple.
 // Browser and smoke share the same src/clear-color.ts scene.
@@ -103,26 +104,21 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  renderer = await createSmokeRenderer(createRenderer, mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
-console.log(`[bevy-clear-color] backend=${renderer.backend}`);
+console.log(`[bevy-clear-color] backend=${rendererBackend(renderer)}`);
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+subscribeSmokeErrors(renderer, (err) => errors.push({ code: err.code, hint: err.hint }));
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const { buildClearColorWorld, stepClearColor } = await import(resolve(here, '..', 'src', 'clear-color.ts'));
 buildClearColorWorld(world);
@@ -149,7 +145,7 @@ function spaceSnapshot() {
 for (let f = 0; f < 5; f++) {
   stepClearColor(world, noInputSnapshot());
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = drawSmokeFrame(renderer, world);
   if (!r.ok) { console.error(`[smoke] FAIL - draw error: ${r.error.code}`); process.exit(1); }
 }
 await delay(100);
@@ -184,14 +180,14 @@ if (initB > 120 && initG < initB) {
 // --- inject Space rising edge (toggle to purple) ---
 stepClearColor(world, spaceSnapshot());
 world.update().unwrap();
-renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+drawSmokeFrame(renderer, world);
 stepClearColor(world, noInputSnapshot());
 
 // render a few more frames
 for (let f = 0; f < 5; f++) {
   stepClearColor(world, noInputSnapshot());
   world.update().unwrap();
-  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  drawSmokeFrame(renderer, world);
 }
 await delay(100);
 

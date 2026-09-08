@@ -1,203 +1,102 @@
-// M4 defers HDR artifact emission assertions to the artifact delivery milestone.
-// @ts-nocheck
-// index-hdr-equirect-import.test.ts
-// feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M1 / w1.
-//
-// TDD red->green: locks the .hdr end-to-end import producing a kind:'equirect'
-// pack-index row + a build-time .bin, on BOTH index.ts paths:
-//   - build generateBundle (vite build programmatic API)
-//   - dev POST /__import equivalent (runImport with the image importer)
-//
-// plan-review.md issue #1 + plan-decisions orchestrator adjudication: equirect
-// is a single 2D rgba16float image with a disk identity, so it produces a build
-// .bin (unlike the old cube-texture which had no single 2D representation). The
-// index.ts skip guards (`meta.subAssets.every(s => s.kind === 'cube-texture')`)
-// therefore become dead code (w8 deletes them); these tests prove the .hdr path
-// no longer takes the skip branch on either path.
-
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
-import { ImporterRegistry, runImport } from '@forgeax/engine-import';
-import type { EquirectAsset, PackIndexEntry } from '@forgeax/engine-types';
+import type { PackIndexEntry } from '@forgeax/engine-types';
 import { build as viteBuild } from 'vite';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { pluginPack } from '../index.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const WORKTREE_ROOT = join(here, '..', '..', '..', '..');
-const FIXTURE_HDR_SRC = join(
-  WORKTREE_ROOT,
+const worktreeRoot = join(here, '..', '..', '..', '..');
+const fixtureHdr = join(
+  worktreeRoot,
   'forgeax-engine-assets',
   'learn-opengl',
   'textures',
   'newport_loft.hdr',
 );
-const HDR_GUID = '019e4a26-3c29-7420-af5d-20f2724a16b0';
-
-function hdrEquirectMeta(): string {
-  return JSON.stringify({
-    schemaVersion: '1.0.0',
-    kind: 'external-asset-package',
-    importer: 'image',
-    source: 'newport_loft.hdr',
-    importSettings: {
-      colorSpace: 'linear',
-      mipmap: 'auto',
-      addressMode: 'clamp-to-edge',
-      filterMode: 'linear',
-    },
-    subAssets: [{ guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' }],
-  });
-}
-
-const MAIN_JS = "console.log('hdr-equirect-import-test entry');\n";
+const hdrGuid = '019e4a26-3c29-7420-af5d-20f2724a16b0';
 
 let originalCwd: string;
 let tmpRoot: string;
 let assetsDir: string;
 let distDir: string;
+let packIndex: PackIndexEntry[] | undefined;
 
-beforeEach(async () => {
+beforeAll(async () => {
   originalCwd = process.cwd();
-  tmpRoot = await mkdtemp(join(tmpdir(), 'forgeax-vpp-w1-index-'));
+  tmpRoot = await mkdtemp(join(tmpdir(), 'forgeax-vpp-hdr-'));
   assetsDir = join(tmpRoot, 'assets');
   distDir = join(tmpRoot, 'dist');
   process.chdir(tmpRoot);
-
-  const hdrBytes = await readFile(FIXTURE_HDR_SRC);
-  await writeFile(join(tmpRoot, 'main.js'), MAIN_JS);
+  await writeFile(join(tmpRoot, 'main.js'), "console.log('hdr-equirect-import-test entry');\n");
   await mkdir(assetsDir, { recursive: true });
-  await writeFile(join(assetsDir, 'newport_loft.hdr'), hdrBytes);
-  await writeFile(join(assetsDir, 'newport_loft.hdr.meta.json'), hdrEquirectMeta());
+  await writeFile(join(assetsDir, 'newport_loft.hdr'), await readFile(fixtureHdr));
+  await writeFile(
+    join(assetsDir, 'newport_loft.hdr.meta.json'),
+    JSON.stringify({
+      schemaVersion: '1.0.0',
+      kind: 'external-asset-package',
+      importer: 'image',
+      source: 'newport_loft.hdr',
+      importSettings: {
+        colorSpace: 'linear',
+        mipmap: 'auto',
+        addressMode: 'clamp-to-edge',
+        filterMode: 'linear',
+      },
+      subAssets: [{ guid: hdrGuid, sourceIndex: 0, kind: 'equirect' }],
+    }),
+  );
+  await viteBuild({
+    root: tmpRoot,
+    logLevel: 'silent',
+    configFile: false,
+    build: {
+      outDir: distDir,
+      emptyOutDir: true,
+      write: true,
+      rollupOptions: { input: { main: 'main.js' } },
+    },
+    plugins: [pluginPack({ roots: [assetsDir], importers: [imageImporter] })],
+  });
+  packIndex = JSON.parse(
+    await readFile(join(distDir, 'pack-index.json'), 'utf8'),
+  ) as PackIndexEntry[];
 });
 
-afterEach(async () => {
+afterAll(async () => {
   process.chdir(originalCwd);
   await rm(tmpRoot, { recursive: true, force: true });
 });
 
-async function findImportedBin(): Promise<string | undefined> {
-  const distAssetsDir = join(distDir, 'assets');
-  let names: string[];
-  try {
-    names = await readdir(distAssetsDir);
-  } catch {
-    return undefined;
-  }
-  return names.find((n) => n.toLowerCase().startsWith(HDR_GUID) && n.endsWith('.bin'));
+function importedRow(): PackIndexEntry {
+  const row = packIndex?.find((entry) => entry.guid.toLowerCase() === hdrGuid);
+  if (!row) throw new Error('HDR imported-output row was not published');
+  return row;
 }
-
-async function readPackIndex(): Promise<PackIndexEntry[]> {
-  const raw = await readFile(join(distDir, 'pack-index.json'), 'utf-8');
-  return JSON.parse(raw) as PackIndexEntry[];
-}
-
-describe.skip('index-hdr-equirect-import.test.ts (w1) - build generateBundle path', () => {
-  it('(a) emits dist/assets/<guid>-<hash>.bin for the .hdr equirect (not a skip)', async () => {
-    await viteBuild({
-      root: tmpRoot,
-      logLevel: 'silent',
-      configFile: false,
-      build: {
-        outDir: distDir,
-        emptyOutDir: true,
-        write: true,
-        rollupOptions: { input: { main: 'main.js' } },
-      },
-      plugins: [pluginPack({ roots: [assetsDir], importers: [imageImporter] })],
-    });
-
-    const imported = await findImportedBin();
-    expect(imported).toBeDefined();
-    expect(imported?.endsWith('.bin')).toBe(true);
-  });
-
-  it('(b) pack-index row carries kind:"equirect" + rgba16float, packageUrl -> .bin', async () => {
-    await viteBuild({
-      root: tmpRoot,
-      logLevel: 'silent',
-      configFile: false,
-      build: {
-        outDir: distDir,
-        emptyOutDir: true,
-        write: true,
-        rollupOptions: { input: { main: 'main.js' } },
-      },
-      plugins: [pluginPack({ roots: [assetsDir], importers: [imageImporter] })],
-    });
-
-    const entries = await readPackIndex();
-    const row = entries.find((e) => e.guid.toLowerCase() === HDR_GUID);
-    expect(row).toBeDefined();
-    expect(row?.kind).toBe('equirect');
-    expect(row?.packageUrl.endsWith('.bin')).toBe(true);
-    expect(row?.packageUrl.endsWith('.hdr')).toBe(false);
-    if (row?.metadata?.kind === 'texture') {
-      expect(row.metadata.format).toBe('rgba16float');
-    }
-  });
-});
-
-describe.skip('index-hdr-equirect-import.test.ts (w1) - dev POST /__import equivalent', () => {
-  it('(c) runImport with the image importer produces an EquirectAsset (no import-produced-no-assets)', async () => {
-    const registry = new ImporterRegistry();
-    registry.register(imageImporter);
-
-    const hdrBytes = new Uint8Array(await readFile(FIXTURE_HDR_SRC));
-    const fs = {
-      readSource: async () => ({ ok: true as const, value: hdrBytes }),
-    };
-
-    const runResult = await runImport(
-      {
-        importer: 'image',
-        source: join(assetsDir, 'newport_loft.hdr'),
-        importSettings: { colorSpace: 'linear', mipmap: 'auto' },
-        subAssets: [{ guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' }],
-      },
-      registry,
-      fs,
-    );
-
-    expect(runResult.ok).toBe(true);
-    if (!runResult.ok) return;
-    expect('skipped' in runResult.value).toBe(false);
-    if ('skipped' in runResult.value) return;
-    const produced = runResult.value.pack.assets;
-    const equirect = produced.find((a) => a.guid.toLowerCase() === HDR_GUID);
-    expect(equirect).toBeDefined();
-    expect((equirect?.payload as EquirectAsset | undefined)?.kind).toBe('equirect');
-  });
-});
 
 describe('production imported-output identity', () => {
-  it('keeps authored name and current projection after texture package emission', async () => {
-    await viteBuild({
-      root: tmpRoot,
-      logLevel: 'silent',
-      configFile: false,
-      build: {
-        outDir: distDir,
-        emptyOutDir: true,
-        write: true,
-        rollupOptions: { input: { main: 'main.js' } },
-      },
-      plugins: [pluginPack({ roots: [assetsDir], importers: [imageImporter] })],
-    });
-
-    const entries = await readPackIndex();
-    const row = entries.find((entry) => entry.guid.toLowerCase() === HDR_GUID);
-    expect(row).toMatchObject({
+  it('keeps the authored source name after texture package emission', () => {
+    expect(importedRow()).toMatchObject({
       name: 'newport_loft.hdr',
+    });
+  });
+
+  it('keeps the current cooked projection after texture package emission', () => {
+    expect(importedRow()).toMatchObject({
       subject: 'imported-output',
       execution: 'cooked',
       lifecycle: 'current',
       projection: expect.objectContaining({ lifecycle: 'current' }),
     });
-    expect(row?.sourcePath).toMatch(/assets\/newport_loft\.hdr$/);
-    expect(row?.packageUrl).toMatch(/\.pack\.json$/);
+  });
+
+  it('keeps source and package locators on the published row', () => {
+    const row = importedRow();
+    expect(row.sourcePath).toMatch(/assets\/newport_loft\.hdr$/);
+    expect(row.packageUrl).toMatch(/\.pack(?:-[^/]+)?\.json$/);
   });
 });

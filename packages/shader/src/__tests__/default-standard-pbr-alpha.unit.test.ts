@@ -9,7 +9,7 @@ const shader = readFileSync(
 
 describe('standard PBR MASK alpha contract', () => {
   it('multiplies factor alpha by sampled texture alpha before discard', () => {
-    expect(shader).toContain('alphaTest(material.baseColor.a * baseSample.a)');
+    expect(shader).toContain('alphaTest(material.baseColor.a * baseSample.a * vertexColor.a)');
   });
 
   it('matches Three r184 alphaTest by discarding values equal to or below cutoff', () => {

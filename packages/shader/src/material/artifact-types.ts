@@ -4,6 +4,7 @@ export interface MaterialShaderArtifact {
   readonly material: string;
   readonly pass: string;
   readonly wgsl: string;
+  readonly layoutIdentity: string;
   readonly bindings: readonly BindGroupLayoutDescriptor[];
   readonly deps: readonly string[];
   readonly vertexInputs: readonly Readonly<Record<string, unknown>>[];
@@ -17,6 +18,7 @@ export function isMaterialShaderArtifact(value: unknown): value is MaterialShade
     typeof artifact.material === 'string' &&
     typeof artifact.pass === 'string' &&
     typeof artifact.wgsl === 'string' &&
+    typeof artifact.layoutIdentity === 'string' &&
     Array.isArray(artifact.bindings) &&
     Array.isArray(artifact.deps) &&
     Array.isArray(artifact.vertexInputs)

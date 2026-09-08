@@ -182,12 +182,12 @@
           "kind": "shader-artifact-and-render-pipeline-projection",
           "sources": [
             "packages/shader/src/material/artifact-registry.ts",
-            "packages/render/src/renderer/material/pipeline-projection.ts"
+            "packages/render/src/assembly/material/pipeline-projection.ts"
           ]
         },
         "runtimeSource": [
           "packages/shader/src/material/artifact-registry.ts",
-          "packages/render/src/renderer/material/pipeline-projection.ts"
+          "packages/render/src/assembly/material/pipeline-projection.ts"
         ],
         "lifecycle": "catalog-derived-current-or-specialization-miss",
         "owner": "packages/shader and packages/render",
@@ -233,10 +233,10 @@
           "packages/assets-runtime/src/asset-registry.ts"
         ],
         "lifecycle": "source-validation-then-catalog-derived",
-        "owner": "packages/ui and packages/vite-plugin-pack",
+        "owner": "packages/ui",
         "catalog": "included",
         "sourceKeyPolicy": "optional",
-        "producerIds": ["ui-source-importer", "ui-prepared-pack"]
+        "producerIds": ["ui-source-importer"]
       },
       {
         "id": "game-config",
@@ -246,11 +246,11 @@
         "authority": {
           "id": "game-project-manifest-authority",
           "kind": "engine-project-manifest",
-          "sources": ["packages/engine-project/src/schema.ts"]
+          "sources": ["packages/project/src/schema.ts"]
         },
-        "runtimeSource": ["packages/engine-project/src/schema.ts"],
+        "runtimeSource": ["packages/project/src/schema.ts"],
         "lifecycle": "manifest-validated-not-cataloged",
-        "owner": "packages/engine-project",
+        "owner": "packages/project",
         "catalog": "excluded",
         "sourceKeyPolicy": "not-applicable",
         "producerIds": ["engine-project-manifest"]
@@ -342,6 +342,23 @@
       }
     ],
     "producers": [
+      {
+        "id": "scriptable-pack-producer",
+        "owner": "packages/pack and packages/import",
+        "sourceFiles": [
+          "packages/pack/src/scriptable-pack.ts",
+          "packages/import/src/scriptable-pack.ts"
+        ],
+        "categories": ["supporting-producer"],
+        "outputs": [
+          {
+            "name": "declared-output-closure",
+            "category": "supporting-producer",
+            "sourceKey": "definition.assets key"
+          }
+        ],
+        "sourceKeyPolicy": "required"
+      },
       {
         "id": "pack-native-cooker",
         "owner": "packages/pack",
@@ -475,7 +492,7 @@
         "owner": "packages/shader and packages/render",
         "sourceFiles": [
           "packages/shader/src/material/artifact-registry.ts",
-          "packages/render/src/renderer/material/pipeline-projection.ts"
+          "packages/render/src/assembly/material/pipeline-projection.ts"
         ],
         "categories": ["shader-render-pipeline"],
         "outputs": [
@@ -509,22 +526,11 @@
         "sourceKeyPolicy": "optional"
       },
       {
-        "id": "ui-prepared-pack",
-        "owner": "packages/vite-plugin-pack",
-        "sourceFiles": [
-          "packages/vite-plugin-pack/src/build-catalog.ts",
-          "packages/vite-plugin-pack/src/__tests__/ui-catalog-row.test.ts"
-        ],
-        "categories": ["ui"],
-        "outputs": [{ "name": "ui-pack", "category": "ui", "sourceKey": "prepared-guid" }],
-        "sourceKeyPolicy": "optional"
-      },
-      {
         "id": "engine-project-manifest",
-        "owner": "packages/engine-project",
+        "owner": "packages/project",
         "sourceFiles": [
-          "packages/engine-project/src/schema.ts",
-          "packages/engine-project/src/__tests__/schema.test.ts"
+          "packages/project/src/schema.ts",
+          "packages/project/src/__tests__/schema.test.ts"
         ],
         "categories": ["game-config"],
         "outputs": [{ "name": "forge.json", "category": "game-config", "sourceKey": null }],
@@ -532,11 +538,25 @@
       },
       {
         "id": "build-catalog",
-        "owner": "packages/vite-plugin-pack",
-        "sourceFiles": ["packages/vite-plugin-pack/src/build-catalog.ts"],
+        "owner": "packages/pack",
+        "sourceFiles": ["packages/pack/src/catalog-projection.ts"],
         "categories": ["supporting-producer"],
         "outputs": [
           { "name": "catalog-projection", "category": "supporting-producer", "sourceKey": null }
+        ],
+        "sourceKeyPolicy": "diagnostic-only"
+      },
+      {
+        "id": "vite-pack-runtime-binding",
+        "owner": "packages/types",
+        "sourceFiles": ["packages/types/src/runtime-scope.ts"],
+        "categories": ["supporting-producer"],
+        "outputs": [
+          {
+            "name": "runtime-binding",
+            "category": "supporting-producer",
+            "sourceKey": null
+          }
         ],
         "sourceKeyPolicy": "diagnostic-only"
       },
@@ -575,6 +595,7 @@
       "packages/pack/schema/meta.schema.json",
       "packages/pack/schema/pack.schema.json",
       "packages/vite-plugin-pack/schema/pack-index.schema.json",
+      "packages/vite-plugin-pack/schema/runtime-binding.schema.json",
       "apps/hello/gltf/assets/box.gltf.meta.json",
       "apps/hello/gltf-instancing/assets/instanced-box.gltf.meta.json"
     ],

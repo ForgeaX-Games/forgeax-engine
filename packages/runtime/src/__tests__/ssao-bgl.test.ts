@@ -22,15 +22,6 @@
 // the existing 5-entry assertions in pipeline.unit.test.ts are migrated
 // holistically (one-cut, no v1/v2 dual fixture).
 
-import type { HdrpBuffers, RenderSystemRuntime } from '@forgeax/engine-render/internal';
-import {
-  createHdrpBindGroupLayoutDescriptor,
-  createHdrpClusterMembershipBindGroup,
-  createHdrpClusterMembershipBindGroupLayoutDescriptor,
-  createHdrpUnifiedBindGroup,
-  getOrCreateSsaoFallbackTexture,
-  packClusterUniform,
-} from '@forgeax/engine-render/internal';
 import type {
   BindGroupLayout,
   Buffer,
@@ -40,6 +31,16 @@ import type {
   TextureView,
 } from '@forgeax/engine-rhi';
 import { describe, expect, it, vi } from 'vitest';
+import type { HdrpBuffers } from '../../../render/src/hdrp-buffers';
+import {
+  createHdrpClusterMembershipBindGroup,
+  createHdrpClusterMembershipBindGroupLayoutDescriptor,
+  createHdrpUnifiedBindGroup,
+  getOrCreateSsaoFallbackTexture,
+  packClusterUniform,
+} from '../../../render/src/hdrp-buffers';
+import { createHdrpBindGroupLayoutDescriptor } from '../../../render/src/pipeline-spec';
+import type { RenderSystemRuntime } from '../../../render/src/render-system';
 
 const FRAGMENT_VISIBILITY = 0x2;
 const COMPUTE_VISIBILITY = 0x4;
@@ -158,6 +159,12 @@ describe('HDRP GPU membership producer bind-group contract', () => {
     );
     expect(uniformPayload[3]).toBe(128);
     expect(storagePayload[3]).toBe(256);
+  });
+
+  it('keeps enabled SSAO intensity in the zero-punctual-light uniform path', () => {
+    const payload = new Float32Array(packClusterUniform({ x: 16, y: 9, z: 24 }, 0.1, 50, 1, 0));
+    expect(payload[3]).toBe(0);
+    expect(payload[7]).toBe(1);
   });
 
   it('uses four compute-only bindings with read-write membership output', () => {

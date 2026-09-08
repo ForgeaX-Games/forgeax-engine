@@ -1,6 +1,22 @@
 import { defineProject } from 'vitest/config';
+import { fileURLToPath } from 'node:url';
 
 export default defineProject({
+  resolve: {
+    alias: [
+      // Picking tests exercise owner-local render implementations directly.
+      // Keep public render imports on that same source graph so ECS component
+      // tokens are not duplicated by a separately bundled dist graph.
+      {
+        find: /^@forgeax\/engine-render$/,
+        replacement: fileURLToPath(new URL('../render/src/index.ts', import.meta.url)),
+      },
+      {
+        find: '@forgeax/engine-render/authoring',
+        replacement: fileURLToPath(new URL('../render/src/authoring.ts', import.meta.url)),
+      },
+    ],
+  },
   test: {
     environment: 'node',
     name: '@forgeax/engine-picking',

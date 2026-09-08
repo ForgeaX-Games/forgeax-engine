@@ -1,22 +1,31 @@
 import type {
   MaterialParameter,
-  MaterialValue,
   ParamSchemaEntry,
   ResolvedMaterial,
   Result,
 } from '@forgeax/engine-types';
-import { createMaterialError, derive, err, type MaterialError, ok } from '@forgeax/engine-types';
+import {
+  createMaterialError,
+  type DerivedMaterialInterface,
+  derive,
+  err,
+  type MaterialError,
+  type MaterialParameterProjection,
+  ok,
+} from '@forgeax/engine-types';
 import { compareParamSchemaSuperset } from '../compare-param-schema.js';
-import type { ShaderError } from '../errors.js';
+import { ShaderError } from '../errors.js';
 import { type CompileResult, compileShader } from '../index.js';
+import { compareDerivedMaterialInterface } from '../reflection.js';
 import { type MaterialTable, resolveMaterialAsset } from './resolve.js';
 import type { MaterialSourceCatalog } from './source-catalog.js';
+import { lowerMaterialVariantContext, type MaterialVariantContext } from './variant-context.js';
 
 export interface MaterialCookRequest {
   readonly material: string;
   readonly table: MaterialTable;
   readonly sources: MaterialSourceCatalog;
-  readonly defines?: Readonly<Record<string, boolean>>;
+  readonly context?: MaterialVariantContext;
 }
 
 export interface MaterialCookedPass {
@@ -27,7 +36,10 @@ export interface MaterialCookedPass {
   readonly generatedModule: string;
   readonly sourceClosure: readonly string[];
   readonly compile: CompileResult;
+  readonly layoutIdentity: string;
 }
+
+export type GeneratedMaterialParameterProjection = MaterialParameterProjection;
 
 export interface MaterialCookedAsset {
   readonly resolved: ResolvedMaterial;
@@ -36,7 +48,47 @@ export interface MaterialCookedAsset {
 
 export type MaterialCookError = MaterialError | ShaderError;
 
+const DEFAULT_MATERIAL_VARIANT_CONTEXT: MaterialVariantContext = {
+  backend: 'webgpu',
+  capability: 'storage-buffer',
+  pipeline: 'forward',
+  geometry: 'mesh',
+  pass: 'forward',
+  profile: 'forgeax-material-wgsl-v1',
+  toolchain: 'naga-oil',
+  instrumentation: 'none',
+};
+
 const IMPORT_RE = /^\s*#import\s+([A-Za-z0-9_:-]+)/gm;
+
+function newlineCount(source: string): number {
+  return source.match(/\n/g)?.length ?? 0;
+}
+
+function mapCookErrorToAuthoredSource(
+  error: ShaderError,
+  authoredSource: string,
+  composedSource: string,
+): ShaderError {
+  if (error.lineNum === undefined) return error;
+  const header = /^(\s*#define_import_path[^\n]*(?:\r?\n|$))/m.exec(authoredSource);
+  if (header === null) return error;
+  const authoredRemainder = authoredSource.slice(header[0].length);
+  const composedRemainder = composedSource.lastIndexOf(authoredRemainder);
+  if (composedRemainder < 0) return error;
+  const composedPrefix = composedSource.slice(0, composedRemainder);
+  const offset = newlineCount(composedPrefix) - newlineCount(header[0]);
+  if (offset <= 0 || error.lineNum <= newlineCount(composedPrefix)) return error;
+  return new ShaderError({
+    code: error.code,
+    expected: error.expected,
+    message: error.message,
+    hint: error.hint,
+    lineNum: error.lineNum - offset,
+    ...(error.linePos === undefined ? {} : { linePos: error.linePos }),
+    ...(error.detail === undefined ? {} : { detail: error.detail }),
+  });
+}
 
 function materialTypeToSchema(parameter: MaterialParameter): ParamSchemaEntry | undefined {
   switch (parameter.type) {
@@ -60,35 +112,12 @@ function materialTypeToSchema(parameter: MaterialParameter): ParamSchemaEntry | 
 }
 
 function projectParameterSchema(
-  material: string,
   parameters: readonly MaterialParameter[],
 ): Result<readonly ParamSchemaEntry[], MaterialError> {
   const projected: ParamSchemaEntry[] = [];
   for (const parameter of parameters) {
-    if (parameter.static === true && parameter.type !== 'bool') {
-      return err(
-        createMaterialError('material-contract-program-mismatch', {
-          code: 'material-contract-program-mismatch',
-          material,
-          pass: 'parameters',
-          program: parameter.name,
-          expectedProgram: 'static parameters are boolean module slots',
-        }),
-      );
-    }
     const schema = materialTypeToSchema(parameter);
     if (schema !== undefined) projected.push(schema);
-    if (parameter.type === 'bool' && parameter.static !== true) {
-      return err(
-        createMaterialError('material-contract-program-mismatch', {
-          code: 'material-contract-program-mismatch',
-          material,
-          pass: 'parameters',
-          program: parameter.name,
-          expectedProgram: 'boolean parameters must be static module slots',
-        }),
-      );
-    }
   }
   return ok(projected);
 }
@@ -124,86 +153,83 @@ function wgslType(parameter: ParamSchemaEntry): string {
   }
 }
 
-function generateParameterModule(schema: readonly ParamSchemaEntry[]): string {
+export function generateParameterModule(schema: readonly ParamSchemaEntry[]): string {
   const derived = derive(schema);
+  const coordinateRecords = derived.coordinateRecords ?? [];
+  const resourceBindings = derived.resourceBindings ?? [];
   const fields = schema
-    .filter(
-      (parameter) => !parameter.type.startsWith('texture') && !parameter.type.startsWith('sampler'),
-    )
-    .filter((parameter) => parameter.type !== 'storage_buffer')
-    .map((parameter) => `  ${parameter.name} : ${wgslType(parameter)},`)
+    .flatMap((parameter) => {
+      if (isNumericParameter(parameter)) {
+        return [`  ${parameter.name} : ${wgslType(parameter)},`];
+      }
+      if (isTextureParameter(parameter)) {
+        const coordinates = coordinateRecords.find((record) => record.parameter === parameter.name);
+        if (coordinates === undefined) return [];
+        return [
+          `  ${coordinates.transformMember} : vec4<f32>,`,
+          `  ${coordinates.metadataMember} : vec4<f32>,`,
+        ];
+      }
+      return [];
+    })
     .join('\n');
   const lines = ['#define_import_path forgeax_material::parameters'];
   if (fields.length > 0) {
     lines.push(`struct MaterialParameters {\n${fields}\n}`);
   }
 
-  let emittedUniform = false;
-  let binding = 0;
-  for (const parameter of schema) {
-    if (parameter.type === 'storage_buffer') {
-      lines.push(`@group(1) @binding(${binding}) var ${parameter.name} : array<u32>;`);
-      binding += 1;
-      continue;
-    }
-    if (
-      parameter.type === 'f32' ||
-      parameter.type === 'i32' ||
-      parameter.type === 'u32' ||
-      parameter.type === 'vec2' ||
-      parameter.type === 'vec3' ||
-      parameter.type === 'vec4' ||
-      parameter.type === 'color'
-    ) {
-      if (!emittedUniform) {
-        lines.push(`@group(1) @binding(${binding}) var<uniform> material : MaterialParameters;`);
-        emittedUniform = true;
-        binding += 1;
-      }
-      continue;
-    }
-    if (
-      parameter.type === 'texture2d' ||
-      parameter.type === 'texture_cube' ||
-      parameter.type === 'texture_depth_2d' ||
-      parameter.type === 'texture_cube_array'
-    ) {
-      lines.push(`@group(1) @binding(${binding}) var ${parameter.name}_sampler : sampler;`);
-      lines.push(
-        `@group(1) @binding(${binding + 1}) var ${parameter.name} : ${wgslType(parameter)};`,
-      );
-      binding += 2;
-      continue;
-    }
-    lines.push(`@group(1) @binding(${binding}) var ${parameter.name} : ${wgslType(parameter)};`);
-    binding += 1;
+  const parameterByName = new Map(schema.map((parameter) => [parameter.name, parameter]));
+  const uniformBinding = derived.bglEntries.find(
+    (entry) => entry.buffer?.type === 'uniform',
+  )?.binding;
+  const declarations = new Map<number, string>();
+  if (uniformBinding !== undefined) {
+    declarations.set(
+      uniformBinding,
+      `@group(1) @binding(${uniformBinding}) var<uniform> material : MaterialParameters;`,
+    );
   }
-  if (derived.userRegionBindingEnd !== binding) {
-    throw new Error('material parameter interface and derived binding layout diverged');
+  for (const resource of resourceBindings) {
+    const parameter = parameterByName.get(resource.parameter ?? resource.name);
+    if (parameter === undefined) continue;
+    if (resource.kind === 'sampler') {
+      declarations.set(
+        resource.binding,
+        `@group(1) @binding(${resource.binding}) var ${resource.name} : sampler;`,
+      );
+    } else if (resource.kind === 'texture') {
+      declarations.set(
+        resource.binding,
+        `@group(1) @binding(${resource.binding}) var ${resource.name} : ${wgslType(parameter)};`,
+      );
+    } else {
+      declarations.set(
+        resource.binding,
+        `@group(1) @binding(${resource.binding}) var ${resource.name} : array<u32>;`,
+      );
+    }
+  }
+  for (const binding of [...declarations.keys()].sort((left, right) => left - right)) {
+    lines.push(declarations.get(binding) as string);
   }
   return `${lines.join('\n')}\n`;
 }
 
-function parameterModuleImports(schema: readonly ParamSchemaEntry[]): string {
-  const names: string[] = [];
-  if (
-    schema.some((parameter) =>
-      ['f32', 'i32', 'u32', 'vec2', 'vec3', 'vec4', 'color'].includes(parameter.type),
-    )
-  ) {
-    names.push('material');
-  }
-  for (const parameter of schema) {
-    if (
-      parameter.type === 'texture2d' ||
-      parameter.type === 'texture_cube' ||
-      parameter.type === 'texture_depth_2d' ||
-      parameter.type === 'texture_cube_array'
-    ) {
-      names.push(`${parameter.name}_sampler`, parameter.name);
-    }
-  }
-  return names.join(', ');
+function isNumericParameter(parameter: ParamSchemaEntry): boolean {
+  return ['f32', 'i32', 'u32', 'vec2', 'vec3', 'vec4', 'color'].includes(parameter.type);
+}
+
+function isTextureParameter(parameter: ParamSchemaEntry): boolean {
+  return ['texture2d', 'texture_cube', 'texture_depth_2d', 'texture_cube_array'].includes(
+    parameter.type,
+  );
+}
+
+function hasAuthoredMaterialInterface(source: string): boolean {
+  return (
+    /\bstruct\s+Material\s*\{/.test(source) &&
+    /@group\(1\)\s*@binding\(0\)\s*var<uniform>\s+material\s*:\s*Material\s*;/.test(source)
+  );
 }
 
 function importModuleIds(source: string): readonly string[] {
@@ -236,36 +262,36 @@ function collectSourceClosure(
   return ok(result);
 }
 
-function moduleDefines(
-  material: string,
-  pass: string,
-  parameters: readonly MaterialParameter[],
-  values: Readonly<Record<string, MaterialValue | null>> | undefined,
-  slots: Readonly<Record<string, string>> | undefined,
-  overrides: Readonly<Record<string, boolean>> | undefined,
-): Result<Record<string, boolean>, MaterialError> {
-  const definitions: Record<string, boolean> = {};
-  for (const parameter of parameters) {
-    if (parameter.type !== 'bool' || parameter.static !== true) continue;
-    const raw = slots?.[parameter.name] ?? values?.[parameter.name] ?? parameter.default;
-    if (typeof raw === 'boolean') definitions[parameter.name] = raw;
-  }
-  Object.assign(definitions, overrides ?? {});
-  for (const [name, value] of Object.entries(slots ?? {})) {
-    if (value !== 'true' && value !== 'false') {
+function applyModuleSlots(
+  source: string,
+  sourceModuleId: string,
+  moduleSlots: Readonly<Record<string, string>> | undefined,
+  sources: MaterialSourceCatalog,
+): Result<string, MaterialError> {
+  let selectedSource = source;
+  for (const [slotName, moduleId] of Object.entries(moduleSlots ?? {}).sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    const selected = sources.resolveSlot(sourceModuleId, slotName, moduleId);
+    if (!selected.ok) return err(selected.error);
+    const marker = new RegExp(
+      `(\\#import\\s+forgeax_material::slot::${slotName.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}::\\{[^\\n]+\\})`,
+      'g',
+    );
+    if (!marker.test(selectedSource)) {
       return err(
-        createMaterialError('material-contract-program-mismatch', {
-          code: 'material-contract-program-mismatch',
-          material,
-          pass,
-          program: name,
-          expectedProgram: 'module slot values must be true or false',
+        createMaterialError('shader-module-not-found', {
+          code: 'shader-module-not-found',
+          module: `${sourceModuleId}::${slotName}=${moduleId}`,
+          source: sourceModuleId,
         }),
       );
     }
-    definitions[name] = value === 'true';
+    selectedSource = selectedSource.replace(marker, (line) =>
+      line.replace(`forgeax_material::slot::${slotName}`, selected.value.moduleId),
+    );
   }
-  return ok(definitions);
+  return ok(selectedSource);
 }
 
 export async function cookMaterialAsset(
@@ -274,8 +300,9 @@ export async function cookMaterialAsset(
   const resolved = resolveMaterialAsset(request.material, request.table);
   if (!resolved.ok) return err(resolved.error);
   const parameters = resolved.value.asset.parameters ?? [];
-  const schema = projectParameterSchema(request.material, parameters);
+  const schema = projectParameterSchema(parameters);
   if (!schema.ok) return schema;
+  const derived: DerivedMaterialInterface = derive(schema.value);
   const generatedModule = generateParameterModule(schema.value);
   const cooked: MaterialCookedPass[] = [];
 
@@ -283,35 +310,43 @@ export async function cookMaterialAsset(
     const sourceRecord = request.sources.get(pass.program.module);
     if (!sourceRecord.ok) return err(sourceRecord.error);
     const source = sourceRecord.value.source;
-    const imports = collectSourceClosure(source, request.sources, generatedModule);
-    if (!imports.ok) return imports;
-    const defines = moduleDefines(
-      request.material,
-      pass.name,
-      parameters,
-      resolved.value.asset.values,
+    const composedSource = applyModuleSlots(
+      source,
+      pass.program.module,
       pass.program.moduleSlots,
-      request.defines,
+      request.sources,
     );
-    if (!defines.ok) return defines;
-    const sourceWithInterface = source.includes('forgeax_material::parameters')
-      ? source
-      : source.replace(
-          /^(\s*#define_import_path\s+[^\n]+\n?)/,
-          `$1#import forgeax_material::parameters::{${parameterModuleImports(schema.value)}}\n`,
-        );
+    if (!composedSource.ok) return composedSource;
+    const imports = collectSourceClosure(composedSource.value, request.sources, generatedModule);
+    if (!imports.ok) return imports;
+    const sourceWithInterface =
+      composedSource.value.includes('forgeax_material::parameters') ||
+      hasAuthoredMaterialInterface(composedSource.value)
+        ? composedSource.value
+        : composedSource.value.replace(
+            /^(\s*#define_import_path\s+[^\n]+\n?)/,
+            `$1${generatedModule.replace(/^#define_import_path[^\n]+\n?/, '')}\n`,
+          );
     const compiled = await compileShader(sourceWithInterface, {
       id: `${pass.program.module}::${pass.name}`,
       imports: imports.value,
-      defines: defines.value,
+      defines: {
+        ...lowerMaterialVariantContext(request.context ?? DEFAULT_MATERIAL_VARIANT_CONTEXT),
+      },
     });
-    if (!compiled.ok) return compiled;
-    const checked = compareParamSchemaSuperset(
-      schema.value,
-      compiled.value.bindings,
-      pass.program.module,
-    );
-    if (!checked.ok) return checked;
+    if (!compiled.ok) {
+      return err(mapCookErrorToAuthoredSource(compiled.error, source, sourceWithInterface));
+    }
+    if (!hasAuthoredMaterialInterface(composedSource.value)) {
+      const checked = compareParamSchemaSuperset(
+        schema.value,
+        compiled.value.bindings,
+        pass.program.module,
+      );
+      if (!checked.ok) return checked;
+    }
+    const reflectionChecked = compareDerivedMaterialInterface(derived, compiled.value.reflection);
+    if (!reflectionChecked.ok) return reflectionChecked;
     cooked.push({
       pass: pass.name,
       module: pass.program.module,
@@ -320,6 +355,7 @@ export async function cookMaterialAsset(
       generatedModule,
       sourceClosure: [sourceRecord.value.path, ...Object.keys(imports.value).sort()],
       compile: compiled.value,
+      layoutIdentity: derived.layoutIdentity,
     });
   }
 

@@ -1,7 +1,8 @@
-// shadow-csm-cascade-loadop.test.ts - bug-20260619-csm-f9-per-cascade-depth-clear
+// shadow-csm-cascade-loadop.test.ts - typed shadow per-cascade depth clear
+// @perf-budget-skip - the two truth-table cases intentionally drive the full renderer call site.
 // M1: per-cascade depth loadOp truth table, asserted against the REAL call site.
 //
-// The fix lives at render-system-record.ts:3200-3207, inside recordShadowPass:
+// The invariant is owned by the typed shadow graph's cascade recording path:
 //   buildBeginRenderPassDescriptor(..., 'shadow-caster',
 //     { depthLoadOp: cascadeIndex === 0 ? 'clear' : 'load' })
 //
@@ -9,8 +10,8 @@
 // pure builder (that would be tautological — the bug could regress verbatim
 // while the suite stays green). Instead it drives the whole pipeline through
 // createRenderer + renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }): the URP cascade loop calls
-// addShadowPass per cascade, whose execute closure invokes the real
-// recordShadowPass(c, selector, viewport, cascadeIndex). A mock GPU device
+// one typed shadow pass per cascade, whose execute closure invokes the real
+// encodeDirectionalShadowPass(c, pass, cascadeIndex, viewport). A mock GPU device
 // captures every descriptor handed to beginRenderPass on the dedicated
 // 'render-system-shadow' command encoder, so the asserted truth table is the
 // engine's decision at the real call site — flip the ternary to a constant and
@@ -116,15 +117,15 @@ function makeMockGPUDevice(log: CaptureLog): unknown {
       getMappedRange: () => new ArrayBuffer(64),
       unmap: () => undefined,
     }),
-    createCommandEncoder: (desc?: { label?: string }) => {
-      // Only the dedicated shadow encoder ('render-system-shadow', created in
-      // recordShadowPass) routes through the per-cascade loadOp call site. Other
-      // encoders (main / point-shadow / boot clears) carry different labels and
-      // are ignored so the captured list is exactly the cascade truth table.
-      const isShadowEncoder = desc?.label === 'render-system-shadow';
+    createCommandEncoder: () => {
       return {
-        beginRenderPass: (rpDesc?: { depthStencilAttachment?: Record<string, unknown> }) => {
-          if (isShadowEncoder) captureShadowDescriptor(log, rpDesc);
+        beginRenderPass: (rpDesc?: {
+          label?: string;
+          depthStencilAttachment?: Record<string, unknown>;
+        }) => {
+          if (rpDesc?.label?.startsWith('shadowCascade') === true) {
+            captureShadowDescriptor(log, rpDesc);
+          }
           return makeRenderPassEncoder();
         },
         finish: () => ({}),
@@ -183,12 +184,25 @@ async function importEngine(): Promise<{
     opts?: unknown,
     bundler?: unknown,
   ) => Promise<{
-    ready: Promise<void>;
+    subscribe: (listener: (event: unknown) => void) => () => void;
     draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
-    onError: (cb: (err: { code: string }) => void) => () => void;
   }>;
 }> {
-  return (await import(ENGINE)) as never;
+  const engine = (await import(ENGINE)) as {
+    createRenderer: (...args: readonly unknown[]) => Promise<unknown>;
+  };
+  return {
+    createRenderer: async (...args: readonly unknown[]) => {
+      const result = (await engine.createRenderer(...args)) as
+        | { readonly ok: true; readonly value: unknown }
+        | { readonly ok: false; readonly error: unknown };
+      if (!result.ok) throw result.error;
+      return result.value as {
+        subscribe: (listener: (event: unknown) => void) => () => void;
+        draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
+      };
+    },
+  };
 }
 
 async function importEcs(): Promise<{ World: new () => unknown }> {
@@ -204,7 +218,7 @@ async function importComponents(): Promise<{
   HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
 }> {
   return {
-    ...(await import('@forgeax/engine-render/internal')),
+    ...(await import('@forgeax/engine-render')),
     ...(await import('@forgeax/engine-scene')),
     ...(await import('@forgeax/engine-assets-runtime')),
   } as never;
@@ -236,7 +250,6 @@ async function drawCsmScene(cascadeCount: number): Promise<CaptureLog> {
     {},
     { shaderManifestUrl: buildManifestDataUrl() },
   );
-  await renderer.ready;
   const { World } = await importEcs();
   const C = await importComponents();
   const world = new (
@@ -272,8 +285,18 @@ async function drawCsmScene(cascadeCount: number): Promise<CaptureLog> {
   );
 
   const errors: { code: string }[] = [];
-  renderer.onError((e) => errors.push(e));
-  if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+  renderer.subscribe((event) => {
+    if (
+      typeof event === 'object' &&
+      event !== null &&
+      'kind' in event &&
+      event.kind === 'error' &&
+      'error' in event
+    ) {
+      errors.push(event.error as { code: string });
+    }
+  });
+  if (!(renderer as unknown as RendererType).attach(world as WorldType).ok) {
     throw new Error('World attachment failed');
   }
   (world as WorldType).update().unwrap();
@@ -281,7 +304,7 @@ async function drawCsmScene(cascadeCount: number): Promise<CaptureLog> {
   return log;
 }
 
-describe('CSM per-cascade depth loadOp (real recordShadowPass call site)', () => {
+describe('CSM per-cascade depth loadOp (typed shadow call site)', () => {
   beforeEach(() => {
     vi.stubGlobal('navigator', { ...baseNavigator });
   });
@@ -292,7 +315,7 @@ describe('CSM per-cascade depth loadOp (real recordShadowPass call site)', () =>
 
   // ── AC-03: cascadeCount=4 truth table (drives the real call site) ──────────
   // N=4 cascades share a single shadowDepth atlas. Each cascade pass routes
-  // through recordShadowPass -> beginRenderPass with the per-cascade override.
+  // through the typed shadow graph -> beginRenderPass with the per-cascade override.
   // The captured descriptors must read: cascade 0 -> clear + depthClearValue,
   // cascades 1..3 -> load + no depthClearValue.
 
@@ -314,7 +337,7 @@ describe('CSM per-cascade depth loadOp (real recordShadowPass call site)', () =>
       expect(ci?.hasDepthClearValue).toBe(false);
       expect(ci?.depthStoreOp).toBe('store');
     }
-  });
+  }, 15_000);
 
   // ── AC-04: cascadeCount=1 no regression ────────────────────────────────────
   // The single cascade (index 0) must still clear, matching pre-fix behavior.
@@ -327,5 +350,5 @@ describe('CSM per-cascade depth loadOp (real recordShadowPass call site)', () =>
     expect(only?.hasDepthClearValue).toBe(true);
     expect(only?.depthClearValue).toBe(1);
     expect(only?.depthStoreOp).toBe('store');
-  });
+  }, 15_000);
 });

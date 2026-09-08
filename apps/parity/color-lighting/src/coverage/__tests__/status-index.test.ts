@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { validateVisualEvidence, type VisualEvidenceIndex } from '../build-status-index';
-import { buildPublicParityStatusIndex, isPublicParityComplete, parityCommandExitCode } from '../public-status';
+import { buildPublicParityStatusIndex, isPublicParityComplete, mergeInjectedVisualEvidenceStatuses, parityCommandExitCode } from '../public-status';
 import { PARITY_CASE_AUTHORITY } from '../required-cases';
 
 describe('status index visual association', () => {
@@ -108,5 +108,16 @@ describe('status index visual association', () => {
     });
     expect(index.missingCaseIds).toContain('ibl-constant-environment');
     expect(index.missingMatrixCaseIds).toContain('ibl-constant-environment');
+  });
+
+  it('projects injected vertex visual reports into required browser case status', () => {
+    const merged = mergeInjectedVisualEvidenceStatuses(
+      { 'positive-minimal': 'pass' },
+      { 'positive-minimal': { 'browser-webgpu': 'pass' } },
+      [{ caseId: 'vertex-color-vec3', status: 'complete', verdict: 'passed' }],
+    );
+
+    expect(merged.caseStatuses['vertex-color-vec3']).toBe('pass');
+    expect(merged.caseBackendStatuses['vertex-color-vec3']).toEqual({ 'browser-webgpu': 'pass' });
   });
 });

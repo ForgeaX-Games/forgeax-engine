@@ -192,18 +192,13 @@ if (!appResult.ok) {
   process.exit(1);
 }
 const app = appResult.value;
-console.log(`[learn-render-5-3-1-directional] backend=${app.renderer.backend}`);
+console.log(`[learn-render-5-3-1-directional] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
 const onErrorEvents = [];
 app.onError((err) => onErrorEvents.push({ code: err.code, hint: err.hint }));
 
-const ready = await app.renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
-const assets = app.renderer.assets;
+const assets = app.assets;
 if (assets === null) {
   console.error('[smoke] FAIL - AssetRegistry is null');
   process.exit(1);
@@ -363,14 +358,19 @@ if (!stopResult.ok) {
   console.error(`[smoke] FAIL - app.stop() returned err: ${stopResult.error.code}`);
   process.exit(1);
 }
+const disposeResult = await app.dispose();
+if (!disposeResult.ok) {
+  console.error(`[smoke] FAIL - app.dispose() returned err: ${disposeResult.error.code}`);
+  process.exit(1);
+}
 
 console.log(`[smoke] frames observed=${totalFrames}`);
 
 // --- 9. Verdict (structural-only) ---
 
 const failures = [];
-if (app.renderer.backend !== 'webgpu')
-  failures.push(`(a) backend=${app.renderer.backend} (expected webgpu)`);
+if (app.renderer.inspect().capabilities.backendKind !== 'webgpu')
+  failures.push(`(a) backend=${app.renderer.inspect().capabilities.backendKind} (expected webgpu)`);
 if (totalFrames < SMOKE_MIN_FRAMES)
   failures.push(`(b) frames=${totalFrames} < ${SMOKE_MIN_FRAMES}`);
 

@@ -59,13 +59,8 @@ if (!appRes.ok) {
   throw new Error('hello-video-cutscene: createApp failed');
 }
 const app: App = appRes.value;
-console.warn(`[hello-video-cutscene] backend=${app.renderer.backend}`);
+console.warn(`[hello-video-cutscene] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
-const ready = await app.renderer.ready;
-if (!ready.ok) {
-  console.error('[hello-video-cutscene] renderer.ready failed:', ready.error.code);
-  throw new Error('hello-video-cutscene: renderer.ready failed');
-}
 
 const world = app.world;
 

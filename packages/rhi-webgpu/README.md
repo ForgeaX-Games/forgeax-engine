@@ -19,6 +19,7 @@
 
 | Entry | Form | Purpose |
 |:--|:--|:--|
+| `requestAdapter(opts?)` | `(RequestAdapterOptions?) => Promise<Result<RhiAdapter, RhiError>>` | Browser-native adapter probe. A resolved `null` is `adapter-unavailable`; a rejection is `webgpu-runtime-error` and preserves the original cause in `detail.error`. |
 | `requestDevice(opts?)` | `(RequestDeviceOptions) => Promise<Result<RhiDevice, RhiError>>` | Entry 1: navigates `navigator.gpu` (default) or an injected `gpu` provider; error paths 1/2/3 originate here |
 | `createShaderModule(device, desc)` | `(RhiDevice, { code, label? }) => Promise<Result<ShaderModule, RhiError>>` | Entry 2: async shader compile; `'shader-compile-failed'` forwards every `GPUCompilationMessage` field to `RhiError.detail.compilerMessages` |
 | `rhi` | `{ requestDevice, createShaderModule }` const singleton | Progressive-disclosure entry (charter proposition 1); see `Engine.create({ rhi, canvas })` and `import { rhi } from '@forgeax/engine-rhi-webgpu'` |
@@ -28,6 +29,14 @@
 | re-export | `RhiDevice` / `Result` / `RhiError` / `_internal_getRawDevice` | Single-entry surface for downstream callers |
 
 ## D-S3 real-path error coverage
+
+`adapter-unavailable` is scoped to this browser-native backend. Runtime may
+continue through the separate `rhi-wgpu` WebGL2 lane, so consumers must not turn
+this one code into a whole-machine “WebGPU unsupported” verdict. Conversely,
+`GPU.requestAdapter()` throwing is not adapter absence: the shim emits
+`webgpu-runtime-error` and retains `{ code: 'request-adapter-threw', name?,
+message }` in `detail.error` so permission-policy, security-context, and browser
+runtime failures remain distinguishable.
 
 `feat-20260508-rhi-surface-completion` lands the real-path implementation for command recording + queue submit + queue.writeBuffer; the 4 D-S3 codes are observable through `Result.err`:
 

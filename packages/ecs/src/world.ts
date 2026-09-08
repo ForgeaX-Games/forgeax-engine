@@ -9,35 +9,27 @@
 // Construction errors (EntityIndexOverflowError) still throw — they are
 // build-time / infrastructure failures.
 
-import type {
-  Handle,
-  LocalEntityId,
-  MountOverride,
-  Result,
-  SceneAsset,
-  SceneEntity,
-  SceneInstanceMount,
-} from '@forgeax/engine-types';
-import { ok } from '@forgeax/engine-types';
-import { BufferPool } from './buffer-pool';
-import type {
-  Component,
-  ComponentSchema,
-  InputShapeOf,
-  ManagedArrayElementType,
-  ManagedArrayElementValue,
-  ShapeOf,
+import type { Handle, Result } from '@forgeax/engine-types';
+import { err, ok } from '@forgeax/engine-types';
+import type { BufferPool } from './buffer-pool';
+import {
+  type Component,
+  ComponentCatalog,
+  type ComponentSchema,
+  componentId,
+  type InputShapeOf,
+  type ShapeOf,
 } from './component';
 import { type EntityHandle, encodeEntity, entityGeneration, entityIndex } from './entity-handle';
 import type {
-  ArrayPopEmptyError,
-  CardinalityExceededError,
+  CommandFailedError,
   ComponentAlreadyPresentError,
   ComponentFieldInvalidValueError,
   ComponentNotDefinedError,
   ComponentNotPresentError,
-  FixedArrayOverflowError,
+  ComponentNumericValueInvalidError,
   FixedSizeMismatchError,
+  ManagedArrayInvalidValueError,
   ManagedBufferOutOfBoundsError,
   ManagedBufferShrinkNotSupportedError,
   RelationshipDetachMismatchError,
@@ -49,8 +41,8 @@ import type {
   ScheduleScopeMismatchError,
   SharedKernelEligibilityError,
   SharedKernelFailureError,
-  SpawnLightInvalidBoundsError,
   StaleEntityError,
+  SystemFailedError,
   SystemSetNotRegisteredError,
   TimeConfigInvalidError,
   TimeDeltaInvalidError,
@@ -58,56 +50,41 @@ import type {
   UniqueRefReleasedError,
   WorldPoisonedError,
 } from './errors';
-import { ChangeEpochExhaustedError } from './errors';
+import { ChangeEpochExhaustedError, RelationshipTargetReadonlyError } from './errors';
 import {
-  createWorldIdentity,
   healthyWorldExecutionState,
   poisonedWorldExecutionState,
   type WorldExecutionFault,
   type WorldExecutionState,
-} from './execution/world-health';
+} from './execution/shared-kernel';
 import type { QueryDescriptor } from './query/query';
 import { createQuery, type Query, type QueryCreationError } from './query/query';
-import type { RecoverableResourceDescriptor } from './resource';
+import { isRelationshipTarget, type RelationshipTargetComponent } from './relationship-index';
 import { createResourceStore, type ResourceStore } from './resource';
-import {
-  createSchedule,
-  type ErrorContext,
-  type ErrorHandler,
-  matchSeverity,
-  type Schedule,
-  type SystemDescriptor,
-  type SystemSet,
-} from './schedule';
-import { FixedUpdate, FrameEnd, Update } from './schedule-token';
-import { SharedRefStore } from './shared-ref-store';
-import {
-  captureSimulationRecord,
-  restoreSimulationRecord,
-  type SimulationError,
-  type SimulationParticipant,
-  SimulationParticipantRegistry,
-  type SimulationRecordV1,
-  simulationWorldFingerprint,
-} from './simulation';
+import { createSchedule, type Schedule, type SystemDescriptor, type SystemSet } from './schedule';
+import { FixedUpdate, Update } from './schedule-token';
+import type { SharedRefStore } from './shared-ref-store';
 import type { Archetype } from './storage/archetype';
-import { type ArchetypeGraph, createArchetypeGraph } from './storage/archetype-graph';
+import type { ArchetypeGraph } from './storage/archetype-graph';
 import {
   type ChangeTicks,
   markComponentChanged,
   markComponentsAdded,
   readComponentChange,
+  readTableEntityRange,
+  type WorldChangeRead,
 } from './storage/change-detection';
 import {
-  createFixedTimeResource,
-  createTimeResource,
+  type ClockWriter,
+  createWorldClock,
   DEFAULT_TIME_POLICY,
   FIXED_TIME_RESOURCE_KEY,
   TIME_RESOURCE_KEY,
   type WorldOptions,
 } from './time';
-import { UniqueRefStore } from './unique-ref-store';
+import type { UniqueRefStore } from './unique-ref-store';
 import { WorldComponentAccess } from './world-component-access';
+import { WorldCore } from './world-core';
 import {
   despawnCore,
   spawnCore,
@@ -117,55 +94,12 @@ import {
   worldRemoveChild,
   worldReparent,
 } from './world-entity-lifecycle';
-import {
-  initializeWorldScene,
-  type SceneAssetResolver,
-  type SceneInstanceStatePayload,
-  type SceneInstantiateDiagnostic,
-  type SceneInstantiateFlatOk,
-  type SceneInstantiateOk,
-  type SceneMembersSpawn,
-  worldApplyMountOverride,
-  worldBuildSceneEntityComponentDatas,
-  worldDespawnDescendants,
-  worldDespawnScene,
-  worldDetachSceneMember,
-  worldGetSceneAssetForInstance,
-  worldGetSceneAssetResolver,
-  worldGetSceneInstanceState,
-  worldInstantiateScene,
-  worldInstantiateSceneAsset,
-  worldInstantiateSceneAssetFlat,
-  worldInstantiateSceneFlat,
-  worldInstantiateSceneRec,
-  worldMountOverridesToStateMap,
-  worldReattachSceneMember,
-  worldRemoveSceneOverride,
-  worldResolveMountSource,
-  worldResolveSceneAsset,
-  worldResolveSceneInstanceStatePayload,
-  worldSetSceneAssetResolver,
-  worldSetSceneOverride,
-  worldSetUniqueRefPayload,
-  worldSpawnMountEntity,
-  worldSpawnSceneMembers,
-  worldValidateMountOverrides,
-} from './world-scene';
-
-export type {
-  SceneInstanceStatePayload,
-  SceneInstantiateDiagnostic,
-  SceneInstantiateFlatOk,
-  SceneInstantiateOk,
-  SceneMembersSpawn,
-} from './world-scene';
-
+import { type WorldInternal, worldInternal } from './world-internal';
 import {
   worldAddSystem,
   worldAddSystems,
   worldAllocSharedRef,
   worldAllocUniqueRef,
-  worldConfigureSets,
   worldGetResource,
   worldHasResource,
   worldInsertResource,
@@ -175,7 +109,7 @@ import {
   worldRemoveSystem,
   worldReplaceSystem,
   worldScheduleData,
-  worldSetErrorHandler,
+  worldScheduleUsesComponent,
   worldUpdate,
 } from './world-scheduling';
 
@@ -184,25 +118,27 @@ import {
  * AI users: switch on `.code` for programmatic branching.
  */
 export type EcsError =
+  | CommandFailedError
   | StaleEntityError
   | ComponentNotPresentError
   | ComponentAlreadyPresentError
   | ComponentFieldInvalidValueError
+  | ComponentNumericValueInvalidError
+  | ManagedArrayInvalidValueError
   | UniqueRefReleasedError
   | UniqueRefDoubleReleaseError
   | ManagedBufferOutOfBoundsError
   | ManagedBufferShrinkNotSupportedError
-  | FixedArrayOverflowError
   | FixedSizeMismatchError
-  | ArrayPopEmptyError
-  | SpawnLightInvalidBoundsError
   | RelationshipSelfCycleError
   | RelationshipMirrorComponentNotRegisteredError
   | RelationshipMirrorFieldTypeMismatchError
   | RelationshipDetachMismatchError
+  | RelationshipTargetReadonlyError
   | ComponentNotDefinedError
   | RemoveEssentialComponentError
   | SystemSetNotRegisteredError
+  | SystemFailedError
   | TimeDeltaInvalidError
   | TimeConfigInvalidError
   | ScheduleScopeMismatchError
@@ -227,34 +163,7 @@ export interface ComponentData<S extends ComponentSchema = ComponentSchema> {
   data: Partial<InputShapeOf<S>>;
 }
 
-/**
- * Filter `S` down to keys whose value type is a managed-array keyword
- * (`array<T>` or `array<T, N>`). Drives the `world.push` / `world.pop` /
- * `world.capacity` `fieldName` parameter so cross-shape access (entity /
- * buffer / string / scalar field names) is a TypeScript compile-time error
- * (plan-strategy §2.1).
- */
-export type ArrayFieldsOf<S extends ComponentSchema> = {
-  [K in keyof S]: S[K] extends
-    | `array<${ManagedArrayElementType}>`
-    | `array<${ManagedArrayElementType}, ${number}>`
-    ? K
-    : never;
-}[keyof S];
-
-/**
- * Resolve the element value type for an `array<T>` / `array<T, N>` field
- * key. `entity` element fields surface the `Entity` opaque type; every
- * scalar element folds to `number` (bool included; the slot view stores 0/1).
- */
-export type ArrayFieldElementValue<
-  S extends ComponentSchema,
-  K extends keyof S,
-> = S[K] extends `array<${infer Elem extends ManagedArrayElementType}>`
-  ? ManagedArrayElementValue<Elem>
-  : S[K] extends `array<${infer Elem extends ManagedArrayElementType}, ${number}>`
-    ? ManagedArrayElementValue<Elem>
-    : never;
+type WritableComponent<C extends Component> = C extends RelationshipTargetComponent ? never : C;
 
 /**
  * Per-archetype summary returned by `world.inspect()`. Sorted ComponentId key
@@ -384,42 +293,61 @@ export interface EntityRecord {
  *   - the free-list of recyclable entity slots.
  */
 export class World {
+  /** Package-internal implementation seam; not exported from any entry point. */
+  readonly [worldInternal]: WorldInternal;
   // ── Internal state ──
 
-  /** Entity records: index slot → record. */
-  private readonly records: EntityRecord[] = [];
-  readonly identity = createWorldIdentity();
-  private executionState: WorldExecutionState = healthyWorldExecutionState(this.identity);
+  /** The single package-private owner of storage, epochs, and change evidence. */
+  private readonly core: WorldCore;
+  get identity() {
+    return this.core.identity;
+  }
+  /** Plugin-owned component discovery scoped to this World and removed through leases. */
+  readonly components = new ComponentCatalog((component) => this.componentIsInUse(component));
+  private executionState: WorldExecutionState;
   /** Monotonic clock advanced exactly once per successful mutation. */
-  private mutationEpoch = 0;
   /** Monotonic revision for successful entity/component structure writes. */
-  private structureEpoch = 0;
   /** Last mutation epoch for each component id, used by component-owned projections. */
-  private readonly componentMutationEpochs: number[] = [];
+  /** Ordered, bounded evidence consumed by persistent engine-owned projections. */
+  private get mutationEpoch() {
+    return this.core.mutationEpoch;
+  }
+  private set mutationEpoch(value: number) {
+    this.core.mutationEpoch = value;
+  }
+  private get structureEpoch() {
+    return this.core.structureEpoch;
+  }
+  private set structureEpoch(value: number) {
+    this.core.structureEpoch = value;
+  }
+  private get componentMutationEpochs() {
+    return this.core.componentMutationEpochs;
+  }
+  private get changeJournal() {
+    return this.core.changeJournal;
+  }
   /** Free index slots (LIFO stack). */
-  private readonly freeIndices: number[] = [];
+  private get records() {
+    return this.core.records;
+  }
+  private get freeIndices() {
+    return this.core.freeIndices;
+  }
   /**
    * Relationship-sync reentry guard (feat-20260531 M2 / plan-strategy D-7).
    /** The archetype graph: manages all archetypes + edge caching. */
-  private readonly graph: ArchetypeGraph;
+  private get graph(): ArchetypeGraph {
+    return this.core.graph;
+  }
   /** DAG schedules for the two built-in execution scopes. */
   private readonly schedules = new Map([
     [Update, createSchedule(Update)],
     [FixedUpdate, createSchedule(FixedUpdate)],
-    [FrameEnd, createSchedule(FrameEnd)],
   ]);
-  private frameTransformPublisher: ((world: World) => void) | undefined;
-  private frameDerivedState:
-    | { readonly owner: object; readonly run: (world: World) => void }
-    | undefined;
-  private framePublicationComplete = false;
   /** Resource store: typed key-value global singletons. */
   private readonly resources: ResourceStore = createResourceStore();
-  private readonly simulationParticipantRegistry = new SimulationParticipantRegistry();
-  private readonly simulationResourceDescriptors = new Map<string, RecoverableResourceDescriptor>();
-  private readonly simulationTransientResourceKeys = new Set<string>();
-  /** Error handler for Layer 3 (defaults to matchSeverity — Panic throws). */
-  private errorHandler: ErrorHandler = matchSeverity;
+  private readonly clock: ReturnType<typeof createWorldClock>;
   /** Remainder carried between fixed-step runs. */
   private fixedAccumulator = 0;
   /**
@@ -433,7 +361,9 @@ export class World {
   // method-generic over `T`); World holds the single per-instance store and
   // routes payload-agnostic release calls. Typed access flows through
   // `UniqueRefStore.resolve<T>` at the consumer layer.
-  private uniqueRefs: UniqueRefStore = new UniqueRefStore();
+  private get uniqueRefs(): UniqueRefStore {
+    return this.core.uniqueRefs;
+  }
   /**
    * Per-World `SharedRefStore` (feat-20260614 M3). Backs every `shared<T>`
    * schema field + the `world.allocSharedRef` facade. Public read-only so AI
@@ -442,13 +372,14 @@ export class World {
    * facade would be a phantom indirection - charter F1 single-entry
    * indexability).
    *
-   * M6 D-10: the release signal is the per-handle `onLastRelease` deleter
-   * passed as the third argument to `allocSharedRef` — there is no global
-   * listener. M6 D-15: the store manages only user-tier slots
-   * (`>= BUILTIN_BASE`); builtin handles are process-static in
-   * `BuiltinAssetRegistry` and never reference-counted.
+   * Final release publishes structured evidence; there is no callback surface.
+   * M6 D-15: the store manages only user-tier slots
+   * (`>= BUILTIN_BASE`); builtin handles are process-static in their
+   * authoring package and never reference-counted.
    */
-  readonly sharedRefs: SharedRefStore = new SharedRefStore();
+  get sharedRefs(): SharedRefStore {
+    return this.core.sharedRefs;
+  }
   /**
    * BufferPool backing every `buffer:<N>` schema-vocab field (M2). Eagerly
    * constructed (per-World, D-2). `spawn` allocs slots for buffer fields and
@@ -457,11 +388,14 @@ export class World {
    * the live view without re-allocating (schema-declared byteLength is
    * fixed in v1; runtime grow is reserved for the M4 carry-over path).
    */
-  private readonly bufferPool: BufferPool = new BufferPool();
+  private get bufferPool() {
+    return this.core.bufferPool;
+  }
   private readonly componentAccess: WorldComponentAccess;
 
   constructor(options: WorldOptions = {}) {
-    this.graph = createArchetypeGraph(options.storage === 'shared');
+    this.core = new WorldCore(options.storage === 'shared');
+    this.executionState = healthyWorldExecutionState(this.identity);
     this.componentAccess = new WorldComponentAccess({
       graph: this.graph,
       records: this.records,
@@ -469,25 +403,82 @@ export class World {
       bufferPool: this.bufferPool,
       uniqueRefs: this.uniqueRefs,
       sharedRefs: this.sharedRefs,
-      markComponentAdded: (entity, component) => this._markComponentAdded(entity, component),
-      markComponentsAdded: (entity, components) => this._markComponentsAdded(entity, components),
-      markComponentChanged: (entity, component) => this._markComponentChanged(entity, component),
-      removeComponentChange: (entity, component) => this._removeComponentChange(entity, component),
-      markStructureChanged: () => this._markStructureChanged(),
-      routeError: (error, context) => this._routeError(error as EcsError, context),
+      relationshipIndexes: this.core.relationshipIndexes,
+      markComponentAdded: (entity, component) => this.internalmarkComponentAdded(entity, component),
+      markComponentsAdded: (entity, components) =>
+        this.internalmarkComponentsAdded(entity, components),
+      markComponentChanged: (entity, component) =>
+        this.internalmarkComponentChanged(entity, component),
+      removeComponentChange: (entity, component) =>
+        this.internalremoveComponentChange(entity, component),
+      markStructureChanged: () => this.internalmarkStructureChanged(),
+      routeError: (error, context) => this.internalrouteError(error as EcsError, context),
     });
-    const policy = { ...DEFAULT_TIME_POLICY, ...options.time };
+    this.clock = createWorldClock({ ...DEFAULT_TIME_POLICY, ...options.time });
     this.resources.entries.set(TIME_RESOURCE_KEY, {
-      value: createTimeResource(policy),
+      value: this.clock.time,
       added: 0,
       changed: 0,
     });
     this.resources.entries.set(FIXED_TIME_RESOURCE_KEY, {
-      value: createFixedTimeResource(policy),
+      value: this.clock.fixed,
       added: 0,
       changed: 0,
     });
-    initializeWorldScene(this);
+    this[worldInternal] = {
+      addComponentCore: this.internaladdComponentCore.bind(this),
+      allocateIndex: this.internalallocateIndex.bind(this),
+      allocatePendingEntity: this.internalallocatePendingEntity.bind(this),
+      cancelPendingEntity: this.internalcancelPendingEntity.bind(this),
+      despawnCore: this.internaldespawnCore.bind(this),
+      getArrayView: this.internalgetArrayView.bind(this),
+      getBufferPool: this.internalgetBufferPool.bind(this),
+      getChangeCursor: this.internalgetChangeCursor.bind(this),
+      getClockWriter: this.internalgetClockWriter.bind(this),
+      getComponentChange: this.internalgetComponentChange.bind(this),
+      getComponentMutationEpoch: this.internalgetComponentMutationEpoch.bind(this),
+      getEntityArchetype: this.internalgetEntityArchetype.bind(this),
+      getFixedAccumulator: this.internalgetFixedAccumulator.bind(this),
+      getFreeIndices: this.internalgetFreeIndices.bind(this),
+      getGraph: this.internalgetGraph.bind(this),
+      getMutationEpoch: this.internalgetMutationEpoch.bind(this),
+      getQueryRow: this.internalgetQueryRow.bind(this),
+      getRecords: this.internalgetRecords.bind(this),
+      getRelationshipEpoch: this.internalgetRelationshipEpoch.bind(this),
+      getRelationshipTargetEntities: this.internalgetRelationshipTargetEntities.bind(this),
+      getResources: this.internalgetResources.bind(this),
+      getSchedule: this.internalgetSchedule.bind(this),
+      getSchedules: this.internalgetSchedules.bind(this),
+      getSharedRefs: this.internalgetSharedRefs.bind(this),
+      getStructureEpoch: this.internalgetStructureEpoch.bind(this),
+      getUniqueRefs: this.internalgetUniqueRefs.bind(this),
+      lookupAlive: this.internallookupAlive.bind(this),
+      markComponentAdded: this.internalmarkComponentAdded.bind(this),
+      markComponentChanged: this.internalmarkComponentChanged.bind(this),
+      markComponentRangeChanged: this.internalmarkComponentRangeChanged.bind(this),
+      markComponentsAdded: this.internalmarkComponentsAdded.bind(this),
+      markDerivedComponentChanges: this.internalmarkDerivedComponentChanges.bind(this),
+      markStructureChanged: this.internalmarkStructureChanged.bind(this),
+      materializePendingEntity: this.internalmaterializePendingEntity.bind(this),
+      nextMutationEpoch: this.internalnextMutationEpoch.bind(this),
+      poisonExecution: this.internalpoisonExecution.bind(this),
+      preflightComponentData: this.internalpreflightComponentData.bind(this),
+      readChangesSince: this.internalreadChangesSince.bind(this),
+      readRow: this.internalreadRow.bind(this),
+      recordIsLive: this.internalrecordIsLive.bind(this),
+      relationshipOnInsert: this.internalrelationshipOnInsert.bind(this),
+      relationshipOnRemove: this.internalrelationshipOnRemove.bind(this),
+      releaseManagedRefsOnRow: this.internalreleaseManagedRefsOnRow.bind(this),
+      removeComponentChange: this.internalremoveComponentChange.bind(this),
+      removeComponentCore: this.internalremoveComponentCore.bind(this),
+      removeEntityChanges: this.internalremoveEntityChanges.bind(this),
+      routeError: this.internalrouteError.bind(this),
+      setFixedAccumulator: this.internalsetFixedAccumulator.bind(this),
+      setQueryRow: this.internalsetQueryRow.bind(this),
+      spawnCore: this.internalspawnCore.bind(this),
+      writeEntitySelf: this.internalwriteEntitySelf.bind(this),
+      writeRow: this.internalwriteRow.bind(this),
+    };
   }
 
   /** Immutable integrity state for execution coordinators and headless callers. */
@@ -501,11 +492,11 @@ export class World {
   ): import('./schedule-token').ScheduleToken {
     if (name === 'Update') return Update;
     if (name === 'FixedUpdate') return FixedUpdate;
-    return FrameEnd;
+    return FixedUpdate;
   }
 
-  /** @internal SharedKernel is the only writer; application code recovers by constructing a new World. */
-  _poisonExecution(fault: WorldExecutionFault): void {
+  /** SharedKernel is the only writer; application code recovers by constructing a new World. */
+  private internalpoisonExecution(fault: WorldExecutionFault): void {
     if (this.executionState.health === 'healthy') {
       this.executionState = poisonedWorldExecutionState(this.identity, fault);
     }
@@ -523,37 +514,62 @@ export class World {
   // Internal access — query engine
   // ──────────────────────────────────────────────────────────────────────────
 
-  /** @internal Expose archetype graph for query engine. Not part of public API. */
-  _getGraph(): ArchetypeGraph {
+  /** Expose archetype graph for query engine. Not part of public API. */
+  private internalgetGraph(): ArchetypeGraph {
     return this.graph;
   }
 
-  /** @internal Current upper bound for mutation observation. */
-  _getMutationEpoch(): number {
+  private componentIsInUse(component: Component): boolean {
+    if (
+      this.graph.archetypes.some(
+        (archetype) =>
+          archetype.size > 0 && archetype.components.some((candidate) => candidate === component),
+      )
+    ) {
+      return true;
+    }
+    return worldScheduleUsesComponent(this, component);
+  }
+
+  /** Current upper bound for mutation observation. */
+  private internalgetMutationEpoch(): number {
     return this.mutationEpoch;
   }
 
-  /** @internal Structure snapshot used to invalidate borrowed query facades. */
-  _getStructureEpoch(): number {
+  /** Current cursor for a persistent projection subscriber. */
+  private internalgetChangeCursor(): number {
+    return this.changeJournal.cursor();
+  }
+
+  /** Read complete mutation evidence or an explicit rebuild signal. */
+  private internalreadChangesSince(cursor: number): WorldChangeRead {
+    return this.changeJournal.readAfter(cursor);
+  }
+
+  /** Structure snapshot used to invalidate borrowed query facades. */
+  private internalgetStructureEpoch(): number {
     return this.structureEpoch;
   }
 
-  /** @internal Resolve current logical identity for a packed entity handle. */
-  _getEntityArchetype(entity: EntityHandle): Archetype | undefined {
+  /** Resolve current logical identity for a packed entity handle. */
+  private internalgetEntityArchetype(entity: EntityHandle): Archetype | undefined {
     const record = this.records[entityIndex(entity)];
-    if (!this._recordIsLive(record, entityGeneration(entity))) return undefined;
+    if (!this.internalrecordIsLive(record, entityGeneration(entity))) return undefined;
     return this.graph.archetypes[record.archetypeId];
   }
 
-  /** @internal Component change state for query filters. */
-  _getComponentChange(entity: EntityHandle, componentId: number): ChangeTicks | undefined {
+  /** Component change state for query filters. */
+  private internalgetComponentChange(
+    entity: EntityHandle,
+    componentId: number,
+  ): ChangeTicks | undefined {
     const record = this.records[entityIndex(entity)];
-    if (!this._recordIsLive(record, entityGeneration(entity))) return undefined;
+    if (!this.internalrecordIsLive(record, entityGeneration(entity))) return undefined;
     return readComponentChange(this.graph, record, entity, componentId);
   }
 
-  /** @internal Allocate one epoch after a mutation has succeeded. */
-  _nextMutationEpoch(): number {
+  /** Allocate one epoch after a mutation has succeeded. */
+  private internalnextMutationEpoch(): number {
     if (this.mutationEpoch >= Number.MAX_SAFE_INTEGER) {
       throw new ChangeEpochExhaustedError(this.mutationEpoch);
     }
@@ -561,8 +577,8 @@ export class World {
     return this.mutationEpoch;
   }
 
-  /** @internal Record one successful structural mutation. */
-  _markStructureChanged(): void {
+  /** Record one successful structural mutation. */
+  private internalmarkStructureChanged(): void {
     this.structureEpoch += 1;
   }
 
@@ -571,34 +587,40 @@ export class World {
     return this.structureEpoch;
   }
 
-  /** @internal Mark a component as both added and changed at the current tick. */
-  _markComponentAdded(entity: EntityHandle, componentId: number): void {
-    this._markComponentsAdded(entity, [componentId]);
+  /** Mark a component as both added and changed at the current tick. */
+  private internalmarkComponentAdded(entity: EntityHandle, componentId: number): void {
+    this.internalmarkComponentsAdded(entity, [componentId]);
   }
 
-  /** @internal Mark one mutation's component instances with a shared epoch. */
-  _markComponentsAdded(entity: EntityHandle, componentIds: readonly number[]): void {
+  /** Mark one mutation's component instances with a shared epoch. */
+  private internalmarkComponentsAdded(entity: EntityHandle, componentIds: readonly number[]): void {
     const record = this.records[entityIndex(entity)];
-    if (!this._recordIsLive(record, entityGeneration(entity))) return;
-    const epoch = this._nextMutationEpoch();
+    if (!this.internalrecordIsLive(record, entityGeneration(entity))) return;
+    const epoch = this.internalnextMutationEpoch();
     markComponentsAdded(this.graph, record, entity, componentIds, epoch);
-    for (const componentId of componentIds) this.componentMutationEpochs[componentId] = epoch;
+    for (const componentId of componentIds) {
+      this.componentMutationEpochs[componentId] = epoch;
+      this.changeJournal.append({ kind: 'component-added', entity, componentId });
+    }
   }
 
-  /** @internal Mark an existing component as changed at the current tick. */
-  _markComponentChanged(entity: EntityHandle, componentId: number): void {
+  /** Mark an existing component as changed at the current tick. */
+  private internalmarkComponentChanged(entity: EntityHandle, componentId: number): void {
     const record = this.records[entityIndex(entity)];
-    if (!this._recordIsLive(record, entityGeneration(entity))) return;
+    if (!this.internalrecordIsLive(record, entityGeneration(entity))) return;
     let epoch: number | undefined;
     markComponentChanged(this.graph, record, entity, componentId, () => {
-      epoch = this._nextMutationEpoch();
+      epoch = this.internalnextMutationEpoch();
       return epoch;
     });
-    if (epoch !== undefined) this.componentMutationEpochs[componentId] = epoch;
+    if (epoch !== undefined) {
+      this.componentMutationEpochs[componentId] = epoch;
+      this.changeJournal.append({ kind: 'component-changed', entity, componentId });
+    }
   }
 
-  /** @internal Mark one contiguous component range with a single epoch. */
-  _markComponentRangeChanged(
+  /** Mark one contiguous component range with a single epoch. */
+  private internalmarkComponentRangeChanged(
     table: ArchetypeGraph['tables'][number],
     componentId: number,
     rowStart: number,
@@ -606,18 +628,48 @@ export class World {
   ): void {
     const epochs = table.storage.get(componentId)?.epochs;
     if (epochs === undefined || rowCount === 0) return;
-    const epoch = this._nextMutationEpoch();
+    const epoch = this.internalnextMutationEpoch();
     epochs.changed.fill(epoch, rowStart, rowStart + rowCount);
     this.componentMutationEpochs[componentId] = epoch;
+    for (const entity of readTableEntityRange(table, rowStart, rowCount)) {
+      this.changeJournal.append({
+        kind: 'component-changed',
+        entity,
+        componentId,
+      });
+    }
   }
 
-  /** @internal Latest mutation token for one component-owned projection. */
-  _getComponentMutationEpoch(componentId: number): number {
+  /** Latest mutation token for one component-owned projection. */
+  private internalgetComponentMutationEpoch(componentId: number): number {
     return this.componentMutationEpochs[componentId] ?? 0;
   }
 
-  /** @internal Query facade write after the facade has already marked evidence. */
-  _setQueryRow(
+  /** Read a materialized relationship target in O(1 + k). */
+  private internalgetRelationshipTargetEntities(
+    source: Component,
+    target: EntityHandle,
+  ): readonly EntityHandle[] {
+    return this.componentAccess.relationshipTargetEntries(source, target);
+  }
+
+  /** Monotonic epoch for the materialized relationship index. */
+  private internalgetRelationshipEpoch(source: Component): number {
+    return this.core.relationshipIndexes.get(componentId(source))?.epoch ?? 0;
+  }
+
+  /** Publish changes to a value derived without an authored mutation epoch. */
+  private internalmarkDerivedComponentChanges(
+    componentId: number,
+    entities: Iterable<EntityHandle>,
+  ): void {
+    for (const entity of entities) {
+      this.changeJournal.append({ kind: 'derived-component-changed', entity, componentId });
+    }
+  }
+
+  /** Query facade write after the facade has already marked evidence. */
+  private internalsetQueryRow(
     entity: EntityHandle,
     component: Component,
     value: Record<string, unknown>,
@@ -625,23 +677,22 @@ export class World {
     return this.componentAccess.set(entity, component, value as never, false);
   }
 
-  /** @internal Query facade read that does not re-enter the public World API. */
-  _getQueryRow(
+  /** Query facade read that does not re-enter the public World API. */
+  private internalgetQueryRow(
     entity: EntityHandle,
     component: Component,
   ): Result<Record<string, unknown>, EcsError> {
     return this.componentAccess.get(entity, component) as Result<Record<string, unknown>, EcsError>;
   }
 
-  /** @internal Remove one component's change state after archetype removal. */
-  _removeComponentChange(entity: EntityHandle, componentId: number): void {
-    void entity;
-    void componentId;
+  /** Remove one component's change state after archetype removal. */
+  private internalremoveComponentChange(entity: EntityHandle, componentId: number): void {
+    this.changeJournal.append({ kind: 'component-removed', entity, componentId });
   }
 
-  /** @internal Remove all change state before an entity handle is retired. */
-  _removeEntityChanges(entity: EntityHandle): void {
-    void entity;
+  /** Remove all change state before an entity handle is retired. */
+  private internalremoveEntityChanges(entity: EntityHandle): void {
+    this.changeJournal.append({ kind: 'entity-removed', entity });
   }
 
   /** Return resource change ticks for diagnostics and resource-driven systems. */
@@ -651,7 +702,7 @@ export class World {
   }
 
   /**
-   * @internal Route a structured error through the Layer-3 ErrorHandler from
+   * Route a structured error from
    * an engine-internal subsystem (e.g. RenderSystem extract stage, w15).
    *
    * Mirrors the private `errorHandler(err, ctx)` call sites inside `World`
@@ -661,112 +712,53 @@ export class World {
    *
    * Not part of the public API.
    */
-  _routeError(err: EcsError, ctx: ErrorContext): void {
-    this.errorHandler(err, ctx);
+  private internalrouteError(err: EcsError, ctx?: { readonly systemName: string }): void {
+    // Internal expected failures are reported without becoming a second
+    // schedule or terminal hook. The host owns fatal frame policy.
+    console.error(`[${ctx?.systemName ?? 'World'}]`, err);
   }
 
   // ──────────────────────────────────────────────────────────────────────────
-  // @internal accessors — M1 extraction seam
+  // accessors — M1 extraction seam
   // ──────────────────────────────────────────────────────────────────────────
 
-  /** @internal */ _getRecords(): EntityRecord[] {
+  /** */ private internalgetRecords(): EntityRecord[] {
     return this.records;
   }
-  /** @internal */ _getFreeIndices(): number[] {
+  /** */ private internalgetFreeIndices(): number[] {
     return this.freeIndices;
   }
-  /** @internal */ _getResources(): ResourceStore {
+  /** */ private internalgetResources(): ResourceStore {
     return this.resources;
   }
-  /** @internal */
-  _getSimulationResourceDescriptors(): ReadonlyMap<string, RecoverableResourceDescriptor> {
-    return this.simulationResourceDescriptors;
-  }
-  /** @internal */ _getSimulationTransientResourceKeys(): ReadonlySet<string> {
-    return this.simulationTransientResourceKeys;
-  }
-  /** @internal */ _getErrorHandler(): ErrorHandler {
-    return this.errorHandler;
-  }
-  /** @internal */ _setErrHandler(h: ErrorHandler): void {
-    this.errorHandler = h;
-  }
-  /** @internal */ _getFixedAccumulator(): number {
+  /** */ private internalgetFixedAccumulator(): number {
     return this.fixedAccumulator;
   }
-  /** @internal */ _setFixedAccumulator(value: number): void {
+  /** */ private internalsetFixedAccumulator(value: number): void {
     this.fixedAccumulator = value;
   }
-  /** @internal */ _getUniqueRefs(): UniqueRefStore {
+  /** */ private internalgetUniqueRefs(): UniqueRefStore {
     return this.uniqueRefs;
   }
-  /** @internal */ _getBufferPool(): BufferPool {
+  /** */ private internalgetBufferPool(): BufferPool {
     return this.bufferPool;
   }
-  /** @internal */ _getSchedule(
+  /** Scheduler-owned mutable clock capability. */
+  private internalgetClockWriter(): ClockWriter {
+    return this.clock.writer;
+  }
+  /** */ private internalgetSchedule(
     token: import('./schedule-token').ScheduleToken,
   ): Schedule | undefined {
     return this.schedules.get(token);
   }
-  /** @internal */ _getSchedules(): ReadonlyMap<
+  /** */ private internalgetSchedules(): ReadonlyMap<
     import('./schedule-token').ScheduleToken,
     Schedule
   > {
     return this.schedules;
   }
-  /** @internal Install the single terminal Transform.world publication owner. */
-  _registerFrameTransformPublisher(
-    publisher: (world: World) => void,
-  ): 'registered' | 'already-registered' {
-    if (this.frameTransformPublisher === undefined) {
-      this.frameTransformPublisher = publisher;
-      return 'registered';
-    }
-    if (this.frameTransformPublisher !== publisher) {
-      throw new Error('World already has a different frame transform publisher.');
-    }
-    return 'already-registered';
-  }
-  /** @internal Attach one renderer-owned derived-state producer to this World. */
-  _attachFrameDerivedState(
-    owner: object,
-    run: (world: World) => void,
-  ): 'attached' | 'already-attached' | 'owner-conflict' {
-    if (this.frameDerivedState === undefined) {
-      this.frameDerivedState = { owner, run };
-      this.framePublicationComplete = false;
-      return 'attached';
-    }
-    return this.frameDerivedState.owner === owner ? 'already-attached' : 'owner-conflict';
-  }
-  /** @internal Detach only the renderer that currently owns derived-state production. */
-  _detachFrameDerivedState(owner: object): void {
-    if (this.frameDerivedState?.owner === owner) {
-      this.frameDerivedState = undefined;
-      this.framePublicationComplete = false;
-    }
-  }
-  /** @internal Invalidate the previous publication before an update attempt. */
-  _beginFramePublication(): void {
-    this.framePublicationComplete = false;
-  }
-  /** @internal World.update terminal pipeline; ordinary schedules cannot register here. */
-  _publishFrameTransforms(): void {
-    this.frameTransformPublisher?.(this);
-  }
-  /** @internal World.update terminal pipeline; renderer attachment is the sole owner. */
-  _deriveFrameRenderState(): void {
-    this.frameDerivedState?.run(this);
-  }
-  /** @internal Mark the terminal pipeline complete only after its final publication. */
-  _completeFramePublication(): void {
-    this.framePublicationComplete = true;
-  }
-  /** @internal Renderer read gate: ownership and terminal publication must both match. */
-  _isFramePublicationReady(owner: object): boolean {
-    return this.frameDerivedState?.owner === owner && this.framePublicationComplete;
-  }
-  /** @internal */ _getSharedRefs(): SharedRefStore {
+  /** */ private internalgetSharedRefs(): SharedRefStore {
     return this.sharedRefs;
   }
 
@@ -793,12 +785,9 @@ export class World {
    * });
    * ```
    */
-  addSystem<
-    const Qs extends ReadonlyArray<QueryDescriptor>,
-    const Ps extends ReadonlyArray<unknown>,
-  >(
+  addSystem<const Qs extends ReadonlyArray<QueryDescriptor>>(
     schedule: import('./schedule-token').ScheduleToken,
-    descriptor: SystemDescriptor<Qs, Ps>,
+    descriptor: SystemDescriptor<Qs>,
   ): Result<void, ScheduleScopeMismatchError> {
     return worldAddSystem(this, schedule, descriptor);
   }
@@ -849,13 +838,10 @@ export class World {
    * });
    * ```
    */
-  replaceSystem<
-    const Qs extends ReadonlyArray<QueryDescriptor>,
-    const Ps extends ReadonlyArray<unknown>,
-  >(
+  replaceSystem<const Qs extends ReadonlyArray<QueryDescriptor>>(
     schedule: import('./schedule-token').ScheduleToken,
     name: string,
-    descriptor: SystemDescriptor<Qs, Ps>,
+    descriptor: SystemDescriptor<Qs>,
   ): Result<void, ScheduleMutationError | ScheduleScopeMismatchError> {
     return worldReplaceSystem(this, schedule, name, descriptor);
   }
@@ -877,57 +863,12 @@ export class World {
    * if (!r.ok) console.error(r.error.code, r.error.hint);
    * ```
    */
-  addSystems<
-    const Qs extends ReadonlyArray<QueryDescriptor>,
-    const Ps extends ReadonlyArray<unknown>,
-  >(
+  addSystems<const Qs extends ReadonlyArray<QueryDescriptor>>(
     schedule: import('./schedule-token').ScheduleToken,
     set: SystemSet,
-    systems: ReadonlyArray<SystemDescriptor<Qs, Ps>>,
+    systems: ReadonlyArray<SystemDescriptor<Qs>>,
   ): Result<void, SystemSetNotRegisteredError | ScheduleScopeMismatchError> {
     return worldAddSystems(this, schedule, set, systems);
-  }
-
-  /**
-   * Record set-level ordering constraints (M1 record layer only).
-   *
-   * Validates all input tokens (main set + before/after members) before
-   * writing. Returns `Result.err` with `SystemSetNotRegisteredError` if any
-   * token fails identity validation.
-   *
-   * @example
-   * ```ts
-   * const setA = defineSystemSet({ name: 'a' });
-   * const setB = defineSystemSet({ name: 'b' });
-   * const r = world.configureSets(Update, { set: setA, before: [setB] });
-   * if (!r.ok) console.error(r.error.code, r.error.hint);
-   * ```
-   */
-  configureSets(
-    schedule: import('./schedule-token').ScheduleToken,
-    opts: {
-      readonly set: SystemSet;
-      readonly before?: readonly SystemSet[];
-      readonly after?: readonly SystemSet[];
-    },
-  ): Result<void, SystemSetNotRegisteredError | ScheduleScopeMismatchError> {
-    return worldConfigureSets(this, schedule, opts);
-  }
-
-  /**
-   * Set a custom error handler for Layer 3 (ErrorHandler + Severity).
-   * Default is `matchSeverity` (Panic → throw, Error → console.error, etc.).
-   *
-   * @example
-   * ```ts
-   * const Position = defineComponent('Position', { x: 'f32', y: 'f32' });
-   * const world = new World();
-   * world.setErrorHandler((err, _ctx) => { console.error(err); });
-   * world.spawn({ component: Position, data: { x: 0, y: 0 } }).unwrap();
-   * ```
-   */
-  setErrorHandler(handler: ErrorHandler): void {
-    worldSetErrorHandler(this, handler);
   }
 
   /**
@@ -946,7 +887,14 @@ export class World {
     deltaSeconds = 0,
   ): Result<
     void,
-    TimeDeltaInvalidError | TimeConfigInvalidError | ScheduleScopeMismatchError | WorldPoisonedError
+    | TimeDeltaInvalidError
+    | TimeConfigInvalidError
+    | ScheduleScopeMismatchError
+    | WorldPoisonedError
+    | CommandFailedError
+    | SystemFailedError
+    | import('./errors').CyclicDependencyError
+    | SharedKernelFailureError
   > {
     return worldUpdate(this, deltaSeconds);
   }
@@ -1001,45 +949,12 @@ export class World {
    * ```
    */
   inspect(): WorldInspection {
-    return worldInspect(this);
+    return detachWorldInspection(worldInspect(this));
   }
 
   /** Return the registered schedule graphs and their declared access metadata. */
   scheduleData(): ReadonlyArray<WorldScheduleData> {
     return worldScheduleData(this);
-  }
-
-  registerSimulationParticipant(participant: SimulationParticipant): Result<void, SimulationError> {
-    return this.simulationParticipantRegistry.register(participant);
-  }
-
-  /** Return a snapshot of the World-owned simulation participant registry. */
-  simulationParticipants(): readonly SimulationParticipant[] {
-    return this.simulationParticipantRegistry.entries();
-  }
-
-  registerRecoverableResource<T>(descriptor: RecoverableResourceDescriptor<T>): void {
-    this.simulationResourceDescriptors.set(
-      descriptor.key,
-      descriptor as RecoverableResourceDescriptor,
-    );
-  }
-
-  /** Mark a host-owned resource as outside the portable simulation projection. */
-  registerSimulationTransientResource(key: string): void {
-    this.simulationTransientResourceKeys.add(key);
-  }
-
-  simulationRecord(): Result<SimulationRecordV1, SimulationError> {
-    return captureSimulationRecord(this, this.simulationParticipantRegistry);
-  }
-
-  simulationRestore(record: SimulationRecordV1): Result<void, SimulationError> {
-    return restoreSimulationRecord(this, this.simulationParticipantRegistry, record);
-  }
-
-  simulationFingerprint(): string {
-    return simulationWorldFingerprint(this);
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -1101,11 +1016,9 @@ export class World {
    * {@link SharedRefStore}. Returns a `Handle<Target, 'shared'>` u32 with
    * rc=1 (the alloc-grant). Consumers retain/release via `world.sharedRefs`.
    *
-   * D-10: pass `onLastRelease` as the third argument — a per-handle deleter
-   * that fires once when this handle's rc transitions 1 -> 0 (mirrors
-   * {@link World.allocUniqueRef}'s `onRelease`). There is no global release
-   * listener; the signal is per-handle. Phase-1 producers (AssetRegistry)
-   * pass no deleter (the alloc-grant rc never reaches 0 during normal use).
+   * Final release publishes structured evidence through the owning
+   * {@link SharedRefStore}; payload disposal remains with the
+   * renderer/assets/plugin owner and is not a user callback.
    *
    * Intended for asset-registry-style producers — anything whose lifecycle
    * is shared across multiple holders (ECS components + external systems).
@@ -1116,7 +1029,6 @@ export class World {
    * @typeParam T - the payload type stored alongside the handle.
    * @param target - phantom target string (type-level discriminant).
    * @param payload - the value to store. Identity-stable until final release.
-   * @param onLastRelease - optional per-handle deleter fired once at rc 1 -> 0.
    * @returns a branded `Handle<Target, 'shared'>` u32 with rc=1.
    *
    * @example
@@ -1125,19 +1037,14 @@ export class World {
    * const handle = world.allocSharedRef<'MaterialAsset', MaterialPayload>(
    *   'MaterialAsset',
    *   payload,
-   *   (p) => releaseGpuResources(p),
    * );
    * const M = defineComponent('M', { asset: 'shared<MaterialAsset>' });
    * world.spawn({ component: M, data: { asset: handle } });
    * // The write-barrier dispatch retains/releases automatically on spawn / despawn.
    * ```
    */
-  allocSharedRef<Target extends string, T>(
-    target: Target,
-    payload: T,
-    onLastRelease?: (payload: T) => void,
-  ): Handle<Target, 'shared'> {
-    return worldAllocSharedRef(this, target, payload, onLastRelease);
+  allocSharedRef<Target extends string, T>(target: Target, payload: T): Handle<Target, 'shared'> {
+    return worldAllocSharedRef(this, target, payload);
   }
 
   /**
@@ -1154,16 +1061,24 @@ export class World {
     return worldInternSharedRef(this, target, payload);
   }
 
-  /**
-   * Check cardinality bound for a component before archetype mutation
-   * (plan-strategy D-3). Returns `CardinalityExceededError` if adding one
-   * more instance would exceed the declared `cardinality` of the component.
-   * Components without a cardinality bound (undefined) pass instantly.
-   */
-
   // ──────────────────────────────────────────────────────────────────────────
   // Component access facade — storage ownership is world-component-access.
   // ──────────────────────────────────────────────────────────────────────────
+
+  private relationshipTargetWriteError(
+    component: Component,
+    operation: string,
+  ): Result<never, EcsError> {
+    return err(new RelationshipTargetReadonlyError(component.name, operation));
+  }
+
+  private relationshipTargetPayloadWrites(data: Readonly<Record<string, unknown>>): boolean {
+    return Object.values(data).some((value) => {
+      if (Array.isArray(value)) return value.length > 0;
+      if (ArrayBuffer.isView(value)) return value.byteLength > 0;
+      return true;
+    });
+  }
 
   get<S extends ComponentSchema>(
     entity: EntityHandle,
@@ -1183,11 +1098,15 @@ export class World {
    * continue to use `get`.
    */
   hasComponent(entity: EntityHandle, component: Component): boolean {
-    const archetype = this._getEntityArchetype(entity);
-    return archetype?.components.some((candidate) => candidate.id === component.id) === true;
+    const archetype = this.internalgetEntityArchetype(entity);
+    return (
+      archetype?.components.some(
+        (candidate) => componentId(candidate) === componentId(component),
+      ) === true
+    );
   }
 
-  _getArrayView(
+  private internalgetArrayView(
     entity: EntityHandle,
     component: Component,
     fieldName: string,
@@ -1195,65 +1114,28 @@ export class World {
     return this.componentAccess._getArrayView(entity, component, fieldName);
   }
 
-  set<S extends ComponentSchema>(
+  set<S extends ComponentSchema, C extends Component<string, S>>(
     entity: EntityHandle,
-    component: Component<string, S>,
+    component: C & WritableComponent<C>,
     value: Partial<InputShapeOf<S>>,
   ): Result<void, EcsError> {
+    if (isRelationshipTarget(component)) return this.relationshipTargetWriteError(component, 'set');
     return this.componentAccess.set(entity, component, value);
   }
 
-  push<S extends ComponentSchema, K extends ArrayFieldsOf<S>>(
+  addComponent<S extends ComponentSchema, C extends Component<string, S>>(
     entity: EntityHandle,
-    component: Component<string, S>,
-    fieldName: K,
-    value: ArrayFieldElementValue<S, K>,
+    componentData: ComponentData<S> & { component: C & WritableComponent<C> },
   ): Result<void, EcsError> {
-    return this.componentAccess.push(entity, component, fieldName, value);
-  }
-
-  pop<S extends ComponentSchema, K extends ArrayFieldsOf<S>>(
-    entity: EntityHandle,
-    component: Component<string, S>,
-    fieldName: K,
-  ): Result<ArrayFieldElementValue<S, K>, EcsError> {
-    return this.componentAccess.pop(entity, component, fieldName);
-  }
-
-  capacity<S extends ComponentSchema, K extends ArrayFieldsOf<S>>(
-    entity: EntityHandle,
-    component: Component<string, S>,
-    fieldName: K,
-  ): Result<number, EcsError> {
-    return this.componentAccess.capacity(entity, component, fieldName);
-  }
-
-  reserveArrayCapacity<S extends ComponentSchema, K extends ArrayFieldsOf<S>>(
-    entity: EntityHandle,
-    component: Component<string, S>,
-    fieldName: K,
-    minimum: number,
-  ): Result<void, EcsError> {
-    return this.componentAccess.reserveArrayCapacity(entity, component, fieldName, minimum);
-  }
-
-  _removeArrayElementByValue<S extends ComponentSchema, K extends ArrayFieldsOf<S>>(
-    entity: EntityHandle,
-    component: Component<string, S>,
-    fieldName: K,
-    value: ArrayFieldElementValue<S, K>,
-  ): Result<void, EcsError> {
-    return this.componentAccess._removeArrayElementByValue(entity, component, fieldName, value);
-  }
-
-  addComponent<S extends ComponentSchema>(
-    entity: EntityHandle,
-    componentData: ComponentData<S>,
-  ): Result<void, EcsError> {
+    if (
+      isRelationshipTarget(componentData.component) &&
+      this.relationshipTargetPayloadWrites(componentData.data as Record<string, unknown>)
+    )
+      return this.relationshipTargetWriteError(componentData.component, 'addComponent');
     return this.componentAccess.addComponent(entity, componentData);
   }
 
-  _addComponentCore<S extends ComponentSchema>(
+  private internaladdComponentCore<S extends ComponentSchema>(
     entity: EntityHandle,
     componentData: ComponentData<S>,
     internal: boolean,
@@ -1261,14 +1143,16 @@ export class World {
     return this.componentAccess._addComponentCore(entity, componentData, internal);
   }
 
-  removeComponent<S extends ComponentSchema>(
+  removeComponent<S extends ComponentSchema, C extends Component<string, S>>(
     entity: EntityHandle,
-    component: Component<string, S>,
+    component: C & WritableComponent<C>,
   ): Result<void, EcsError> {
+    if (isRelationshipTarget(component))
+      return this.relationshipTargetWriteError(component, 'removeComponent');
     return this.componentAccess.removeComponent(entity, component);
   }
 
-  _removeComponentCore<S extends ComponentSchema>(
+  private internalremoveComponentCore<S extends ComponentSchema>(
     entity: EntityHandle,
     component: Component<string, S>,
     internal: boolean,
@@ -1276,41 +1160,59 @@ export class World {
     return this.componentAccess._removeComponentCore(entity, component, internal);
   }
 
-  _allocatePendingEntity(): EntityHandle {
+  private internalallocatePendingEntity(): EntityHandle {
     return this.componentAccess._allocatePendingEntity();
   }
-
-  _materializePendingEntity(entity: EntityHandle, componentDatas: ComponentData[]): void {
-    this.componentAccess._materializePendingEntity(entity, componentDatas);
+  /** */ private internalcancelPendingEntity(entity: EntityHandle): void {
+    this.componentAccess._cancelPendingEntity(entity);
   }
 
-  /** @internal */ _checkCardinality(c: Component, n: number): CardinalityExceededError | null {
-    return this.componentAccess.checkCardinality(c, n);
+  private internalmaterializePendingEntity(
+    entity: EntityHandle,
+    componentDatas: ComponentData[],
+  ): Result<void, EcsError> {
+    return this.componentAccess._materializePendingEntity(entity, componentDatas);
   }
-  /** @internal */ _allocateIndex(): number {
+
+  /** Shared structural preflight for direct and deferred writes. */
+  private internalpreflightComponentData(
+    holder: EntityHandle | null,
+    componentData: ComponentData,
+    pendingEntities?: ReadonlySet<number>,
+    unavailableEntities?: ReadonlySet<number>,
+  ): Result<void, EcsError> {
+    return this.componentAccess.preflightComponentData(
+      holder,
+      componentData,
+      pendingEntities,
+      unavailableEntities,
+    );
+  }
+
+  /** */ private internalallocateIndex(): number {
     return this.componentAccess.allocateIndex();
   }
-  /** @internal */ _recordIsLive(r: EntityRecord | undefined, g: number): r is EntityRecord {
+  /** */ private internalrecordIsLive(r: EntityRecord | undefined, g: number): r is EntityRecord {
     return this.componentAccess.recordIsLive(r, g);
   }
-  /** @internal */ _lookupAlive(
+  /** */ private internallookupAlive(
     e: EntityHandle,
     op: string,
     c?: string,
   ): Result<EntityRecord, EcsError> {
     return this.componentAccess.lookupAlive(e, op, c);
   }
-  /** @internal */ _readRow<S extends ComponentSchema>(
+  /** */ private internalreadRow<S extends ComponentSchema>(
     a: Archetype,
     c: Component<string, S>,
     r: number,
   ): ShapeOf<S> {
     return this.componentAccess.readRow(a, c, r);
   }
-  /** @internal */ _writeEntitySelf(a: Archetype, r: number, h: EntityHandle): void {
+  /** */ private internalwriteEntitySelf(a: Archetype, r: number, h: EntityHandle): void {
     this.componentAccess.writeEntitySelf(a, r, h);
   }
-  /** @internal */ _writeRow<S extends ComponentSchema>(
+  /** */ private internalwriteRow<S extends ComponentSchema>(
     a: Archetype,
     c: Component<string, S>,
     r: number,
@@ -1318,25 +1220,22 @@ export class World {
   ): void {
     this.componentAccess.writeRow(a, c, r, v);
   }
-  /** @internal */ _releaseManagedRefsOnRow(a: Archetype, c: Component, r: number): void {
+  /** */ private internalreleaseManagedRefsOnRow(a: Archetype, c: Component, r: number): void {
     this.componentAccess.releaseManagedRefsOnRow(a, c, r);
   }
-  /** @internal */ _relationshipOnInsert(
+  /** */ private internalrelationshipOnInsert(
     h: EntityHandle,
     c: Component,
     v: Record<string, unknown>,
-  ): void {
-    this.componentAccess.relationshipOnInsert(h, c, v);
+  ): Result<void, EcsError> {
+    return this.componentAccess.relationshipOnInsert(h, c, v);
   }
-  /** @internal */ _relationshipOnRemove(
+  /** */ private internalrelationshipOnRemove(
     h: EntityHandle,
     c: Component,
     v: Record<string, unknown>,
-  ): void {
-    this.componentAccess.relationshipOnRemove(h, c, v);
-  }
-  /** @internal */ _expandCoAttach(cds: ComponentData[]): ComponentData[] {
-    return this.componentAccess.expandCoAttach(cds);
+  ): Result<void, EcsError> {
+    return this.componentAccess.relationshipOnRemove(h, c, v);
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -1368,19 +1267,25 @@ export class World {
     }
   ): Result<EntityHandle, EcsError>;
   spawn(...componentDatas: ComponentData[]): Result<EntityHandle, EcsError> {
+    const target = componentDatas.find(
+      (data) =>
+        isRelationshipTarget(data.component) &&
+        this.relationshipTargetPayloadWrites(data.data as Record<string, unknown>),
+    );
+    if (target !== undefined) return this.relationshipTargetWriteError(target.component, 'spawn');
     return spawnCore(this, componentDatas, false);
   }
 
   /**
    * Core implementation of `spawn` with reentry guard.
    *
-   * @param internal — `true` when called from within relationship hook
-   *   machinery (lazy mirror create, exclusive reparent). Relationship
-   *   handling is suppressed in this path to prevent infinite mirror
-   *   recursion; user-declared onInsert callbacks still fire.
-   * @internal
+   * @param internal — `true` when called from relationship maintenance
+   *   (lazy mirror create or exclusive reparent).
    */
-  _spawnCore(componentDatas: ComponentData[], internal: boolean): Result<EntityHandle, EcsError> {
+  private internalspawnCore(
+    componentDatas: ComponentData[],
+    internal: boolean,
+  ): Result<EntityHandle, EcsError> {
     return spawnCore(this, componentDatas, internal);
   }
 
@@ -1427,14 +1332,11 @@ export class World {
    * Core implementation of `despawn` with reentry guard.
    *
    * @param internal — `true` when called from within linkedSpawn cascade.
-   *   Nested despawn skips the `relationshipOnRemove` mirror-prune for
-   *   `linkedSpawn`-target components (the parent is already retired, so
-   *   pruning its Children list would fail); user-declared onRemove
-   *   callbacks still fire and the linkedSpawn collection still walks the
-   *   subtree so grandchildren cascade correctly (tweak-20260714 M2, R-6).
-   * @internal
+   *   Nested despawn skips relationship pruning after the parent is retired;
+   *   the linkedSpawn collection still walks the subtree so grandchildren
+   *   cascade correctly (tweak-20260714 M2, R-6).
    */
-  _despawnCore(entity: EntityHandle, internal: boolean): Result<void, EcsError> {
+  private internaldespawnCore(entity: EntityHandle, internal: boolean): Result<void, EcsError> {
     return despawnCore(this, entity, internal);
   }
 
@@ -1476,155 +1378,22 @@ export class World {
   iterDescendants(entity: EntityHandle): Iterable<EntityHandle> {
     return worldIterDescendants(this, entity);
   }
+}
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // ──────────────────────────────────────────────────────────────────────────
-  // Scene facade — implementation and per-World scene state live in world-scene.
-  // ──────────────────────────────────────────────────────────────────────────
+/** Freeze the detached POD produced by World.inspect(). */
+function detachWorldInspection<T extends object>(snapshot: T): Readonly<T> {
+  return freezeInspection(snapshot);
+}
 
-  /** @internal */
-  _setSceneAssetResolver(resolver: SceneAssetResolver): void {
-    worldSetSceneAssetResolver(this, resolver);
+function freezeInspection<T>(value: T): Readonly<T> {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) {
+    return value as Readonly<T>;
   }
-  /** @internal */
-  _getSceneAssetResolver(): SceneAssetResolver | null {
-    return worldGetSceneAssetResolver(this);
+  for (const key of Reflect.ownKeys(value as object)) {
+    const child = (value as Record<PropertyKey, unknown>)[key];
+    if (child !== null && (typeof child === 'object' || typeof child === 'function')) {
+      freezeInspection(child);
+    }
   }
-  instantiateScene(
-    handle: Handle<'SceneAsset', 'shared'>,
-    parent?: EntityHandle,
-  ): Result<SceneInstantiateOk, EcsError> {
-    return worldInstantiateScene(this, handle, parent);
-  }
-  instantiateSceneFlat(
-    handle: Handle<'SceneAsset', 'shared'>,
-  ): Result<SceneInstantiateFlatOk, EcsError> {
-    return worldInstantiateSceneFlat(this, handle);
-  }
-  /** @internal */
-  _instantiateSceneRec(
-    handle: Handle<'SceneAsset', 'shared'>,
-    parent: EntityHandle | undefined,
-    stack: Set<number>,
-    diagnostics: SceneInstantiateDiagnostic[],
-  ): Result<EntityHandle, EcsError> {
-    return worldInstantiateSceneRec(this, handle, parent, stack, diagnostics);
-  }
-  /** @internal */
-  _resolveSceneAsset(handle: Handle<'SceneAsset', 'shared'>): Result<SceneAsset, EcsError> {
-    return worldResolveSceneAsset(this, handle);
-  }
-  /** @internal */
-  _spawnSceneMembers(
-    handle: Handle<'SceneAsset', 'shared'>,
-    asset: SceneAsset,
-    stack: Set<number>,
-    diagnostics: SceneInstantiateDiagnostic[],
-  ): Result<SceneMembersSpawn, EcsError> {
-    return worldSpawnSceneMembers(this, handle, asset, stack, diagnostics);
-  }
-  /** @internal */
-  _instantiateSceneAsset(
-    handle: Handle<'SceneAsset', 'shared'>,
-    asset: SceneAsset,
-    parent: EntityHandle | undefined,
-    stack: Set<number>,
-    diagnostics: SceneInstantiateDiagnostic[],
-  ): Result<EntityHandle, EcsError> {
-    return worldInstantiateSceneAsset(this, handle, asset, parent, stack, diagnostics);
-  }
-  /** @internal */
-  _instantiateSceneAssetFlat(
-    handle: Handle<'SceneAsset', 'shared'>,
-    asset: SceneAsset,
-    stack: Set<number>,
-    diagnostics: SceneInstantiateDiagnostic[],
-  ): Result<{ roots: EntityHandle[]; mountEntities: EntityHandle[] }, EcsError> {
-    return worldInstantiateSceneAssetFlat(this, handle, asset, stack, diagnostics);
-  }
-  /** @internal */
-  _buildSceneEntityComponentDatas(
-    node: SceneEntity,
-    mapping: Uint32Array,
-    diagnostics: SceneInstantiateDiagnostic[],
-  ): Result<ComponentData[], EcsError> {
-    return worldBuildSceneEntityComponentDatas(node, mapping, diagnostics);
-  }
-  /** @internal */
-  _applyMountOverride(member: EntityHandle, ov: MountOverride): Result<void, EcsError> {
-    return worldApplyMountOverride(this, member, ov);
-  }
-  /** @internal */
-  _validateMountOverrides(mount: SceneInstanceMount): Result<void, EcsError> {
-    return worldValidateMountOverrides(mount);
-  }
-  /** @internal */
-  _spawnMountEntity(
-    mount: SceneInstanceMount,
-    mapping: Uint32Array,
-    diagnostics: SceneInstantiateDiagnostic[],
-  ): Result<EntityHandle, EcsError> {
-    return worldSpawnMountEntity(this, mount, mapping, diagnostics);
-  }
-  /** @internal */
-  _resolveMountSource(
-    source: number | string,
-    parentHandle: Handle<'SceneAsset', 'shared'>,
-  ): Result<Handle<'SceneAsset', 'shared'>, EcsError> {
-    return worldResolveMountSource(this, source, parentHandle);
-  }
-  /** @internal */
-  _mountOverridesToStateMap(
-    src: Map<LocalEntityId, Map<string, MountOverride>>,
-  ): Map<LocalEntityId, Map<string, { comp: string; field?: string; value: unknown }>> {
-    return worldMountOverridesToStateMap(src);
-  }
-  /** @internal */
-  _setUniqueRefPayload<T>(handle: Handle<string, 'unique'>, payload: T): void {
-    worldSetUniqueRefPayload(this, handle, payload);
-  }
-  /** @internal */
-  _resolveSceneInstanceStatePayload(
-    root: EntityHandle,
-  ): Result<SceneInstanceStatePayload, EcsError> {
-    return worldResolveSceneInstanceStatePayload(this, root);
-  }
-  getSceneInstanceState(root: EntityHandle): Result<SceneInstanceStatePayload, EcsError> {
-    return worldGetSceneInstanceState(this, root);
-  }
-  despawnScene(root: EntityHandle, opts?: { keepDetached?: boolean }): Result<number, EcsError> {
-    return worldDespawnScene(this, root, opts);
-  }
-  despawnDescendants(
-    root: EntityHandle,
-    opts?: { keepDetached?: boolean },
-  ): Result<number, EcsError> {
-    return worldDespawnDescendants(this, root, opts);
-  }
-  setSceneOverride<S extends ComponentSchema>(
-    root: EntityHandle,
-    member: EntityHandle,
-    component: Component<string, S>,
-    field: keyof ShapeOf<S> & string,
-    value: unknown,
-  ): Result<void, EcsError> {
-    return worldSetSceneOverride(this, root, member, component, field, value);
-  }
-  removeSceneOverride<S extends ComponentSchema>(
-    root: EntityHandle,
-    member: EntityHandle,
-    component: Component<string, S>,
-    field: keyof ShapeOf<S> & string,
-  ): Result<void, EcsError> {
-    return worldRemoveSceneOverride(this, root, member, component, field);
-  }
-  detachSceneMember(root: EntityHandle, member: EntityHandle): Result<void, EcsError> {
-    return worldDetachSceneMember(this, root, member);
-  }
-  reattachSceneMember(root: EntityHandle, member: EntityHandle): Result<void, EcsError> {
-    return worldReattachSceneMember(this, root, member);
-  }
-  getSceneAssetForInstance(root: EntityHandle): Result<Handle<'SceneAsset', 'shared'>, EcsError> {
-    return worldGetSceneAssetForInstance(this, root);
-  }
+  return Object.freeze(value) as Readonly<T>;
 }

@@ -1,14 +1,12 @@
 // Ambient declarations for node:* modules used by dawn tests that read the
 // hello-triangle compiled shader manifest at runtime. The runtime package's
 // tsconfig does not enable @types/node (production target is browser); these
-// minimal shims keep tsc green for the 3 shadow dawn test files only.
+// minimal shims keep tsc green for the small set of dawn test files that read
+// compiled shader manifests at runtime.
 //
-// Used by:
-// - shadow-m2.dawn.test.ts
-// - shadow-m3.dawn.test.ts
-// - shadow-m3-calibrate-run.dawn.test.ts
+// Used by shader-manifest Dawn fixtures and the runtime benchmark fixtures.
 // - tilemap-chunk-y-sort-bench.unit.test.ts (perf_hooks + process.env)
-// - render-system-fold-scene-instances.unit.test.ts (readdirSync + dirname)
+// - record-fold-scene-instances.unit.test.ts (readdirSync + dirname)
 // - basis-catalog-dispatch.integration.test.ts (existsSync pkg-built gate)
 
 declare module 'node:fs' {

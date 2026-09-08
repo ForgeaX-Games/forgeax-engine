@@ -2,14 +2,14 @@
 //
 // resolveName is the one runtime name-truth function and it delegates to the
 // stateless deriveAssetName pure function (D-6). Every other name consumer reads
-// resolveName or that same deriveAssetName -- none re-implements the XOR rule.
+// resolveName or that same deriveAssetName -- none re-implements the display-name rule.
 //
 // This is a grep/fixture test, not a pure runtime assertion: it reads the source
 // trees and asserts structural unification.
 //
-// M4 (w24/w22) wiring completed: inspect() now calls resolveName; build-catalog
-// now calls deriveAssetName. The grep assertions below confirm both paths route
-// through the SSOT, no bypass.
+// M4 (w24/w22) wiring completed: inspect() now calls resolveName; the catalog
+// builder now calls deriveAssetName. The grep assertions below confirm both
+// paths route through the SSOT, no bypass.
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -22,16 +22,16 @@ const deriveSrc = readFileSync(
   'utf8',
 );
 const buildCatalogSrc = readFileSync(
-  fileURLToPath(new URL('../../../vite-plugin-pack/src/build-catalog.ts', import.meta.url)),
+  fileURLToPath(new URL('../../../pack/src/catalog-builder.ts', import.meta.url)),
   'utf8',
 );
 
 describe('unified name resolution (AC-04)', () => {
-  it('deriveAssetName is the single XOR rule definition', () => {
+  it('deriveAssetName is the single display-name rule definition', () => {
     expect(deriveSrc).toContain('export function deriveAssetName');
   });
 
-  it('resolveName delegates to deriveAssetName (no inline XOR re-implementation)', () => {
+  it('resolveName delegates to deriveAssetName (no inline re-implementation)', () => {
     expect(registrySrc).toContain("import { deriveAssetName } from '@forgeax/engine-pack/name'");
     // resolveName returns the result of deriveAssetName, not a hand-rolled rule.
     const body = registrySrc.slice(
@@ -54,14 +54,12 @@ describe('unified name resolution (AC-04)', () => {
     expect(registrySrc).not.toContain("name: ''");
   });
 
-  // M4 expansion (w22 landed): build-catalog routes through deriveAssetName
-  it('build-catalog imports and calls deriveAssetName (no inline XOR)', () => {
-    expect(buildCatalogSrc).toContain(
-      "import { deriveAssetName } from '@forgeax/engine-pack/name'",
-    );
+  // M4 expansion (w22 landed): catalog-builder routes through deriveAssetName
+  it('catalog-builder imports and calls deriveAssetName (no inline display-name rule)', () => {
+    expect(buildCatalogSrc).toContain("import { deriveAssetName } from './deriveAssetName.js'");
     expect(buildCatalogSrc).toContain('deriveAssetName(');
-    // No inline re-implementation of the XOR rule (no hand-rolled basename)
-    // The single deriveAssetName pure function handles all branches.
+    // No inline re-implementation (no hand-rolled basename); the single
+    // deriveAssetName pure function handles the display-name rule.
     expect(buildCatalogSrc.match(/deriveAssetName\(/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
   });
 });

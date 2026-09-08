@@ -1,0 +1,254 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forgeax.dev/schemas/format-support-matrix/1",
+  "title": "ForgeaX format tier one support matrix",
+  "description": "Initial fail-closed evidence matrix for the three CSV tier one rows.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "featureId",
+    "currentMainSha",
+    "source",
+    "statusPolicy",
+    "formats"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "format-support-matrix/1"
+    },
+    "featureId": {
+      "const": "feat-20260812-format-classification-tier1"
+    },
+    "currentMainSha": {
+      "$ref": "#/$defs/gitSha"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "byteCount",
+        "headerRowCount",
+        "dataRowCount",
+        "firstTierRows",
+        "provenance"
+      ],
+      "properties": {
+        "path": {
+          "const": ".forgeax-harness/docs/forgeax-format-classification.csv"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "byteCount": {
+          "const": 14749
+        },
+        "headerRowCount": {
+          "const": 1
+        },
+        "dataRowCount": {
+          "const": 56
+        },
+        "firstTierRows": {
+          "type": "array",
+          "const": [8, 18, 26]
+        },
+        "provenance": {
+          "$ref": "#/$defs/provenance"
+        }
+      }
+    },
+    "statusPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidenceLayers",
+        "completeVerdictRequires",
+        "visualEvidenceRequiredForRelease",
+        "candidateEvidenceStatus"
+      ],
+      "properties": {
+        "evidenceLayers": {
+          "const": ["importer", "runtime", "gpu", "recovery", "visual"]
+        },
+        "completeVerdictRequires": {
+          "const": ["importer", "runtime", "gpu", "recovery"]
+        },
+        "visualEvidenceRequiredForRelease": {
+          "const": true
+        },
+        "candidateEvidenceStatus": {
+          "const": "audit-only"
+        }
+      }
+    },
+    "formats": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "$ref": "#/$defs/formatRow"
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "gitSha": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40,64}$"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestedUrl", "resolvedUrl"],
+      "properties": {
+        "requestedUrl": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resolvedUrl": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "paths"],
+      "properties": {
+        "status": {
+          "enum": ["not-yet-created", "ready", "blocked"]
+        },
+        "paths": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "platform", "runtime", "backend"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "platform": {"type": "string", "minLength": 1},
+        "runtime": {"type": "string", "minLength": 1},
+        "backend": {"type": "string", "minLength": 1}
+      }
+    },
+    "structuredError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "expected", "hint", "detail"],
+      "properties": {
+        "code": {"type": "string", "minLength": 1},
+        "expected": {"type": "string", "minLength": 1},
+        "hint": {"type": "string", "minLength": 1},
+        "detail": {"type": "string", "minLength": 1}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "layer",
+        "status",
+        "observed",
+        "verdict",
+        "confidence",
+        "evidenceRefs",
+        "error"
+      ],
+      "properties": {
+        "layer": {
+          "enum": ["importer", "runtime", "gpu", "recovery", "visual"]
+        },
+        "status": {
+          "enum": ["supported", "unsupported", "blocked"]
+        },
+        "observed": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verdict": {
+          "enum": ["supported", "unsupported", "blocked"]
+        },
+        "confidence": {
+          "enum": ["low", "medium", "high"]
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "error": {
+          "anyOf": [
+            {"$ref": "#/$defs/structuredError"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "formatRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "csvRow",
+        "formatId",
+        "format",
+        "extensions",
+        "sourceSha256",
+        "sourceCodeSha",
+        "fixture",
+        "environment",
+        "evidence",
+        "overallVerdict"
+      ],
+      "properties": {
+        "csvRow": {
+          "enum": [8, 18, 26]
+        },
+        "formatId": {
+          "enum": ["meshopt", "ktx2-basis", "morph-target"]
+        },
+        "format": {
+          "type": "string",
+          "minLength": 1
+        },
+        "extensions": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sourceCodeSha": {
+          "$ref": "#/$defs/gitSha"
+        },
+        "fixture": {
+          "$ref": "#/$defs/fixture"
+        },
+        "environment": {
+          "$ref": "#/$defs/environment"
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "items": {"$ref": "#/$defs/evidence"}
+        },
+        "overallVerdict": {
+          "enum": ["supported", "unsupported", "blocked"]
+        }
+      }
+    }
+  }
+}

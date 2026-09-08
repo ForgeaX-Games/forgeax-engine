@@ -1,10 +1,13 @@
+import { configureRuntimeAssetCatalog, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
-import { World, type EntityHandle } from '@forgeax/engine-ecs';
+import { createWorldContext, World, type EntityHandle } from '@forgeax/engine-ecs';
 import { mat4 } from '@forgeax/engine-math';
-import { Camera } from '@forgeax/engine-render';
-import { createRenderer } from '@forgeax/engine-runtime';
+import type { Context } from '@forgeax/engine-plugin';
+import { Camera, type RenderWorldLease } from '@forgeax/engine-render';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
 import { Transform, scenePlugin } from '@forgeax/engine-scene';
-import { createStandaloneRuntimeAssetBinding, type Handle, type MaterialAsset } from '@forgeax/engine-types';
+import { type Handle, type MaterialAsset } from '@forgeax/engine-types';
+import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import {
   createVfxEffectContract,
   loadVfxGpuEffect,
@@ -31,6 +34,7 @@ const BOSS_ACCENT_MATERIAL_GUID = '019e9c00-0000-7000-8000-000000000004';
 const GROUND_WARNING_MATERIAL_GUID = '019e9c00-0000-7000-8000-000000000005';
 const STRIKE_MATERIAL_GUID = '019e9c00-0000-7000-8000-000000000006';
 const MOUTH_MATERIAL_GUID = '019e9c00-0000-7000-8000-000000000001';
+const cameraEntities = new WeakMap<World, EntityHandle>();
 
 export type BossLightningValues = {
   readonly intensity: number;
@@ -56,8 +60,9 @@ let cameraEntity = 0 as EntityHandle;
 function cameraSource() {
   return {
     read(world: World) {
-      const transform = world.get(cameraEntity, Transform);
-      const camera = world.get(cameraEntity, Camera);
+      const owner = cameraEntities.get(world) ?? cameraEntity;
+      const transform = world.get(owner, Transform);
+      const camera = world.get(owner, Camera);
       if (!transform.ok || !camera.ok) return undefined;
       cameraReady = true;
       const position = new Float32Array(transform.value.pos);
@@ -122,7 +127,7 @@ function stageCandidatePlan(
 
 async function loadMaterial(
   world: World,
-  assets: NonNullable<Awaited<ReturnType<typeof createRenderer>>['assets']>,
+  assets: AssetRegistry,
   guid: string,
 ): Promise<Handle<'MaterialAsset', 'shared'>> {
   const loaded = await assets.loadByGuid<MaterialAsset>(assets.parseGuid(guid));
@@ -131,16 +136,19 @@ async function loadMaterial(
 }
 
 export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
-  const falsifyMode = new URLSearchParams(globalThis.location.search).get('boss-lightning-falsify');
+  const searchParams = new URLSearchParams(globalThis.location.search);
+  const falsifyMode = searchParams.get('boss-lightning-falsify');
+  const m35Mode = searchParams.get('boss-lightning-m35') === '1';
   const world = new World();
   const host = createVfxRuntimeHost({
     camera: cameraSource(),
+    ...(m35Mode ? { maxQueuedTicks: 1 } : {}),
     providers: [
       createCameraProvider({ available: () => cameraReady }),
       createSceneDepthProvider({ available: () => cameraReady && falsifyMode !== 'missing-depth' }),
     ],
   });
-  const renderer = await createRenderer(
+  const constructed = await constructRuntimeRendererHost(
     target,
     {
       features:
@@ -150,9 +158,15 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
     forgeaxBundlerAdapter(),
   );
-  const ready = await renderer.ready;
-  if (!ready.ok) throw new Error(`boss-lightning: renderer not ready: ${ready.error.hint}`);
-  renderer.onError(error => {
+  if (!constructed.ok) throw constructed.error;
+  const renderer = constructed.value.renderer;
+  const assets = constructed.value.assets;
+  const attachedMainRendererWorld = renderer.attach(world);
+  if (!attachedMainRendererWorld.ok) throw attachedMainRendererWorld.error;
+  const mainLease = attachedMainRendererWorld.value;
+  renderer.subscribe((event) => {
+    if (event.kind !== 'error') return;
+    const error = event.error;
     if (validationErrors.length >= 32) return;
     validationErrors.push({
       code: error.code,
@@ -160,13 +174,10 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       detail: 'detail' in error ? error.detail : undefined,
     });
   });
-  const assets = renderer.assets;
-  if (assets === null) throw new Error('boss-lightning: renderer has no AssetRegistry');
-  if (import.meta.env.DEV) {
-    assets.configureRuntimeBinding(createStandaloneRuntimeAssetBinding('hello-boss-lightning'));
-  } else {
-    assets.configurePackIndex('/pack-index.json');
-  }
+  configureRuntimeAssetCatalog(
+    assets,
+    runtimeBinding,
+  );
   const attached = await host.attachWorld({ world, assets });
   if (!attached.ok) throw new Error(`boss-lightning: VFX host attach failed: ${attached.error.hint}`);
 
@@ -180,6 +191,7 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const materials: BossSceneMaterials = { body, accent, mouth, groundWarning, strike };
   const scene = createBossScene(world, materials);
   cameraEntity = scene.camera;
+  cameraEntities.set(world, cameraEntity);
   const loaded = await loadVfxGpuEffect(assets, EFFECT_GUID);
   if (!loaded.ok) throw new Error(`boss-lightning: GPU effect load failed: ${String(loaded.error)}`);
   const effect = world.allocSharedRef('ParticleEffectAsset', loaded.value);
@@ -192,10 +204,91 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       timeScale: 1,
     },
   }).unwrap();
-  const appResult = await createApp({ renderer, world, plugins: [scenePlugin()] });
+  let m35World: World | undefined;
+  let m35Player: EntityHandle | undefined;
+  let m35Context: Context | undefined;
+  let m35Lease: RenderWorldLease | undefined;
+  if (m35Mode) {
+    m35World = new World();
+    const m35Camera = m35World
+      .spawn(
+        { component: Transform, data: { pos: [0, 1.2, 7.5] } },
+        {
+          component: Camera,
+          data: { fov: Math.PI / 3, aspect: target.width / target.height, near: 0.1, far: 100 },
+        },
+      )
+      .unwrap();
+    cameraEntities.set(m35World, m35Camera);
+    const m35Effect = m35World.allocSharedRef('ParticleEffectAsset', loaded.value);
+    m35Player = m35World
+      .spawn(
+        { component: Transform, data: { pos: [0, -0.2, 0] } },
+        {
+          component: ParticleEffectPlayer,
+          data: { effect: m35Effect, playing: true, seed: 43, timeScale: 1 },
+        },
+      )
+      .unwrap();
+    m35Context = await createWorldContext(m35World, [scenePlugin()]);
+    const attachedM35RendererWorld = renderer.attach(m35World);
+    if (!attachedM35RendererWorld.ok) throw attachedM35RendererWorld.error;
+    m35Lease = attachedM35RendererWorld.value;
+    const attachedM35HostWorld = await host.attachWorld({ world: m35World, assets });
+    if (!attachedM35HostWorld.ok) {
+      throw new Error(`boss-lightning: M35 VFX host attach failed: ${attachedM35HostWorld.error.hint}`);
+    }
+  }
+  const appResult = await createApp({ renderer, assets, world, plugins: [scenePlugin()] });
   if (!appResult.ok) throw new Error(`boss-lightning: app assembly failed: ${appResult.error.hint}`);
   appResult.value.start();
   let nextImpactSequence = 1;
+  const m35 =
+    m35World === undefined || m35Player === undefined
+      ? undefined
+      : {
+          world: m35World,
+          player: m35Player,
+          pause: () => appResult.value.pause(),
+          resume: () => appResult.value.resume(),
+          inspect: () => ({ affected: host.inspect(m35World), sibling: host.inspect(world) }),
+          control: () => host.acquireControl(m35World),
+          step: () => {
+            const siblingUpdate = world.update(1 / 60);
+            const affectedUpdate = m35World.update(1 / 60);
+            if (!siblingUpdate.ok || !affectedUpdate.ok) {
+              return { siblingUpdate, affectedUpdate, draw: undefined };
+            }
+            if (m35Lease === undefined) throw new Error('boss-lightning: M35 render lease unavailable');
+            const draw = renderer.draw({
+              leases: [mainLease, m35Lease],
+              camera: { lease: mainLease },
+              environment: { lease: mainLease },
+            });
+            return { siblingUpdate, affectedUpdate, draw };
+          },
+          cleanup: async () => {
+            const stopped = appResult.value.stop();
+            await m35Context?.fiber.dispose();
+            await appResult.value.dispose();
+            const detachAffected = await host.detachWorld({ world: m35World });
+            const detachAffectedAgain = await host.detachWorld({ world: m35World });
+            const detachSibling = await host.detachWorld({ world });
+            const detachSiblingAgain = await host.detachWorld({ world });
+            m35Lease?.dispose();
+            mainLease.dispose();
+            await renderer.dispose();
+            await renderer.dispose();
+            return {
+              stopped,
+              detachAffected,
+              detachAffectedAgain,
+              detachSibling,
+              detachSiblingAgain,
+              rendererDisposedTwice: true,
+            };
+          },
+        };
   Object.assign(globalThis, {
     __forgeaxBossLightning: {
       app: appResult.value,
@@ -268,7 +361,16 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         create: createBossLightningInstance,
         inspect: () => host.inspect(world),
         recover: () => renderer.recover(),
+        ...(m35 === undefined
+          ? {}
+          : {
+              replay: () => {
+                const control = host.acquireControl(m35.world);
+                return control.ok ? control.value.replay({ player: m35.player }) : control;
+              },
+            }),
       },
+      m35,
       m11: {
         holdStaleInstance: () => {
           const runtime = world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);

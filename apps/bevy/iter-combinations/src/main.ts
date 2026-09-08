@@ -40,7 +40,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = appResult.value;
-  console.warn(`[bevy-iter-combinations] backend=${app.renderer.backend}`);
+  console.warn(`[bevy-iter-combinations] state=${app.renderer.inspect().state}`);
 
   buildIterCombinationsWorld(app.world);
 

@@ -1,7 +1,8 @@
-import { Entity, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
 import { ChildOf, Transform } from '../index';
 import { projectHierarchy, type SceneHierarchyDiagnostic } from '../systems';
+import { setMalformedParentEdge } from './fixtures/malformed-hierarchy-edge';
 
 describe('scene hierarchy projection contract', () => {
   it('exposes stable parent edges and diagnostic detail without throwing', () => {
@@ -26,28 +27,7 @@ describe('scene hierarchy projection contract', () => {
     const third = world
       .spawn({ component: Transform, data: {} }, { component: ChildOf, data: { parent: second } })
       .unwrap();
-    const graph = (
-      world as unknown as {
-        _getGraph(): {
-          tables: ReadonlyArray<
-            | {
-                size: number;
-                storage: Map<number, { fields: Map<string, { view: Uint32Array }> }>;
-              }
-            | undefined
-          >;
-        };
-      }
-    )._getGraph();
-    for (const table of graph.tables) {
-      if (table === undefined) continue;
-      const entities = table.storage.get(Entity.id)?.fields.get('self')?.view;
-      const parents = table.storage.get(ChildOf.id)?.fields.get('parent')?.view;
-      if (entities === undefined || parents === undefined) continue;
-      for (let row = 0; row < table.size; row++) {
-        if (entities[row] === second) parents[row] = third;
-      }
-    }
+    setMalformedParentEdge(world, second, third);
 
     const diagnostics: readonly SceneHierarchyDiagnostic[] = projectHierarchy(world).diagnostics;
 

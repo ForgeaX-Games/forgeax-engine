@@ -13,14 +13,5 @@ export {
   RapierPhysicsWorld2D,
   registerPhysicsSystems2D,
 } from './rapier-physics-world-2d';
-export type {
-  Rapier2DKinematicControllerState,
-  Rapier2DSimulationBody,
-  Rapier2DSimulationCollider,
-  Rapier2DSimulationJoint,
-  Rapier2DSimulationParticipantOptions,
-  Rapier2DSimulationState,
-} from './simulation-participant';
-export { createRapier2DSimulationParticipant } from './simulation-participant';
 export type { Rapier2DModule } from './wasm-loader';
 export { loadRapier2D } from './wasm-loader';

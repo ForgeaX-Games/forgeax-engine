@@ -8,18 +8,33 @@ export interface ScheduleToken {
   readonly name: string;
 }
 
-export type ScheduleName = 'Update' | 'FixedUpdate' | 'FrameEnd';
+export type ScheduleName = 'Update' | 'FixedUpdate';
 
 function createScheduleToken(name: ScheduleName): ScheduleToken {
-  return Object.freeze({ name });
+  // The Engine Worker loads its runtime and an execution bootstrap as separate
+  // Vite bundles. Keep the two built-in tokens physically shared across those
+  // bundles so a plugin's `Update` reference still addresses the owning World
+  // schedule instead of becoming an accidental cross-scope edge.
+  const registry = globalThis as typeof globalThis & {
+    readonly [key: symbol]: ScheduleToken | undefined;
+  };
+  const key = Symbol.for(`forgeax.ecs.schedule-token.${name}`);
+  const existing = registry[key];
+  if (existing !== undefined) return existing;
+  const token = Object.freeze({ name });
+  Object.defineProperty(registry, key, {
+    configurable: false,
+    enumerable: false,
+    value: token,
+    writable: false,
+  });
+  return token;
 }
 
 /** Variable-rate World schedule. */
 export const Update = createScheduleToken('Update');
 /** Fixed-rate World schedule and the intrinsic Update ordering anchor. */
 export const FixedUpdate = createScheduleToken('FixedUpdate');
-/** End-of-outer-update schedule, after fixed steps and deferred commands. */
-export const FrameEnd = createScheduleToken('FrameEnd');
 export function isScheduleToken(value: unknown): value is ScheduleToken {
-  return value === Update || value === FixedUpdate || value === FrameEnd;
+  return value === Update || value === FixedUpdate;
 }

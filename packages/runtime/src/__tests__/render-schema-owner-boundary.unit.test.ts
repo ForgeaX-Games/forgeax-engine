@@ -1,12 +1,8 @@
 import { World } from '@forgeax/engine-ecs';
-import {
-  Camera,
-  extractFrame,
-  perspective,
-  prepareExtractContext,
-} from '@forgeax/engine-render/internal';
+import { Camera, perspective } from '@forgeax/engine-render';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
+import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
 
 describe('render extract owner boundary', () => {
   it('joins render Camera with scene Transform in one world', () => {

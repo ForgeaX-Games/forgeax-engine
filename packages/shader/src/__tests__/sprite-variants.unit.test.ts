@@ -111,17 +111,21 @@ describe('w6 (b) -- pbr / unlit / sprite-adjacent shaders DO NOT pick up PER_INS
     });
   }
 
-  it('default-standard-pbr.wgsl keeps its two-axis (STORAGE + CLUSTER_FORWARD) declaration (still 4 variants, none touch PER_INSTANCE_REGION)', () => {
+  it('default-standard-pbr.wgsl keeps its storage, cluster, and vertex-color axes (none touch PER_INSTANCE_REGION)', () => {
     const axes = variantAxes(readWgsl('default-standard-pbr.wgsl'));
     expect(axes).toEqual([
       '#pragma variant_axis STORAGE_BUFFER_AVAILABLE',
       '#pragma variant_axis CLUSTER_FORWARD_AVAILABLE',
+      '#pragma variant_axis VERTEX_COLOR_AVAILABLE',
     ]);
   });
 
-  it('unlit.wgsl keeps its single-axis (STORAGE_BUFFER_AVAILABLE) declaration (still 2 variants)', () => {
+  it('unlit.wgsl keeps its storage and vertex-color axes', () => {
     const axes = variantAxes(readWgsl('unlit.wgsl'));
-    expect(axes).toEqual(['#pragma variant_axis STORAGE_BUFFER_AVAILABLE']);
+    expect(axes).toEqual([
+      '#pragma variant_axis STORAGE_BUFFER_AVAILABLE',
+      '#pragma variant_axis VERTEX_COLOR_AVAILABLE',
+    ]);
   });
 });
 

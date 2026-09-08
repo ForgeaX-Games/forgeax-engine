@@ -156,13 +156,11 @@ const mockCanvas = {
   removeEventListener() {},
 };
 
-let runtime;
 let ecs;
 let types;
 let render;
 let authoring;
 try {
-  runtime = await import('@forgeax/engine-runtime');
   ecs = await import('@forgeax/engine-ecs');
   types = await import('@forgeax/engine-types');
   render = await import('@forgeax/engine-render');
@@ -173,7 +171,7 @@ try {
   );
 }
 
-const { createRenderer } = runtime;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Camera } = render;
 const { TileLayer, Tilemap } = authoring;
 const { ChildOf, Transform } = await import('@forgeax/engine-scene');
@@ -187,23 +185,26 @@ const ENGINE_MANIFEST = await buildEngineShaderManifest();
 const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
 
 let renderer;
+let assets;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  assets = constructed.value.assets;
 } catch (createErr) {
   await deferred(
     `createRenderer threw: ${createErr instanceof Error ? createErr.message : String(createErr)}`,
   );
 }
-const worldAttachment1 = renderer.attachWorld(world);
+if (assets === undefined) throw new Error('host assets unavailable');
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 const errors = [];
-renderer.onError((e) => errors.push({ code: e.code }));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') errors.push({ code: event.error.code });
+});
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  await deferred(`renderer.ready failed: ${ready.error.code}`);
-}
 
 // Synthetic 32x32 RGBA tile atlas (4 quadrants of 16x16). Registered via
 // the same handle path as the real asi-world demo.
@@ -244,23 +245,15 @@ const synthPod = {
   mipmap: false,
 };
 const atlasHandle = world.allocSharedRef('TextureAsset', synthPod);
-const uploadRes = await renderer.store.uploadTexture(atlasHandle, synthPod, {
-  bytes: synth.data,
-  width: synth.width,
-  height: synth.height,
-  mime: 'image/png',
-  colorSpace: 'srgb',
-  mipmap: false,
-});
-if (!uploadRes.ok) {
-  console.error(`[hello-asi-world smoke] atlas upload failed: ${uploadRes.error.code}`);
+const atlasCatalog = assets.catalog('hello-asi-world/synthetic-atlas', synthPod);
+if (!atlasCatalog.ok) {
+  console.error(`[hello-asi-world smoke] atlas catalog failed: ${atlasCatalog.error.code}`);
   process.exit(1);
 }
 
 const tileset = {
   kind: 'tileset',
-  guid: 'hello-asi-world/synthetic-atlas',
-  atlases: [atlasHandle],
+  atlases: ['hello-asi-world/synthetic-atlas'],
   tileWidth: 16,
   tileHeight: 16,
   columns: 2,
@@ -273,7 +266,11 @@ const tileset = {
   ],
   tiles: [{ regionIndex: 0 }, { regionIndex: 1 }, { regionIndex: 2 }, { regionIndex: 3 }],
 };
-const tilesetHandle = world.allocSharedRef('TilesetAsset', tileset);
+const tilesetCatalog = assets.catalog('hello-asi-world/tileset', tileset);
+if (!tilesetCatalog.ok) {
+  console.error(`[hello-asi-world smoke] tileset catalog failed: ${tilesetCatalog.error.code}`);
+  process.exit(1);
+}
 
 const tilemap = world
   .spawn(
@@ -284,7 +281,7 @@ const tilemap = world
         rows: ROWS,
         tileSize: [1, 1],
         chunkSize: CHUNK_SIZE,
-        tileset: tilesetHandle,
+        tileset: 'hello-asi-world/tileset',
       },
     },
     { component: Transform, data: {} },
@@ -332,7 +329,11 @@ let lastFrameDrawCount = 0;
 for (let f = 0; f < TARGET_FRAMES; f++) {
   drawCallsThisFrame = 0;
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = renderer.draw({
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  });
   if (!r.ok) {
     console.error(`[hello-asi-world smoke] draw frame ${f}: ${r.error.code}`);
     process.exit(1);

@@ -77,6 +77,33 @@ describe('user material shader variant manifest', () => {
     ]);
   });
 
+  it('normalizes path separators before matching an authored material package', async () => {
+    const sourcePath = resolve(
+      repoRoot,
+      'apps/learn-render/4.advanced-opengl/3.blending/src/alpha-test.wgsl',
+    );
+    const source = await readFile(sourcePath, 'utf8');
+    const alternateSeparatorPath = sourcePath.includes('\\')
+      ? sourcePath.replace(/\\/g, '/')
+      : sourcePath.replace(/\//g, '\\');
+    const plugin = forgeaxShader({
+      engineEntries: false,
+      materialPackages: [
+        resolve(
+          repoRoot,
+          'apps/learn-render/4.advanced-opengl/3.blending/src/alpha-test.pack.json',
+        ),
+      ],
+    });
+    const ctx = mockContext();
+
+    await plugin.buildStart?.call(ctx as never);
+    const transformed = await plugin.transform?.call(ctx as never, source, alternateSeparatorPath);
+
+    expect(transformed).not.toBeNull();
+    expect(transformed).not.toBeUndefined();
+  });
+
   it('compiles both WEBGL2_COMPAT branches and inlines them into materialShaders[]', async () => {
     const sourcePath = resolve(
       repoRoot,

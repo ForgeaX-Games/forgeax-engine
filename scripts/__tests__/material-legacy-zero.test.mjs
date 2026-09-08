@@ -70,4 +70,27 @@ describe('material legacy zero gate', () => {
       ['json-asset-literal', []],
     ]);
   });
+
+  it('does not scan canonical inventory metadata as a legacy consumer', async () => {
+    const root = await fixture();
+    await writeFile(
+      join(root, 'scripts/check-material-contract-inventory.mjs'),
+      "const sidecar = '.wgsl.meta.json';\n",
+    );
+    await writeFile(
+      join(root, 'scripts/material-contract-inventory.json'),
+      JSON.stringify({ materialSidecars: ['source.wgsl.meta.json'] }),
+    );
+    await writeFile(join(root, 'scripts/real-consumer.mjs'), "const value = 'paramValues';\n");
+
+    const report = scanMaterialLegacySurface(root, { paths: ['scripts'] });
+    expect(report.ok).toBe(false);
+    expect(report.hits).toEqual([
+      {
+        channel: 'script-fixture-literal',
+        path: 'scripts/real-consumer.mjs',
+        patterns: ['param-values'],
+      },
+    ]);
+  });
 });

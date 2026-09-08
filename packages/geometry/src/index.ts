@@ -11,6 +11,11 @@
 // uv (2 floats), expanded to the 12-float runtime layout (adds tangent vec4)
 // by meshFromInterleaved / PROCEDURAL_FLOATS_PER_VERTEX.
 
+export type { VertexAttributePackDetail } from '@forgeax/engine-types';
+
+export { meshAssetContribution, meshAssetDecoder, meshAssetKind } from './assets/mesh-decoder';
+export { createPrimitiveMesh, type PrimitiveMeshKind } from './assets/primitive-mesh';
+
 export {
   createBoxGeometry,
   meshFromInterleaved,
@@ -36,5 +41,14 @@ export { createTorusGeometry } from './torus';
 export {
   buildMeshAttributeMapForUvSets,
   deriveVertexBufferLayout,
+  deriveVertexBufferLayoutFromProjection,
+  deriveVertexLayoutProjection,
+  deriveVertexLayoutProjectionFromMask,
   type GpuVertexBufferLayoutEntry,
+  type PackedVertexAttributes,
+  packInterleavedVertexAttributes,
+  VertexAttributePackError,
+  type VertexLayoutProjection,
+  type VertexLayoutProjectionAttribute,
+  type VertexLayoutProjectionMaskError,
 } from './vertex-attribute-layout';

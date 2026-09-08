@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parsePackV2 } from '../index.js';
+import { parsePackV2, validateCookedMaterialRecord } from '../index.js';
 
 const root = resolve(import.meta.dirname, '../../../../');
 
@@ -60,5 +60,28 @@ describe('Pack v2 fixture migration', () => {
         artifacts: [{ path: 'shared.bin', bytes: 'base64' }],
       }).ok,
     ).toBe(false);
+  });
+
+  it('rejects retired material cook records instead of retaining a cross-generation reader', () => {
+    const retiredSchema = ['material-cook', '2'].join('/');
+    expect(
+      validateCookedMaterialRecord({
+        schemaVersion: retiredSchema,
+        guid: 'mat-v2',
+        resolved: { passes: [], parameters: [], values: {} },
+        refs: { parent: [], textures: [], samplers: [], modules: [] },
+        artifact: { mediaType: 'text/wgsl', path: 'shader.wgsl', digest: 'sha256:a', bytes: [] },
+        receipt: {
+          schemaVersion: retiredSchema,
+          sourceClosure: [],
+          profile: 'webgpu/v1',
+          compilerVersion: 'compiler/1',
+          inputDigest: 'sha256:i',
+          outputDigest: 'sha256:a',
+          layoutIdentity: 'sha256:l',
+          derivedInterface: { layoutIdentity: 'sha256:l' },
+        },
+      }),
+    ).toMatchObject({ ok: false, error: { code: 'material-cook-record-invalid' } });
   });
 });

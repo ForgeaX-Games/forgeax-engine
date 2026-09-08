@@ -7,8 +7,7 @@
 //     M3 ships rAF + frame-loop wired; M4 wires error fan-out + console.error
 //     fallback + canvas-detach guard; M5 ships the AppError class + 5-member
 //     closed AppErrorCode union + APP_ERROR_HINTS / APP_EXPECTED tables.
-//   - M2 (feat-20260526-preview-runtime-host): loadGame / LoadGameError /
-//     GameContext / GameEntry exported from the same barrel.
+//   - loadGame validates the native default Cordis plugin exported by a project.
 //
 // Single import path:
 //   import {
@@ -18,40 +17,36 @@
 //     APP_ERROR_HINTS, LOAD_GAME_ERROR_HINTS,
 //     APP_EXPECTED, LOAD_GAME_EXPECTED,
 //     isAppError, isLoadGameError,
-//     type App, type GameContext, type GameEntry,
+//     type App, type GameHost, type Plugin,
 //     type AppAssembleArgs, type CreateAppOptions,
 //     type AppErrorCode, type LoadGameErrorCode,
 //     type AppErrorDetail, type LoadGameErrorDetail,
 //     type AppErrorDetailFor, type LoadGameErrorDetailFor,
 //     type AppDetailCanvasDetached, type AppDetailSystemUpdateFailed,
 //     type LoadGameDetailImportFailed, type LoadGameDetailInvalidFormat,
-//     type LoadGameDetailModuleNotFound, type GameEntryResolver,
+//     type LoadGameDetailModuleNotFound, type GamePluginResolver,
 //   } from '@forgeax/engine-app';
 
 export type {
+  Effect,
+  EffectMeta,
+  Fiber,
+  Inject,
   Plugin,
-  PluginDetailBuildFailed,
-  PluginDetailDuplicatePlugin,
-  PluginErrorCode,
-  PluginErrorDetail,
-  PluginErrorDetailFor,
-  PluginGroup,
-  PluginGroupBuilder,
-  PluginSource,
 } from '@forgeax/engine-plugin';
-// PluginError re-exports -- the canonical SSOT lives in @forgeax/engine-plugin
-// (D-1b). Re-exported here to keep AI-user import { Plugin, PluginError } from
-// '@forgeax/engine-app' stable (D-1c). Capability package
-// packages import directly from '@forgeax/engine-plugin'.
+export { Context } from '@forgeax/engine-plugin';
 export {
-  definePluginGroup,
-  flattenPluginSources,
-  isPluginError,
-  PLUGIN_ERROR_HINTS,
-  PLUGIN_EXPECTED,
-  PluginError,
-} from '@forgeax/engine-plugin';
-export { createApp } from './create-app';
+  createFullscreenRenderFeature,
+  type FullscreenRenderFeatureOptions,
+} from '@forgeax/engine-render/authoring';
+export {
+  type BrowserFrameSubmitted,
+  FORGEAX_FRAME_SUBMITTED_DATASET,
+  FORGEAX_FRAME_SUBMITTED_EVENT,
+  publishBrowserFrameSubmitted,
+  resetBrowserFrameSubmitted,
+} from './browser-frame-signal';
+export { createApp, measureCanvasDrawingBuffer, syncCanvasDrawingBuffer } from './create-app';
 export type {
   AppDetailCanvasDetached,
   AppDetailEmpty,
@@ -61,6 +56,7 @@ export type {
   AppDetailExecutionRebuildFailed,
   AppDetailExecutionStaleWorld,
   AppDetailExecutionTierUnavailable,
+  AppDetailPluginActivationFailed,
   AppDetailSystemUpdateFailed,
   AppErrorCode,
   AppErrorDetail,
@@ -73,7 +69,9 @@ export {
   isAppError,
 } from './errors';
 export type {
+  ExecutionAssetCatalog,
   ExecutionBootstrapEntry,
+  ExecutionBootstrapHost,
   ExecutionBootstrapValue,
   ExecutionCapabilities,
   ExecutionCapabilityFact,
@@ -83,7 +81,6 @@ export type {
   ExecutionFault,
   ExecutionMeasurement,
   ExecutionOptions,
-  ExecutionRealmBootstrapContext,
   ExecutionReport,
   ExecutionRequestedTier,
   ExecutionSelection,
@@ -99,70 +96,34 @@ export {
   EXECUTION_REPORT_SCHEMA_VERSION,
   EXECUTION_REQUESTED_TIERS,
   EXECUTION_TIERS,
+  executionBootstrapHostPlugin,
   isExecutionReport,
   loadBootstrapEntry,
   missingExecutionCapabilities,
   prepareBootstrapEntry,
   probeExecutionCapabilities,
-  runPreparedBootstrap,
   selectExecutionTier,
   unavailableExecutionCapabilities,
   validateExecutionBootstrapData,
 } from './execution';
 export { ensureFallbackCamera } from './fallback-camera';
 export type {
-  BootstrapContext,
-  BootstrapEntry,
   GameActionArgsSchema,
   GameActionDef,
-  GameContext,
-  GameEntry,
-  GamePluginDescriptor,
-  GamePluginDiagnostic,
-  GamePluginDiagnosticCode,
-  GamePluginLifecycle,
-  GamePluginProducer,
-  GamePluginProducerContext,
-  GamePluginReloadResult,
+  GameHost,
   GameProjectionRegistrar,
   GameProjectionValue,
   GameReadDef,
 } from './game-context';
-export { GAMEPLAY_PRODUCER_CONTRACT, GAMEPLAY_PRODUCER_CONTRACT_VERSION } from './game-context';
-export type {
-  GamePluginInstallation,
-  GamePluginInstallResult,
-  GamePluginLoad,
-  GamePluginModule,
-  GamePluginSystemDiagnostic,
-  LoadedGamePlugin,
-} from './game-plugins';
-export {
-  addGamePluginSystems,
-  describeGamePluginSystems,
-  getPlayPluginFailure,
-  installGamePluginProducers,
-  loadGamePluginModules,
-} from './game-plugins';
-export type {
-  SimulationInspectionSummary,
-  SimulationParticipantAssembly,
-  SimulationParticipantInspection,
-} from './internal/simulation-participants';
+export { gameHostPlugin } from './game-context';
 export { inputPlugin } from './plugin-factories';
-export type {
-  SimulationInspectionError,
-  SimulationInspectionManifest,
-  SimulationInspectionManifestParticipant,
-  SimulationManifestInvalidError,
-} from './simulation-manifest';
+export type { RenderFeatureHost } from './renderer-plugin';
 export {
-  SIMULATION_INSPECTION_ERROR_FIELDS,
-  SIMULATION_INSPECTION_MANIFEST_VERSION,
-  SIMULATION_INSPECTION_RECORD_OWNER,
-  SIMULATION_INSPECTION_SCHEMA_OWNER,
-  validateSimulationInspectionManifest,
-} from './simulation-manifest';
+  ownedRendererPlugin,
+  rendererPlugin,
+  renderFeatureHostPlugin,
+  renderFeaturePlugin,
+} from './renderer-plugin';
 
 import {
   isLoadGameError,
@@ -171,7 +132,7 @@ import {
   LoadGameError,
 } from './load-game-errors';
 
-export type { GameEntryResolver } from './load-game';
+export type { GamePluginResolver } from './load-game';
 export { loadGame } from './load-game';
 export type {
   LoadGameDetailImportFailed,
@@ -181,12 +142,45 @@ export type {
   LoadGameErrorDetail,
   LoadGameErrorDetailFor,
 } from './load-game-errors';
+export {
+  createToolPreviewHost,
+  replayToolPreviewCapture,
+  type ToolPreviewCaptureResult,
+  type ToolPreviewHost,
+  type ToolPreviewHostError,
+  type ToolPreviewHostOptions,
+  type ToolPreviewResourceFacts,
+  type ToolPreviewResourceKind,
+  type ToolPreviewResourceRequest,
+  type ToolPreviewRunResult,
+} from './tool-preview/bootstrap';
+export {
+  createToolPreviewEvidence,
+  joinResourcePreviewEvidence,
+  joinToolPreviewEvidence,
+  type ToolPreviewEvidence,
+} from './tool-preview/evidence';
+export {
+  fitToolPreviewCameraToAabb,
+  type ToolPreviewCameraFrame,
+} from './tool-preview/framing';
+export {
+  createToolPreviewRecipe,
+  type ToolPreviewAction,
+  type ToolPreviewPresentation,
+  type ToolPreviewRecipe,
+  type ToolPreviewRecipeOptions,
+  type ToolPreviewTrace,
+  type ToolPreviewTraceEvent,
+  validateToolPreviewTrace,
+} from './tool-preview/recipe';
 export type {
   App,
   AppAssembleArgs,
   AssembleAppError,
   BundlerOptions,
   CanvasAppError,
+  CanvasDrawingBufferSize,
   CreateAppOptions,
   DrawSource,
   DrawSourceResult,

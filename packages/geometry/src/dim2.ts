@@ -1,6 +1,6 @@
-import { err, ok, type Result } from '@forgeax/engine-ecs';
 import { box2, box3, circle2 } from '@forgeax/engine-math';
 import type { AssetError, MeshAsset, PrimitiveTopology } from '@forgeax/engine-types';
+import { err, ok, type Result } from '@forgeax/engine-types';
 import { degenerate, PROCEDURAL_FLOATS_PER_VERTEX } from './box';
 
 export type Vec2 = readonly [number, number];
@@ -241,8 +241,15 @@ function buildMesh(
     indices: new Uint32Array(indices),
     attributes: { position: positions, normal: normals, uv: uvs, tangent: tangents },
     submeshes: [
-      { indexOffset: 0, indexCount: indices.length, vertexCount: points.length, topology },
+      {
+        indexOffset: 0,
+        indexCount: indices.length,
+        vertexCount: points.length,
+        topology,
+        materialSlot: 0,
+      },
     ],
+    materialSlots: [{ slotName: 'Default' }],
     aabb: box3.fromPositions(box3.create(), positions),
   };
 }

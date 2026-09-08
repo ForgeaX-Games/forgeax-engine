@@ -16,7 +16,7 @@
 // Grep gate: passKind:'deferred' / passKind:'forward' / passKind:'shadow-caster'
 //   each hit >=1 in packages/runtime/src/materials.ts
 
-import { Materials } from '@forgeax/engine-render/internal';
+import { Materials } from '@forgeax/engine-render';
 import type { PassKind } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
@@ -241,5 +241,14 @@ describe('Materials.unlit forward-only (w14)', () => {
   it('stores alphaCutoff on the unlit material', () => {
     const mat = Materials.unlit([1, 1, 1, 1], { alphaCutoff: 0.1 });
     expect(mat.values?.alphaCutoff).toBe(0.1);
+  });
+
+  it('keeps unlit numeric fields before texture coordinates in shader ABI order', () => {
+    const mat = Materials.unlit([1, 1, 1, 1]);
+    expect(mat.parameters).toEqual([
+      { name: 'baseColor', type: 'color' },
+      { name: 'alphaCutoff', type: 'f32', optional: true },
+      { name: 'baseColorTexture', type: 'texture', optional: true },
+    ]);
   });
 });

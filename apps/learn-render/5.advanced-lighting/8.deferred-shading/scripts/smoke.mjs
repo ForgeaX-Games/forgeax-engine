@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // apps/learn-render/5.advanced-lighting/8.deferred-shading/scripts/smoke.mjs
-// feat-20260612-hdrp-deferred-shading-learn-render-5-8 M4 / w21.
+// feat-20260612-standard-deferred-shading-learn-render-5-8 M7 / w21.
 //
 // LearnOpenGL section 5.8 deferred-shading dawn-node smoke (structural-only).
-// Spawns a configurable point-light count (default 32) + 9 cube 3x3 grid through HDRP deferred opaque,
+// Spawns a configurable point-light count (default 32) + 9 cube 3x3 grid through Standard deferred opaque,
 // renders 300 frames, and asserts no RhiError / no unknown onError codes.
 //
 // Output literals (preserved for grep tooling):
@@ -12,9 +12,8 @@
 //   - `[smoke] PASS`
 //   - `[smoke] FAIL`
 
-import { readFileSync, writeFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
-import { resolve, dirname, join } from 'node:path';
+import { writeFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -29,20 +28,6 @@ const PROFILE_FRAME_LIMIT = Number.parseInt(
 const PROFILE_EVENT_LIMIT = Number.parseInt(process.env.FORGEAX_PROFILE_EVENT_LIMIT ?? '100000', 10);
 const PROFILE_SETTLE_AFTER_FRAMES = 16;
 const PROFILE_SETTLE_MS = Number.parseInt(process.env.FORGEAX_PROFILE_SETTLE_MS ?? '25', 10);
-const MEMBERSHIP_TIMING_MODE = process.env.FORGEAX_MEMBERSHIP_TIMING;
-const MEMBERSHIP_TIMING_REPORT_PATH = process.env.FORGEAX_MEMBERSHIP_TIMING_REPORT;
-const MEMBERSHIP_RECORD_DIR = process.env.FORGEAX_MEMBERSHIP_RECORD_DIR;
-const MEMBERSHIP_RECORD_KIND = process.env.FORGEAX_MEMBERSHIP_RECORD_KIND ?? 'attempt';
-const MEMBERSHIP_ATTEMPT_ID = process.env.FORGEAX_MEMBERSHIP_ATTEMPT_ID;
-const MEMBERSHIP_REFERENCE_ID = process.env.FORGEAX_MEMBERSHIP_REFERENCE_ID;
-const MEMBERSHIP_PARENT_ATTEMPT_ID = process.env.FORGEAX_MEMBERSHIP_PARENT_ATTEMPT_ID;
-const MEMBERSHIP_REFERENCE_KIND = process.env.FORGEAX_MEMBERSHIP_REFERENCE_KIND;
-const MEMBERSHIP_REFERENCES = process.env.FORGEAX_MEMBERSHIP_REFERENCES
-  ?.split(',')
-  .map((value) => value.trim())
-  .filter((value) => value.length > 0);
-const MEMBERSHIP_MANIFEST_PATH = process.env.FORGEAX_MEMBERSHIP_MANIFEST;
-const MEMBERSHIP_ARTIFACT_ROOT = process.env.FORGEAX_MEMBERSHIP_ARTIFACT_ROOT;
 const WIDTH = 512;
 const HEIGHT = 512;
 
@@ -54,14 +39,13 @@ const NUM_LIGHTS = (() => {
   if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 256) return parsed;
   throw new Error('FORGEAX_DEFERRED_LIGHTS must be an integer in [1, 256]');
 })();
-const CLUSTER_GRID = { x: 16, y: 9, z: 64 };
 const CUBE_SCALE = 0.5;
 const CUBE_SPACING = 3.0;
 const CUBE_Y = -0.5;
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-// Known-noise app.onError codes during HDRP deferred demo.
+// Known-noise app.onError codes during the Standard deferred demo.
 const KNOWN_NOISE_CODES = new Set([
   'hdrp-light-budget-exceeded',
   'hdrp-index-list-overflow',
@@ -144,42 +128,6 @@ function ensureRenderTarget(device, format) {
   return renderTarget;
 }
 
-async function readRawPixels() {
-  if (sharedDevice === undefined || renderTarget === undefined) return null;
-  const bytesPerPixel = 4;
-  const bytesPerRow = WIDTH * bytesPerPixel;
-  const bufferSize = bytesPerRow * HEIGHT;
-  let readback;
-  try {
-    await sharedDevice.queue.onSubmittedWorkDone();
-    readback = sharedDevice.createBuffer({
-      size: bufferSize,
-      usage: 0x0001 | 0x0008,
-      mappedAtCreation: false,
-    });
-    const encoder = sharedDevice.createCommandEncoder();
-    encoder.copyTextureToBuffer(
-      { texture: renderTarget },
-      { buffer: readback, bytesPerRow, rowsPerImage: HEIGHT },
-      { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
-    );
-    sharedDevice.queue.submit([encoder.finish()]);
-    await readback.mapAsync(0x0001, 0, bufferSize);
-    const mapped = new Uint8Array(readback.getMappedRange(0, bufferSize));
-    const pixels = new Uint8Array(bufferSize);
-    pixels.set(mapped);
-    readback.unmap();
-    return pixels;
-  } catch (error) {
-    console.error(
-      `[smoke] raw membership pixel readback unavailable: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return null;
-  } finally {
-    readback?.destroy();
-  }
-}
-
 const mockCanvas = {
   tagName: 'CANVAS',
   isConnected: true,
@@ -217,10 +165,15 @@ const enginePkg = await import('@forgeax/engine-app');
 const { createApp } = enginePkg;
 const { createProfileClock, createProfiler } = await import('@forgeax/engine-profiler');
 
-const runtimePkg = await import('@forgeax/engine-runtime');
 const { Materials } = await import('@forgeax/engine-render');
-const { HDRP_PIPELINE_ID } = await import('@forgeax/engine-render/internal');
-const { Camera, MeshFilter, MeshRenderer, perspective, PointLight } = await import('@forgeax/engine-render');
+const {
+  Camera,
+  DEFAULT_STANDARD_PROFILE,
+  MeshFilter,
+  MeshRenderer,
+  perspective,
+  PointLight,
+} = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
@@ -234,12 +187,15 @@ const profiler =
         // clock, so diagnostic profiling must use an independent monotonic clock.
         clock: createProfileClock(() => Number(process.hrtime.bigint() / 1000n)),
       });
-const appOptions = profiler === undefined ? {} : { profiler };
-if (MEMBERSHIP_TIMING_MODE === 'gpu' || MEMBERSHIP_TIMING_MODE === 'cpu-control') {
-  appOptions.membershipTiming = MEMBERSHIP_TIMING_MODE === 'gpu'
-    ? { mode: 'gpu', maxPendingCaptures: 2 }
-    : { mode: 'cpu-control' };
-}
+const standardLightCount = NUM_LIGHTS === 1 ? 1 : NUM_LIGHTS === 256 ? 256 : 32;
+const appOptions = {
+  standardProfile: {
+    ...DEFAULT_STANDARD_PROFILE,
+    lightCount: standardLightCount,
+    lighting: FALSIFY === 'force-direct' ? 'direct' : 'clustered',
+  },
+  ...(profiler === undefined ? {} : { profiler }),
+};
 const appResult = await createApp(mockCanvas, appOptions, { shaderManifestUrl: MANIFEST_URL });
 globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 
@@ -250,7 +206,8 @@ if (!appResult.ok) {
   process.exit(1);
 }
 const app = appResult.value;
-console.log(`[learn-render-5-8-deferred] backend=${app.renderer.backend}`);
+const inspection = app.renderer.inspect();
+console.log(`[learn-render-5-8-deferred] backend=${inspection.capabilities.backendKind}`);
 console.log(`[smoke] lights=${NUM_LIGHTS}`);
 
 if (profiler !== undefined) {
@@ -271,32 +228,11 @@ if (profiler !== undefined) {
 const onErrorEvents = [];
 app.onError((err) => onErrorEvents.push({ code: err.code, hint: err.hint }));
 
-const ready = await app.renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
-const assets = app.renderer.assets;
+const assets = app.assets;
 if (assets === null) {
   console.error('[smoke] FAIL - AssetRegistry is null');
   process.exit(1);
-}
-
-let installSuccess = false;
-if (FALSIFY === 'force-urp') {
-  console.log('[smoke] FALSIFY=force-urp -- skipping installPipeline(hdrpHandle)');
-} else {
-  const installRes = app.renderer.installPipeline({
-    kind: 'render-pipeline',
-    pipelineId: HDRP_PIPELINE_ID,
-    config: { clusterGrid: CLUSTER_GRID },
-  });
-  if (!installRes.ok) {
-    console.error(`[smoke] FAIL - installPipeline: ${installRes.error.code} - ${installRes.error.hint}`);
-    process.exit(1);
-  }
-  installSuccess = true;
 }
 
 const world = app.world;
@@ -423,55 +359,23 @@ if (!startResult.ok) {
 }
 
 let totalFrames = 0;
-let membershipCaptureStarted = false;
-let membershipCaptureStartError = null;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   const due = rafQueue.shift();
   if (!due) break;
   fakeNow += 16.67;
-  if (!membershipCaptureStarted && i >= Math.min(30, SMOKE_MIN_FRAMES - 1) && app.renderer.membershipTiming !== undefined) {
-    const started = app.renderer.membershipTiming.start();
-    if (!started.ok) {
-      membershipCaptureStartError = { code: started.error.code, detail: started.error.hint };
-      if (MEMBERSHIP_RECORD_DIR === undefined) {
-        console.error(`[smoke] FAIL - membership timing start: ${started.error.code}`);
-        process.exit(1);
-      }
-    } else {
-      membershipCaptureStarted = true;
-    }
-  }
   due.cb(fakeNow);
   totalFrames++;
   if (i % 16 === 15) await delay(i + 1 === PROFILE_SETTLE_AFTER_FRAMES ? PROFILE_SETTLE_MS : 1);
 }
 
-let timingReport = membershipCaptureStartError;
-if (membershipCaptureStarted && app.renderer.membershipTiming !== undefined) {
-  const timing = await app.renderer.membershipTiming.finish();
-  timingReport = timing.ok ? timing.value : { code: timing.error.code, detail: timing.error.hint };
-  if (MEMBERSHIP_TIMING_REPORT_PATH !== undefined) {
-    writeFileSync(MEMBERSHIP_TIMING_REPORT_PATH, `${JSON.stringify(timing.ok ? timing.value : { code: timing.error.code })}\n`);
-  }
-  if (MEMBERSHIP_TIMING_MODE === 'gpu' && !timing.ok && MEMBERSHIP_RECORD_DIR === undefined) {
-    console.error(`[smoke] FAIL - membership timing finish: ${timing.error.code}`);
-    process.exit(1);
-  }
-}
-
-let pixels = null;
-if (MEMBERSHIP_RECORD_DIR !== undefined) {
-  pixels = await readRawPixels();
-  if (pixels === null) {
-    const pixelResult = await app.renderer.readPixels();
-    if (pixelResult.ok) pixels = pixelResult.value;
-    else console.error(`[smoke] membership pixel readback unavailable: ${pixelResult.error.code}`);
-  }
-}
-
 const stopResult = app.stop();
 if (!stopResult.ok) {
   console.error(`[smoke] FAIL - app.stop() returned err: ${stopResult.error.code}`);
+  process.exit(1);
+}
+const disposeResult = await app.dispose();
+if (!disposeResult.ok) {
+  console.error(`[smoke] FAIL - app.dispose() returned err: ${disposeResult.error.code}`);
   process.exit(1);
 }
 
@@ -487,63 +391,13 @@ if (profiler !== undefined && PROFILE_CAPTURE_PATH !== undefined) {
   );
 }
 
-if (MEMBERSHIP_RECORD_DIR !== undefined) {
-  if (MEMBERSHIP_MANIFEST_PATH === undefined) throw new Error('FORGEAX_MEMBERSHIP_MANIFEST is required with record output');
-  const manifest = JSON.parse(readFileSync(MEMBERSHIP_MANIFEST_PATH, 'utf8'));
-  const sourceHead = process.env.FORGEAX_SOURCE_HEAD ?? execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-  const evidence = {
-    backendKind: app.renderer.device.caps.backendKind,
-    compute: app.renderer.device.caps.compute,
-    timestampQuery: MEMBERSHIP_TIMING_MODE === 'cpu-control'
-      ? false
-      : app.renderer.device.caps.timestampQuery,
-    timestampPeriodNanoseconds: MEMBERSHIP_TIMING_MODE === 'cpu-control'
-      ? null
-      : app.renderer.device.caps.timestampPeriodNanoseconds ?? null,
-    adapter: 'dawn-node',
-    environment: 'node-dawn',
-    actualProducer:
-      timingReport?.actualProducer ??
-      (MEMBERSHIP_REFERENCE_KIND === 'timing-omitted-pixel' ? 'gpu' : MEMBERSHIP_TIMING_MODE === 'gpu' ? 'gpu' : 'cpu'),
-  };
-  const { writeMembershipEvidence } = await import('./membership-evidence.mjs');
-  const record = writeMembershipEvidence({
-    outputDir: MEMBERSHIP_RECORD_DIR,
-    artifactRoot: MEMBERSHIP_ARTIFACT_ROOT,
-    manifest,
-    recordKind: MEMBERSHIP_RECORD_KIND,
-    attemptId: MEMBERSHIP_ATTEMPT_ID,
-    referenceId: MEMBERSHIP_REFERENCE_ID,
-    parentAttemptId: MEMBERSHIP_PARENT_ATTEMPT_ID,
-    referenceKind: MEMBERSHIP_REFERENCE_KIND,
-    mode:
-      MEMBERSHIP_TIMING_MODE === undefined || MEMBERSHIP_TIMING_MODE === ''
-        ? 'omitted'
-        : MEMBERSHIP_TIMING_MODE,
-    sourceHead,
-    command: process.argv,
-    evidence,
-    timing: timingReport,
-    references: MEMBERSHIP_REFERENCES,
-    membership: timingReport?.membership ?? null,
-    pixels: MEMBERSHIP_REFERENCE_KIND === 'cpu-membership' ? null : pixels,
-    profile:
-      profiler?.latestCapture() ??
-      { completeness: { status: 'not-requested', droppedEventCount: 0 } },
-    lights: NUM_LIGHTS,
-    clusterGrid: CLUSTER_GRID,
-    frames: totalFrames,
-  });
-  console.log(`[smoke] membership terminal record=${join(MEMBERSHIP_RECORD_DIR, 'record.json')} kind=${record.record.recordKind} outcome=${record.record.status ?? record.record.terminal.outcome}`);
-}
-
 console.log(`[smoke] frames observed=${totalFrames}`);
 
 // --- 9. Verdict (structural-only) ---
 
 const failures = [];
-if (app.renderer.backend !== 'webgpu')
-  failures.push(`(a) backend=${app.renderer.backend} (expected webgpu)`);
+if (inspection.capabilities.backendKind !== 'webgpu')
+  failures.push(`(a) backend=${inspection.capabilities.backendKind} (expected webgpu)`);
 if (totalFrames < SMOKE_MIN_FRAMES)
   failures.push(`(b) frames=${totalFrames} < ${SMOKE_MIN_FRAMES}`);
 
@@ -575,7 +429,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 4 criteria GREEN: backend=webgpu, frames=${totalFrames}, hdrpInstalled=${installSuccess}, onError events=${onErrorEvents.length}, console.error=${unexpectedConsoleErrors.length}`,
+  `[smoke] PASS - 4 criteria GREEN: backend=webgpu, frames=${totalFrames}, standardProfile=${FALSIFY === 'force-direct' ? 'direct' : 'clustered'}, onError events=${onErrorEvents.length}, console.error=${unexpectedConsoleErrors.length}`,
 );
 
 if (sharedDevice) sharedDevice.destroy?.();

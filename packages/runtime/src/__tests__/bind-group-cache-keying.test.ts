@@ -7,14 +7,14 @@
 // w5: cleanup eviction (cleanPerEntityCache — red until w8 rewrites it)
 //     + getOrCreatePerEntity existence (red until w8 implements it).
 
+import type { BindGroup } from '@forgeax/engine-rhi';
+import { describe, expect, it } from 'vitest';
+import type { BindGroupCounts } from '../../../render/src/record/frame-snapshot';
 import {
-  type BindGroupCounts,
   cleanPerEntityCache,
   getOrCreateFromChain,
   getOrCreatePerEntity,
-} from '@forgeax/engine-render/internal';
-import type { BindGroup } from '@forgeax/engine-rhi';
-import { describe, expect, it } from 'vitest';
+} from '../../../render/src/record/mesh-ssbo';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 

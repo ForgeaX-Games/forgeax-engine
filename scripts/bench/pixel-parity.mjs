@@ -35,6 +35,10 @@
 //                                        real value into fixture pkg.json).
 //   PIXEL_PARITY_PER_PIXEL_THRESHOLD   — Layer A float [0,1] (default 0.1
 //                                        via evaluator fallback).
+//   FORGEAX_BROWSER_HEADLESS           — set to 0/false for headed Chromium
+//                                        under Xvfb on Linux software-WebGPU
+//                                        runners; headless GPU-process teardown
+//                                        can destroy the device mid-capture.
 
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -54,10 +58,10 @@ const REPO_ROOT = resolve(HERE, '..', '..');
 const REPORT_DIR = resolve(REPO_ROOT, 'report');
 const SCHEMA_PATH = resolve(REPO_ROOT, 'forgeax-metrics.schema.json');
 
-// Bench targets (feat-20260608-cluster-lighting M7 / w26): pick which
+// Bench targets: pick which
 // fixture pair the bench drives. Default is the historical
 // 'parity-forgeax' (D-1 / D-3 left/right both from the same forgeax preview);
-// 'parity-urp-vs-hdrp' drives the M7 URP-vs-HDRP fixture so AC-22's
+// 'parity-standard-lanes' drives the Standard direct-vs-clustered fixture so AC-22's
 // ε ≤ 0.001 ≤4-light parity becomes machine-checkable.
 const BENCH_TARGETS = {
   'parity-forgeax': {
@@ -65,10 +69,10 @@ const BENCH_TARGETS = {
     port: 4174,
     reportFile: 'pixel-parity.json',
   },
-  'parity-urp-vs-hdrp': {
+  'parity-standard-lanes': {
     filter: '@forgeax/parity-urp-vs-hdrp',
     port: 4175,
-    reportFile: 'pixel-parity-urp-vs-hdrp.json',
+    reportFile: 'pixel-parity-standard-lanes.json',
   },
 };
 const BENCH_TARGET = process.env.BENCH_TARGET ?? 'parity-forgeax';
@@ -450,8 +454,11 @@ function writeReport(result) {
 
 async function captureBothFromSinglePage() {
   const { chromium } = await import('playwright');
+  const browserHeadless = !['0', 'false'].includes(
+    (process.env.FORGEAX_BROWSER_HEADLESS ?? '1').toLowerCase(),
+  );
   const browser = await chromium.launch({
-    headless: true,
+    headless: browserHeadless,
     channel: 'chrome-beta',
     args: [
       '--enable-unsafe-webgpu',

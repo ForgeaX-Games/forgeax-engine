@@ -1,6 +1,10 @@
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { projectMaterial } from '../material/project.js';
+import {
+  createMaterialVariantContext,
+  lowerMaterialVariantContext,
+} from '../material/variant-context.js';
 
 const material: MaterialAsset = {
   kind: 'material',
@@ -12,9 +16,9 @@ const material: MaterialAsset = {
     },
   ],
   parameters: [
-    { name: 'baseColor', type: 'color', static: true },
+    { name: 'baseColor', type: 'color' },
     { name: 'roughness', type: 'f32' },
-    { name: 'normalTexture', type: 'texture', static: true },
+    { name: 'normalTexture', type: 'texture' },
   ],
   values: {
     baseColor: [0.8, 0.2, 0.1, 1],
@@ -27,28 +31,19 @@ const material: MaterialAsset = {
   },
 };
 
-describe('MaterialAsset static and dynamic projection', () => {
-  it('keeps runtime values out of static specialization inputs', () => {
+describe('MaterialAsset runtime and module projection', () => {
+  it('keeps every material value in the runtime projection', () => {
     const result = projectMaterial(material, {
       material: 'leaf',
       mode: 'development',
-      defines: { QUALITY: 2 },
       sourceClosure: { 'game::paint': 'hash-paint' },
       vertexInputs: [{ location: 0, format: 'float32x3' }],
     });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.runtimeValues).toEqual({ roughness: 0.35 });
+    expect(result.value.runtimeValues).toEqual(material.values);
     expect(result.value.staticSelection).toMatchObject({
-      values: { baseColor: [0.8, 0.2, 0.1, 1] },
-      texturePresence: { normalTexture: true },
-      textureInputs: {
-        normalTexture: {
-          coordinates: { set: 1, transform: { rotation: 0.5 } },
-        },
-      },
-      defines: { QUALITY: 2 },
       moduleSlots: { lighting: 'game::pbr' },
       pipelineState: { blend: 'opaque', cull: 'back' },
       sourceClosure: { 'game::paint': 'hash-paint' },
@@ -70,5 +65,53 @@ describe('MaterialAsset static and dynamic projection', () => {
       expect(detail.material).toBe('leaf');
       expect(detail.staticSelection.length).toBeGreaterThan(0);
     }
+  });
+
+  it('characterizes runtime and module-slot projections separately', () => {
+    const result = projectMaterial(material, {
+      material: 'owner-overlap',
+      mode: 'development',
+      sourceClosure: { 'game::paint': 'hash-paint' },
+      vertexInputs: [{ location: 0, format: 'float32x3' }],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.runtimeValues).toEqual(material.values);
+    expect(result.value.staticSelection.moduleSlots).toEqual({ lighting: 'game::pbr' });
+  });
+
+  it('accepts only the closed producer-owned variant context', () => {
+    const context = createMaterialVariantContext({
+      backend: 'webgpu',
+      capability: 'storage-buffer',
+      pipeline: 'forward',
+      geometry: 'mesh',
+      pass: 'forward',
+      profile: 'forgeax-material-wgsl-v1',
+      toolchain: 'naga-oil',
+      instrumentation: 'none',
+    });
+    expect(context.ok).toBe(true);
+    if (!context.ok) return;
+    expect(lowerMaterialVariantContext(context.value)).toEqual({
+      STORAGE_BUFFER_AVAILABLE: true,
+      WEBGL2_COMPAT: false,
+      PER_INSTANCE_REGION: false,
+      POINT_SHADOW_AVAILABLE: false,
+    });
+    expect(
+      createMaterialVariantContext({
+        backend: 'webgpu',
+        capability: 'storage-buffer',
+        pipeline: 'forward',
+        geometry: 'mesh',
+        pass: 'forward',
+        profile: 'forgeax-material-wgsl-v1',
+        toolchain: 'naga-oil',
+        instrumentation: 'none',
+        STORAGE_BUFFER_AVAILABLE: false,
+      } as never).ok,
+    ).toBe(false);
   });
 });

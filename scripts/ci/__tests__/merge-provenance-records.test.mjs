@@ -138,7 +138,7 @@ function sharedRecords() {
   ];
 }
 
-test('t15b: merges four immutable producer records with selected artifact IDs', () => {
+test('t15b: merges immutable producer records with selected artifact IDs', () => {
   const values = records();
   for (const artifact of values[0].artifacts) artifact.artifactId = 'core-transfer';
   const dir = fixture(values);
@@ -157,9 +157,15 @@ test('t15b: merges four immutable producer records with selected artifact IDs', 
     assert.equal(merged.artifacts.length, 9);
     const githubOutput = readFileSync(result.githubOutput, 'utf8');
     assert.match(githubOutput, /^artifact_ids=/m);
-    assert.doesNotMatch(githubOutput, /shared-app-inputs-1-[01]/);
+    assert.doesNotMatch(githubOutput, /^artifact_ids=.*shared-app-inputs-1-[01]/m);
     const artifactIds = githubOutput.match(/^artifact_ids=(.*)$/m)?.[1]?.split(',') ?? [];
     assert.equal(artifactIds.filter((artifactId) => artifactId === 'core-transfer').length, 1);
+    const consumerIds = (name) =>
+      githubOutput.match(new RegExp(`^${name}=(.*)$`, 'm'))?.[1]?.split(',') ?? [];
+    assert.ok(consumerIds('artifact_ids_primary_pnpm').includes('core-transfer'));
+    assert.equal(consumerIds('artifact_ids_primary_pnpm').length, 2);
+    assert.ok(consumerIds('artifact_ids_smoke_fleet').includes('shared-app-inputs-1-1'));
+    assert.ok(consumerIds('artifact_ids_smoke_fleet').includes('app-shard-2-1-0'));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

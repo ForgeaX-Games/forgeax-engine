@@ -1,3 +1,5 @@
+import * as SceneOwner from '@forgeax/engine-scene';
+
 // scene-mount-roundtrip.test.ts — M4 round-trip acceptance tests
 // (feat-20260703-collect-nested-sceneinstance-to-mount-roundtrip).
 //
@@ -11,17 +13,17 @@
 //   parse back -> catalog -> registry.instantiate (reload) ->
 //   rootsToSceneAsset -> structural equivalence
 
+import { AnimationPlayer } from '@forgeax/engine-animation';
 import type { Asset } from '@forgeax/engine-assets-runtime';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { SceneInstance } from '@forgeax/engine-render';
 import type { Handle, MountOverride, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '../collect-scene-asset';
-import '@forgeax/engine-render/internal';
-import { AnimationPlayer } from '@forgeax/engine-animation';
-import { SceneInstance } from '@forgeax/engine-render/internal';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+import { registerSceneComponents } from './helpers/register-scene-components';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Helpers
@@ -42,6 +44,7 @@ function cat(reg: AssetRegistry, g: string, p: SceneAsset): void {
 }
 
 function rs(w: World, a: SceneAsset): Handle<'SceneAsset', 'shared'> {
+  registerSceneComponents(w, [AnimationPlayer]);
   return w.allocSharedRef('SceneAsset', a);
 }
 
@@ -237,7 +240,7 @@ describe('m4-t1 — single-layer mount round-trip', () => {
     }
 
     // Step 5: Serialize (breakpoint A — mounts must survive).
-    const serRes = serializeSceneAssetToPack(collect1.value, G3);
+    const serRes = serializeSceneAssetToPack(collect1.value, w.components.entries(), G3);
     expect(serRes.ok).toBe(true);
     if (!serRes.ok) return;
 
@@ -340,7 +343,7 @@ describe('m4-t1 — single-layer mount round-trip', () => {
     expect(collect1.value.mounts?.[0]?.memberCount).toBe(1);
 
     // Serialize -> parse -> catalog -> reload.
-    const serRes = serializeSceneAssetToPack(collect1.value, G3);
+    const serRes = serializeSceneAssetToPack(collect1.value, w.components.entries(), G3);
     expect(serRes.ok).toBe(true);
     if (!serRes.ok) return;
 
@@ -459,7 +462,7 @@ describe('m4-t2 — double-layer nested mount round-trip', () => {
     }
 
     // Step 2: Serialize -> parse -> catalog -> reload.
-    const serRes = serializeSceneAssetToPack(collect1.value, G4);
+    const serRes = serializeSceneAssetToPack(collect1.value, w.components.entries(), G4);
     expect(serRes.ok).toBe(true);
     if (!serRes.ok) return;
 
@@ -589,7 +592,7 @@ describe('m4-t2 — double-layer nested mount round-trip', () => {
     }
 
     // Serialize -> reload.
-    const serRes = serializeSceneAssetToPack(collect1.value, G4);
+    const serRes = serializeSceneAssetToPack(collect1.value, w.components.entries(), G4);
     expect(serRes.ok).toBe(true);
     if (!serRes.ok) return;
 
@@ -679,7 +682,7 @@ describe('m4-t3 — fixed-point: post-normalization collect equality', () => {
     if (!collect1.ok) return;
 
     // Serialize -> parse -> catalog -> first reload.
-    const serRes = serializeSceneAssetToPack(collect1.value, G3);
+    const serRes = serializeSceneAssetToPack(collect1.value, w.components.entries(), G3);
     expect(serRes.ok).toBe(true);
     if (!serRes.ok) return;
 
@@ -772,7 +775,7 @@ describe('m4-t3 — fixed-point: post-normalization collect equality', () => {
     if (!collect1.ok) return;
 
     // Serialize -> parse -> catalog -> reload.
-    const serRes = serializeSceneAssetToPack(collect1.value, G4);
+    const serRes = serializeSceneAssetToPack(collect1.value, w.components.entries(), G4);
     expect(serRes.ok).toBe(true);
     if (!serRes.ok) return;
 
@@ -847,7 +850,7 @@ function findMountedMember(w: World, rootA: EntityHandle): EntityHandle {
   for (const c of w.iterDescendants(rootA)) {
     if (c === rootA) continue;
     if (!w.get(c, SceneInstance).ok) continue;
-    const st = w.getSceneInstanceState(c);
+    const st = SceneOwner.worldGetSceneInstanceState(w, c);
     if (!st.ok) continue;
     for (const [member] of st.value.entityToLocalId) return member;
   }
@@ -905,7 +908,7 @@ describe('w17 — collect fold double-round-trip idempotency (AC-04)', () => {
     expect(clipsSer[0]).toBe(GCLIP);
 
     // Serialize → parse → reload.
-    const ser = serializeSceneAssetToPack(collect1.value, G3);
+    const ser = serializeSceneAssetToPack(collect1.value, w.components.entries(), G3);
     expect(ser.ok).toBe(true);
     if (!ser.ok) return;
     const unpacked = unpackSerialized(ser.value);

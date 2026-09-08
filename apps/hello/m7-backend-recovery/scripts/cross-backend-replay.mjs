@@ -1,39 +1,28 @@
 #!/usr/bin/env node
-import { writeFileSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { create as createDawn, globals as dawnGlobals } from 'webgpu';
 import { PNG } from 'pngjs';
-import { createReplay, deserializeTape, pixelDeltaAbsMean } from '@forgeax/engine-rhi-debug';
-import { rhi as nullRhi } from '@forgeax/engine-rhi-null';
+import { buildFrameModel, decodeTape, openReplay } from '@forgeax/engine-rhi-debug';
+import {
+  createShaderModule as createNullShaderModule,
+  rhi as nullRhi,
+} from '@forgeax/engine-rhi-null';
 import { createShaderModule, rhi as webgpuRhi } from '@forgeax/engine-rhi-webgpu';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
-const [tapePath, reportPath, livePngPath] = process.argv.slice(2);
-if (tapePath === undefined || reportPath === undefined) {
-  throw new Error('usage: cross-backend-replay.mjs <tapePath> <reportPath> [livePngPath]');
+const [artifactPath, livePngPath] = process.argv.slice(2);
+if (artifactPath === undefined) {
+  throw new Error('usage: cross-backend-replay.mjs <artifactPath> [livePngPath]');
 }
 
-const report = JSON.parse(await readFile(reportPath, 'utf8'));
-const tapeResult = deserializeTape(
-  JSON.stringify({ header: report.header, events: report.events }),
-  new Uint8Array(await readFile(tapePath)),
-);
-if (!tapeResult.ok) {
-  throw new Error(`deserializeTape failed: ${tapeResult.error.code} (${tapeResult.error.hint})`);
-}
-
-const tape = tapeResult.value;
-const drawCount = tape.events.filter(
-  (event) =>
-    event.kind === 'draw' ||
-    event.kind === 'drawIndexed' ||
-    event.kind === 'drawIndirect' ||
-    event.kind === 'drawIndexedIndirect' ||
-    event.kind === 'dispatchWorkgroups',
-).length;
+const decoded = decodeTape(new Uint8Array(await readFile(artifactPath)));
+if (!decoded.ok) throw new Error(`decodeTape failed: ${decoded.error.code} (${decoded.error.hint})`);
+const tape = decoded.value;
+const model = buildFrameModel(tape);
+const workIndex = model.works.findIndex((work) => work.kind.startsWith('draw'));
 const frameMarkCount = tape.events.filter((event) => event.kind === 'frameMark').length;
-if (drawCount === 0 || frameMarkCount === 0) {
-  throw new Error(`browser tape lacks dynamic evidence: draws=${drawCount} frameMarks=${frameMarkCount}`);
+if (workIndex < 0 || frameMarkCount === 0) {
+  throw new Error(`browser tape lacks dynamic evidence: works=${model.works.length} frameMarks=${frameMarkCount}`);
 }
 
 Object.assign(globalThis, dawnGlobals);
@@ -61,21 +50,26 @@ const dawnDeviceResult = await dawnAdapterResult.value.requestDevice({
 if (!dawnDeviceResult.ok) {
   throw new Error(`Dawn device failed: ${dawnDeviceResult.error.code} (${dawnDeviceResult.error.hint})`);
 }
-const dawnReplayResult = createReplay(tape, dawnDeviceResult.value, createShaderModule);
+const dawnReplayResult = await openReplay(tape, {
+  device: dawnDeviceResult.value,
+  createShaderModule,
+});
 if (!dawnReplayResult.ok) {
-  throw new Error(`Dawn createReplay failed: ${dawnReplayResult.error.code} (${dawnReplayResult.error.hint})`);
+  throw new Error(`Dawn openReplay failed: ${dawnReplayResult.error.code} (${dawnReplayResult.error.hint})`);
 }
-const dawnReplay = dawnReplayResult.value;
-const dawnStepResult = await dawnReplay.stepTo(tape.events.length - 1);
-if (!dawnStepResult.ok) {
-  throw new Error(`Dawn replay stepTo(${tape.events.length - 1}) failed: ${dawnStepResult.error.code} (${dawnStepResult.error.hint})`);
+const dawnInspection = await dawnReplayResult.value.inspectWork(workIndex, ['pixels']);
+if (!dawnInspection.ok) {
+  throw new Error(`Dawn replay inspectWork(${workIndex}) failed: ${dawnInspection.error.code} (${dawnInspection.error.hint})`);
 }
-const dawnReadbackResult = await dawnReplay.readbackRt();
-if (!dawnReadbackResult.ok) {
-  throw new Error(`Dawn replay readback failed: ${dawnReadbackResult.error.code} (${dawnReadbackResult.error.hint})`);
+const dawnReadback = dawnInspection.value.attachment;
+if (
+  dawnReadback?.kind !== 'texture' ||
+  dawnReadback.width === undefined ||
+  dawnReadback.height === undefined
+) {
+  throw new Error(`Dawn replay produced no color attachment: ${JSON.stringify(dawnInspection.value)}`);
 }
-const dawnReadback = dawnReadbackResult.value;
-const dawnLitBytes = dawnReadback.pixels.reduce((count, byte) => count + (byte > 8 ? 1 : 0), 0);
+const dawnLitBytes = dawnReadback.bytes.reduce((count, byte) => count + (byte > 8 ? 1 : 0), 0);
 if (dawnReadback.width <= 0 || dawnReadback.height <= 0 || dawnLitBytes === 0) {
   throw new Error(
     `Dawn replay produced an empty render target: ${dawnReadback.width}x${dawnReadback.height} litBytes=${dawnLitBytes}`,
@@ -83,51 +77,51 @@ if (dawnReadback.width <= 0 || dawnReadback.height <= 0 || dawnLitBytes === 0) {
 }
 let livePixelDelta;
 if (livePngPath !== undefined) {
-  // Browser toDataURL() may select adaptive PNG row filters; use pngjs for
-  // decoding rather than the engine smoke codec, whose intentionally tiny
-  // decoder only accepts filter=0 reference fixtures.
   const livePng = PNG.sync.read(await readFile(livePngPath));
-  const live = { width: livePng.width, height: livePng.height, pixels: new Uint8Array(livePng.data) };
-  if (live.width !== dawnReadback.width || live.height !== dawnReadback.height) {
+  if (livePng.width !== dawnReadback.width || livePng.height !== dawnReadback.height) {
     throw new Error(
-      `Dawn/live dimensions differ: dawn=${dawnReadback.width}x${dawnReadback.height} live=${live.width}x${live.height}`,
+      `Dawn/live dimensions differ: dawn=${dawnReadback.width}x${dawnReadback.height} live=${livePng.width}x${livePng.height}`,
     );
   }
-  // Playwright preserves the canvas compositor's transparent alpha while the
-  // Dawn render target is an opaque WebGPU attachment. Alpha is presentation
-  // metadata here, not a cross-backend color signal; compare the RGB payload
-  // after making both buffers explicitly opaque.
-  const livePixels = new Uint8Array(live.pixels);
-  const dawnPixels = new Uint8Array(dawnReadback.pixels);
-  for (let i = 3; i < livePixels.length; i += 4) {
-    livePixels[i] = 255;
-    dawnPixels[i] = 255;
+  let totalDelta = 0;
+  for (let index = 0; index < dawnReadback.bytes.length; index += 4) {
+    totalDelta +=
+      (Math.abs((livePng.data[index] ?? 0) - (dawnReadback.bytes[index] ?? 0)) +
+        Math.abs((livePng.data[index + 1] ?? 0) - (dawnReadback.bytes[index + 1] ?? 0)) +
+        Math.abs((livePng.data[index + 2] ?? 0) - (dawnReadback.bytes[index + 2] ?? 0))) /
+      3;
   }
-  livePixelDelta = pixelDeltaAbsMean(livePixels, dawnPixels);
-  writeFileSync(`${livePngPath}.dawn.png`, writeReferencePng(dawnPixels, dawnReadback.width, dawnReadback.height));
+  livePixelDelta =
+    dawnReadback.bytes.length === 0
+      ? Number.POSITIVE_INFINITY
+      : totalDelta / (dawnReadback.bytes.length / 4);
+  await writeFile(
+    `${livePngPath}.dawn.png`,
+    writeReferencePng(dawnReadback.bytes, dawnReadback.width, dawnReadback.height),
+  );
   if (livePixelDelta > 0.1) {
     throw new Error(`Dawn/live pixel delta too large: ${livePixelDelta.toFixed(5)} > 0.1`);
   }
 }
-dawnReplay.dispose();
+if (!(await dawnReplayResult.value.dispose()).ok) throw new Error('Dawn replay dispose failed');
 
-const adapterResult = await nullRhi.requestAdapter();
-if (!adapterResult.ok) throw new Error(`null adapter failed: ${adapterResult.error.code}`);
-const deviceResult = await adapterResult.value.requestDevice();
-if (!deviceResult.ok) throw new Error(`null device failed: ${deviceResult.error.code}`);
-
-const replayResult = createReplay(tape, deviceResult.value);
-if (!replayResult.ok) {
-  throw new Error(`null createReplay failed: ${replayResult.error.code} (${replayResult.error.hint})`);
+const nullAdapterResult = await nullRhi.requestAdapter();
+if (!nullAdapterResult.ok) throw new Error(`null adapter failed: ${nullAdapterResult.error.code}`);
+const nullDeviceResult = await nullAdapterResult.value.requestDevice();
+if (!nullDeviceResult.ok) throw new Error(`null device failed: ${nullDeviceResult.error.code}`);
+const nullReplayResult = await openReplay(tape, {
+  device: nullDeviceResult.value,
+  createShaderModule: createNullShaderModule,
+});
+if (!nullReplayResult.ok) {
+  throw new Error(`null openReplay failed: ${nullReplayResult.error.code} (${nullReplayResult.error.hint})`);
 }
-const replay = replayResult.value;
-const endIndex = tape.events.length - 1;
-const stepResult = await replay.stepTo(endIndex);
-if (!stepResult.ok) {
-  throw new Error(`null replay stepTo(${endIndex}) failed: ${stepResult.error.code} (${stepResult.error.hint})`);
+const nullInspection = await nullReplayResult.value.inspectWork(workIndex);
+if (!nullInspection.ok) {
+  throw new Error(`null replay inspectWork(${workIndex}) failed: ${nullInspection.error.code} (${nullInspection.error.hint})`);
 }
-replay.dispose();
+if (!(await nullReplayResult.value.dispose()).ok) throw new Error('null replay dispose failed');
 
 console.log(
-  `[m7-backend] same-scene cross-backend replay: PASS (browser tape -> Dawn pixel readback + null structural replay; events=${tape.events.length}, draws=${drawCount}, frameMarks=${frameMarkCount}, dawnRt=${dawnReadback.width}x${dawnReadback.height}, dawnLitBytes=${dawnLitBytes}, livePixelDelta=${livePixelDelta === undefined ? 'not-requested' : livePixelDelta.toFixed(5)})`,
+  `[m7-backend] same-scene cross-backend replay: PASS (browser .rhitape -> Dawn pixel readback + null structural replay; events=${tape.events.length}, works=${model.works.length}, frameMarks=${frameMarkCount}, dawnRt=${dawnReadback.width}x${dawnReadback.height}, dawnLitBytes=${dawnLitBytes}, livePixelDelta=${livePixelDelta === undefined ? 'not-requested' : livePixelDelta.toFixed(5)})`,
 );

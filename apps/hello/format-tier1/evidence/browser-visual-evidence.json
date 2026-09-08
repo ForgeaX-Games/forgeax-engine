@@ -1,0 +1,58 @@
+{
+  "schemaVersion": "format-tier1-browser-visual/1",
+  "featureId": "feat-20260812-format-classification-tier1",
+  "generatedAt": "2026-08-14T10:26:13.441Z",
+  "sourceCodeSha": "f36c48e59618cef2d679b91737de337cdcb8b718",
+  "target": {
+    "id": "format-tier1-dogfood",
+    "url": "http://127.0.0.1:5173/"
+  },
+  "browser": {
+    "engine": "chromium",
+    "webgpu": "captured-for-current-code-revision",
+    "console": {
+      "errors": [],
+      "warnings": []
+    }
+  },
+  "screenshots": {
+    "baseline": ".forgeax-harness/forgeax-loop/feat-20260812-format-classification-tier1/evidence/format-tier1-dogfood-baseline.png",
+    "meshopt-gpu-output": ".forgeax-harness/forgeax-loop/feat-20260812-format-classification-tier1/evidence/format-tier1-meshopt-gpu-output.png",
+    "ktx2-basis-matrix-output": ".forgeax-harness/forgeax-loop/feat-20260812-format-classification-tier1/evidence/format-tier1-ktx2-basis-matrix-output.png",
+    "morph-static-animation-output": ".forgeax-harness/forgeax-loop/feat-20260812-format-classification-tier1/evidence/format-tier1-morph-static-animation-output.png",
+    "morph-zero-weight-output": ".forgeax-harness/forgeax-loop/feat-20260812-format-classification-tier1/evidence/format-tier1-morph-zero-weight-output.png"
+  },
+  "expectations": [
+    {
+      "id": "meshopt-gpu-output",
+      "screenshot": ".forgeax-harness/forgeax-loop/feat-20260812-format-classification-tier1/evidence/format-tier1-meshopt-gpu-output.png",
+      "observed": "The live Chromium dogfood page shows the real EXT_meshopt fixture reaching the standard MeshFilter/MeshRenderer consumer; the current screenshot was captured and read.",
+      "verdict": "pass",
+      "confidence": "high"
+    },
+    {
+      "id": "ktx2-basis-matrix-output",
+      "screenshot": ".forgeax-harness/forgeax-loop/feat-20260812-format-classification-tier1/evidence/format-tier1-ktx2-basis-matrix-output.png",
+      "observed": "The current Chromium matrix screenshot presents ETC1S, UASTC LDR, UASTC HDR, and raw Basis results backed by the 20-cell Dawn sampling witness.",
+      "verdict": "pass",
+      "confidence": "high"
+    },
+    {
+      "id": "morph-static-animation-output",
+      "screenshot": ".forgeax-harness/forgeax-loop/feat-20260812-format-classification-tier1/evidence/format-tier1-morph-static-animation-output.png",
+      "observed": "The live Chromium canvas visibly renders the imported Morph fixture. The feature is active for static, animated, and zero-weight states; compositor readPixels remains explicitly diagnostic-only and the read screenshot is the visual authority.",
+      "verdict": "pass",
+      "confidence": "high"
+    },
+    {
+      "id": "morph-zero-weight-output",
+      "screenshot": ".forgeax-harness/forgeax-loop/feat-20260812-format-classification-tier1/evidence/format-tier1-morph-zero-weight-output.png",
+      "observed": "The live Chromium canvas visibly renders the imported Morph fixture. The feature is active for static, animated, and zero-weight states; compositor readPixels remains explicitly diagnostic-only and the read screenshot is the visual authority.",
+      "verdict": "pass",
+      "confidence": "high"
+    }
+  ],
+  "observed": "The current live Chromium target was captured and read after the Meshopt, KTX2/Basis, and Morph GPU witnesses passed on the same source revision.",
+  "verdict": "pass",
+  "confidence": "high"
+}

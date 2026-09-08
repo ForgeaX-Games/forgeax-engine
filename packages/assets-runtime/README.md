@@ -1,8 +1,91 @@
 # @forgeax/engine-assets-runtime
 
+## MaterialAsset 唯一成功路径
+
+Runtime 负责 `paramSchema -> derive -> compile/reflect -> cook/load -> extract/record`
+中的 load 与 extract/record 消费：按 GUID 读取 producer 已 cook 的 artifact、
+receipt、`coordinateSet` 与 `physicalUvScale`，验证 `layoutIdentity` 后交给
+render owner。缺失或 stale 时 inspect、修复 producer 并 recook；不会在 runtime
+编译 WGSL 或补写 app 侧坐标。
+
+> [!CAUTION]
+> 只按结构化 `code`、`detail`、`hint` 恢复；不要复制 source-owned error union，
+> 也不要从 URL 或数组顺序重建 asset identity。
+
 ## Authoring and recovery index
 
+## Material contract index
+
+The runtime loader reads the Pack publication by GUID and exposes a read-only
+projection to render. Runtime values and module slots are data, while compiler
+context is a closed input; no material macro, feature define, cook, or DDC
+write belongs here. Preserve the layered identities
+`materialContractDigest`, `sourceClosureDigest`, `layoutIdentity`,
+`programIdentity`, `cookIdentity`, and `materialPublicationIdentity`, and
+compare `current` with `generation` before sending the first producer
+divergence back through cold-cook and receipt/artifact verification.
+
+The shortest static consumer path is `configurePackIndex(url)` followed by
+`loadByGuid<ConcreteAsset>(guid)`. The public barrel exposes the concrete
+16-kind types and returns durable payloads, dependency `refs`, and local
+`artifacts`; it does not mint a generic GUID-to-handle materializer. Animation,
+tileset, render, audio, and VFX owners perform their own World or Host
+projection after load.
+
+Catalog source is selected once per host mode: `configureRuntimeBinding(binding)`
+owns the scope/generation-bound catalog used by Vite development servers, while
+`configurePackIndex(url)` owns the static catalog emitted by a production build.
+They are alternatives, not a sequence. App demos can use the shared
+`configureRuntimeAssetCatalog` helper from `@forgeax/apps-shared` to keep this
+selection as one SSOT and avoid overwriting a scoped development URL with
+`/pack-index.json`.
+
+Read structured errors by `code` and use `hint`/`detail` to inspect, rebuild or
+cold-cook, refresh LKG, or attach a capability. Host capability loss affects
+install/play/execute only; descriptor loading stays available.
+
+The runtime matrix is the same 16 durable kinds as `SCRIPTABLE_PACK_ASSET_KINDS`:
+`mesh`, `material`, `scene`, `texture`, `equirect`, `sampler`, `font`,
+`render-pipeline`, `tileset`, `video`, `skeleton`, `skin`, `animation-clip`,
+`animation-graph`, `audio`, and `particle-effect`.
+
 The authority map is [`asset-authority.schema.json`](../../asset-authority.schema.json). Runtime reads Catalog decisions and validated Pack/DDC projections by GUID; it never writes Pack, Meta, DDC, or authoring state.
+
+## Material publication inspection
+
+`inspectMaterialRuntime(ready)` is the read-only, GUID-addressed inspection
+projection after the `MaterialReady` gate. Its first-level identity is
+`materialGuid`, `publicationGeneration`, `specializationKey`,
+`artifactDigest`, and `readiness`. Expand `sourceClosure`,
+`parameterContract`, `refs`, and `receipt` only when owner debugging requires
+them. The returned `status: 'Ready'` is retained for compatibility with the
+runtime result; `readiness: 'ready'` is the machine-readable state field.
+
+Material failure consumers branch on stable kebab-case codes:
+`shader-module-not-found`, `material-reflection-binding-mismatch`,
+`material-specialization-not-cooked`, `asset-artifact-missing`,
+`asset-artifact-integrity-mismatch`, and `material-cook-record-invalid`.
+Read `expected`, `actual`, `hint`, `retryable`, and `recoveryActions` when
+present. Do not infer readiness from a transport URL, a shader manifest, a
+natural-language message, or a fallback material.
+
+## Plugin-owned loader registrations
+
+`assetsPlugin(registry)` provides the renderer-owned registry to a Cordis
+realm. `assetLoaderPlugin(loader)` and `packLoaderPlugin(loader)` register one
+loader as a reversible Fiber effect, so removing a feature cannot leave a stale
+kind handler behind. GUID, Catalog, Pack, and payload identity remain owned by
+`AssetRegistry`; the plugin controls only the registration lifetime.
+
+```ts
+const feature = await app.pluginContext.plugin(assetLoaderPlugin(dialogueLoader));
+const dialogue = await app.renderer.assets.loadByGuid<Dialogue>(guid);
+await feature.dispose();
+```
+
+Use `registry.loaders.register(...)` directly only in a lower-level host that
+owns the matching disposer itself. App/game capability composition should use
+the plugin helpers so registration and teardown share one Cordis lifecycle.
 
 | Lifecycle | Runtime action | Recovery |
 |:--|:--|:--|
@@ -50,10 +133,11 @@ Cook states are not interchangeable: `notCooked`, `ready/current`, `ready/stale`
   (`shared-ref-stale` / `shared-ref-released` / `asset-not-found`) so callers
   distinguish "re-acquire handle" from "re-load asset" from "check GUID".
 - **`LoaderRegistry` + `wireDefaultLoaders(registry, extraLoaders?)` +
-  `createDefaultLoaderRegistry(extraLoaders?)`** — the default set is 10
-  engine-owned kinds (6 inline pack-payload + texture/font/equirect + video).
-  `createRenderer` injects the concrete Web Audio catalog-entry loader as the
-  eleventh kind, keeping this package independent of the audio backend.
+  `createDefaultLoaderRegistry(extraLoaders?)`** — the default set covers the
+  complete 16-kind durable `Asset` union, including both inline and artifact
+  forms. `createRenderer` may replace the durable audio descriptor loader with
+  its concrete Web Audio catalog-entry loader; the registry still has one
+  owner per kind.
 
 ### 30s hands-on example
 
@@ -67,6 +151,14 @@ world.spawn(
   { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
   { component: MeshRenderer, data: { materials: [matHandle] } },
+).unwrap();
+
+// Imported meshes normally use an empty override vector. AssetRegistry
+// recursively loads MeshAsset.materialSlots defaults; Render inherits them.
+world.spawn(
+  { component: Transform, data: {} },
+  { component: MeshFilter, data: { assetHandle: importedMeshHandle } },
+  { component: MeshRenderer, data: { materials: [] } },
 ).unwrap();
 
 // Catalogue + load a GUID-addressed asset (dev / inline path):
@@ -83,9 +175,10 @@ const res = await assets.loadByGuid(guid); // -> Result<payload> (D-17: payload,
 | `BuiltinAssetRegistry` / `BUILTIN_*` / `BUILTIN_BASE` | const | process-static builtin payloads and reserved slot boundary; the shared vertex-layout SSOT is `PROCEDURAL_FLOATS_PER_VERTEX` from `@forgeax/engine-geometry` |
 | `resolveAssetHandle` / `walkMaterialPassesOverSharedRefs` | fn | two-tier handle -> payload resolution |
 | `LoaderRegistry` | class | kind -> loader dispatch table |
-| `wireDefaultLoaders` / `createDefaultLoaderRegistry` | fn | wire 10 engine loaders + caller `extraLoaders` |
+| `wireDefaultLoaders` / `createDefaultLoaderRegistry` | fn | wire all 16 durable Asset loaders + caller `extraLoaders` |
+| `assetsPlugin` / `assetLoaderPlugin` / `packLoaderPlugin` | fn | Provide a registry and bind loader registrations to a Cordis Fiber lifetime |
 | `DynamicTextureStore` / `DynamicTextureDevice` | class/type | per-frame dynamic texture upload store; replacement devices invalidate stale transient textures before the next upload |
-| `unpackMeshBin` / `UnpackedMeshBin` | fn/type | `<guid>.bin` sidecar decode |
+| `unpackMeshBin` / `UnpackedMeshBin` | fn/type | strict mesh-binary v4 sidecar decode with geometry projection verification |
 | `validateTilesetPayload` / `TilesetValidateOptions` | fn/type | register-time tileset payload gate |
 | `PostSpawnHook` / `SkinJointResolver` | type | post-spawn hook contract (D-1; runtime injects `postSpawnResolveJoints`) |
 | `Asset` / `MeshAsset` | type | re-exported asset union shapes (SSOT `@forgeax/engine-types`) |
@@ -95,6 +188,35 @@ Full `AssetRegistry` surface + signatures: source SSOT
 pipeline lives in `packages/assets-runtime/src/registry/load-by-guid.ts`; the
 instantiate cluster + hook types in `registry/instantiate.ts`; material
 validation in `registry/validate-material.ts`.
+
+## Mesh binary v4 loading
+
+[`loaders/mesh-bin.ts`](src/loaders/mesh-bin.ts) is the sole runtime decoder.
+It rebuilds the geometry projection from the wire mask, compares schema version,
+stride, and digest, validates every byte/cardinality bound, then publishes the
+mesh and metadata as one result. Inline-pack loading uses the same loader.
+
+| Failure | Runtime behavior | Next action |
+|:--|:--|:--|
+| v2/v3 or malformed bytes | closed `MeshBinAssetError` with sourceKey, expected/actual, and recovery hint | Re-cook through the owning importer |
+| invalid refs or metadata | no MeshAsset publication | Repair producer refs/Meta and retry |
+| failed replacement after a prior load | retain the catalogued last-known-good payload | Inspect evidence, cold-cook, then publish atomically |
+
+> [!WARNING]
+> Runtime has no legacy decoder and no re-cook fallback. A white/default mesh
+> is not a valid recovery for a malformed artifact.
+
+### Scene instantiation failure atomicity
+
+> [!IMPORTANT]
+> `assets.instantiate` and `assets.instantiateFlat` run the renderer-injected
+> post-spawn hook as part of one transaction. If joint wiring returns the
+> existing `skin-joint-path-unresolved` or `skin-asset-unresolved` result, the
+> method returns that exact structured error and removes only the entities,
+> hierarchy, mount state, joint publication, and shared-reference grants
+> created by that call. Repair the catalogued asset or joint path, then retry
+> with the same registry and World; no process or World reconstruction is
+> required.
 
 ## Catalog source: enumerate first-class asset rows, then observe row changes
 

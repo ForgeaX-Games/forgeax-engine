@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Same-page Chrome journey for the RenderGraph cycle -> repaired pipeline
-// contract. The page exposes only the consumer's public install seam and the
-// existing readback hook; no renderer or graph internals are reached here.
+// Same-page Chrome journey for a failed RenderFeature plan -> repaired plan.
+// The page exposes only the consumer's public install seam and readback hook;
+// no renderer or graph internals are reached here.
 
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -210,25 +210,20 @@ try {
       return { first: api.dispose(), second: api.dispose(), state: api.getState() };
     });
 
-    const cycleNames = cycle.state.cycleDiagnostic?.detail?.cycle ?? [];
-    const repairedPasses = repaired.state.lastPassNames ?? [];
-    const repairedOrder = repaired.state.repairedPassOrder ?? [];
     const report = {
       baseline: { width: baseline.width, height: baseline.height, hud: baseline.hud },
       cycle: {
         install: cycle.install,
         code: cycle.state.cycleDiagnostic?.code,
-        cycle: cycleNames,
-        drawSubmitted: cycle.state.cycleDrawSubmitted,
+        mode: cycle.state.cycleDiagnostic?.mode,
+        frameStatus: cycle.state.lastFrameStatus,
         activePipelineId: cycle.state.activePipelineId,
         healthyCanvasPixelsChanged: changedPngPixels(healthyCanvas.png, cycleCanvas.png),
       },
       repaired: {
         install: repaired.install,
         activePipelineId: repaired.state.activePipelineId,
-        drawSubmitted: repaired.state.repairedDrawSubmitted,
-        passNames: repairedPasses,
-        executeOrder: repairedOrder,
+        frameStatus: repaired.state.lastFrameStatus,
         recoveredBytes: changedBytes(pausedBaseline.pixels, repaired.pixels),
         recoveredCanvasPixelsChanged: changedPngPixels(healthyCanvas.png, repairedCanvas.png),
       },
@@ -245,21 +240,18 @@ try {
     await page.close();
     if (pageErrors.length > 0) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
     if (consoleErrors.length > 0) throw new Error(`console errors: ${consoleErrors.join(' | ')}`);
-    if (cycle.state.cycleDiagnostic?.code !== 'cyclic-dependency') throw new Error(`cycle code=${cycle.state.cycleDiagnostic?.code}`);
-    if (!cycleNames.includes('cycle-pass-a') || !cycleNames.includes('cycle-pass-b')) throw new Error(`cycle facts=${JSON.stringify(cycleNames)}`);
-    if (cycle.state.cycleDrawSubmitted !== false) throw new Error(`cycle submitted=${cycle.state.cycleDrawSubmitted}`);
+    if (cycle.state.cycleDiagnostic?.code !== 'render-feature-stage-failed' || cycle.state.cycleDiagnostic?.mode !== 'cycle') throw new Error(`feature failure=${JSON.stringify(cycle.state.cycleDiagnostic)}`);
+    if (cycle.state.lastFrameStatus !== 'feature-failed') throw new Error(`cycle frame status=${cycle.state.lastFrameStatus}`);
     if (cycle.state.activePipelineId === repaired.state.activePipelineId) throw new Error('cycle and repaired pipeline IDs were not distinct');
     if (changedPngPixels(healthyCanvas.png, cycleCanvas.png) !== 0) throw new Error('cycle contaminated healthy canvas pixels');
-    if (repaired.state.repairedDrawSubmitted !== true) throw new Error(`repaired submitted=${repaired.state.repairedDrawSubmitted}`);
-    if (repairedOrder.join('>') !== 'repaired-stage-a>repaired-stage-b') throw new Error(`execute order=${repairedOrder.join('>')}`);
-    if (repairedPasses.join('>') !== 'repaired-stage-a>repaired-stage-b>main>post') throw new Error(`pass names=${repairedPasses.join('>')}`);
+    if (repaired.state.lastFrameStatus !== 'healthy') throw new Error(`repaired frame status=${repaired.state.lastFrameStatus}`);
     if (changedBytes(pausedBaseline.pixels, repaired.pixels) !== 0) throw new Error('repaired pipeline did not recover baseline pixels');
     if (changedPngPixels(healthyCanvas.png, repairedCanvas.png) !== 0) throw new Error('repaired pipeline did not recover healthy canvas');
     if (healthy.hud !== 'inversion' || changedBytes(repaired.pixels, healthy.pixels) === 0) throw new Error('healthy switch did not change post-process pixels');
     if (changedPngPixels(repairedCanvas.png, healthyCanvasAfterSwitch.png) === 0) throw new Error('healthy switch did not change the canvas');
     if (!cleanup.first.ok || !cleanup.second.ok) throw new Error(`cleanup failed: ${JSON.stringify(cleanup)}`);
 
-    console.log(`[m24] browser cycle/recovery: PASS cycle=cyclic-dependency cyclePasses=${cycleNames.join('>')} cycleSubmitted=false repairedPasses=${repairedPasses.join('>')} recoveredBytes=0 healthyChangedBytes=${changedBytes(repaired.pixels, healthy.pixels)} cleanup=idempotent`);
+    console.log(`[m24] browser cycle/recovery: PASS feature=render-feature-stage-failed mode=cycle frameStatus=feature-failed repairedStatus=${repaired.state.lastFrameStatus} recoveredBytes=0 healthyChangedBytes=${changedBytes(repaired.pixels, healthy.pixels)} cleanup=idempotent`);
   } finally {
     await browser.close();
   }

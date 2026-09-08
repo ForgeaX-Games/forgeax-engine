@@ -11,4 +11,8 @@ export type {
   DebugDrawErrorCode,
   DebugDrawErrorDetail,
 } from './errors';
+export {
+  createDebugDrawRenderFeaturePlan,
+  type DebugDrawRenderFeatureInput,
+} from './render-feature';
 export type { CreateShaderModule, DebugDrawOptions, DepthMode } from './types';

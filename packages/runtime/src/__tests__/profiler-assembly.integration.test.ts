@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createProfiler } from '@forgeax/engine-profiler';
-import type { RendererOptions } from '@forgeax/engine-render/internal';
+import type { RendererOptions } from '@forgeax/engine-render';
 import { describe, expect, it } from 'vitest';
 
 describe('runtime profiler assembly', () => {

@@ -39,11 +39,18 @@ const concurrency = Number(
     workspaceConcurrency({ cpus, memoryBytes, reserveGB: 2, workerGB: 2 }),
 );
 const noCache = process.env.FORGEAX_BUILD_NO_TASK_CACHE === '1';
+const packageRunner = process.env.FORGEAX_PACKAGE_BUILD_RUNNER ?? 'pnpm';
+if (packageRunner !== 'pnpm' && packageRunner !== 'bun')
+  throw new Error(`unsupported package build runner: ${packageRunner}`);
 
 function runPackage(pkg) {
   return new Promise((resolveRun) => {
     const startedAt = performance.now();
-    const child = spawn('pnpm', ['--filter', pkg.manifest.name, 'run', 'build'], {
+    const args =
+      packageRunner === 'bun'
+        ? ['run', '--filter', pkg.manifest.name, 'build']
+        : ['--filter', pkg.manifest.name, 'run', 'build'];
+    const child = spawn(packageRunner, args, {
       cwd: root,
       stdio: 'inherit',
       shell: process.platform === 'win32',
@@ -78,6 +85,7 @@ function packagePlan(pkg, dependencyOutputFingerprints) {
         schemaVersion: 1,
         kind: 'package-build',
         name: pkg.manifest.name,
+        packageRunner,
         sourceFingerprint,
         dependencyFingerprint,
       }),
@@ -192,6 +200,7 @@ async function main() {
       requested: packages.length,
       built: results.filter((result) => result.status === 'built').length,
       skipped: results.filter((result) => result.status === 'skipped').length,
+      runner: packageRunner,
       concurrency,
       durationMs: Number(
         results.reduce((total, result) => total + result.durationMs, 0).toFixed(1),

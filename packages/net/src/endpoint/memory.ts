@@ -4,7 +4,7 @@
 
 import type { Result } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
-import type { EndpointEvent, NetEndpoint, PeerId } from './endpoint';
+import type { EndpointEvent, NetEndpoint, NetEndpointConnector, PeerId } from './endpoint';
 import type { EndpointError as EndpointErrorType } from './errors';
 import { ENDPOINT_ERROR_HINTS, ENDPOINT_EXPECTED, EndpointError } from './errors';
 
@@ -169,4 +169,26 @@ export function createMemoryEndpointPairWithController(): {
   };
 
   return { endpoints: [epA, epB], controller };
+}
+
+/** Create a replaceable, realm-neutral connector over a deterministic endpoint factory. */
+export function createMemoryEndpointConnector(
+  createEndpoint: () => NetEndpoint,
+): NetEndpointConnector {
+  return {
+    connect(signal) {
+      if (signal.aborted)
+        return Promise.resolve(
+          err(
+            new EndpointError({
+              code: 'connection-failed',
+              expected: ENDPOINT_EXPECTED['connection-failed'],
+              hint: ENDPOINT_ERROR_HINTS['connection-failed'],
+              detail: { address: 'memory', cause: 'connect aborted' },
+            }),
+          ),
+        );
+      return Promise.resolve(ok(createEndpoint()));
+    },
+  };
 }

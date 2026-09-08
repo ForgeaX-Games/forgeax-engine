@@ -68,17 +68,18 @@ fn linearToSrgbOetf(color : vec3<f32>) -> vec3<f32> {
 //   [512..516) pcfKernelSize    f32           (align 4, size 4)
 //   [516..528) _align_pad      —             (mat4 array align=16, 12 B)
 //   [528..784) spotLightViewProj array<mat4x4<f32>,4>  (align 16, size 256)
-//   WGSL struct = 784 B. Host UBO = VIEW_UBO_BYTES = 784 B (createRenderer.ts);
-//   render-system-record.ts writes the full 196 f32 payload. The spot matrix
+//   WGSL prefix = 784 B. Host UBO = VIEW_UBO_BYTES = 960 B (renderer-factory.ts);
+//   view-ubo.ts writes the full 240 f32 payload. The spot matrix
 //   array fold (feat-20260625 w25) removes the standalone @group(0) binding 9
 //   uniform buffer so the WebGL2 fallback fragment uniform-buffer count returns
 //   to 11 (GLES 3.0 max).
-//   total = 784 B.
+//   temporal projection facts and Fog payload append after the spot matrix;
+//   total = 960 B.
 //
 // Field order must stay byte-for-byte identical to every prior release
 // (charter P4 consistent abstraction); new fields append at the tail.
-// Host write in render-system-record.ts builds the 148-float payload and
-// createRenderer.ts allocates VIEW_UBO_BYTES = 592.
+// Host write in view-ubo.ts builds the 240-float payload and the renderer
+// allocates VIEW_UBO_BYTES = 960.
 //
 // feat-20260531-skybox-env-background M2 / w3: inverseViewProj appended
 // at the tail (64 B mat4 at byte offset 176). The host pre-computes
@@ -91,7 +92,7 @@ fn linearToSrgbOetf(color : vec3<f32>) -> vec3<f32> {
 // `lightViewProj_A..D` array at offset 112 (inverseViewProj stays at 176;
 // `lightViewProj_B..D` + `splitPlanes` + cascadeCount/cascadeBlend follow
 // inverseViewProj). WGSL struct is 512 B (auto-padded tail); the host
-// allocates 592 B and writes 22 f32 of trailing zeros (88 B) to satisfy
+// allocates the larger View slot and writes trailing zero lanes to satisfy
 // the AC-08 fixed-UBO-size invariant (the extra bytes are never read).
 // shadow_caster.wgsl indexes the 4 fields via `shadowCasterCascade.index`
 // (binding 5, written per shadow pass).
@@ -101,7 +102,7 @@ fn linearToSrgbOetf(color : vec3<f32>) -> vec3<f32> {
 // tail (depthBias / normalBias / pcfKernelSize at bytes 504/508/512, floats
 // 126/127/128). Tail-append only -- field order is byte-for-byte stable
 // (charter P4); the prior 88 B host tail pad shrinks to 64 B, total stays
-// 592 B (host UBO size unchanged, AC-08). lighting-directional.wgsl drives the
+// View slot remains within the existing 1024 B stride. lighting-directional.wgsl drives the
 // directional shadow bias (D-1: bias = max(normalBias*(1-N.L), depthBias)) and
 // a pcfKernelSize-wide PCF loop from these fields.
 //
@@ -120,10 +121,23 @@ fn linearToSrgbOetf(color : vec3<f32>) -> vec3<f32> {
 // channel has no such contention — the host writes all <=4 spot matrices once
 // per frame before the forward pass, so the fold is safe. mat4 array align=16:
 // the array lands at byte 528 (next 16 B-aligned offset after pcfKernelSize at
-// byte 512..516), spanning bytes 528..784. WGSL struct = 784 B; the host
-// allocates VIEW_UBO_BYTES = 784 (createRenderer.ts) and writes the full 196 f32
+// byte 512..516), spanning bytes 528..784. The host allocates VIEW_UBO_BYTES =
+// 960 (renderer-factory.ts) and writes the full 240 f32
 // payload (render-system-record.ts). Lane N = the spot with `shadowAtlasTile
 // === N` (cap = 4); `evalSpotShadowed` reads `view.spotLightViewProj[tile]`.
+struct FogViewParams {
+  color         : vec3<f32>,
+  density       : f32,
+  heightFalloff : f32,
+  maxOpacity    : f32,
+};
+
+struct FogRay {
+  origin    : vec3<f32>,
+  direction : vec3<f32>,
+  distance  : f32,
+};
+
 struct View {
   worldViewProj   : mat4x4<f32>,
   lightDir        : vec3<f32>,
@@ -146,6 +160,11 @@ struct View {
   // 528..784. Lane N = spot with shadowAtlasTile === N (cap = 4). Zeroed lanes
   // are safe (sample gated on shadowAtlasTile >= 0 in default-standard-pbr.wgsl).
   spotLightViewProj : array<mat4x4<f32>, 4>,
+  temporalCurrentViewProj : mat4x4<f32>,
+  temporalPreviousViewProj : mat4x4<f32>,
+  // x = near, y = far, z = 1 for orthographic and 0 for perspective.
+  temporalProjection : vec4<f32>,
+  fog                 : FogViewParams,
 };
 
 // Per-instance mesh slot (feat-20260518-pbr-direct-lighting-mvp M2 / w8.5,
@@ -159,6 +178,12 @@ struct View {
 struct Mesh {
   worldFromLocal : mat4x4<f32>,
   normalMatrix   : mat3x3<f32>,
+#if STORAGE_BUFFER_AVAILABLE == true
+  previousWorldFromLocal : mat4x4<f32>,
+  // x = conservative reactive mask. The remaining lanes are reserved and
+  // zero so one vec4 remains the sole host/shader metadata ABI.
+  temporal : vec4<f32>,
+#endif
 };
 
 // feat-20260519-light-casters-point-spot-pbr M4 / w21 (D-S1 + D-S2 +
@@ -406,6 +431,9 @@ struct ShadowCasterCascade {
 // the stride bump.
 struct InstanceData {
   localFromInstance : mat4x4<f32>,
+#if STORAGE_BUFFER_AVAILABLE == true
+  previousLocalFromInstance : mat4x4<f32>,
+#endif
 #if PER_INSTANCE_REGION == true
   // Per-instance atlas region: .xy = (uMin, vMin), .zw = (uW, vH). Pairs
   // with the legacy `material.region` UBO field (sprite.wgsl Material
@@ -416,6 +444,37 @@ struct InstanceData {
   region : vec4<f32>,
 #endif
 };
+
+fn sceneTemporalUv(clip : vec4<f32>) -> vec2<f32> {
+  let safeW = select(1e-6, clip.w, abs(clip.w) >= 1e-6);
+  let ndc = clip.xy / safeW;
+  return vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+}
+
+fn sceneTemporalViewDepth(clip : vec4<f32>) -> f32 {
+  let perspectiveDepth = max(clip.w, 0.0);
+  let ndcDepth = clip.z / max(abs(clip.w), 1e-6);
+  let orthographicDepth = view.temporalProjection.x +
+    ndcDepth * (view.temporalProjection.y - view.temporalProjection.x);
+  let viewDepth = select(
+    perspectiveDepth,
+    max(orthographicDepth, 0.0),
+    view.temporalProjection.z >= 0.5,
+  );
+  return log2(1.0 + viewDepth);
+}
+
+fn packSceneTemporal(
+  currentClip : vec4<f32>,
+  previousClip : vec4<f32>,
+  reactive : f32,
+) -> vec4<f32> {
+  return vec4<f32>(
+    sceneTemporalUv(currentClip) - sceneTemporalUv(previousClip),
+    sceneTemporalViewDepth(currentClip),
+    clamp(reactive, 0.0, 1.0),
+  );
+}
 #if STORAGE_BUFFER_AVAILABLE == true
 @group(3) @binding(0) var<storage, read> instances : array<InstanceData>;
 #else

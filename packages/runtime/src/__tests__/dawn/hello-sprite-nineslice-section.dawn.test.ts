@@ -46,12 +46,12 @@
 
 import { AssetRegistry, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
-import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render/internal';
-import { createRenderer } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { constructRuntimeRendererHost } from '../../renderer-host';
 import { drawPublished } from '../draw-published';
 
 const WIDTH = 64;
@@ -172,37 +172,28 @@ async function renderOneFrame(opts: {
     removeEventListener() {},
   } as unknown as HTMLCanvasElement;
 
-  let renderer: Awaited<ReturnType<typeof createRenderer>>;
+  let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
   try {
-    renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: ENGINE_MANIFEST_URL });
+    host = await constructRuntimeRendererHost(
+      mockCanvas,
+      {},
+      {
+        shaderManifestUrl: ENGINE_MANIFEST_URL,
+      },
+    );
   } finally {
     globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
   }
-  expect(renderer.backend).toBe('webgpu');
-
-  const ready = await renderer.ready;
-  expect(ready.ok).toBe(true);
-  if (!ready.ok) throw new Error('renderer not ready');
-
-  const assets = renderer.assets;
+  expect(host.ok).toBe(true);
+  if (!host.ok) throw host.error;
+  const { renderer, assets } = host.value;
+  expect(renderer.inspect().state).toBe('alive');
   expect(assets).toBeInstanceOf(AssetRegistry);
 
   const world = new World();
 
   const texAsset = makeCornerCheckerTexture();
   const texHandle = world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', texAsset);
-  // feat-20260601-gpu-resource-store-extraction M1: explicit texture GPU upload.
-  const texUploadRes = await renderer.store.uploadTexture(texHandle, texAsset, {
-    bytes: texAsset.data as Uint8Array,
-    width: texAsset.width,
-    height: texAsset.height,
-    mime: 'image/png',
-    colorSpace: texAsset.colorSpace,
-    mipmap: texAsset.mipmap,
-  });
-  expect(texUploadRes.ok).toBe(true);
-  if (!texUploadRes.ok) throw new Error('texture upload failed');
-
   // D-4 explicit constraint: tile mode uses the sprite pipeline's shared
   // renderer-owned repeat sampler, so vertex-shader-emitted uv > 1 wraps via
   // the hardware sampler. Both scenes use that same configuration; the only
@@ -240,8 +231,9 @@ async function renderOneFrame(opts: {
   });
 
   const errors: unknown[] = [];
-  renderer.onError((e) => {
-    errors.push(e);
+  renderer.subscribe((event) => {
+    if (event.kind !== 'error') return;
+    errors.push(event.error);
   });
 
   // ASYMMETRIC scale: x=4*y. Under uniform 9-slice mapping the corners stay

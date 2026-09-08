@@ -37,7 +37,7 @@ describe('asset-local ImportProduct contract', () => {
           artifacts: {
             body: {
               mediaType: 'application/x-forgeax-mesh',
-              assetCodec: { name: 'mesh-binary', version: '2' },
+              assetCodec: { name: 'mesh-binary', version: '4' },
               bytes: new Uint8Array([1]),
             },
           },
@@ -66,7 +66,9 @@ describe('asset-local ImportProduct contract', () => {
     expect(result.ok).toBe(true);
     if (result.ok && 'product' in result.value) {
       expect(result.value).not.toHaveProperty('bins');
-      expect(result.value.product).not.toHaveProperty('artifacts');
+      expect(result.value.product.artifacts).toHaveProperty(`${MESH_GUID}/body`);
+      expect(result.value.product.receipts).toHaveLength(2);
+      expect(result.value.product.sourceRevision).toBe('source:fixture.source');
       expect(result.value.pack.assets[0]?.artifacts).toHaveProperty('body');
       expect(result.value.pack.assets[1]?.artifacts).toHaveProperty('body');
     }

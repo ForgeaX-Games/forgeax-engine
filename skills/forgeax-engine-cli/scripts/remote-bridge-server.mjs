@@ -10,7 +10,7 @@
 // CAN dial OUT. So createApp mounts a DEV-only bridge that opens a WebSocket
 // CLIENT to this relay, and the relay runs @forgeax/engine-remote/execute
 // (the ws-free eval core) inside the page realm against the live world/renderer/
-// assets/debugAdapter.
+// assets/rhiCapture.
 //
 // This relay is the meeting point both sides CAN reach:
 //   • the engine page connects OUT to  ws://127.0.0.1:5733/bridge  (page dials the relay)

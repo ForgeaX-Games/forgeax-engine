@@ -57,14 +57,18 @@ if (!comparison.ok) {
 
 ## Limits and allocation evidence
 
-Always set both `frameLimit` and `eventLimit` to positive safe integers. The recorder retains bounded arrays and fixed records, reports dropped events after overflow, and never presents an overflow artifact as complete. A host can pass `allocationReport` to `createProfiler` to count profiler-owned event object allocations; the deterministic D-6 gate requires zero allocations while the profiler is off.
+Always set both `frameLimit` and `eventLimit` to positive safe integers. The recorder retains bounded scalar event storage during frames and materializes fixed records only when `finish()` builds the artifact, reports dropped events after overflow, and never presents an overflow artifact as complete. A host can pass `allocationReport` to `createProfiler` to count profiler-owned event object allocations; the deterministic D-6 gate requires zero allocations while the profiler is off.
 
 ```ts
 const allocationReport = { profilerEventObjectAllocations: 0 };
 const profiler = createProfiler({ allocationReport });
 ```
 
-The phase catalog is exposed as `profiler.phaseCatalog`. App and Render owners publish their catalogs; consumers should read that relation rather than copy phase names into another list.
+The phase catalog is exposed as `profiler.phaseCatalog`. App and Render owners publish their catalogs;
+consumers should read that relation rather than copy phase names into another list.
+`registerPhaseCatalog(source, phases)` returns an idempotent lease disposer. The App frame-loop and
+Renderer release their own definitions at terminal teardown, so reusing a Profiler does not retain a
+dead owner. A finished `ProfileCapture` keeps an immutable catalog snapshot.
 
 The default capture detail is `owner`, which records the stable App/Render phases with the normal
 profiler overhead budget. For a bounded attribution pass, opt into `nested`; Render then records
@@ -150,6 +154,7 @@ Profiler owns capture records, bounds, allocation evidence, and offline projecti
 | Entry | Purpose |
 |:--|:--|
 | `createProfiler(options?)` | Creates an opt-in bounded recorder with an optional sink, clock, catalog, and allocation report. |
+| `profiler.registerPhaseCatalog(source, phases)` | Registers one owner catalog and returns its idempotent removal lease. |
 | `ProfileCapture` | Versioned artifact accepted by validation, model building, and the CLI. |
 | `validateProfileCapture(value)` | Validates schema and semantic invariants before offline use. |
 | `buildProfileModel(capture)` | Projects retained records into summaries without changing the artifact. |

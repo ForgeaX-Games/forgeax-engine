@@ -164,7 +164,7 @@ describe('pack-file cache', () => {
       const result = await reg.loadByGuid<TypesMeshAsset>(parseGuid(MESH_A_GUID));
       expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([packIndexUrl, packUrl]);
       expect(result.ok).toBe(true);
-      expect(fetchMock).toHaveBeenNthCalledWith(1, packIndexUrl);
+      expect(fetchMock).toHaveBeenNthCalledWith(1, packIndexUrl, { cache: 'no-store' });
       expect(fetchMock).toHaveBeenNthCalledWith(2, packUrl);
     } finally {
       // biome-ignore lint/suspicious/noExplicitAny: test teardown
@@ -192,7 +192,7 @@ describe('pack-file cache', () => {
     try {
       const result = await reg.loadByGuid<TypesMeshAsset>(parseGuid(MESH_A_GUID));
       expect(result.ok).toBe(true);
-      expect(fetchMock).toHaveBeenNthCalledWith(1, packIndexUrl);
+      expect(fetchMock).toHaveBeenNthCalledWith(1, packIndexUrl, { cache: 'no-store' });
       expect(fetchMock).toHaveBeenNthCalledWith(2, packUrl);
     } finally {
       // biome-ignore lint/suspicious/noExplicitAny: test teardown

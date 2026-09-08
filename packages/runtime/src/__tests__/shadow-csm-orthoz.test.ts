@@ -23,14 +23,10 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { mat4, vec3 } from '@forgeax/engine-math';
-import {
-  Camera,
-  DirectionalLight,
-  extractFrame,
-  prepareExtractContext,
-} from '@forgeax/engine-render/internal';
+import { Camera, DirectionalLight } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
+import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
 
 // Light travelling down and toward +x/+z, so the source is up and toward -x/-z.
 const LIGHT_DIR: readonly [number, number, number] = [0.3, -1, 0.3];

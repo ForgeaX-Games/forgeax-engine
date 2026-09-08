@@ -19,8 +19,10 @@
 // (B3) child world pos accumulates parent transform
 // (B6) camera detection via GltfNodeIr.camera field (not legacy nodes[1] heuristic)
 
+import { packInterleavedVertexAttributes } from '@forgeax/engine-geometry';
 import type { Mat4 } from '@forgeax/engine-math';
 import { box3, mat4, quat, vec3 } from '@forgeax/engine-math';
+import { AssetGuid as AssetGuidCodec } from '@forgeax/engine-pack/guid';
 import type {
   AssetGuid,
   Handle,
@@ -29,13 +31,16 @@ import type {
   MaterialError,
   MaterialTextureValue,
   MeshAsset,
+  MeshMaterialSlot,
+  MorphTarget,
   RenderQueue,
   Result,
   SceneAsset,
   SceneEntity,
   Submesh,
+  VertexAttributeMap,
 } from '@forgeax/engine-types';
-import { createMaterialError, err, ok } from './errors.js';
+import { createMaterialError, err, type GltfError, gltfErr, ok } from './errors.js';
 import type {
   GltfDoc,
   GltfMaterialIr,
@@ -44,21 +49,6 @@ import type {
   GltfPunctualLightIr,
   GltfTextureInfoIr,
 } from './parse-gltf.js';
-
-/** Canonical interleaved vertex stride for the unskinned 4-attribute layout. */
-const FLOATS_PER_VERTEX_12 = 12;
-/**
- * Skinned 6-attribute interleaved stride: 12 floats (position/normal/uv/tangent)
- * + 4 uint16 joints reinterpreted as 2 floats + 4 float32 weights = 18 floats.
- * Skin index is written via a Uint16Array view aliasing the same buffer at the
- * 12-float offset (4 uint16 = 8 bytes = 2 float32 slots), preserving the
- * naturally aligned vertex layout WebGPU consumes via the 6-attribute
- * `deriveVertexBufferLayout` output.
- */
-const FLOATS_PER_VERTEX_18 = 18;
-/** Canonical base float offsets for UV1 start in interleaved (unskinned / skinned). */
-const UV1_OFFSET_UNSKINNED = FLOATS_PER_VERTEX_12;
-const UV1_OFFSET_SKINNED = FLOATS_PER_VERTEX_18;
 
 /**
  * Convert one or more parsed `GltfMeshIr` primitives sharing the same glTF
@@ -83,24 +73,35 @@ const UV1_OFFSET_SKINNED = FLOATS_PER_VERTEX_18;
  * identity defaults per primitive: normal -> +Y, uv -> 0, tangent -> +X with
  * w=1.
  *
- * Throws on empty input — every glTF mesh has at least one primitive, and an
- * empty array would produce a `mesh-asset-submeshes-empty` AssetError at
- * register time anyway. Caller (gltfImporter / smoke driver) is responsible
- * for grouping by `meshIr.meshIndex` before calling.
+ * Invalid source data is returned as a typed `GltfError`; callers must branch
+ * on `Result.ok` before publishing a MeshAsset. Caller (gltfImporter / smoke
+ * driver) is responsible for grouping by `meshIr.meshIndex` before calling.
  */
-export function meshIrToMeshAsset(prims: readonly GltfMeshIr[]): MeshAsset {
+export function meshIrToMeshAsset(
+  prims: readonly GltfMeshIr[],
+  materials: {
+    readonly guidByIndex?: ReadonlyMap<number, string>;
+    readonly nameByIndex?: ReadonlyMap<number, string>;
+    readonly sourceKeyByIndex?: ReadonlyMap<number, string>;
+  } = {},
+): Result<MeshAsset, GltfError> {
   if (prims.length === 0) {
-    throw new Error(
-      'meshIrToMeshAsset: empty primitives array; pass at least one GltfMeshIr (every glTF mesh has >= 1 primitive)',
+    return err(
+      gltfErr('gltf-mesh-bridge-invalid', {
+        reason: 'empty-input',
+        primitiveCount: 0,
+      }),
     );
   }
   let totalVertexCount = 0;
   let totalIndexCount = 0;
   let hasAnySkin = false;
+  const hasAnyColor = prims.some((p) => p.colors0 !== undefined);
   let hasAnyIndices = false;
-  // feat-20260629-multi-uv-set-support m1-w3: scan for max UV set count across
-  // all primitives so the merged interleaved stride accommodates the widest one.
-  let uvSetCount = 1; // always at least texcoord0 slot
+  // feat-20260629-multi-uv-set-support m1-w3: derive the widest canonical UV
+  // key list across all primitives so the geometry projection accommodates it.
+  let widestUvIndex = 0;
+  const morphTargetCount = prims[0]?.morphTargets?.length ?? 0;
   for (const p of prims) {
     const primVc = p.positions.length / 3;
     totalVertexCount += primVc;
@@ -111,42 +112,51 @@ export function meshIrToMeshAsset(prims: readonly GltfMeshIr[]): MeshAsset {
       totalIndexCount += primVc;
     }
     if (p.joints0 !== undefined && p.weights0 !== undefined) hasAnySkin = true;
+    if ((p.morphTargets?.length ?? 0) !== morphTargetCount) {
+      return err(
+        gltfErr('gltf-mesh-bridge-invalid', {
+          meshIndex: p.meshIndex,
+          primitiveIndex: prims.indexOf(p),
+          reason: 'morph-count-mismatch',
+          expectedTargetCount: morphTargetCount,
+          actualTargetCount: p.morphTargets?.length ?? 0,
+        }),
+      );
+    }
     // Count present UV sets in this primitive.
     for (let k = 7; k >= 1; k--) {
       const key = `texcoord${k}` as keyof GltfMeshIr;
       if (p[key] !== undefined) {
-        uvSetCount = Math.max(uvSetCount, k + 1);
+        widestUvIndex = Math.max(widestUvIndex, k);
         break;
       }
     }
   }
 
-  const FLOATS_PER_VERTEX_BASE = hasAnySkin ? FLOATS_PER_VERTEX_18 : FLOATS_PER_VERTEX_12;
-  const UV1_OFFSET = hasAnySkin ? UV1_OFFSET_SKINNED : UV1_OFFSET_UNSKINNED;
-  // Dynamic stride: base + (uvSetCount - 1) * 2 extra floats for uv1..uvK
-  const FLOATS_PER_VERTEX = FLOATS_PER_VERTEX_BASE + (uvSetCount - 1) * 2;
-  const interleaved = new Float32Array(totalVertexCount * FLOATS_PER_VERTEX);
+  const uvKeys = Array.from({ length: widestUvIndex }, (_, index) => `uv${index + 1}`);
+
   const positionsCat = new Float32Array(totalVertexCount * 3);
   const normalsCat = new Float32Array(totalVertexCount * 3);
   const uvsCat = new Float32Array(totalVertexCount * 2);
   const tangentsCat = new Float32Array(totalVertexCount * 4);
+  const colorsCat = hasAnyColor ? new Float32Array(totalVertexCount * 4) : undefined;
+  const morphTargets: MorphTarget[] = Array.from({ length: morphTargetCount }, (_, targetIndex) => {
+    const source = prims[0]?.morphTargets?.[targetIndex];
+    return {
+      ...(source?.position === undefined
+        ? {}
+        : { position: new Float32Array(totalVertexCount * 3) }),
+      ...(source?.normal === undefined ? {} : { normal: new Float32Array(totalVertexCount * 3) }),
+      ...(source?.tangent === undefined ? {} : { tangent: new Float32Array(totalVertexCount * 4) }),
+    };
+  });
   // feat-20260629-multi-uv-set-support m1-w3: per-UV-set standalone typed arrays
-  // for MeshAsset.attributes (uv1..uvK). Allocated only when uvSetCount > 1.
-  const uvCats: Float32Array[] = [];
-  for (let k = 1; k < uvSetCount; k++) {
-    uvCats.push(new Float32Array(totalVertexCount * 2));
-  }
-  // D-2 / w8: when promoted to 18-float stride, allocate parallel skinIndex
-  // (Uint16Array, 4 per vertex) and skinWeight (Float32Array, 4 per vertex)
-  // standalone arrays for MeshAsset.attributes. The interleaved buffer carries
-  // the same data at offset 12..15 (uint16x4 via aliased view) + 16..19
-  // (float32x4) for GPU upload.
+  // for MeshAsset.attributes (uv1..uvK). Allocated only for imported sets.
+  const uvCats = uvKeys.map(() => new Float32Array(totalVertexCount * 2));
+  // D-2 / w8: when promoted to a skinned projection, retain canonical
+  // standalone arrays; the geometry packer owns the interleaved GPU bytes.
   const skinIndicesCat = hasAnySkin ? new Uint16Array(totalVertexCount * 4) : undefined;
   const skinWeightsCat = hasAnySkin ? new Float32Array(totalVertexCount * 4) : undefined;
-  // Aliased Uint16Array view over the interleaved Float32Array buffer. Used
-  // only when hasAnySkin === true; writes 4 uint16 values per vertex starting
-  // at byte offset (dst + 12) * 4, where dst is the per-vertex Float32 cursor.
-  const interleavedU16 = hasAnySkin ? new Uint16Array(interleaved.buffer) : undefined;
   // Multi-primitive merge biases each primitive's index range by the running
   // vertex offset, so the merged max index is `totalVertexCount - 1`. When a
   // glTF mesh has > 65535 vertices across all primitives (common for
@@ -168,71 +178,118 @@ export function meshIrToMeshAsset(prims: readonly GltfMeshIr[]): MeshAsset {
       ? new Uint32Array(totalIndexCount)
       : new Uint16Array(totalIndexCount);
   const submeshes: Submesh[] = [];
+  const materialSlots: MeshMaterialSlot[] = [];
+  const slotByMaterial = new Map<number | null, number>();
+  const usedNames = new Set<string>();
+  const uniqueSlotName = (base: string): string => {
+    let candidate = base.trim() || 'Material';
+    let suffix = 2;
+    while (usedNames.has(candidate)) candidate = `${base}_${suffix++}`;
+    usedNames.add(candidate);
+    return candidate;
+  };
+  const slotFor = (materialIndex: number | null): number => {
+    const existing = slotByMaterial.get(materialIndex);
+    if (existing !== undefined) return existing;
+    const slotIndex = materialSlots.length;
+    const guid = materialIndex === null ? undefined : materials.guidByIndex?.get(materialIndex);
+    const parsed = guid === undefined ? undefined : AssetGuidCodec.parse(guid);
+    materialSlots.push({
+      slotName: uniqueSlotName(
+        materialIndex === null
+          ? 'Default'
+          : (materials.nameByIndex?.get(materialIndex) ?? `Material_${materialIndex}`),
+      ),
+      sourceKey:
+        materialIndex === null
+          ? 'gltf:default'
+          : (materials.sourceKeyByIndex?.get(materialIndex) ?? `gltf:material:${materialIndex}`),
+      ...(parsed?.ok ? { defaultMaterial: parsed.value } : {}),
+    });
+    slotByMaterial.set(materialIndex, slotIndex);
+    return slotIndex;
+  };
 
   let vertexCursor = 0;
   let indexCursor = 0;
   for (const mesh of prims) {
+    const materialSlot = slotFor(mesh.materialIndex);
     const primVertexCount = mesh.positions.length / 3;
     const primIndexCount = mesh.indices === undefined ? 0 : mesh.indices.length;
+    if (mesh.colors0 !== undefined && mesh.colors0.length !== primVertexCount * 4) {
+      return err(
+        gltfErr('gltf-mesh-bridge-invalid', {
+          meshIndex: mesh.meshIndex,
+          primitiveIndex: prims.indexOf(mesh),
+          reason: 'color-cardinality',
+          semantic: 'COLOR_0',
+          vertexCount: primVertexCount,
+          expectedLength: primVertexCount * 4,
+          actualLength: mesh.colors0.length,
+        }),
+      );
+    }
     for (let i = 0; i < primVertexCount; i++) {
-      const dst = (vertexCursor + i) * FLOATS_PER_VERTEX;
       const p = i * 3;
-      interleaved[dst + 0] = mesh.positions[p + 0] as number;
-      interleaved[dst + 1] = mesh.positions[p + 1] as number;
-      interleaved[dst + 2] = mesh.positions[p + 2] as number;
       positionsCat[(vertexCursor + i) * 3 + 0] = mesh.positions[p + 0] as number;
       positionsCat[(vertexCursor + i) * 3 + 1] = mesh.positions[p + 1] as number;
       positionsCat[(vertexCursor + i) * 3 + 2] = mesh.positions[p + 2] as number;
       if (mesh.normals !== undefined) {
         const n = i * 3;
-        interleaved[dst + 3] = mesh.normals[n + 0] as number;
-        interleaved[dst + 4] = mesh.normals[n + 1] as number;
-        interleaved[dst + 5] = mesh.normals[n + 2] as number;
         normalsCat[(vertexCursor + i) * 3 + 0] = mesh.normals[n + 0] as number;
         normalsCat[(vertexCursor + i) * 3 + 1] = mesh.normals[n + 1] as number;
         normalsCat[(vertexCursor + i) * 3 + 2] = mesh.normals[n + 2] as number;
       } else {
-        interleaved[dst + 3] = 0;
-        interleaved[dst + 4] = 1;
-        interleaved[dst + 5] = 0;
         normalsCat[(vertexCursor + i) * 3 + 1] = 1;
       }
       if (mesh.texcoord0 !== undefined) {
         const t = i * 2;
-        interleaved[dst + 6] = mesh.texcoord0[t + 0] as number;
-        interleaved[dst + 7] = mesh.texcoord0[t + 1] as number;
         uvsCat[(vertexCursor + i) * 2 + 0] = mesh.texcoord0[t + 0] as number;
         uvsCat[(vertexCursor + i) * 2 + 1] = mesh.texcoord0[t + 1] as number;
       }
       if (mesh.tangents !== undefined) {
         const g = i * 4;
-        interleaved[dst + 8] = mesh.tangents[g + 0] as number;
-        interleaved[dst + 9] = mesh.tangents[g + 1] as number;
-        interleaved[dst + 10] = mesh.tangents[g + 2] as number;
-        interleaved[dst + 11] = mesh.tangents[g + 3] as number;
         tangentsCat[(vertexCursor + i) * 4 + 0] = mesh.tangents[g + 0] as number;
         tangentsCat[(vertexCursor + i) * 4 + 1] = mesh.tangents[g + 1] as number;
         tangentsCat[(vertexCursor + i) * 4 + 2] = mesh.tangents[g + 2] as number;
         tangentsCat[(vertexCursor + i) * 4 + 3] = mesh.tangents[g + 3] as number;
       } else {
-        interleaved[dst + 8] = 1;
-        interleaved[dst + 9] = 0;
-        interleaved[dst + 10] = 0;
-        interleaved[dst + 11] = 1;
         tangentsCat[(vertexCursor + i) * 4 + 0] = 1;
         tangentsCat[(vertexCursor + i) * 4 + 3] = 1;
       }
-      // D-2 / w8: when the MeshAsset is promoted to 18-float stride, write
-      // joints (uint16x4 occupies 8 bytes = float slots dst+12..13, written via
-      // the aliased Uint16 view starting at u16 index (dst+12)*2) and weights
-      // (float32x4 at float slots dst+14..17). Total per-vertex stride is
-      // 18 floats = 72 bytes, matching deriveVertexBufferLayout's offset table
-      // (position 0 / normal 12 / uv 24 / tangent 32 / skinIndex 48 / skinWeight 56).
-      // Unskinned primitives in a mixed MeshAsset zero-fill both slots
-      // implicitly — Float32Array / Uint16Array default to 0 and we never
-      // touched dst+12..17 in the unskinned branch.
+      if (colorsCat !== undefined) {
+        const colorDst = (vertexCursor + i) * 4;
+        const colorSrc = i * 4;
+        if (mesh.colors0 === undefined) {
+          colorsCat[colorDst + 0] = 1;
+          colorsCat[colorDst + 1] = 1;
+          colorsCat[colorDst + 2] = 1;
+          colorsCat[colorDst + 3] = 1;
+        } else {
+          colorsCat[colorDst + 0] = mesh.colors0[colorSrc + 0] as number;
+          colorsCat[colorDst + 1] = mesh.colors0[colorSrc + 1] as number;
+          colorsCat[colorDst + 2] = mesh.colors0[colorSrc + 2] as number;
+          colorsCat[colorDst + 3] = mesh.colors0[colorSrc + 3] as number;
+        }
+      }
+      for (let targetIndex = 0; targetIndex < morphTargetCount; targetIndex++) {
+        const source = mesh.morphTargets?.[targetIndex];
+        const target = morphTargets[targetIndex] as MorphTarget;
+        const vertex = vertexCursor + i;
+        if (source?.position !== undefined && target.position !== undefined) {
+          target.position.set(source.position.subarray(i * 3, i * 3 + 3), vertex * 3);
+        }
+        if (source?.normal !== undefined && target.normal !== undefined) {
+          target.normal.set(source.normal.subarray(i * 3, i * 3 + 3), vertex * 3);
+        }
+        if (source?.tangent !== undefined && target.tangent !== undefined) {
+          target.tangent.set(source.tangent.subarray(i * 4, i * 4 + 4), vertex * 4);
+        }
+      }
+      // D-2 / w8: when the MeshAsset is promoted to a skinned projection,
+      // retain both canonical standalone arrays. The geometry packer writes
+      // their typed values into the canonical interleaved byte layout once.
       if (hasAnySkin && skinIndicesCat !== undefined && skinWeightsCat !== undefined) {
-        const u16Base = (dst + 12) * 2; // float slot 12 starts at u16 index 24 within this vertex
         const skinDst = (vertexCursor + i) * 4;
         if (mesh.joints0 !== undefined && mesh.weights0 !== undefined) {
           const j = i * 4;
@@ -240,10 +297,6 @@ export function meshIrToMeshAsset(prims: readonly GltfMeshIr[]): MeshAsset {
           const j1 = mesh.joints0[j + 1] as number;
           const j2 = mesh.joints0[j + 2] as number;
           const j3 = mesh.joints0[j + 3] as number;
-          (interleavedU16 as Uint16Array)[u16Base + 0] = j0;
-          (interleavedU16 as Uint16Array)[u16Base + 1] = j1;
-          (interleavedU16 as Uint16Array)[u16Base + 2] = j2;
-          (interleavedU16 as Uint16Array)[u16Base + 3] = j3;
           skinIndicesCat[skinDst + 0] = j0;
           skinIndicesCat[skinDst + 1] = j1;
           skinIndicesCat[skinDst + 2] = j2;
@@ -252,34 +305,26 @@ export function meshIrToMeshAsset(prims: readonly GltfMeshIr[]): MeshAsset {
           const w1 = mesh.weights0[j + 1] as number;
           const w2 = mesh.weights0[j + 2] as number;
           const w3 = mesh.weights0[j + 3] as number;
-          interleaved[dst + 14] = w0;
-          interleaved[dst + 15] = w1;
-          interleaved[dst + 16] = w2;
-          interleaved[dst + 17] = w3;
           skinWeightsCat[skinDst + 0] = w0;
           skinWeightsCat[skinDst + 1] = w1;
           skinWeightsCat[skinDst + 2] = w2;
           skinWeightsCat[skinDst + 3] = w3;
         }
-        // else: unskinned primitive in mixed MeshAsset; zero-fill is implicit
-        // because Float32Array / Uint16Array initialize to 0 and the
-        // interleaved view never touched dst+12..17 above.
+        // else: unskinned primitive in a mixed MeshAsset; typed arrays remain
+        // zero-filled, which is the canonical fallback.
       }
       // feat-20260629-multi-uv-set-support m1-w3: write uv1..uvK after skin data.
       // Canonical interleaved order: position/normal/uv/tangent/skinIndex/skinWeight/uv1..uv7.
       // UV1 starts at offset UV1_OFFSET (12 for unskinned, 18 for skinned) in float slots.
       // Each additional UV set 2F. Missing texcoordK → zero-fill (plan-strategy M1).
-      for (let k = 1; k < uvSetCount; k++) {
+      for (let k = 1; k <= uvKeys.length; k++) {
         const uvKey = `texcoord${k}` as keyof GltfMeshIr;
-        const interleavedOffset = UV1_OFFSET + (k - 1) * 2;
         const catIdx = k - 1;
         const cat = uvCats[catIdx] as Float32Array;
         const catDst = (vertexCursor + i) * 2;
         const srcArr = mesh[uvKey] as Float32Array | undefined;
         if (srcArr !== undefined) {
           const t = i * 2;
-          interleaved[dst + interleavedOffset + 0] = srcArr[t + 0] as number;
-          interleaved[dst + interleavedOffset + 1] = srcArr[t + 1] as number;
           cat[catDst + 0] = srcArr[t + 0] as number;
           cat[catDst + 1] = srcArr[t + 1] as number;
         }
@@ -305,6 +350,7 @@ export function meshIrToMeshAsset(prims: readonly GltfMeshIr[]): MeshAsset {
           indexCount: primIndexCount,
           vertexCount: primVertexCount,
           topology: 'triangle-list',
+          materialSlot,
         });
         indexCursor += primIndexCount;
       } else {
@@ -317,6 +363,7 @@ export function meshIrToMeshAsset(prims: readonly GltfMeshIr[]): MeshAsset {
           indexCount: primVertexCount,
           vertexCount: primVertexCount,
           topology: 'triangle-list',
+          materialSlot,
         });
         indexCursor += primVertexCount;
       }
@@ -327,28 +374,46 @@ export function meshIrToMeshAsset(prims: readonly GltfMeshIr[]): MeshAsset {
         indexCount: 0,
         vertexCount: primVertexCount,
         topology: 'triangle-list',
+        materialSlot,
       });
     }
     vertexCursor += primVertexCount;
   }
 
-  return {
+  const attributes: VertexAttributeMap = {
+    position: positionsCat,
+    normal: normalsCat,
+    uv: uvsCat,
+    tangent: tangentsCat,
+    ...(colorsCat === undefined ? {} : { color: colorsCat }),
+    ...(skinIndicesCat === undefined ? {} : { skinIndex: skinIndicesCat }),
+    ...(skinWeightsCat === undefined ? {} : { skinWeight: skinWeightsCat }),
+    ...Object.fromEntries(uvCats.map((cat, idx) => [`uv${idx + 1}`, cat])),
+  };
+  const packed = packInterleavedVertexAttributes(attributes, totalVertexCount);
+  if (!packed.ok) {
+    return err(
+      gltfErr('gltf-mesh-bridge-invalid', {
+        meshIndex: prims[0]?.meshIndex ?? -1,
+        reason: 'layout-invalid',
+        cause: packed.error.detail,
+      }),
+    );
+  }
+
+  return ok({
     kind: 'mesh',
-    vertices: interleaved,
+    vertices: packed.value.vertices,
     ...(indices === undefined ? {} : { indices }),
     submeshes,
+    materialSlots,
     aabb: box3.fromPositions(box3.create(), positionsCat),
-    attributes: {
-      position: positionsCat,
-      normal: normalsCat,
-      uv: uvsCat,
-      tangent: tangentsCat,
-      ...(skinIndicesCat === undefined ? {} : { skinIndex: skinIndicesCat }),
-      ...(skinWeightsCat === undefined ? {} : { skinWeight: skinWeightsCat }),
-      // feat-20260629-multi-uv-set-support m1-w3: per-UV-set standalone arrays
-      ...Object.fromEntries(uvCats.map((cat, idx) => [`uv${idx + 1}`, cat])),
-    },
-  };
+    attributes,
+    ...(morphTargetCount === 0 ? {} : { morphTargets }),
+    ...(prims[0]?.morphWeights === undefined
+      ? {}
+      : { morphWeights: new Float32Array(prims[0].morphWeights) }),
+  });
 }
 
 export interface GltfBridgeContext {
@@ -571,6 +636,15 @@ export function gltfDocToSceneAsset(doc: GltfDoc, ctx: GltfBridgeContext): Scene
       if (meshHandle !== undefined) {
         components.MeshFilter = { assetHandle: meshHandle };
       }
+      const meshMorph = doc.meshes.find((mesh) => mesh.meshIndex === ir.meshIndex);
+      const morphCount = meshMorph?.morphTargets?.length ?? 0;
+      if (morphCount > 0) {
+        const weights = ir.morphWeights ?? meshMorph?.morphWeights ?? new Float32Array(morphCount);
+        if (weights.length !== morphCount) {
+          throw new Error('gltfDocToSceneAsset: MorphWeights length does not match morph targets');
+        }
+        components.MorphWeights = { weights: new Float32Array(weights) };
+      }
       // tweak-20260611 M6: when this node references a glTF skin, stamp a
       // Skin component carrying the SkeletonAsset GUID as a string. The
       // runtime AssetRegistry._resolveSceneGuids resolves the string to a
@@ -602,33 +676,10 @@ export function gltfDocToSceneAsset(doc: GltfDoc, ctx: GltfBridgeContext): Scene
       // shared default-material handle (Tier-B scope; Sponza / BoxTextured
       // every primitive carries an explicit material so this fallback path
       // is exercised only by under-specified glTFs).
-      const materialHandles: unknown[] = [];
-      let firstMatHandle: unknown | undefined;
-      for (const meshIr of doc.meshes) {
-        if (meshIr.meshIndex !== (ir.meshIndex as number)) continue;
-        const matIdx = meshIr.materialIndex;
-        let handle: unknown | undefined;
-        if (matIdx !== null) {
-          handle = ctx.materialHandles.get(matIdx);
-        }
-        if (handle !== undefined) {
-          firstMatHandle = handle;
-          break;
-        }
-      }
-      for (const meshIr of doc.meshes) {
-        if (meshIr.meshIndex !== (ir.meshIndex as number)) continue;
-        const matIdx = meshIr.materialIndex;
-        let handle: unknown | undefined;
-        if (matIdx !== null) {
-          handle = ctx.materialHandles.get(matIdx);
-        }
-        if (handle === undefined) handle = firstMatHandle;
-        if (handle !== undefined) materialHandles.push(handle);
-      }
-      if (materialHandles.length > 0) {
-        components.MeshRenderer = { materials: materialHandles };
-      }
+      // Mesh-owned slots carry imported defaults. Scene nodes persist only
+      // true instance differences, so the canonical imported node starts with
+      // an empty per-slot override vector.
+      components.MeshRenderer = { materials: [] };
     }
 
     // Instances on the same entity as MeshFilter/MeshRenderer.
@@ -745,17 +796,13 @@ function textureValue(
           ...(binding.texCoord === undefined ? {} : { set: binding.texCoord }),
           ...(binding.transform === undefined ? {} : { transform: binding.transform }),
         };
-  const value =
-    samplerHandle === undefined
-      ? {
-          texture: textureHandle as unknown as MaterialTextureValue['texture'],
-          ...(coordinates === undefined ? {} : { coordinates }),
-        }
-      : {
-          texture: textureHandle as unknown as MaterialTextureValue['texture'],
-          sampler: samplerHandle as unknown as NonNullable<MaterialTextureValue['sampler']>,
-          ...(coordinates === undefined ? {} : { coordinates }),
-        };
+  const value = {
+    texture: textureHandle as unknown as MaterialTextureValue['texture'],
+    ...(samplerHandle === undefined
+      ? {}
+      : { sampler: samplerHandle as unknown as NonNullable<MaterialTextureValue['sampler']> }),
+    ...(coordinates === undefined ? {} : { coordinates }),
+  };
   if (slot === 'normalTexture') {
     const normal = info as GltfMaterialIr['normalTexture'];
     if (typeof normal === 'object' && normal?.scale !== undefined) {

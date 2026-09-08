@@ -27,11 +27,7 @@ const caps = {
   maxColorAttachments: 8,
 } satisfies RhiCaps;
 
-function feature(
-  identity: string,
-  events: string[],
-  failStage?: 'extract' | 'prepare' | 'contribute',
-) {
+function feature(identity: string, events: string[], failStage?: 'extract' | 'plan') {
   const value = { identity };
   return {
     identity,
@@ -41,17 +37,11 @@ function feature(
         ? err(new RenderFeatureStageFailedError(identity, 0, 'extract', 'next-frame'))
         : ok(value);
     },
-    prepare: () => {
-      events.push(`${identity}:prepare`);
-      return failStage === 'prepare'
-        ? err(new RenderFeatureStageFailedError(identity, 0, 'prepare', 'next-frame'))
-        : ok(undefined);
-    },
-    contribute: () => {
-      events.push(`${identity}:contribute`);
-      return failStage === 'contribute'
-        ? err(new RenderFeatureStageFailedError(identity, 0, 'contribute', 'next-frame'))
-        : ok(undefined);
+    plan: () => {
+      events.push(`${identity}:plan`);
+      return failStage === 'plan'
+        ? err(new RenderFeatureStageFailedError(identity, 0, 'plan', 'next-frame'))
+        : ok({ resources: [], passes: [] });
     },
   } satisfies RenderFeature<typeof value>;
 }
@@ -71,20 +61,19 @@ describe('render feature stage scheduling', () => {
       caps,
     });
 
-    expect(result.events).toEqual([
+    expect(
+      result.stageEvents.map(({ featureIdentity, stage }) => `${featureIdentity}:${stage}`),
+    ).toEqual([
       'synthetic.first:extract',
-      'synthetic.first:prepare',
-      'synthetic.first:contribute',
+      'synthetic.first:plan',
       'synthetic.second:extract',
-      'synthetic.second:prepare',
-      'synthetic.second:contribute',
+      'synthetic.second:plan',
     ]);
   });
 
   it.each([
     'extract',
-    'prepare',
-    'contribute',
+    'plan',
   ] as const)('isolates a %s failure from the healthy feature', (failStage) => {
     const events: string[] = [];
     const host = createRenderFeatureHost([
@@ -109,12 +98,11 @@ describe('render feature stage scheduling', () => {
       });
     }
     expect(events).toContain('synthetic.healthy:extract');
-    expect(events).toContain('synthetic.healthy:prepare');
-    expect(events).toContain('synthetic.healthy:contribute');
+    expect(events).toContain('synthetic.healthy:plan');
     const failedEvents = events.filter((event) => event.startsWith('synthetic.failed:'));
-    const failedStageIndex = ['extract', 'prepare', 'contribute'].indexOf(failStage);
+    const failedStageIndex = ['extract', 'plan'].indexOf(failStage);
     expect(failedEvents).toEqual(
-      ['extract', 'prepare', 'contribute']
+      ['extract', 'plan']
         .slice(0, failedStageIndex + 1)
         .map((stage) => `synthetic.failed:${stage}`),
     );

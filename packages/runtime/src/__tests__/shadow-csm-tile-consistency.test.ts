@@ -115,14 +115,10 @@ function makeMockGPUDevice(log: CaptureLog): unknown {
       getMappedRange: () => new ArrayBuffer(64),
       unmap: () => undefined,
     }),
-    createCommandEncoder: (desc?: { label?: string }) => {
-      // Only the dedicated shadow encoder routes through the per-cascade
-      // viewport call site (recordShadowPass). Other encoders (main / boot
-      // clears) carry different labels and are ignored, so the captured list is
-      // exactly the cascade tile placement in order.
-      const isShadowEncoder = desc?.label === 'render-system-shadow';
+    createCommandEncoder: () => {
       return {
-        beginRenderPass: () => makeRenderPassEncoder(log, isShadowEncoder),
+        beginRenderPass: (descriptor?: { label?: string }) =>
+          makeRenderPassEncoder(log, descriptor?.label?.startsWith('shadowCascade') === true),
         finish: () => ({}),
       };
     },
@@ -198,12 +194,25 @@ async function importEngine(): Promise<{
     opts?: unknown,
     bundler?: unknown,
   ) => Promise<{
-    ready: Promise<void>;
+    subscribe: (listener: (event: unknown) => void) => () => void;
     draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
-    onError: (cb: (err: { code: string }) => void) => () => void;
   }>;
 }> {
-  return (await import(ENGINE)) as never;
+  const engine = (await import(ENGINE)) as {
+    createRenderer: (...args: readonly unknown[]) => Promise<unknown>;
+  };
+  return {
+    createRenderer: async (...args: readonly unknown[]) => {
+      const result = (await engine.createRenderer(...args)) as
+        | { readonly ok: true; readonly value: unknown }
+        | { readonly ok: false; readonly error: unknown };
+      if (!result.ok) throw result.error;
+      return result.value as {
+        subscribe: (listener: (event: unknown) => void) => () => void;
+        draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
+      };
+    },
+  };
 }
 
 async function importEcs(): Promise<{ World: new () => unknown }> {
@@ -219,7 +228,7 @@ async function importComponents(): Promise<{
   HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
 }> {
   return {
-    ...(await import('@forgeax/engine-render/internal')),
+    ...(await import('@forgeax/engine-render')),
     ...(await import('@forgeax/engine-scene')),
     ...(await import('@forgeax/engine-assets-runtime')),
   } as never;
@@ -239,7 +248,6 @@ async function captureCascadeViewports(cascadeCount: number, mapSize: number): P
     {},
     { shaderManifestUrl: buildManifestDataUrl() },
   );
-  await renderer.ready;
   const { World } = await importEcs();
   const C = await importComponents();
   const world = new (World as new () => { spawn: (...componentDatas: unknown[]) => unknown })();
@@ -275,8 +283,8 @@ async function captureCascadeViewports(cascadeCount: number, mapSize: number): P
     { component: C.MeshRenderer, data: {} },
     { component: C.Transform, data: identityTransform() },
   );
-  renderer.onError(() => undefined);
-  if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+  renderer.subscribe(() => undefined);
+  if (!(renderer as unknown as RendererType).attach(world as WorldType).ok) {
     throw new Error('World attachment failed');
   }
   (world as WorldType).update().unwrap();
@@ -291,21 +299,21 @@ function canonicalTile(layer: number, count: number): { col: number; row: number
   return { col: layer % tilesPerSide, row: Math.floor(layer / tilesPerSide) };
 }
 
-// Read the WGSL the GPU actually compiles and evaluate its _atlasTileOrigin
-// branch-free tilesPerSide rule (select(2u, 1u, count<=1u)) so the sampler-side
-// mapping is pinned to the real shader source, not a hand-copy.
+// Read the WGSL the GPU actually compiles and evaluate its _atlasTileGrid
+// column rule (select(2u, 1u, count<=1u)) so the sampler-side mapping is pinned
+// to the real shader source, not a hand-copy.
 const LIGHTING_WGSL = fileURLToPath(
   new URL('../../../shader/src/lighting-directional.wgsl', import.meta.url),
 );
 
 function wgslAtlasTilesPerSide(count: number): number {
   const src = readFileSync(LIGHTING_WGSL, 'utf8');
-  // The shader rule lives in _atlasTileOrigin: tilesPerSide = select(2u,1u,count<=1u).
+  // The shader rule lives in _atlasTileGrid: columns = select(2u,1u,count<=1u).
   // We assert that exact expression is present, then evaluate it here.
-  const m = src.match(/tilesPerSide\s*:\s*u32\s*=\s*select\(2u,\s*1u,\s*count\s*<=\s*1u\)/);
+  const m = src.match(/columns\s*:\s*u32\s*=\s*select\(2u,\s*1u,\s*count\s*<=\s*1u\)/);
   if (m === null) {
     throw new Error(
-      'lighting-directional.wgsl _atlasTileOrigin tilesPerSide rule changed; update AC-04 test',
+      'lighting-directional.wgsl _atlasTileGrid columns rule changed; update AC-04 test',
     );
   }
   return count <= 1 ? 1 : 2;
@@ -355,7 +363,7 @@ describe('CSM cascade tile / matrix / viewport three-way agreement (AC-04, AC-06
 
         // (3) matrix slot: layer index maps 1:1 to lightViewProj_A..D, so the
         // slot index IS the layer. The depth pass uses cascadeIndex=layer to
-        // pick the same matrix (urp-pipeline addShadowPass cascadeIndex: i).
+        // pick the same matrix used by the typed shadow cascade at index i.
         const matrixSlot = layer;
 
         // Three-way: all point at the same tile, and the matrix slot is the
@@ -364,7 +372,7 @@ describe('CSM cascade tile / matrix / viewport three-way agreement (AC-04, AC-06
         expect(depthTile).toEqual(canonicalTile(layer, count));
         expect(matrixSlot).toBe(layer);
       }
-    });
+    }, 30_000);
   }
 
   it('AC-06: count=1 collapses to tile (0,0), matrix slot 0, viewport (0,0)', async () => {
@@ -375,7 +383,7 @@ describe('CSM cascade tile / matrix / viewport three-way agreement (AC-04, AC-06
     expect(vp).toEqual({ x: 0, y: 0, w: mapSize, h: mapSize });
     expect(wgslAtlasTile(0, 1)).toEqual({ col: 0, row: 0 });
     expect(canonicalTile(0, 1)).toEqual({ col: 0, row: 0 });
-  });
+  }, 30_000);
 });
 
 // AC-07 (9-tap PCF offset coordinate-system self-consistency).
@@ -398,9 +406,9 @@ describe('CSM cascade tile / matrix / viewport three-way agreement (AC-04, AC-06
 describe('AC-07: PCF offset coordinate-system self-consistency (static source check)', () => {
   it('count>1 taps are clamped to the cascade tile rect (no cross-tile sampling)', () => {
     const src = readFileSync(LIGHTING_WGSL, 'utf8');
-    // Guard the structure: OOB tests tileUv, sampling uses uv = tileUv*inv +
+    // Guard the structure: OOB tests tileUv, sampling uses uv = tileUv*tileScale +
     // tileOrigin, and every 9-tap offset is clamped to the tile rect.
-    expect(src).toMatch(/let\s+uv\s*=\s*tileUv\s*\*\s*inv\s*\+\s*tileOrigin/);
+    expect(src).toMatch(/let\s+uv\s*=\s*tileUv\s*\*\s*tileScale\s*\+\s*tileOrigin/);
     expect(src).toMatch(/tileUv\.x\s*>=\s*0\.0\s*&&\s*tileUv\.x\s*<=\s*1\.0/);
     expect(src).toMatch(
       /offsetUv\s*=\s*clamp\(\s*uv\s*\+\s*vec2<f32>\(f32\(x\),\s*f32\(y\)\)\s*\*\s*texel\s*,\s*tileLo\s*,\s*tileHi\s*\)/,
@@ -409,8 +417,8 @@ describe('AC-07: PCF offset coordinate-system self-consistency (static source ch
     // PCF uses a fixed texel inset; the per-iteration radius clip keeps all taps
     // of kernels {1,3,5} in-tile).
     expect(src).toMatch(/let\s+tileLo\s*=\s*tileOrigin\s*\+\s*texel/);
-    expect(src).toMatch(/let\s+tileHi\s*=\s*tileOrigin\s*\+\s*vec2<f32>\(inv\)\s*-\s*texel/);
-    // count=1 => tilesPerSide=1 => inv=1, tileOrigin=(0,0) => uv === tileUv, so
+    expect(src).toMatch(/let\s+tileHi\s*=\s*tileOrigin\s*\+\s*tileScale\s*-\s*texel/);
+    // count=1 => columns=1 => tileScale=(1,1), tileOrigin=(0,0) => uv === tileUv, so
     // the OOB guard space and sample space coincide regardless of the clamp.
     expect(wgslAtlasTilesPerSide(1)).toBe(1);
   });

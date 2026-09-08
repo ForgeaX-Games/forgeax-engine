@@ -14,7 +14,7 @@
  * scalar form).
  *
  * `.detail = { component, field, fieldType, actualValue, index? }`
- * `.hint` — names the field and points at `loadByGuid + allocSharedRef`.
+ * `.hint` — names the field and points at `AssetRegistry.load + allocSharedRef`.
  */
 export class SharedFieldInvalidValueError extends Error {
   override readonly name = 'SharedFieldInvalidValueError';
@@ -41,7 +41,7 @@ export class SharedFieldInvalidValueError extends Error {
     const hint =
       `'${fieldName}${at}' on '${componentName}' is a ${fieldType} reference; ` +
       `got ${typeof actualValue} (${JSON.stringify(actualValue)}). ` +
-      `Resolve the GUID to a handle first: loadByGuid(...) then allocSharedRef(...), ` +
+      `Resolve the GUID to a handle first: AssetRegistry.load(guid, kind) then allocSharedRef(...), ` +
       `and bind the returned numeric handle — not the raw GUID / sidecar object.`;
     super(
       `${componentName}.${fieldName}${at}: shared field bound to a non-handle value.\n` +

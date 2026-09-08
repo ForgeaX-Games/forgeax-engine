@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
-import { lstatSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
+import { createReadStream, lstatSync, readdirSync, readlinkSync, statSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -26,32 +26,56 @@ function collectEntries(root, inputPath, entries) {
     return;
   }
   if (!stat.isFile()) throw new Error(`unsupported fingerprint input: ${absolutePath}`);
-  entries.set(path, { kind: 'file', path, value: readFileSync(absolutePath) });
+  entries.set(path, { kind: 'file', path, filePath: absolutePath });
+}
+
+function startField(hash, byteLength) {
+  hash.update(String(byteLength));
+  hash.update(':');
+}
+
+function finishField(hash) {
+  hash.update('\0');
 }
 
 function updateField(hash, value) {
   const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);
-  hash.update(String(bytes.length));
-  hash.update(':');
+  startField(hash, bytes.length);
   hash.update(bytes);
-  hash.update('\0');
+  finishField(hash);
+}
+
+function updateEntryMetadata(hash, entry) {
+  updateField(hash, entry.kind);
+  updateField(hash, entry.path);
+}
+
+async function updateFile(hash, filePath) {
+  startField(hash, statSync(filePath).size);
+  for await (const chunk of createReadStream(filePath)) hash.update(chunk);
+  finishField(hash);
 }
 
 export function fingerprintEntries(entries) {
   const hash = createHash('sha256');
   for (const entry of [...entries].sort((a, b) => a.path.localeCompare(b.path))) {
-    updateField(hash, entry.kind);
-    updateField(hash, entry.path);
+    updateEntryMetadata(hash, entry);
     updateField(hash, entry.value);
   }
   return `sha256:${hash.digest('hex')}`;
 }
 
-export function fingerprintFiles(rootPath, inputPaths) {
+export async function fingerprintFiles(rootPath, inputPaths) {
   const root = resolve(rootPath);
   const entries = new Map();
   for (const inputPath of inputPaths) collectEntries(root, inputPath, entries);
-  return fingerprintEntries(entries.values());
+  const hash = createHash('sha256');
+  for (const entry of [...entries.values()].sort((a, b) => a.path.localeCompare(b.path))) {
+    updateEntryMetadata(hash, entry);
+    if (entry.filePath === undefined) updateField(hash, entry.value);
+    else await updateFile(hash, entry.filePath);
+  }
+  return `sha256:${hash.digest('hex')}`;
 }
 
 export function fingerprintValue(value) {
@@ -72,5 +96,5 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const root = args[rootIndex + 1];
   const paths = args.filter((_, index) => index !== rootIndex && index !== rootIndex + 1);
   if (paths.length === 0) throw new Error('at least one fingerprint path is required');
-  process.stdout.write(`${fingerprintFiles(root, paths)}\n`);
+  process.stdout.write(`${await fingerprintFiles(root, paths)}\n`);
 }

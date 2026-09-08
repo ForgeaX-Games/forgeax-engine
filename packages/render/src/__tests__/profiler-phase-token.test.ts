@@ -6,7 +6,7 @@ import {
   RENDER_PHASE_CATALOG,
   RENDER_RECORD_PHASE_CATALOG,
   type RenderPhase,
-} from '../renderer';
+} from '../render-contract';
 
 const RENDER_PHASES: readonly RenderPhase[] = [
   'extract',

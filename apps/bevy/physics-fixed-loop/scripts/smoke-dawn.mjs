@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -64,17 +65,12 @@ const { createRenderer } = await import('@forgeax/engine-runtime');
 const { buildPhysicsFixedWorld, installPhysicsFixedSystems, readPhysicsFixedState } = await import(resolve(here, '..', 'src', 'physics-fixed-loop.ts'));
 const manifestPath = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const manifestUrl = `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}`;
-const renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: manifestUrl });
+const renderer = await createSmokeRenderer(createRenderer, mockCanvas, {}, { shaderManifestUrl: manifestUrl });
 const errors = [];
-renderer.onError((error) => errors.push(error.code));
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code}`);
-  process.exit(1);
-}
+subscribeSmokeErrors(renderer, (error) => errors.push(error.code));
 
 const world = new World({ time: { fixedDeltaSeconds: 1 / 30, maxStepsPerUpdate: 4, maxDeltaSeconds: 0.25 } });
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 buildPhysicsFixedWorld(world);
 installPhysicsFixedSystems(world);
@@ -84,7 +80,7 @@ for (let i = 0; i < frames; i++) {
     console.error(`[smoke] FAIL - world.update: ${updated.error.code}`);
     process.exit(1);
   }
-  const drawn = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const drawn = drawSmokeFrame(renderer, world);
   if (!drawn.ok) console.error(`[smoke] draw ${i}: ${drawn.error.code}`);
 }
 const state = readPhysicsFixedState(world);
@@ -92,7 +88,7 @@ const physical = world.get(state.player, PhysicalTranslation);
 const rendered = world.get(state.player, Transform);
 const fixed = world.getResource(FixedTime);
 const checks = [
-  ['backend=webgpu', renderer.backend === 'webgpu'],
+  ['backend=webgpu', rendererBackend(renderer) === 'webgpu'],
   [`frames>=${frames}`, state.interpolationFrames === frames],
   ['fixed-steps>0', state.fixedSteps > 0],
   ['physics-advanced', physical.ok && physical.value.x > 0],

@@ -8,6 +8,8 @@
 //
 // Naming convention `*.dawn.test.ts` per vitest.config.ts dawn project.
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it, beforeAll } from 'vitest';
 
 const VERTEX_STRIDE_BYTES = 16;
@@ -46,6 +48,12 @@ fn fs_main(in: FragmentInput) -> @location(0) vec4<f32> {
 `;
 
 describe('F-3: PSO full-shape dawn-node gate (w12/w25 fixup)', () => {
+  it('keeps the producer declaration free of raw submission ownership', () => {
+    const source = readFileSync(resolve(import.meta.dirname, '../src/index.ts'), 'utf8');
+    expect(source).toContain('RenderFeaturePlan');
+    expect(source).not.toMatch(/RhiDevice|RhiQueue|RhiCommandEncoder|queue\.submit|encoder\.finish/);
+  });
+
   let capturedPipelineDesc: Record<string, unknown> | null = null;
   let capturedBgEntries: Array<Record<string, unknown>> | null = null;
   let capturedLessEqualDesc: Record<string, unknown> | null = null;

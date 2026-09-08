@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { defineComponent } from '../component';
+import type { Component } from '../component';
+import { componentId, defineComponent } from '../component';
 import { Disabled, Entity } from '../entity';
 import type { EntityHandle } from '../entity-handle';
 import { SparseStorageRequiresTagError } from '../errors';
 import { Update } from '../schedule-token';
-import { sparseTagHas } from '../storage/sparse-tag-set';
+import { sparseTagHas } from '../storage/change-detection';
 import { World } from '../world';
+
+import { worldInternal } from '../world-internal';
 
 describe('sparse tag storage', () => {
   it('defaults components to table and rejects sparse components with fields', () => {
@@ -25,14 +28,14 @@ describe('sparse tag storage', () => {
     const selected = world
       .spawn({ component: Position, data: { x: 2 } }, { component: Selected, data: {} })
       .unwrap();
-    const graph = world._getGraph();
-    const plainArchetype = world._getEntityArchetype(plain);
-    const selectedArchetype = world._getEntityArchetype(selected);
+    const graph = world[worldInternal].getGraph();
+    const plainArchetype = world[worldInternal].getEntityArchetype(plain);
+    const selectedArchetype = world[worldInternal].getEntityArchetype(selected);
 
     expect(plainArchetype).not.toBe(selectedArchetype);
     expect(plainArchetype?.tableId).toBe(selectedArchetype?.tableId);
     expect(graph.tables).toHaveLength(1);
-    expect(graph.tables[0]?.components.map((component) => component.name)).toEqual([
+    expect(graph.tables[0]?.components.map((component: Component) => component.name)).toEqual([
       'Entity',
       'SharedTablePosition',
     ]);
@@ -48,8 +51,8 @@ describe('sparse tag storage', () => {
     const Selected = defineComponent('SparseFlipSelected', {}, { storage: 'sparse' });
     const world = new World();
     const entity = world.spawn({ component: Wide, data: { a: 1, b: 2, c: 3, d: 4 } }).unwrap();
-    const graph = world._getGraph();
-    const sourceArchetype = world._getEntityArchetype(entity);
+    const graph = world[worldInternal].getGraph();
+    const sourceArchetype = world[worldInternal].getEntityArchetype(entity);
     if (sourceArchetype === undefined) throw new Error('source archetype missing');
     const table = graph.tables[sourceArchetype.tableId];
     if (table === undefined) throw new Error('table missing');
@@ -71,7 +74,7 @@ describe('sparse tag storage', () => {
     };
 
     world.addComponent(entity, { component: Selected, data: {} }).unwrap();
-    const selectedArchetype = world._getEntityArchetype(entity);
+    const selectedArchetype = world[worldInternal].getEntityArchetype(entity);
     expect(selectedArchetype?.tableId).toBe(table.id);
     expect(selectedArchetype?.rows[0]).toBe(tableRow);
     expect(table.size).toBe(before.size);
@@ -92,7 +95,7 @@ describe('sparse tag storage', () => {
     ).toEqual(before.epochs);
 
     world.removeComponent(entity, Selected).unwrap();
-    expect(world._getEntityArchetype(entity)?.tableId).toBe(table.id);
+    expect(world[worldInternal].getEntityArchetype(entity)?.tableId).toBe(table.id);
     expect(table.size).toBe(before.size);
     expect(table.version).toBe(before.version);
   });
@@ -147,26 +150,9 @@ describe('sparse tag storage', () => {
     world.despawn(first).unwrap();
     const replacement = world.spawn().unwrap();
     expect(replacement as number).not.toBe(first as number);
-    const set = world._getGraph().sparseTags.get(Selected.id);
+    const set = world[worldInternal].getGraph().sparseTags.get(componentId(Selected));
     expect(set === undefined ? false : sparseTagHas(set, replacement)).toBe(false);
     expect([...world.query({ with: [Selected] }).unwrap()]).toEqual([]);
-  });
-
-  it('enforces sparse cardinality from logical Archetype membership', () => {
-    const Singleton = defineComponent(
-      'SparseCardinalitySingleton',
-      {},
-      {
-        storage: 'sparse',
-        cardinality: 1,
-      },
-    );
-    const world = new World();
-    world.spawn({ component: Singleton, data: {} }).unwrap();
-
-    const second = world.spawn({ component: Singleton, data: {} });
-    expect(second.ok).toBe(false);
-    if (!second.ok) expect(second.error.code).toBe('cardinality-exceeded');
   });
 
   it('routes deferred sparse spawn, add, and remove through the same storage boundary', () => {
@@ -197,35 +183,6 @@ describe('sparse tag storage', () => {
     expect(observed).toHaveLength(2);
     expect(world.get(existing, Selected).ok).toBe(false);
     expect([...world.query({ with: [Selected] }).unwrap()]).toHaveLength(1);
-  });
-
-  it('runs sparse lifecycle hooks at the documented visibility boundary', () => {
-    const observations: string[] = [];
-    let world: World;
-    const Selected = defineComponent(
-      'SparseHookSelected',
-      {},
-      {
-        storage: 'sparse',
-        onAdd(entity) {
-          observations.push(`add:${world.get(entity, Selected).ok}`);
-        },
-        onInsert(entity) {
-          observations.push(`insert:${world.get(entity, Selected).ok}`);
-        },
-        onDiscard(entity) {
-          observations.push(`discard:${world.get(entity, Selected).ok}`);
-        },
-        onRemove(entity) {
-          observations.push(`remove:${world.get(entity, Selected).ok}`);
-        },
-      },
-    );
-    world = new World();
-    const entity = world.spawn().unwrap();
-    world.addComponent(entity, { component: Selected, data: {} }).unwrap();
-    world.removeComponent(entity, Selected).unwrap();
-    expect(observations).toEqual(['add:true', 'insert:true', 'discard:true', 'remove:true']);
   });
 
   it('reports sparse logical identity without pretending it is Table storage', () => {

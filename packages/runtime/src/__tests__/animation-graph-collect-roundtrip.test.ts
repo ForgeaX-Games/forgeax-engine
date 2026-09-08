@@ -16,34 +16,27 @@
 // a verify-only landing that this test is the witness for).
 
 import {
-  AssetRegistry,
-  animationGraphLoader,
-  resolveAssetHandle,
-} from '@forgeax/engine-assets-runtime';
-import { World } from '@forgeax/engine-ecs';
-import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type {
-  AnimationClip,
-  AnimationGraph,
-  AnimationGraphNode,
-  Asset,
-  Handle,
-  LoadContext,
-} from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
-import '@forgeax/engine-render/internal';
-import '@forgeax/engine-render/internal';
-import {
   AnimationPlayer,
   defineAnimationGraph,
   evaluateAnimationGraph,
   serializeAnimationGraph,
 } from '@forgeax/engine-animation';
+import { AssetRegistry, animationGraphLoader } from '@forgeax/engine-assets-runtime';
+import { World } from '@forgeax/engine-ecs';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
+import type { AnimationClip, AnimationGraph, Handle, LoadContext } from '@forgeax/engine-types';
+import { describe, expect, it } from 'vitest';
 import { rootsToSceneAsset } from '../collect-scene-asset';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function makeRegistry(): AssetRegistry {
   return new AssetRegistry(makeMockShaderRegistry());
+}
+
+function makeWorld(): World {
+  const world = new World();
+  world.components.register(AnimationPlayer).unwrap();
+  return world;
 }
 
 const stubCtx = {} as LoadContext;
@@ -55,13 +48,13 @@ function registerClip(
   reg: AssetRegistry,
   guidStr: string,
   duration: number,
-): { handle: Handle<'AnimationClip', 'shared'>; guid: string } {
+): { handle: Handle<'AnimationClip', 'shared'>; guid: string; asset: AnimationClip } {
   const parsed = AssetGuid.parse(guidStr);
   if (!parsed.ok) throw new Error(`bad test GUID ${guidStr}`);
   const clip: AnimationClip = { kind: 'animation-clip', duration, channels: [] };
   reg.catalog(parsed.value, clip);
   const handle = world.allocSharedRef('AnimationClip', clip) as Handle<'AnimationClip', 'shared'>;
-  return { handle, guid: AssetGuid.format(parsed.value) };
+  return { handle, guid: AssetGuid.format(parsed.value), asset: clip };
 }
 
 // Register a graph POD in both stores; returns its handle + GUID string.
@@ -96,11 +89,7 @@ const G_GRAPH = 'b1000000-0000-4000-8000-0000000000aa';
 const G_GRAPH2 = 'b1000000-0000-4000-8000-0000000000bb';
 
 // Build the standard test graph: Add(base=Blend(walk, run), additive=[survey@0.3]).
-function buildStandardGraph(
-  walk: Handle<'AnimationClip', 'shared'>,
-  run: Handle<'AnimationClip', 'shared'>,
-  survey: Handle<'AnimationClip', 'shared'>,
-): AnimationGraph {
+function buildStandardGraph(walk: string, run: string, survey: string): AnimationGraph {
   const built = defineAnimationGraph((b) => {
     const w = b.clip(walk);
     const r = b.clip(run);
@@ -114,12 +103,12 @@ function buildStandardGraph(
 
 describe('AnimationGraph collect round-trip (M4 / w28, AC-14 part b)', () => {
   it('collects a graph-holding entity with graph resolved to its GUID (schema-driven, zero special-case)', () => {
-    const world = new World();
+    const world = makeWorld();
     const reg = makeRegistry();
     const walk = registerClip(world, reg, G_WALK, 10);
     const run = registerClip(world, reg, G_RUN, 20);
     const survey = registerClip(world, reg, G_SURVEY, 30);
-    const graph = buildStandardGraph(walk.handle, run.handle, survey.handle);
+    const graph = buildStandardGraph(walk.guid, run.guid, survey.guid);
     const g = registerGraph(world, reg, G_GRAPH, graph);
 
     const e = world
@@ -141,7 +130,7 @@ describe('AnimationGraph collect round-trip (M4 / w28, AC-14 part b)', () => {
   });
 
   it('skips a graph == 0 (no-graph) entity 0-sentinel: lossless, no graph key emitted', () => {
-    const world = new World();
+    const world = makeWorld();
     const reg = makeRegistry();
 
     const e = world
@@ -163,33 +152,30 @@ describe('AnimationGraph collect round-trip (M4 / w28, AC-14 part b)', () => {
   });
 
   it('a graph reloaded from its serialized pack payload evaluates to identical weights', () => {
-    const world = new World();
+    const world = makeWorld();
     const reg = makeRegistry();
     const walk = registerClip(world, reg, G_WALK, 10);
     const run = registerClip(world, reg, G_RUN, 20);
     const survey = registerClip(world, reg, G_SURVEY, 30);
-    const guidToHandle = new Map<string, Handle<'AnimationClip', 'shared'>>([
-      [walk.guid, walk.handle],
-      [run.guid, run.handle],
-      [survey.guid, survey.handle],
-    ]);
+    const original = buildStandardGraph(walk.guid, run.guid, survey.guid);
+    const lookup = (guid: string): AnimationClip | undefined =>
+      new Map([
+        [walk.guid, walk.asset],
+        [run.guid, run.asset],
+        [survey.guid, survey.asset],
+      ]).get(guid);
 
     // Original graph -> register -> spawn -> eval one frame -> read weights.
-    const original = buildStandardGraph(walk.handle, run.handle, survey.handle);
     const g0 = registerGraph(world, reg, G_GRAPH, original);
     const e0 = world.spawn({ component: AnimationPlayer, data: { graph: g0.handle } }).unwrap();
-    evaluateAnimationGraph(world, 1 / 60);
+    evaluateAnimationGraph(world, 1 / 60, lookup);
     const w0res = world.get(e0, AnimationPlayer);
     expect(w0res.ok).toBe(true);
     if (!w0res.ok) return;
     const weights0 = Array.from((w0res.value as unknown as { weights: Float32Array }).weights);
 
     // Serialize -> deserialize -> re-resolve clip GUIDs to their handles -> rebuild.
-    const clipGuidResolver = (clip: Handle<'AnimationClip', 'shared'>): string | undefined => {
-      const r = resolveAssetHandle<AnimationClip>(world, clip);
-      if (!r.ok) return undefined;
-      return reg._guidForAsset(r.value as Asset);
-    };
+    const clipGuidResolver = (clip: string): string | undefined => clip;
     const out = serializeAnimationGraph(original, clipGuidResolver);
     expect(out).not.toBeUndefined();
     if (out === undefined) return;
@@ -199,24 +185,11 @@ describe('AnimationGraph collect round-trip (M4 / w28, AC-14 part b)', () => {
     }
     const reloaded = parsed as AnimationGraph;
 
-    // Re-resolve each clip GUID back to its live handle (the ECS/use-time step).
-    const rebuiltNodes: AnimationGraphNode[] = reloaded.nodes.map((n) => {
-      if (n.type === 'clip') {
-        const handle = guidToHandle.get(n.clip as unknown as string);
-        if (handle === undefined) throw new Error(`unresolved clip GUID ${String(n.clip)}`);
-        return { type: 'clip', clip: handle, weight: n.weight };
-      }
-      return n;
-    });
-    const rebuilt: AnimationGraph = {
-      kind: 'animation-graph',
-      nodes: rebuiltNodes,
-      root: reloaded.root,
-    };
+    const rebuilt: AnimationGraph = reloaded;
 
     const g1 = registerGraph(world, reg, G_GRAPH2, rebuilt);
     const e1 = world.spawn({ component: AnimationPlayer, data: { graph: g1.handle } }).unwrap();
-    evaluateAnimationGraph(world, 1 / 60);
+    evaluateAnimationGraph(world, 1 / 60, lookup);
     const w1res = world.get(e1, AnimationPlayer);
     expect(w1res.ok).toBe(true);
     if (!w1res.ok) return;

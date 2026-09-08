@@ -1,8 +1,14 @@
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CatalogReplica } from '@forgeax/engine-assets-runtime';
-import { DdcEntryStore, type DdcHead, DdcLifecycle, ddcOutputDigest } from '@forgeax/engine-ddc';
+import {
+  type BuildDdcInput,
+  DdcEntryStore,
+  type DdcHead,
+  DdcLifecycle,
+  ddcOutputDigest,
+  semanticBuildKey,
+} from '@forgeax/engine-ddc';
 import {
   ImporterRegistry,
   type ImportRunnerFs,
@@ -10,15 +16,7 @@ import {
   type RunImportResult,
   runImport,
 } from '@forgeax/engine-import';
-import type {
-  Asset,
-  CatalogDelta,
-  CatalogEntry,
-  ImportContext,
-  ImportedAsset,
-  SourceOverrideMap,
-} from '@forgeax/engine-types';
-import { type SemanticDdcInput, semanticDdcKey } from '../ddc-cache.js';
+import type { Asset, ImportContext, ImportedAsset, SourceOverrideMap } from '@forgeax/engine-types';
 
 export const SOURCE_OVERRIDE_FIXTURE_GUID = '11111111-1111-4111-8111-111111111111';
 
@@ -28,7 +26,7 @@ export interface SourceOverrideFixture {
   readonly fs: ImportRunnerFs;
   meta(sourceOverrides?: SourceOverrideMap): RunImportMeta;
   run(sourceOverrides?: SourceOverrideMap): Promise<RunImportResult>;
-  semantic(sourceOverrides?: SourceOverrideMap): SemanticDdcInput;
+  semantic(sourceOverrides?: SourceOverrideMap): BuildDdcInput;
   publish(
     root: string,
     sourceOverrides?: SourceOverrideMap,
@@ -128,7 +126,7 @@ export function createSourceOverrideProducerFixture(): SourceOverrideFixture {
       if (!result.ok || 'skipped' in result.value) {
         throw new Error('source override fixture expected a successful import');
       }
-      const key = semanticDdcKey(fixture.semantic(sourceOverrides));
+      const key = semanticBuildKey(fixture.semantic(sourceOverrides));
       await writePack(root, key, result.value.pack);
       const lifecycle = new DdcLifecycle(root);
       const lease = await lifecycle.begin(SOURCE_OVERRIDE_FIXTURE_GUID, key);
@@ -140,69 +138,11 @@ export function createSourceOverrideProducerFixture(): SourceOverrideFixture {
       sourceOverrides,
       failure = { code: 'validation-failed', detail: 'fixture failure' },
     ) {
-      const key = semanticDdcKey(fixture.semantic(sourceOverrides));
+      const key = semanticBuildKey(fixture.semantic(sourceOverrides));
       const lifecycle = new DdcLifecycle(root);
       const lease = await lifecycle.begin(SOURCE_OVERRIDE_FIXTURE_GUID, key);
       await lifecycle.fail(lease, failure);
       return { key, lifecycle, head: await lifecycle.inspect(SOURCE_OVERRIDE_FIXTURE_GUID, key) };
-    },
-  };
-  return fixture;
-}
-
-export interface CatalogFixture {
-  readonly source: {
-    enumerate(): Promise<{ readonly ok: true; readonly value: readonly CatalogEntry[] }>;
-    subscribe(listener: (delta: CatalogDelta) => void): () => void;
-  };
-  readonly replica: CatalogReplica;
-  emit(delta: CatalogDelta): void;
-  replace(entries: readonly CatalogEntry[]): void;
-  deferEnumeration(): (entries: readonly CatalogEntry[]) => void;
-}
-
-/** A no-sleep catalog source for deterministic success, gap, and timeout inputs. */
-export function createCatalogFixture(entries: readonly CatalogEntry[]): CatalogFixture {
-  let current = entries;
-  let listener: ((delta: CatalogDelta) => void) | undefined;
-  let deferNextEnumeration = false;
-  let resolveEnumeration: ((entries: readonly CatalogEntry[]) => void) | undefined;
-  const source = {
-    async enumerate() {
-      if (deferNextEnumeration) {
-        deferNextEnumeration = false;
-        return new Promise<{ readonly ok: true; readonly value: readonly CatalogEntry[] }>(
-          (next) => {
-            resolveEnumeration = (nextEntries) => {
-              resolveEnumeration = undefined;
-              next({ ok: true, value: nextEntries });
-            };
-          },
-        );
-      }
-      return { ok: true as const, value: current };
-    },
-    subscribe(next: (delta: CatalogDelta) => void) {
-      listener = next;
-      return () => {
-        if (listener === next) listener = undefined;
-      };
-    },
-  };
-  const fixture: CatalogFixture = {
-    source,
-    replica: new CatalogReplica(source as never),
-    emit(delta) {
-      listener?.(delta);
-    },
-    replace(next) {
-      current = next;
-    },
-    deferEnumeration() {
-      deferNextEnumeration = true;
-      return (next) => {
-        resolveEnumeration?.(next);
-      };
     },
   };
   return fixture;

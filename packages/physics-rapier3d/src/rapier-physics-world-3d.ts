@@ -1,4 +1,4 @@
-import { FixedTime, FixedUpdate } from '@forgeax/engine-ecs';
+import { componentDefinition, Disabled, FixedTime, FixedUpdate } from '@forgeax/engine-ecs';
 // @forgeax/engine-physics-rapier3d — RapierPhysicsWorld3D class and three-phase
 // tick systems (syncBackend / stepSimulation / writeback).
 //
@@ -18,7 +18,8 @@ import { FixedTime, FixedUpdate } from '@forgeax/engine-ecs';
 // and colliders from the physics world.
 
 import type { Component, EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
-import { defineSystem, Entity as EntityComponent, resolveComponent } from '@forgeax/engine-ecs';
+import { defineSystem } from '@forgeax/engine-ecs';
+import { createWorldProjection, type WorldProjection } from '@forgeax/engine-ecs/projection';
 import { mat4, quat, type Vec3, vec3 } from '@forgeax/engine-math';
 import type { PhysicsWorld, RaycastHit } from '@forgeax/engine-physics';
 import {
@@ -31,17 +32,16 @@ import {
   PhysicsSet,
   RIGID_BODY_TYPE_STATIC,
   RigidBody,
-  registerColliderRemoveListener,
+  registerPhysicsComponents,
   rigidBodyTypeFromF32,
 } from '@forgeax/engine-physics';
-import type {
-  Rapier3DKinematicControllerState,
-  Rapier3DSimulationBody,
-  Rapier3DSimulationCollider,
-  Rapier3DSimulationJoint,
-  Rapier3DSimulationState,
-} from './simulation-participant';
+import { ChildOf } from '@forgeax/engine-scene';
 import type { Rapier3DModule } from './wasm-loader';
+
+interface Rapier3DKinematicControllerState {
+  readonly entity: number;
+  readonly offset: number;
+}
 
 /**
  * Per-entity physics record — tracks the Rapier body handle for
@@ -73,6 +73,48 @@ interface PhysicsCollider3D {
   readonly isSensor: number;
   readonly collisionGroups: number;
   readonly solverGroups: number;
+}
+
+interface PhysicsSyncQueryRow {
+  readonly entity: EntityHandle;
+  has(component: Component): boolean;
+  get(component: Component): Record<string, unknown> | undefined;
+}
+
+interface PhysicsSyncQuery extends Iterable<PhysicsSyncQueryRow> {
+  at(entity: EntityHandle): PhysicsSyncQueryRow | undefined;
+}
+
+interface PhysicsSyncState {
+  readonly world: World;
+  readonly transformComponent: Component;
+  readonly query: PhysicsSyncQuery;
+  readonly projection: WorldProjection;
+  initialized: boolean;
+}
+
+interface PhysicsSyncDescriptor {
+  readonly entity: EntityHandle;
+  readonly transform: PhysicsTransform3D;
+  readonly rigidBody: {
+    readonly type: number;
+    readonly mass: number;
+    readonly linearDamping: number;
+    readonly angularDamping: number;
+    readonly gravityScale: number;
+    readonly ccdEnabled: number;
+  };
+  readonly collider: PhysicsCollider3D;
+  readonly hasCharacterController: boolean;
+  readonly characterControllerOffset: number | undefined;
+}
+
+interface PhysicsEntityDelta {
+  transformChanged: boolean;
+  colliderChanged: boolean;
+  rigidBodyChanged: boolean;
+  characterControllerChanged: boolean;
+  characterControllerRemoved: boolean;
 }
 
 export interface Rapier3DCollisionEvent {
@@ -190,6 +232,11 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     | { world: World; transform: Component; characterController: Component }
     | undefined;
 
+  /** Persistent ECS query + projection cursor for incremental backend sync. */
+  private syncState: PhysicsSyncState | undefined;
+
+  private disposed = false;
+
   constructor(rapier: Rapier3DModule) {
     this.rapierModule = rapier;
     // biome-ignore lint/suspicious/noExplicitAny: Rapier World constructor is a class exported from a namespace module
@@ -202,6 +249,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
   // ─── PhysicsWorld interface ────────────────────────────────────────────
 
   setGravity(gravity: Vec3): void {
+    this.assertActive('setGravity');
     const x = gravity[0] ?? 0;
     const y = gravity[1] ?? 0;
     const z = gravity[2] ?? 0;
@@ -220,6 +268,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     maxDist: number,
     filterMask?: number,
   ): RaycastHit | undefined {
+    this.assertActive('raycast');
     const RAPIER = this.rapierModule;
     // biome-ignore lint/suspicious/noExplicitAny: Rapier Ray constructor comes from a namespace module
     const RayCtor = (RAPIER as any).Ray as new (
@@ -263,6 +312,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
   }
 
   teleport(entity: number, position: Vec3): void {
+    this.assertActive('teleport');
     this.pendingTeleports.set(entity, {
       x: position[0] ?? 0,
       y: position[1] ?? 0,
@@ -271,6 +321,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
   }
 
   step(deltaTime: number): void {
+    this.assertActive('step');
     void deltaTime;
     // biome-ignore lint/suspicious/noExplicitAny: Rapier World.step
     (this.raw as any).step(this.eventQueue);
@@ -385,343 +436,20 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
       .map(([entity, offset]) => ({ entity, offset }));
   }
 
-  captureSimulationState(
-    entityMapper?: (entity: number) => number | undefined,
-  ): Rapier3DSimulationState {
-    const mapEntity = (entity: number): number => {
-      if (entityMapper === undefined) return entity;
-      const mapped = entityMapper(entity);
-      if (mapped === undefined) throw new Error('simulation entity mapping is missing');
-      return mapped;
-    };
-    const mapEvent = (event: Rapier3DCollisionEvent): Rapier3DCollisionEvent => ({
-      type: event.type,
-      entityA: mapEntity(event.entityA),
-      entityB: mapEntity(event.entityB),
-    });
-    const bodies: Rapier3DSimulationBody[] = [];
-    (this.raw as RapierWorld).forEachRigidBody((body: RapierRigidBody) => {
-      const colliders: Rapier3DSimulationCollider[] = [];
-      for (let index = 0; index < body.numColliders(); index += 1) {
-        const collider = body.collider(index);
-        const shapeType = collider.shapeType();
-        colliders.push({
-          shapeType,
-          translation: { ...collider.translation() },
-          rotation: { ...collider.rotation() },
-          density: collider.density(),
-          friction: collider.friction(),
-          restitution: collider.restitution(),
-          sensor: collider.isSensor(),
-          enabled: collider.isEnabled(),
-          collisionGroups: Number(collider.collisionGroups()),
-          solverGroups: Number(collider.solverGroups()),
-          activeEvents: Number(collider.activeEvents()),
-          activeCollisionTypes: Number(collider.activeCollisionTypes()),
-          ...(shapeType === this.rapierModule.ShapeType.Ball
-            ? { radius: collider.radius() }
-            : shapeType === this.rapierModule.ShapeType.Cuboid
-              ? { halfExtents: { ...collider.halfExtents() } }
-              : shapeType === this.rapierModule.ShapeType.Capsule
-                ? { halfHeight: collider.halfHeight(), radius: collider.radius() }
-                : {}),
-        });
-      }
-      bodies.push({
-        entity: mapEntity(body.userData),
-        bodyType: body.bodyType(),
-        translation: { ...body.translation() },
-        rotation: { ...body.rotation() },
-        nextTranslation: { ...body.nextTranslation() },
-        nextRotation: { ...body.nextRotation() },
-        linearVelocity: { ...body.linvel() },
-        angularVelocity: { ...body.angvel() },
-        gravityScale: body.gravityScale(),
-        linearDamping: body.linearDamping(),
-        angularDamping: body.angularDamping(),
-        ccdEnabled: body.isCcdEnabled(),
-        sleeping: body.isSleeping(),
-        enabled: body.isEnabled(),
-        userForce: { ...body.userForce() },
-        userTorque: { ...body.userTorque() },
-        colliders,
-      });
-    });
-    return {
-      version: 1,
-      gravity: { ...this.currentGravity },
-      bodies,
-      joints: this.captureSimulationJoints(mapEntity),
-      kinematicControllers: this.getKinematicControllerStates().map((controller) => ({
-        ...controller,
-        entity: mapEntity(controller.entity),
-      })),
-      pendingTeleports: this.getPendingTeleports().map(([entity, target]) => [
-        mapEntity(entity),
-        target,
-      ]),
-      collisionPairs: [...this.collisionPairs].map(([entity, others]) => [
-        mapEntity(entity),
-        [...others].map(mapEntity).sort(),
-      ]),
-      collisionEvents: this.getCollisionEventHistory().map(mapEvent),
-      pendingCollisionEvents: this.pendingCollisionEvents.map(mapEvent),
-    };
-  }
-
-  private captureSimulationJoints(
-    entityMapper?: (entity: number) => number,
-  ): Rapier3DSimulationJoint[] {
-    const mapEntity = entityMapper ?? ((entity: number) => entity);
-    const joints: Rapier3DSimulationJoint[] = [];
-    (this.raw as RapierWorld).impulseJoints.forEach((joint: RapierWorld) => {
-      if (!joint?.isValid()) return;
-      joints.push({
-        type: joint.type(),
-        body1Entity: mapEntity(joint.body1().userData),
-        body2Entity: mapEntity(joint.body2().userData),
-        anchor1: { ...joint.anchor1() },
-        anchor2: { ...joint.anchor2() },
-        contactsEnabled: joint.contactsEnabled(),
-      });
-    });
-    return joints;
-  }
-
-  createRestoreCandidate(): RapierPhysicsWorld3D {
-    return new RapierPhysicsWorld3D(this.rapierModule);
-  }
-
-  loadSimulationState(state: Rapier3DSimulationState): void {
-    this.setGravity(new Float32Array([state.gravity.x, state.gravity.y, state.gravity.z]) as never);
-    const byEntity = new Map<number, RapierRigidBody>();
-    for (const bodyState of state.bodies) {
-      const body = (this.raw as RapierWorld).createRigidBody(
-        this.rigidBodyDescFromState(bodyState),
-      ) as RapierRigidBody;
-      body.userData = bodyState.entity;
-      this.registerBody(bodyState.entity, body.handle);
-      byEntity.set(bodyState.entity, body);
-      for (const colliderState of bodyState.colliders) {
-        (this.raw as RapierWorld).createCollider(this.colliderDescFromState(colliderState), body);
-      }
-      body.setTranslation(bodyState.translation, false);
-      body.setRotation(bodyState.rotation, false);
-      const isKinematic =
-        bodyState.bodyType === this.rapierModule.RigidBodyType.KinematicPositionBased ||
-        bodyState.bodyType === this.rapierModule.RigidBodyType.KinematicVelocityBased;
-      if (isKinematic) {
-        body.setNextKinematicTranslation(bodyState.nextTranslation);
-        body.setNextKinematicRotation(bodyState.nextRotation);
-      }
-      body.setLinvel(bodyState.linearVelocity, false);
-      body.setAngvel(bodyState.angularVelocity, false);
-      body.setGravityScale(bodyState.gravityScale, false);
-      body.addForce(bodyState.userForce, false);
-      body.addTorque(bodyState.userTorque, false);
-    }
-    for (const jointState of state.joints) {
-      const body1 = byEntity.get(jointState.body1Entity);
-      const body2 = byEntity.get(jointState.body2Entity);
-      if (!body1 || !body2) throw new Error('joint body mapping is missing');
-      const joint = (this.raw as RapierWorld).createImpulseJoint(
-        this.jointDataFromState(jointState),
-        body1,
-        body2,
-        true,
-      );
-      joint.setContactsEnabled(jointState.contactsEnabled);
-    }
-    for (const controllerState of state.kinematicControllers) {
-      if (!byEntity.has(controllerState.entity)) {
-        throw new Error('kinematic controller body mapping is missing');
-      }
-      this.ensureKcc(controllerState.entity, controllerState.offset);
-    }
-    for (const [entity, target] of state.pendingTeleports)
-      this.pendingTeleports.set(entity, { ...target });
-    for (const [entity, others] of state.collisionPairs) {
-      this.collisionPairs.set(entity, new Set(others));
-    }
-    this.collisionEventHistory.push(...(state.collisionEvents as Rapier3DCollisionEvent[]));
-    this.pendingCollisionEvents.push(...(state.pendingCollisionEvents as Rapier3DCollisionEvent[]));
-  }
-
-  private rigidBodyDescFromState(state: Rapier3DSimulationBody): RapierWorld {
-    const RAPIER = this.rapierModule;
-    const factories = new Map<number, () => RapierWorld>([
-      [RAPIER.RigidBodyType.Dynamic, () => RAPIER.RigidBodyDesc.dynamic()],
-      [RAPIER.RigidBodyType.Fixed, () => RAPIER.RigidBodyDesc.fixed()],
-      [
-        RAPIER.RigidBodyType.KinematicPositionBased,
-        () => RAPIER.RigidBodyDesc.kinematicPositionBased(),
-      ],
-      [
-        RAPIER.RigidBodyType.KinematicVelocityBased,
-        () => RAPIER.RigidBodyDesc.kinematicVelocityBased(),
-      ],
-    ]);
-    const factory = factories.get(state.bodyType);
-    if (!factory) throw new Error('unsupported body type');
-    return factory()
-      .setTranslation(state.translation.x, state.translation.y, state.translation.z)
-      .setRotation(state.rotation)
-      .setLinvel(state.linearVelocity.x, state.linearVelocity.y, state.linearVelocity.z)
-      .setAngvel(state.angularVelocity.x, state.angularVelocity.y, state.angularVelocity.z)
-      .setGravityScale(state.gravityScale)
-      .setLinearDamping(state.linearDamping)
-      .setAngularDamping(state.angularDamping)
-      .setCcdEnabled(state.ccdEnabled)
-      .setSleeping(state.sleeping)
-      .setEnabled(state.enabled);
-  }
-
-  private colliderDescFromState(state: Rapier3DSimulationCollider): RapierWorld {
-    const RAPIER = this.rapierModule;
-    const halfExtents = state.halfExtents;
-    const desc =
-      state.shapeType === RAPIER.ShapeType.Ball
-        ? RAPIER.ColliderDesc.ball(state.radius)
-        : state.shapeType === RAPIER.ShapeType.Cuboid && halfExtents !== undefined
-          ? RAPIER.ColliderDesc.cuboid(halfExtents.x, halfExtents.y, halfExtents.z)
-          : state.shapeType === RAPIER.ShapeType.Capsule
-            ? RAPIER.ColliderDesc.capsule(state.halfHeight, state.radius)
-            : undefined;
-    if (!desc) throw new Error('unsupported collider shape');
-    return desc
-      .setTranslation(state.translation.x, state.translation.y, state.translation.z)
-      .setRotation(state.rotation)
-      .setDensity(state.density)
-      .setFriction(state.friction)
-      .setRestitution(state.restitution)
-      .setSensor(state.sensor)
-      .setEnabled(state.enabled)
-      .setCollisionGroups(state.collisionGroups)
-      .setSolverGroups(state.solverGroups)
-      .setActiveEvents(state.activeEvents)
-      .setActiveCollisionTypes(state.activeCollisionTypes);
-  }
-
-  private jointDataFromState(state: Rapier3DSimulationJoint): RapierWorld {
-    const RAPIER = this.rapierModule;
-    if (state.type === RAPIER.JointType.Revolute) {
-      return RAPIER.JointData.revolute(state.anchor1, state.anchor2, { x: 0, y: 1, z: 0 });
-    }
-    if (state.type === RAPIER.JointType.Fixed) {
-      return RAPIER.JointData.fixed(state.anchor1, { x: 0, y: 0, z: 0, w: 1 }, state.anchor2, {
-        x: 0,
-        y: 0,
-        z: 0,
-        w: 1,
-      });
-    }
-    throw new Error('unsupported joint type');
-  }
-
-  commitRestoreCandidate(
-    candidate: RapierPhysicsWorld3D,
-    entityMap?: ReadonlyMap<number, number>,
-  ): void {
-    if (entityMap !== undefined) candidate.remapEntities(entityMap);
-    const previousRaw = this.raw;
-    const previousEventQueue = this.eventQueue;
-    this.raw = candidate.raw;
-    this.eventQueue = candidate.eventQueue;
-    this.currentGravity = { ...candidate.currentGravity };
-    this.entityMap.clear();
-    for (const [entity, record] of candidate.entityMap) this.entityMap.set(entity, record);
-    this.pendingTeleports.clear();
-    for (const [entity, target] of candidate.pendingTeleports) {
-      this.pendingTeleports.set(entity, { ...target });
-    }
-    this.collisionPairs.clear();
-    for (const [entity, others] of candidate.collisionPairs) {
-      this.collisionPairs.set(entity, new Set(others));
-    }
-    this.pendingCollisionEvents.splice(
-      0,
-      this.pendingCollisionEvents.length,
-      ...candidate.pendingCollisionEvents,
-    );
-    this.collisionEventHistory.splice(
-      0,
-      this.collisionEventHistory.length,
-      ...candidate.collisionEventHistory,
-    );
-    this.kccCache.clear();
-    for (const [entity, controller] of candidate.kccCache) {
-      this.kccCache.set(entity, controller);
-    }
-    this.kccOffsets.clear();
-    for (const [entity, offset] of candidate.kccOffsets) {
-      this.kccOffsets.set(entity, offset);
-    }
-    if (previousRaw !== this.raw && typeof previousRaw.free === 'function') previousRaw.free();
-    if (previousEventQueue !== this.eventQueue && typeof previousEventQueue.free === 'function') {
-      previousEventQueue.free();
-    }
-  }
-
-  private remapEntities(entityMap: ReadonlyMap<number, number>): void {
-    const remap = (entity: number): number => {
-      const mapped = entityMap.get(entity);
-      if (mapped === undefined) throw new Error('simulation entity mapping is missing');
-      return mapped;
-    };
-    (this.raw as RapierWorld).forEachRigidBody((body: RapierRigidBody) => {
-      body.userData = remap(body.userData);
-    });
-    const entityRecords = [...this.entityMap].map(
-      ([entity, record]) => [remap(entity), record] as const,
-    );
-    this.entityMap.clear();
-    for (const [entity, record] of entityRecords) this.entityMap.set(entity, record);
-
-    const teleports = [...this.pendingTeleports].map(
-      ([entity, target]) => [remap(entity), target] as const,
-    );
-    this.pendingTeleports.clear();
-    for (const [entity, target] of teleports) this.pendingTeleports.set(entity, target);
-
-    const pairs = [...this.collisionPairs].map(
-      ([entity, others]) => [remap(entity), new Set([...others].map(remap))] as const,
-    );
-    this.collisionPairs.clear();
-    for (const [entity, others] of pairs) this.collisionPairs.set(entity, others);
-
-    const remapEvent = (event: Rapier3DCollisionEvent): Rapier3DCollisionEvent => ({
-      ...event,
-      entityA: remap(event.entityA),
-      entityB: remap(event.entityB),
-    });
-    this.pendingCollisionEvents.splice(
-      0,
-      this.pendingCollisionEvents.length,
-      ...this.pendingCollisionEvents.map(remapEvent),
-    );
-    this.collisionEventHistory.splice(
-      0,
-      this.collisionEventHistory.length,
-      ...this.collisionEventHistory.map(remapEvent),
-    );
-
-    const kccOffsets = [...this.kccOffsets].map(
-      ([entity, offset]) => [remap(entity), offset] as const,
-    );
-    this.kccOffsets.clear();
-    for (const [entity, offset] of kccOffsets) this.kccOffsets.set(entity, offset);
-    const kccCache = [...this.kccCache].map(
-      ([entity, controller]) => [remap(entity), controller] as const,
-    );
-    this.kccCache.clear();
-    for (const [entity, controller] of kccCache) this.kccCache.set(entity, controller);
-  }
-
   dispose(): void {
+    if (this.disposed) return;
+    this.syncState = undefined;
+    this.moveContext = undefined;
     if (typeof this.raw.free === 'function') this.raw.free();
     if (typeof this.eventQueue.free === 'function') this.eventQueue.free();
+    this.entityMap.clear();
+    this.pendingTeleports.clear();
+    this.collisionPairs.clear();
+    this.pendingCollisionEvents.length = 0;
+    this.collisionEventHistory.length = 0;
     this.kccCache.clear();
     this.kccOffsets.clear();
+    this.disposed = true;
   }
 
   getBodyCount(): number {
@@ -738,11 +466,25 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
    * `registerPhysicsSystems` (plan-strategy D-1/D-7).
    */
   setMoveContext(world: World, transform: Component, characterController: Component): void {
+    this.assertActive('setMoveContext');
     this.moveContext = { world, transform, characterController };
   }
 
+  /** Release the persistent ECS readers owned by one system registration. */
+  clearEcsContext(world: World): void {
+    if (this.syncState?.world === world) this.syncState = undefined;
+    if (this.moveContext?.world === world) this.moveContext = undefined;
+  }
+
   moveAndSlide(entity: number, desiredDelta: Vec3): Vec3 {
+    this.assertActive('moveAndSlide');
     return this.computeMove(entity, desiredDelta);
+  }
+
+  private assertActive(operation: string): void {
+    if (this.disposed) {
+      throw new Error(`RapierPhysicsWorld3D.${operation} cannot run on a disposed instance`);
+    }
   }
 
   /**
@@ -875,7 +617,8 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     }
     // The ECS token owns the defaults; keep the defensive no-context path on
     // that projection so 3D cannot drift from the shared CharacterController schema.
-    return CharacterController.defaults as CharacterControllerTuning;
+    return componentDefinition(CharacterController)
+      .defaults as unknown as CharacterControllerTuning;
   }
 
   /**
@@ -890,6 +633,225 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     this.kccCache.set(entity, ctrl);
     this.kccOffsets.set(entity, offset);
     return ctrl;
+  }
+
+  /** Remove backend rows whose Collider disappeared from the World query. */
+  pruneMissingEntities(active: ReadonlySet<number>): void {
+    for (const entity of this.entityMap.keys()) {
+      if (!active.has(entity)) this.removeEntity(entity);
+    }
+  }
+
+  private bodyForEntity(entity: number): RapierRigidBody | undefined {
+    const record = this.entityMap.get(entity);
+    if (!record) return undefined;
+    // biome-ignore lint/suspicious/noExplicitAny: Rapier bodies API needs any-cast
+    return ((this.raw as any).bodies.get(record.bodyHandle) as RapierRigidBody | null) ?? undefined;
+  }
+
+  private isCommittedFixedBody(entity: number): boolean {
+    return this.bodyForEntity(entity)?.bodyType() === this.rapierModule.RigidBodyType.Fixed;
+  }
+
+  private reconcileTransformlessCompatibility(entity: number, staticByEcs: boolean): void {
+    if (!staticByEcs || !this.isCommittedFixedBody(entity)) {
+      this.removeEntity(entity);
+      return;
+    }
+    // A fixed body cannot be controller-owned. Clear stale KCC state defensively
+    // while retaining the already-committed body and collider receipt.
+    this.removeKccController(entity);
+  }
+
+  private resetForFullReconcile(transformlessStatic: ReadonlySet<number>): void {
+    // Without a descriptor/hash mirror, an overflow cannot prove which existing
+    // Transform-backed body changed. Recreate those bodies from the final ECS
+    // combination. Dynamic velocity/contact state is intentionally reset during
+    // this recovery path so stale motion type or collider data cannot survive.
+    for (const entity of [...this.entityMap.keys()]) {
+      if (transformlessStatic.has(entity) && this.isCommittedFixedBody(entity)) {
+        this.removeKccController(entity);
+        continue;
+      }
+      this.removeEntity(entity);
+    }
+  }
+
+  private fullReconcilePhysicsState(state: PhysicsSyncState): void {
+    const descriptors: PhysicsSyncDescriptor[] = [];
+    const transformlessStatic = new Set<number>();
+    for (const row of state.query) {
+      if (!row.has(state.transformComponent)) {
+        if (physicsRowIsStatic(row)) transformlessStatic.add(row.entity);
+        continue;
+      }
+      const descriptor = readPhysicsSyncDescriptor(row, state.transformComponent);
+      if (descriptor !== undefined) descriptors.push(descriptor);
+    }
+
+    this.resetForFullReconcile(transformlessStatic);
+    for (const descriptor of descriptors) {
+      this.ensureBody(
+        descriptor.entity,
+        descriptor.transform,
+        descriptor.rigidBody,
+        descriptor.collider,
+      );
+    }
+    state.initialized = true;
+  }
+
+  private reconcilePhysicsDelta(
+    state: PhysicsSyncState,
+    entity: EntityHandle,
+    delta: PhysicsEntityDelta,
+  ): void {
+    const row = state.query.at(entity);
+    if (row === undefined) {
+      this.removeEntity(entity);
+      return;
+    }
+    if (!row.has(state.transformComponent)) {
+      // A lifecycle mutation cannot be applied without a pose. Keep only the
+      // narrow migration case where Transform alone disappeared from an already
+      // committed fixed body; never create or reshape a Transform-less row.
+      if (delta.colliderChanged || delta.rigidBodyChanged) {
+        this.removeEntity(entity);
+        return;
+      }
+      this.reconcileTransformlessCompatibility(entity, physicsRowIsStatic(row));
+      return;
+    }
+
+    const descriptor = readPhysicsSyncDescriptor(row, state.transformComponent);
+    if (descriptor === undefined) {
+      this.removeEntity(entity);
+      return;
+    }
+
+    if (this.hasBody(entity) && (delta.colliderChanged || delta.rigidBodyChanged)) {
+      // Collider/RigidBody lifecycle is reconciled by replacement from the final
+      // ECS combination. This deliberately resets velocity/contact state for an
+      // affected dynamic body; no descriptor mirror is introduced in M1.
+      this.removeEntity(entity);
+    }
+    if (!this.hasBody(entity)) {
+      this.ensureBody(entity, descriptor.transform, descriptor.rigidBody, descriptor.collider);
+      return;
+    }
+
+    if (delta.characterControllerChanged) {
+      const cachedOffset = this.kccOffsets.get(entity);
+      const hadCachedReceipt = this.kccCache.has(entity);
+      const finalOffset = descriptor.characterControllerOffset;
+      if (!descriptor.hasCharacterController) {
+        this.removeKccController(entity);
+      } else if (
+        hadCachedReceipt &&
+        (delta.characterControllerRemoved ||
+          finalOffset === undefined ||
+          !Object.is(cachedOffset, finalOffset))
+      ) {
+        // Consume the final ECS combination. A remove+add in one journal window
+        // rebuilds the KCC receipt with the final offset, while transient
+        // grounded writeback leaves an equal-offset receipt untouched.
+        this.removeKccController(entity);
+        if (finalOffset !== undefined) this.ensureKcc(entity, finalOffset);
+      }
+    }
+    if (!delta.transformChanged && !delta.characterControllerRemoved) return;
+
+    const bodyType = rigidBodyTypeFromF32(descriptor.rigidBody.type);
+    if (bodyType === 'static') {
+      this.syncAuthoredPose(entity, descriptor.transform, descriptor.collider, 'static');
+    } else if (bodyType === 'kinematic' && !descriptor.hasCharacterController) {
+      this.syncAuthoredPose(entity, descriptor.transform, descriptor.collider, 'kinematic');
+    }
+  }
+
+  /** @internal ECS system bridge; consumers should register PhysicsSyncBackend. */
+  _syncFromEcs(world: World, transformComponent: Component): void {
+    this.assertActive('syncFromEcs');
+    let state = this.syncState;
+    if (
+      state === undefined ||
+      state.world !== world ||
+      state.transformComponent !== transformComponent
+    ) {
+      const queryResult = world.query({
+        read: [Collider],
+        optional: [transformComponent, RigidBody, CharacterController, ChildOf],
+      });
+      if (!queryResult.ok) return;
+      state = {
+        world,
+        transformComponent,
+        query: queryResult.value as unknown as PhysicsSyncQuery,
+        projection: createWorldProjection(world, {
+          components: [
+            transformComponent,
+            Collider,
+            RigidBody,
+            CharacterController,
+            ChildOf,
+            Disabled,
+          ],
+        }),
+        initialized: false,
+      };
+      this.syncState = state;
+    }
+
+    if (!state.initialized) {
+      this.fullReconcilePhysicsState(state);
+      return;
+    }
+
+    const evidence = state.projection.poll();
+    if (evidence.status === 'rebuild') {
+      this.fullReconcilePhysicsState(state);
+      return;
+    }
+    if (evidence.changes.length === 0) return;
+
+    const deltas = new Map<EntityHandle, PhysicsEntityDelta>();
+    for (const change of evidence.changes) {
+      let delta = deltas.get(change.entity);
+      if (delta === undefined) {
+        delta = {
+          transformChanged: false,
+          colliderChanged: false,
+          rigidBodyChanged: false,
+          characterControllerChanged: false,
+          characterControllerRemoved: false,
+        };
+        deltas.set(change.entity, delta);
+      }
+      if (change.kind === 'entity-removed') continue;
+      if (change.component === undefined) {
+        this.fullReconcilePhysicsState(state);
+        return;
+      }
+      if (change.component === transformComponent) {
+        delta.transformChanged = true;
+      } else if (change.component === Collider) {
+        delta.colliderChanged = true;
+      } else if (change.component === RigidBody) {
+        delta.rigidBodyChanged = true;
+      } else if (change.component === CharacterController) {
+        delta.characterControllerChanged = true;
+        if (change.kind === 'component-removed') delta.characterControllerRemoved = true;
+      } else if (change.component === ChildOf) {
+        delta.transformChanged = true;
+      } else if (change.component !== Disabled) {
+        // The projection is intentionally closed over the membership inputs.
+        // Any future unattributable record fails closed to a complete read.
+        this.fullReconcilePhysicsState(state);
+        return;
+      }
+    }
+
+    for (const [entity, delta] of deltas) this.reconcilePhysicsDelta(state, entity, delta);
   }
 
   /**
@@ -937,6 +899,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     },
     collider: PhysicsCollider3D,
   ): void {
+    this.assertActive('ensureBody');
     if (this.entityMap.has(entity)) return; // M1 idempotent guard (D-2)
 
     const RAPIER = this.rapierModule;
@@ -1074,6 +1037,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     collider: PhysicsCollider3D,
     bodyType: 'static' | 'kinematic',
   ): void {
+    this.assertActive('syncAuthoredPose');
     const record = this.entityMap.get(entity);
     if (!record) return;
     // biome-ignore lint/suspicious/noExplicitAny: Rapier bodies API needs any-cast
@@ -1213,65 +1177,8 @@ export function createRapier3DPhysicsWorld(rapier: Rapier3DModule): RapierPhysic
   return new RapierPhysicsWorld3D(rapier);
 }
 
-// ─── Internal archetype graph surface (mirrors advance-animation-player) ──
-interface GraphLike {
-  readonly tables: ReadonlyArray<TableLike | undefined>;
-}
-interface TableLike {
-  readonly components: ReadonlyArray<{ readonly id: number }>;
-  readonly storage: ReadonlyMap<
-    number,
-    {
-      readonly fields: ReadonlyMap<
-        string,
-        {
-          readonly view:
-            | Uint32Array
-            | Float32Array
-            | ReadonlyArray<Uint32Array>
-            | ReadonlyArray<Float32Array>;
-        }
-      >;
-    }
-  >;
-  readonly size: number;
-}
-interface InternalWorldSurface {
-  /** @internal Archetype graph accessor mirrored from World; used for tick-system traversal. */
-  _getGraph(): GraphLike;
-}
-function asInternal(w: World): InternalWorldSurface {
-  return w as unknown as InternalWorldSurface;
-}
-
-/**
- * Read the full packed `Entity` handle for archetype `row` from the essential
- * id=0 `Entity` column (`self` field), present on every archetype.
- */
-function readEntityAt(table: TableLike, row: number): EntityHandle {
-  const selfCol = table.storage
-    .get((EntityComponent as unknown as Component).id)
-    ?.fields.get('self')?.view as Uint32Array | undefined;
-  return (selfCol?.[row] ?? 0) as EntityHandle;
-}
-
-function hasResolvedWorldPose(world: Float32Array | undefined, base: number): boolean {
-  if (!world) return false;
-  return (
-    world[base] !== 1 ||
-    world[base + 5] !== 1 ||
-    world[base + 10] !== 1 ||
-    world[base + 15] !== 1 ||
-    world[base + 1] !== 0 ||
-    world[base + 2] !== 0 ||
-    world[base + 4] !== 0 ||
-    world[base + 6] !== 0 ||
-    world[base + 8] !== 0 ||
-    world[base + 9] !== 0 ||
-    world[base + 12] !== 0 ||
-    world[base + 13] !== 0 ||
-    world[base + 14] !== 0
-  );
+function hasReadableWorldPose(world: Float32Array | undefined): world is Float32Array {
+  return world !== undefined && world.length >= 16;
 }
 
 /** dt upper bound (plan-strategy D-4): skip step if dt exceeds this. */
@@ -1281,27 +1188,135 @@ const poseScratchRotation = quat.create();
 const poseScratchScale = vec3.create();
 const poseScratchWorld = new Float32Array(16);
 
-// ─── Collider removal despawn-cleanup dispatch (plan-strategy D-3) ───
-//
-// `Collider.onRemove` (defined in @forgeax/engine-physics) fans removal out to
-// subscribed listeners. The frozen component token cannot be mutated, so each
-// backend subscribes via `registerColliderRemoveListener` and dispatches
-// removeEntity to every live backend on removal — only the one whose entityMap
-// holds the entity acts (removeEntity early-returns otherwise, idempotent). One
-// global subscription covers all backends; backends are tracked in a Set.
+function physicsRowIsStatic(row: PhysicsSyncQueryRow): boolean {
+  if (!row.has(RigidBody)) return true;
+  const rigidBody = row.get(RigidBody) as { readonly type: number } | undefined;
+  return rigidBody !== undefined && rigidBodyTypeFromF32(rigidBody.type) === 'static';
+}
 
-const registeredBackends = new Set<RapierPhysicsWorld3D>();
-let colliderRemoveListenerSubscribed = false;
+function readPhysicsSyncDescriptor(
+  row: PhysicsSyncQueryRow,
+  transformComponent: Component,
+): PhysicsSyncDescriptor | undefined {
+  const transformData = row.get(transformComponent) as
+    | {
+        readonly pos: Float32Array;
+        readonly quat: Float32Array;
+        readonly scale: Float32Array;
+        readonly world?: Float32Array;
+      }
+    | undefined;
+  const colliderData = row.get(Collider) as
+    | {
+        readonly shape: number;
+        readonly halfExtents: Float32Array;
+        readonly radius: number;
+        readonly halfHeight: number;
+        readonly friction: number;
+        readonly restitution: number;
+        readonly density: number;
+        readonly isSensor: number | boolean;
+        readonly collisionGroups: number;
+        readonly solverGroups: number;
+      }
+    | undefined;
+  if (transformData === undefined || colliderData === undefined) return undefined;
 
-function registerBackendForRemoveHook(pw: RapierPhysicsWorld3D): void {
-  registeredBackends.add(pw);
-  if (colliderRemoveListenerSubscribed) return;
-  colliderRemoveListenerSubscribed = true;
-  registerColliderRemoveListener((entity) => {
-    for (const backend of registeredBackends) {
-      backend.removeEntity(entity as unknown as number);
-    }
-  });
+  // Root-local TRS is already a world pose. A ChildOf row, however, must use
+  // Scene's derived world matrix whenever that field is readable. Matrix
+  // contents cannot be a validity sentinel: a legitimate parent/local
+  // composition can resolve to identity. Direct/test rows that omit `world`
+  // retain the authored-local fallback.
+  const useWorldPose = row.has(ChildOf) && hasReadableWorldPose(transformData.world);
+  if (useWorldPose) {
+    poseScratchWorld.set(transformData.world.subarray(0, 16));
+    mat4.decompose(poseScratchPosition, poseScratchRotation, poseScratchScale, poseScratchWorld);
+  } else {
+    poseScratchPosition[0] = transformData.pos[0] ?? 0;
+    poseScratchPosition[1] = transformData.pos[1] ?? 0;
+    poseScratchPosition[2] = transformData.pos[2] ?? 0;
+    poseScratchRotation[0] = transformData.quat[0] ?? 0;
+    poseScratchRotation[1] = transformData.quat[1] ?? 0;
+    poseScratchRotation[2] = transformData.quat[2] ?? 0;
+    poseScratchRotation[3] = transformData.quat[3] ?? 1;
+    poseScratchScale[0] = transformData.scale[0] ?? 1;
+    poseScratchScale[1] = transformData.scale[1] ?? 1;
+    poseScratchScale[2] = transformData.scale[2] ?? 1;
+  }
+
+  const rigidBodyData = row.has(RigidBody)
+    ? (row.get(RigidBody) as
+        | {
+            readonly type: number;
+            readonly mass: number;
+            readonly linearDamping: number;
+            readonly angularDamping: number;
+            readonly gravityScale: number;
+            readonly ccdEnabled: number | boolean;
+          }
+        | undefined)
+    : undefined;
+  const characterControllerData = row.has(CharacterController)
+    ? (row.get(CharacterController) as { readonly offset: number } | undefined)
+    : undefined;
+
+  return {
+    entity: row.entity,
+    transform: {
+      position: {
+        x: poseScratchPosition[0] ?? 0,
+        y: poseScratchPosition[1] ?? 0,
+        z: poseScratchPosition[2] ?? 0,
+      },
+      rotation: {
+        x: poseScratchRotation[0] ?? 0,
+        y: poseScratchRotation[1] ?? 0,
+        z: poseScratchRotation[2] ?? 0,
+        w: poseScratchRotation[3] ?? 1,
+      },
+      scale: {
+        x: poseScratchScale[0] ?? 1,
+        y: poseScratchScale[1] ?? 1,
+        z: poseScratchScale[2] ?? 1,
+      },
+    },
+    rigidBody:
+      rigidBodyData === undefined
+        ? {
+            type: RIGID_BODY_TYPE_STATIC,
+            mass: 0,
+            linearDamping: 0,
+            angularDamping: 0,
+            gravityScale: 1,
+            ccdEnabled: 0,
+          }
+        : {
+            type: rigidBodyData.type,
+            mass: rigidBodyData.mass,
+            linearDamping: rigidBodyData.linearDamping,
+            angularDamping: rigidBodyData.angularDamping,
+            gravityScale: rigidBodyData.gravityScale,
+            ccdEnabled: Number(rigidBodyData.ccdEnabled),
+          },
+    collider: {
+      shape: colliderData.shape,
+      halfExtents: [
+        colliderData.halfExtents[0] ?? 0,
+        colliderData.halfExtents[1] ?? 0,
+        colliderData.halfExtents[2] ?? 0,
+      ],
+      radius: colliderData.radius,
+      halfHeight: colliderData.halfHeight,
+      friction: colliderData.friction,
+      restitution: colliderData.restitution,
+      density: colliderData.density,
+      isSensor: Number(colliderData.isSensor),
+      collisionGroups: colliderData.collisionGroups,
+      solverGroups: colliderData.solverGroups,
+    },
+    hasCharacterController: row.has(CharacterController),
+    characterControllerOffset: characterControllerData?.offset,
+  };
 }
 
 // ── System name constants ──
@@ -1311,34 +1326,33 @@ const PHYSICS_WRITEBACK = 'physicsWriteback' as const;
 const PHYSICS_COLLISION_SYNC = 'physicsCollisionSync' as const;
 
 /**
- * Resolve the runtime `Transform` component token from the global ECS
+ * Resolve the runtime `Transform` component token from the World-local ECS
  * registry (M2 — full resource-ification, D-3). physics already depends on
- * `@forgeax/engine-ecs`, so `resolveComponent` introduces no new dependency
+ * `@forgeax/engine-ecs`, so the catalog introduces no new dependency
  * and replaces the closure-captured `transformComponent` second parameter.
  * Returns `undefined` when Transform is not yet defined (the runtime package
  * defines it on import); callers early-out.
  */
-function resolveTransform(): Component | undefined {
-  return resolveComponent('Transform');
+function resolveTransform(world: World): Component | undefined {
+  return world.components.resolve('Transform');
 }
 
 /**
  * `physicsSyncBackend` system token (M2 — full resource-ification, D-4).
  *
- * After propagateTransforms — query entities with (Transform, Collider) and
- * call ensureBody for each. `RigidBody` is OPTIONAL: an entity with a Collider
- * but no RigidBody is treated as a STATIC collider (Rapier-native behavior — a
- * collider without a parent body is fixed), which is exactly what the `Collider`
- * component docstring promises and how static level geometry (floors, walls) is
- * naturally authored. Reads `world` from its first parameter; resolves Transform
- * via the global registry. Labelled `'physics'`.
+ * After propagateTransforms, bootstrap/recovery performs one complete Collider
+ * reconcile. Warm ticks poll the existing ECS projection and identity-read only
+ * final changed rows. Bare Colliders remain implicit static bodies; Transform-less
+ * fixed bodies are retained only as a migration defense and are never created.
+ * Reads `world` from its first parameter; resolves Transform via the global
+ * registry. Labelled `'physics'`.
  */
 export const PhysicsSyncBackend: SystemHandle<readonly []> = defineSystem({
   name: PHYSICS_SYNC_BACKEND,
   queries: [],
   after: ['propagateTransformsFixed'],
   fn: (world) => {
-    const transformComponent = resolveTransform();
+    const transformComponent = resolveTransform(world);
     if (transformComponent === undefined) return;
     let pw: RapierPhysicsWorld3D;
     try {
@@ -1348,226 +1362,7 @@ export const PhysicsSyncBackend: SystemHandle<readonly []> = defineSystem({
     }
 
     pw.applyPendingTeleports();
-
-    const graph = asInternal(world)._getGraph();
-
-    for (const arch of graph.tables) {
-      if (!arch || arch.size === 0) continue;
-      // (Collider, Transform) are REQUIRED; RigidBody is OPTIONAL. A
-      // Collider-only entity is simulated as an implicit static collider (see
-      // the system doc + the Collider component docstring). Gating on RigidBody
-      // here — as the pre-fix filter did — silently dropped every bare-Collider
-      // static body from the simulation, contradicting the documented contract.
-      if (
-        !arch.components.some((c) => c.id === Collider.id) ||
-        !arch.components.some((c) => c.id === transformComponent.id)
-      ) {
-        continue;
-      }
-
-      // D-5: character entities (CharacterController) move via moveAndSlide
-      // (which pushes the kinematic body + writes Transform itself), so the
-      // kinematic mirror below must NOT double-write them. Detected once per
-      // archetype — characters fall into a distinct archetype by component set.
-      const hasCharacterController = arch.components.some((c) => c.id === CharacterController.id);
-
-      // RigidBody column is optional (bare-Collider archetypes have none). When
-      // absent, `rbCols` is undefined → every rb* view below is undefined → the
-      // per-row rigidBody is synthesized as a static default (the `static`
-      // ensureBody arm ignores mass/damping/gravity anyway).
-      const rbCols = arch.storage.get(RigidBody.id)?.fields;
-      const cCols = arch.storage.get(Collider.id)?.fields;
-      const tfCols = arch.storage.get(transformComponent.id)?.fields;
-      if (!cCols || !tfCols) continue;
-
-      const rbType = rbCols?.get('type')?.view as Uint32Array | undefined;
-      const rbMass = rbCols?.get('mass')?.view as Float32Array | undefined;
-      const rbLinDamp = rbCols?.get('linearDamping')?.view as Float32Array | undefined;
-      const rbAngDamp = rbCols?.get('angularDamping')?.view as Float32Array | undefined;
-      const rbGravScale = rbCols?.get('gravityScale')?.view as Float32Array | undefined;
-      const rbCcd = rbCols?.get('ccdEnabled')?.view as Uint32Array | undefined;
-
-      const cShape = cCols.get('shape')?.view as Uint32Array | undefined;
-      // feat-20260709 M4: halfExtents is one inline array<f32,3> column
-      // (stride 3, row r's xyz at [r*3 .. +2]). radius/halfHeight stay scalar
-      // columns (OOS-1).
-      const cHalfExtents = cCols.get('halfExtents')?.view as Float32Array | undefined;
-      const cRadius = cCols.get('radius')?.view as Float32Array | undefined;
-      const cHalfH = cCols.get('halfHeight')?.view as Float32Array | undefined;
-      const cFric = cCols.get('friction')?.view as Float32Array | undefined;
-      const cRest = cCols.get('restitution')?.view as Float32Array | undefined;
-      const cDens = cCols.get('density')?.view as Float32Array | undefined;
-      const cSensor = cCols.get('isSensor')?.view as Uint32Array | undefined;
-      const cCGroups = cCols.get('collisionGroups')?.view as Uint32Array | undefined;
-      const cSGroups = cCols.get('solverGroups')?.view as Uint32Array | undefined;
-
-      // Local TRS position is a flat stride-3 array<f32,3> column
-      // (feat-20260709 M2): row i's xyz at pos[i*3 .. +2]. Indexed reads only
-      // -- zero per-call allocation on this per-frame sync path (AC-08).
-      const tfPos = tfCols.get('pos')?.view as Float32Array | undefined;
-      const tfQuat = tfCols.get('quat')?.view as Float32Array | undefined;
-      const tfScale = tfCols.get('scale')?.view as Float32Array | undefined;
-      // Transform.world is an inline `array<f32, 16>` column (stride 16,
-      // column-major mat4); row r's world-space translation is at
-      // [r*16 + 12 .. +14]. The kinematic mirror MUST drive the Rapier collider
-      // from WORLD space, not local pos: a ChildOf collider (e.g. a Guardian
-      // attack sensor parented to its body) has local pos (0,0,0), so mirroring
-      // local would pin its collider at the world origin forever while only its
-      // ECS Transform follows the parent (via propagateTransforms). physicsSync
-      // runs AFTER propagateTransforms, so this column is fresh this frame.
-      const tfWorld = tfCols.get('world')?.view as Float32Array | undefined;
-
-      // rb* views are intentionally NOT guarded here: a bare-Collider archetype
-      // has no RigidBody column, so they are legitimately undefined and the
-      // per-row rigidBody below falls back to a static default. Only the
-      // Collider + Transform columns are required.
-      if (
-        !cShape ||
-        !cHalfExtents ||
-        !cRadius ||
-        !cHalfH ||
-        !cFric ||
-        !cRest ||
-        !cDens ||
-        !cSensor ||
-        !cCGroups ||
-        !cSGroups ||
-        !tfPos ||
-        !tfQuat ||
-        !tfScale
-      ) {
-        continue;
-      }
-
-      for (let row = 0; row < arch.size; row++) {
-        const entity = readEntityAt(arch, row);
-
-        const localBase = row * 3;
-        const quatBase = row * 4;
-        const worldBase = row * 16;
-        const useWorldPose = hasResolvedWorldPose(tfWorld, worldBase);
-        const worldPosition =
-          useWorldPose && tfWorld
-            ? {
-                x: tfWorld[worldBase + 12] ?? tfPos[localBase] ?? 0,
-                y: tfWorld[worldBase + 13] ?? tfPos[localBase + 1] ?? 0,
-                z: tfWorld[worldBase + 14] ?? tfPos[localBase + 2] ?? 0,
-              }
-            : {
-                x: tfPos[localBase] ?? 0,
-                y: tfPos[localBase + 1] ?? 0,
-                z: tfPos[localBase + 2] ?? 0,
-              };
-        if (useWorldPose && tfWorld) {
-          for (let lane = 0; lane < 16; lane++) {
-            poseScratchWorld[lane] = tfWorld[worldBase + lane] ?? 0;
-          }
-          mat4.decompose(
-            poseScratchPosition,
-            poseScratchRotation,
-            poseScratchScale,
-            poseScratchWorld,
-          );
-        } else {
-          poseScratchPosition[0] = tfPos[localBase] ?? 0;
-          poseScratchPosition[1] = tfPos[localBase + 1] ?? 0;
-          poseScratchPosition[2] = tfPos[localBase + 2] ?? 0;
-          poseScratchRotation[0] = tfQuat[quatBase] ?? 0;
-          poseScratchRotation[1] = tfQuat[quatBase + 1] ?? 0;
-          poseScratchRotation[2] = tfQuat[quatBase + 2] ?? 0;
-          poseScratchRotation[3] = tfQuat[quatBase + 3] ?? 1;
-          poseScratchScale[0] = tfScale[localBase] ?? 1;
-          poseScratchScale[1] = tfScale[localBase + 1] ?? 1;
-          poseScratchScale[2] = tfScale[localBase + 2] ?? 1;
-        }
-        const transform: PhysicsTransform3D = {
-          position: useWorldPose
-            ? {
-                x: poseScratchPosition[0] ?? 0,
-                y: poseScratchPosition[1] ?? 0,
-                z: poseScratchPosition[2] ?? 0,
-              }
-            : worldPosition,
-          rotation: {
-            x: poseScratchRotation[0] ?? 0,
-            y: poseScratchRotation[1] ?? 0,
-            z: poseScratchRotation[2] ?? 0,
-            w: poseScratchRotation[3] ?? 1,
-          },
-          scale: {
-            x: poseScratchScale[0] ?? 1,
-            y: poseScratchScale[1] ?? 1,
-            z: poseScratchScale[2] ?? 1,
-          },
-        };
-
-        // Bare-Collider (no RigidBody) → synthesize a STATIC body. The `static`
-        // ensureBody arm reads only `type`, so mass/damping/gravity/ccd defaults
-        // are inert; this matches Rapier's "collider without a parent body is
-        // fixed" semantics and the Collider component docstring.
-        const rigidBody: {
-          type: number;
-          mass: number;
-          linearDamping: number;
-          angularDamping: number;
-          gravityScale: number;
-          ccdEnabled: number;
-        } = rbType
-          ? {
-              type: rbType[row] as number,
-              mass: (rbMass?.[row] ?? 0) as number,
-              linearDamping: (rbLinDamp?.[row] ?? 0) as number,
-              angularDamping: (rbAngDamp?.[row] ?? 0) as number,
-              gravityScale: (rbGravScale?.[row] ?? 1) as number,
-              ccdEnabled: (rbCcd?.[row] ?? 0) as number,
-            }
-          : {
-              type: RIGID_BODY_TYPE_STATIC,
-              mass: 0,
-              linearDamping: 0,
-              angularDamping: 0,
-              gravityScale: 1,
-              ccdEnabled: 0,
-            };
-
-        const collider: {
-          shape: number;
-          halfExtents: readonly [number, number, number];
-          radius: number;
-          halfHeight: number;
-          friction: number;
-          restitution: number;
-          density: number;
-          isSensor: number;
-          collisionGroups: number;
-          solverGroups: number;
-        } = {
-          shape: cShape[row] as number,
-          halfExtents: [
-            cHalfExtents[row * 3] as number,
-            cHalfExtents[row * 3 + 1] as number,
-            cHalfExtents[row * 3 + 2] as number,
-          ],
-          radius: cRadius[row] as number,
-          halfHeight: cHalfH[row] as number,
-          friction: cFric[row] as number,
-          restitution: cRest[row] as number,
-          density: cDens[row] as number,
-          isSensor: cSensor[row] as number,
-          collisionGroups: cCGroups[row] as number,
-          solverGroups: cSGroups[row] as number,
-        };
-
-        pw.ensureBody(entity, transform, rigidBody, collider);
-
-        const rbTypeVal = rigidBodyTypeFromF32(rigidBody.type);
-        if (rbTypeVal === 'static') {
-          pw.syncAuthoredPose(entity, transform, collider, 'static');
-        } else if (rbTypeVal === 'kinematic' && !hasCharacterController) {
-          pw.syncAuthoredPose(entity, transform, collider, 'kinematic');
-        }
-      }
-    }
+    pw._syncFromEcs(world, transformComponent);
   },
 });
 
@@ -1606,7 +1401,7 @@ export const PhysicsWriteback: SystemHandle<readonly []> = defineSystem({
   queries: [],
   after: [PHYSICS_STEP_SIMULATION],
   fn: (world) => {
-    const transformComponent = resolveTransform();
+    const transformComponent = resolveTransform(world);
     if (transformComponent === undefined) return;
     let pw: RapierPhysicsWorld3D;
     try {
@@ -1658,33 +1453,47 @@ export const PhysicsCollisionSync: SystemHandle<readonly []> = defineSystem({
  * `defineSystem` tokens; this helper wires the moveAndSlide context + despawn
  * cleanup hook, then adds the tokens to the schedule.
  *
- * Transform is resolved from the global ECS registry (`resolveComponent`,
+ * Transform is resolved from the World-local ECS component catalog,
  * D-3) — the previous `transformComponent` second parameter was redundant once
  * the system fns and moveContext resolve Transform themselves, so it is gone.
  *
  * @param world ECS World instance.
  */
-export function registerPhysicsSystems(world: World): void {
+export function registerPhysicsSystems(world: World): () => void {
+  const releaseComponents = registerPhysicsComponents(world);
   // ── moveAndSlide context + despawn cleanup wiring (D-1/D-3) ──
   // Wire the World + Transform/CharacterController components into the backend
   // so moveAndSlide can read tuning and write pose/grounded back, and register
   // the backend for the global Collider.onRemove dispatch (despawn cleanup).
-  const transformComponent = resolveTransform();
+  const transformComponent = resolveTransform(world);
   try {
     const pw = world.getResource<RapierPhysicsWorld3D>('PhysicsWorld');
     if (transformComponent !== undefined) {
       pw.setMoveContext(world, transformComponent, CharacterController);
     }
-    registerBackendForRemoveHook(pw);
   } catch {
     // PhysicsWorld resource not yet inserted — moveAndSlide falls back to
     // CharacterController schema defaults until a later registration wires it.
   }
 
-  world.addSystems(FixedUpdate, PhysicsSet, [
-    PhysicsSyncBackend,
-    PhysicsStepSimulation,
-    PhysicsWriteback,
-    PhysicsCollisionSync,
-  ]);
+  world
+    .addSystems(FixedUpdate, PhysicsSet, [
+      PhysicsSyncBackend,
+      PhysicsStepSimulation,
+      PhysicsWriteback,
+      PhysicsCollisionSync,
+    ])
+    .unwrap();
+  return () => {
+    world.removeSystem(FixedUpdate, PHYSICS_COLLISION_SYNC);
+    world.removeSystem(FixedUpdate, PHYSICS_WRITEBACK);
+    world.removeSystem(FixedUpdate, PHYSICS_STEP_SIMULATION);
+    world.removeSystem(FixedUpdate, PHYSICS_SYNC_BACKEND);
+    try {
+      world.getResource<RapierPhysicsWorld3D>('PhysicsWorld').clearEcsContext(world);
+    } catch {
+      // PhysicsWorld may already have been removed as part of outer teardown.
+    }
+    releaseComponents();
+  };
 }

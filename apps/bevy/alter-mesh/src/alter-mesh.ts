@@ -29,11 +29,6 @@ const INDICES = new Uint16Array([
   16, 19, 17, 17, 19, 18, 20, 21, 23, 21, 23, 22,
 ]);
 
-export interface MeshGpuStore {
-  updateMesh(handle: Handle<'MeshAsset', 'shared'>, vertices: Float32Array, indices: Uint16Array): void;
-  getMeshGpuHandles?(handle: Handle<'MeshAsset', 'shared'>): unknown;
-}
-
 export interface AlterMeshState {
   readonly leftEntity: EntityHandle;
   readonly rightEntity: EntityHandle;
@@ -78,8 +73,9 @@ function cubeMesh(vertices: Float32Array): MeshAsset {
       tangent: new Float32Array(POSITIONS.flatMap(() => [1, 0, 0, 1])),
     },
     indices: INDICES,
-    submeshes: [{ indexOffset: 0, indexCount: INDICES.length, vertexCount: POSITIONS.length, topology: 'triangle-list' }],
+    submeshes: [{ indexOffset: 0, indexCount: INDICES.length, vertexCount: POSITIONS.length, topology: 'triangle-list', materialSlot: 0 }],
     aabb: new Float32Array([-0.75, -0.75, -0.75, 0.75, 0.75, 0.75]),
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 
@@ -118,11 +114,13 @@ export function buildAlterMeshWorld(world: World): AlterMeshState {
   };
 }
 
-export function mutateSharedMesh(state: AlterMeshState, store: MeshGpuStore): void {
-  if (store.getMeshGpuHandles?.(state.sharedMeshHandle) === undefined) return;
+export function mutateSharedMesh(world: World, state: AlterMeshState): void {
+  const mesh = world.sharedRefs.resolve<'MeshAsset', MeshAsset>(state.sharedMeshHandle);
+  if (!mesh.ok) return;
   state.altered = !state.altered;
   state.mutations += 1;
-  store.updateMesh(state.sharedMeshHandle, state.altered ? state.alteredVertices : state.baseVertices, state.indices);
+  mesh.value.vertices.set(state.altered ? state.alteredVertices : state.baseVertices);
+  world.sharedRefs.markChanged(state.sharedMeshHandle);
 }
 
 export function swapRightMesh(world: World, state: AlterMeshState): void {
@@ -133,7 +131,7 @@ export function swapRightMesh(world: World, state: AlterMeshState): void {
   });
 }
 
-export function stepAlterMesh(world: World, state: AlterMeshState, store: MeshGpuStore, input: InputSnapshot): void {
-  if (input.keyboard.justPressedCode('Enter')) mutateSharedMesh(state, store);
+export function stepAlterMesh(world: World, state: AlterMeshState, input: InputSnapshot): void {
+  if (input.keyboard.justPressedCode('Enter')) mutateSharedMesh(world, state);
   if (input.keyboard.justPressedCode('Space')) swapRightMesh(world, state);
 }

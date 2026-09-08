@@ -1,3 +1,5 @@
+// @perf-budget-skip: intentional full mock-GPU render regression smoke gate.
+
 // bug-20260610-sponza-per-submesh-bg-textureviews D2 regression test (M3 / m3-1).
 //
 // State at C2 (this commit, parent f4bf5cda + M2 rename):
@@ -31,6 +33,15 @@ import type { World as WorldType } from '@forgeax/engine-ecs';
 import type { Renderer as RendererType } from '@forgeax/engine-render';
 import type { Handle, MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+function canonicalTestMeshAttributes(vertexCount: number) {
+  return {
+    position: new Float32Array(vertexCount * 3),
+    normal: new Float32Array(vertexCount * 3),
+    uv: new Float32Array(vertexCount * 2),
+    tangent: new Float32Array(vertexCount * 4),
+  };
+}
 
 // ─── Test fixtures ──────────────────────────────────────────────────────────
 
@@ -224,15 +235,46 @@ function buildManifestDataUrl(): string {
 }
 
 interface RendererLike {
-  ready: Promise<unknown>;
+  subscribe: RendererType['subscribe'];
   draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
-  onError: (cb: (err: { code: string }) => void) => () => void;
+}
+
+function unwrapRendererError(value: unknown): { code: string; detail?: unknown } {
+  let current = value as { code: string; detail?: unknown };
+  while (
+    current.detail !== undefined &&
+    typeof current.detail === 'object' &&
+    current.detail !== null
+  ) {
+    const cause = (current.detail as { cause?: unknown }).cause;
+    if (
+      cause === undefined ||
+      typeof cause !== 'object' ||
+      cause === null ||
+      typeof (cause as { code?: unknown }).code !== 'string'
+    ) {
+      break;
+    }
+    current = cause as { code: string; detail?: unknown };
+  }
+  return current;
 }
 
 async function importEngine(): Promise<{
-  createRenderer: (canvas: unknown, opts?: unknown, opts2?: unknown) => Promise<RendererLike>;
+  createRenderer: (...args: readonly unknown[]) => Promise<RendererLike>;
 }> {
-  return (await import('../createRenderer')) as never;
+  const engine = (await import('../createRenderer')) as {
+    createRenderer: (...args: readonly unknown[]) => Promise<unknown>;
+  };
+  return {
+    createRenderer: async (...args: readonly unknown[]) => {
+      const result = (await engine.createRenderer(...args)) as
+        | { readonly ok: true; readonly value: unknown }
+        | { readonly ok: false; readonly error: unknown };
+      if (!result.ok) throw result.error;
+      return result.value as RendererLike;
+    },
+  };
 }
 
 async function importEcs(): Promise<{
@@ -252,7 +294,7 @@ async function importComponents(): Promise<{
   DirectionalLight: unknown;
 }> {
   return {
-    ...(await import('@forgeax/engine-render/internal')),
+    ...(await import('@forgeax/engine-render')),
     ...(await import('@forgeax/engine-scene')),
   } as never;
 }
@@ -297,11 +339,30 @@ function threeSubmeshMesh(): MeshAsset {
     kind: 'mesh',
     vertices: new Float32Array(9 * 12),
     indices: new Uint16Array([0, 1, 2, 3, 4, 5, 6, 7, 8]),
-    attributes: {},
+    attributes: canonicalTestMeshAttributes(9),
+    materialSlots: [{ slotName: 'First' }, { slotName: 'Second' }, { slotName: 'Third' }],
     submeshes: [
-      { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' as const },
-      { indexOffset: 3, indexCount: 3, vertexCount: 3, topology: 'triangle-list' as const },
-      { indexOffset: 6, indexCount: 3, vertexCount: 3, topology: 'triangle-list' as const },
+      {
+        indexOffset: 0,
+        indexCount: 3,
+        vertexCount: 3,
+        topology: 'triangle-list' as const,
+        materialSlot: 0,
+      },
+      {
+        indexOffset: 3,
+        indexCount: 3,
+        vertexCount: 3,
+        topology: 'triangle-list' as const,
+        materialSlot: 1,
+      },
+      {
+        indexOffset: 6,
+        indexCount: 3,
+        vertexCount: 3,
+        topology: 'triangle-list' as const,
+        materialSlot: 2,
+      },
     ],
   };
 }
@@ -322,7 +383,6 @@ async function setupRenderer(
       shaderManifestUrl: buildManifestDataUrl(),
     },
   );
-  await renderer.ready;
   return { renderer };
 }
 
@@ -424,10 +484,18 @@ describe('record: per-submesh PBR material BG textureView (bug-20260610 D2 regre
     const spies = makeSpies();
     const { renderer } = await setupRenderer(spies);
     const errors: string[] = [];
-    renderer.onError((e) => errors.push(e.code));
+    renderer.subscribe((event) => {
+      if (event.kind === 'error') errors.push(event.error.code);
+    });
 
     const world = await spawnPbrMultiMaterialScene();
-    if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+    if (!(renderer as unknown as RendererType).attach(world as WorldType).ok) {
+      throw new Error('World attachment failed');
+    }
+    (world as WorldType).update().unwrap();
+    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (!(renderer as unknown as RendererType).attach(world as WorldType).ok) {
       throw new Error('World attachment failed');
     }
     (world as WorldType).update().unwrap();
@@ -495,8 +563,12 @@ async function spawnPbrMissingTextureScene(): Promise<unknown> {
     kind: 'mesh',
     vertices: new Float32Array(3 * 12),
     indices: new Uint16Array([0, 1, 2]),
-    attributes: {},
-    submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+    attributes: canonicalTestMeshAttributes(3),
+    submeshes: [
+      { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list', materialSlot: 0 },
+    ],
+
+    materialSlots: [{ slotName: 'Default' }],
   };
   const meshHandle = world.allocSharedRef('MeshAsset', oneSubmeshMesh) as unknown as Handle<
     'MeshAsset',
@@ -584,7 +656,9 @@ describe('record: PBR missing baseColorTexture telemetry (feat-future-pbr-missin
       const spies = makeSpies();
       const { renderer } = await setupRenderer(spies, 1);
       const errors: Array<{ code: string; detail?: unknown }> = [];
-      renderer.onError((e) => errors.push(e as { code: string; detail?: unknown }));
+      renderer.subscribe((event) => {
+        if (event.kind === 'error') errors.push(unwrapRendererError(event.error));
+      });
 
       const { world, badTexHandleId } = (await spawnPbrMissingTextureScene()) as {
         world: unknown;
@@ -594,12 +668,12 @@ describe('record: PBR missing baseColorTexture telemetry (feat-future-pbr-missin
       // Two frames: the RhiError fires per-frame (machine-readable signal), but
       // the console.warn fires exactly once (warn-once across RenderSystem
       // lifetime -- signal/noise floor, charter P3).
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+      if (!(renderer as unknown as RendererType).attach(world as WorldType).ok) {
         throw new Error('World attachment failed');
       }
       (world as WorldType).update().unwrap();
       renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-      if (!(renderer as unknown as RendererType).attachWorld(world as WorldType).ok) {
+      if (!(renderer as unknown as RendererType).attach(world as WorldType).ok) {
         throw new Error('World attachment failed');
       }
       (world as WorldType).update().unwrap();

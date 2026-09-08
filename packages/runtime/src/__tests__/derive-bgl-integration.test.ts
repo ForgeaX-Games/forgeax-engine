@@ -25,10 +25,10 @@
 //       std140 walk produced by derive — caller writes scalars at the
 //       reported offsets and the totalBytes is the buffer allocation size.
 
-import { appendInjection } from '@forgeax/engine-render/internal';
 import type { ParamSchemaEntry } from '@forgeax/engine-types';
 import { derive } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { appendInjection } from '../../../render/src/pbr-pipeline';
 
 // ─── Synthetic schemas (one per built-in shader family) ─────────────────────
 //

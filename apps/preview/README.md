@@ -220,15 +220,16 @@ Branch on `error.code`, then read `expected`, `hint`, and the narrowed `detail`.
 Do not parse `message`, silently skip a scenario, mount to `document.body`, add a duplicate UI manager, or use a custom mesh/stand-in to hide an engine asset failure.
 </details>
 
-## Simulation inspection read
+## Preview inspection and capture
 
-Preview consumes `simulation.inspect` as a read-only projection from the App
-owner. The result follows the [simulation inspection schema](../../packages/app/schema/simulation-inspection.schema.json)
-and contains only format/owner metadata, participant readiness, baseline
-fingerprint, trace counts, report domains/tolerance, and structured errors.
+Preview exposes game-owned read and action projections through one
+JSON-serializable inspection boundary. Use `inspection.list()` to discover the
+available ids, then call `inspection.read(id)` or `inspection.run(id, args)`;
+the loaded game owns the meaning of each projection.
 
-Use it to diagnose source/fresh-target agreement and fixed-tick evidence. Do
-not implement restore/replay actions in Preview, pass raw World or native
-physics/audio objects, or use pixels as the simulation oracle. Recover from a
-failure by reading `code`, `expected`, `hint`, and `detail`, then retry the
-owner-level path with a fresh target.
+RHI capture is a separate optional capability. When enabled,
+`inspection.captureFrame()` uploads one `rhi-tape` artifact to the Vite debug
+provider for DevKit summary and fresh-device inspection. Do not pass raw World,
+renderer, physics, audio, or GPU objects through the inspection surface. Recover
+from a failure by reading `code`, `expected`, `hint`, and `detail`, then retry
+the owner-level path with a fresh target.

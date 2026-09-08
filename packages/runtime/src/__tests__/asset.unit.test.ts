@@ -81,8 +81,8 @@ import {
   PROCEDURAL_FLOATS_PER_VERTEX,
 } from '@forgeax/engine-geometry';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { createEngineMetrics, GpuResourceStore } from '@forgeax/engine-render/internal';
 import { ok, ok as rhiOk } from '@forgeax/engine-rhi';
+import { rhi } from '@forgeax/engine-rhi-null';
 import { ShaderRegistry } from '@forgeax/engine-shader';
 import type {
   EquirectAsset,
@@ -94,8 +94,14 @@ import type {
 import { AssetError, toShared, toUnique, unwrapHandle } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { deriveBuiltin } from '../../../pack/src/builtin';
+import { DeviceScope } from '../../../render/src/device/device-scope';
+import { GpuResidencyCache } from '../../../render/src/device/gpu-residency';
+import { createEngineMetrics } from '../../../render/src/engine-metrics';
+import { createRenderer as createRuntimeRenderer } from '../createRenderer';
 import { createDevImportTransport, type ImportTransport } from '../dev-import-transport';
+import { EngineEnvironmentError } from '../errors/environment';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+import { requireRenderer } from './renderer-test-utils';
 
 vi.mock('@forgeax/engine-rhi-webgpu', async () => {
   spies.webgpuImportCount += 1;
@@ -310,7 +316,7 @@ function makeMockCanvas(opts: { webgpu?: 'context' | 'null'; webgl2?: 'context' 
     removeEventListener() {},
   } as unknown as HTMLCanvasElement;
 }
-function makeStubGPU(): unknown {
+function _makeStubGPU(): unknown {
   return {
     requestAdapter: async () => ({
       features: new Set<string>(),
@@ -337,8 +343,9 @@ function makeStubGPU(): unknown {
       expect(assets.loaders.get('texture')).toBeDefined();
       expect(assets.loaders.get('font')).toBeDefined();
       expect(assets.loaders.get('sampler')).toBeDefined();
-      // Deliberately NOT registered: render-pipeline and shader.
-      expect(assets.loaders.get('render-pipeline')).toBeUndefined();
+      // The complete ordinary Asset vocabulary is registered; shader remains
+      // build-time only and is deliberately absent.
+      expect(assets.loaders.get('render-pipeline')).toBeDefined();
       expect(assets.loaders.get('shader')).toBeUndefined();
       // registeredKinds includes the default set.
       const kinds = assets.loaders.registeredKinds();
@@ -349,13 +356,13 @@ function makeStubGPU(): unknown {
     it('host can register a custom kind via assets.loaders.register', () => {
       const assets = new AssetRegistry(makeMockShaderRegistry());
       assets.loaders.register({
-        kind: 'texture',
+        kind: 'custom-test',
         load: () => ({
           ok: false,
           error: new AssetError({ code: 'asset-parse-failed', expected: 'x', hint: 'x' }),
         }),
       });
-      expect(assets.loaders.get('texture')).toBeDefined();
+      expect(assets.loaders.get('custom-test')).toBeDefined();
     });
   });
 
@@ -409,13 +416,15 @@ function makeStubGPU(): unknown {
       expect(reg.get('mesh')).toBeUndefined();
     });
 
-    it('re-registering the same kind is idempotent (last write wins, no throw)', () => {
+    it('rejects re-registering the same kind and preserves the first owner', () => {
       const reg = new LoaderRegistry();
       const first = stubLoader('mesh');
       const second = stubLoader('mesh');
       reg.register(first);
-      expect(() => reg.register(second)).not.toThrow();
-      expect(reg.get('mesh')).toBe(second);
+      expect(() => reg.register(second)).toThrow(
+        'LoaderRegistry.register: duplicate loader kind "mesh"',
+      );
+      expect(reg.get('mesh')).toBe(first);
       // registeredKinds carries one entry, not two duplicates.
       expect(reg.registeredKinds().filter((k) => k === 'mesh')).toHaveLength(1);
     });
@@ -466,9 +475,7 @@ function makeStubGPU(): unknown {
   }
 
   describe('inline pack-payload loaders (w4)', () => {
-    it('INLINE_PACK_LOADERS covers the 8 inline kinds in order', () => {
-      // Sampler is an engine-owned inline payload needed by material references;
-      // animationGraphLoader remains the final inline entry.
+    it('INLINE_PACK_LOADERS covers the complete inline kinds in order', () => {
       expect(INLINE_PACK_LOADERS.map((l) => l.kind)).toEqual([
         'mesh',
         'scene',
@@ -478,6 +485,10 @@ function makeStubGPU(): unknown {
         'skin',
         'animation-clip',
         'animation-graph',
+        'render-pipeline',
+        'tileset',
+        'audio',
+        'particle-effect',
       ]);
     });
 
@@ -496,6 +507,7 @@ function makeStubGPU(): unknown {
             indexOffset: 0,
             indexCount: 3,
             vertexCount: 8,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -660,8 +672,14 @@ function makeStubGPU(): unknown {
   }
 
   describe('Pack v2 artifact loaders', () => {
-    it('PACK_ARTIFACT_LOADERS is texture + font + equirect', () => {
-      expect(PACK_ARTIFACT_LOADERS.map((l) => l.kind)).toEqual(['texture', 'font', 'equirect']);
+    it('PACK_ARTIFACT_LOADERS includes descriptor-backed ordinary kinds', () => {
+      expect(PACK_ARTIFACT_LOADERS.map((l) => l.kind)).toEqual([
+        'texture',
+        'font',
+        'equirect',
+        'render-pipeline',
+        'tileset',
+      ]);
     });
 
     it('textureLoader import sub-branch builds a TextureAsset POD from .bin bytes', async () => {
@@ -754,45 +772,36 @@ function makeStubGPU(): unknown {
     'skin',
     'animation-clip',
     'animation-graph',
+    'render-pipeline',
+    'tileset',
     'texture',
     'font',
     'equirect',
     'video',
     'ui',
     'audio',
+    'particle-effect',
   ] as const;
 
-  const UNREGISTERED_STUBS = ['render-pipeline', 'shader'] as const;
+  const UNREGISTERED_STUBS = ['shader'] as const;
 
   describe('wireDefaultLoaders (w5; D-2 extraLoaders w8; D-2 terminal M3 / w32)', () => {
-    // feat-20260705-runtime-tier2-decomposition M3 / w32 (D-2 terminal):
-    // videoLoader now lives in @forgeax/engine-graphics-extras and is imported +
-    // wired internally by wireDefaultLoaders (assets-runtime -> graphics-extras
-    // forward edge). Only the audio placeholder stays caller-supplied via
-    // `extraLoaders` (OOS-9). Internal default set = 10 kinds (was 9); the
-    // createRenderer assembly point passes `[audioLoaderPlaceholder]` to complete
-    // the wired set. Registration behaviour is equivalent -- the total wired
-    // set is unchanged; only the internal/injected split shifts by one
-    // (AC-05 allowed test attribution adjustment).
-    //
-    // Sampler is an inline engine loader and UI remains a built-in projection;
-    // the audio-injected full set is 14 kinds.
-    it('registers the 13 engine loaders + extraLoader (audio) = 14 kinds', () => {
+    it('registers all ordinary asset kinds plus UI', () => {
       const reg = new LoaderRegistry();
       wireDefaultLoaders(reg, [audioLoader]);
       for (const kind of REGISTERED_KINDS) {
         expect(reg.get(kind), `expected loader for kind '${kind}'`).toBeDefined();
       }
-      expect(reg.registeredKinds()).toHaveLength(14);
+      expect(reg.registeredKinds()).toHaveLength(17);
     });
 
-    it('default set (no extraLoaders) is the 13 engine-owned kinds (incl. video and UI)', () => {
+    it('default set includes audio, video, and UI', () => {
       const reg = new LoaderRegistry();
       wireDefaultLoaders(reg);
-      expect(reg.registeredKinds()).toHaveLength(13);
+      expect(reg.registeredKinds()).toHaveLength(17);
       expect(reg.get('video'), 'video is wired internally (graphics-extras)').toBeDefined();
       expect(reg.get('ui'), 'ui is wired internally (engine-ui)').toBeDefined();
-      expect(reg.get('audio'), 'audio is injected, not default').toBeUndefined();
+      expect(reg.get('audio'), 'audio is an ordinary default asset kind').toBeDefined();
     });
 
     it('does NOT register render-pipeline / shader (AC-02 exclusion)', () => {
@@ -876,11 +885,13 @@ function makeStubGPU(): unknown {
         indices: new Uint16Array([0, 1, 2, 2, 3, 0]),
         attributes: { position: positions },
         aabb: new Float32Array(6),
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 6,
             vertexCount: vertices.length,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -914,11 +925,13 @@ function makeStubGPU(): unknown {
         indices: new Uint16Array([0, 1, 2]),
         attributes: { position: positionBuf },
         aabb: new Float32Array(6),
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 3,
             vertexCount: vertices.length,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -946,11 +959,13 @@ function makeStubGPU(): unknown {
         vertices,
         indices: new Uint16Array([0, 1, 2, 2, 3, 0]),
         attributes: {}, // no position
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 6,
             vertexCount: vertices.length,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -977,11 +992,13 @@ function makeStubGPU(): unknown {
         vertices: new Float32Array(0),
         indices: new Uint16Array(0),
         attributes: {},
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 0,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -1006,11 +1023,13 @@ function makeStubGPU(): unknown {
         indices: new Uint16Array([0]),
         attributes: { position: positions },
         aabb: new Float32Array(6),
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 1,
             vertexCount: vertices.length,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -1042,11 +1061,13 @@ function makeStubGPU(): unknown {
         indices: new Uint16Array([0, 1]),
         attributes: { position: positions },
         aabb: new Float32Array(6),
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 2,
             vertexCount: vertices.length,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -1334,11 +1355,13 @@ function makeStubGPU(): unknown {
       vertices: new Float32Array([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1]),
       indices: new Uint16Array([0]),
       attributes: {},
+      materialSlots: [{ slotName: 'Default' }],
       submeshes: [
         {
           indexOffset: 0,
           indexCount: 1,
           vertexCount: 12,
+          materialSlot: 0,
           topology: 'triangle-list',
         },
       ],
@@ -1784,11 +1807,13 @@ function makeStubGPU(): unknown {
         vertices: new Float32Array(9), // 9 floats = 3 verts * 3F (position-only, not 12F)
         indices: new Uint16Array([0, 1, 2]),
         attributes: {},
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 3,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -1812,11 +1837,13 @@ function makeStubGPU(): unknown {
         vertices: new Float32Array(0),
         indices: new Uint16Array(0),
         attributes: {},
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 0,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -1836,11 +1863,13 @@ function makeStubGPU(): unknown {
         vertices: new Float32Array(24),
         indices: new Uint16Array([0, 0, 0]),
         attributes: {},
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 3,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -1862,11 +1891,13 @@ function makeStubGPU(): unknown {
         vertices: new Float32Array(9),
         indices: new Uint16Array([0, 1, 2]),
         attributes: {},
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 3,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -1881,11 +1912,13 @@ function makeStubGPU(): unknown {
         vertices: new Float32Array(36), // 3 verts * 12F
         indices: new Uint16Array([0, 1, 2]),
         attributes: {},
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 3,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -1904,11 +1937,13 @@ function makeStubGPU(): unknown {
         vertices: new Float32Array(11), // 11 floats, not divisible by 12
         indices: new Uint16Array([0, 1, 2]),
         attributes: {},
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 3,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -1930,11 +1965,13 @@ function makeStubGPU(): unknown {
         vertices: new Float32Array(12),
         indices: new Uint16Array([0, 1, 2]),
         attributes: {},
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 3,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -2184,467 +2221,96 @@ function makeStubGPU(): unknown {
     });
   });
 }
-
 {
-  // --- from auto-select.test.ts ---
-  const baseNavigator = { userAgent: 'mock-engine-test' } as unknown as Navigator;
-
-  beforeEach(() => {
-    spies.reset();
-    vi.stubGlobal('navigator', { ...baseNavigator });
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  // ─── Tests ──────────────────────────────────────────────────────────────────
-
-  describe('createRenderer M3 auto-select facade (D-P4)', () => {
-    // Case (1): navigator.gpu present → statically linked rhi-webgpu path.
-    it('case 1: navigator.gpu present → uses @forgeax/engine-rhi-webgpu', async () => {
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeStubGPU() });
-      const canvas = makeMockCanvas({ webgpu: 'context', webgl2: 'context' });
-      vi.resetModules();
-      spies.webgpuImportCount = 0;
-      spies.wgpuImportCount = 0;
-
-      const { createRenderer } = (await import(
-        '../../../render/src/renderer/renderer-factory'
-      )) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: { shaderManifestUrl?: string | undefined },
-          bundler?: unknown,
-        ) => Promise<{ backend: string }>;
-      };
-      const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-
-      expect(renderer.backend).toBe('webgpu');
-      const factorySource = readFileSync(
-        fileURLToPath(new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url)),
-        'utf8',
-      );
-      expect(factorySource).toContain("from '@forgeax/engine-rhi-webgpu'");
-      expect(spies.wgpuImportCount).toBe(0);
-      // AC-11: wgpu-wasm wasm-loader was never invoked.
-      expect(spies.ensureReadyCount).toBe(0);
-    });
-
-    // Case (2): navigator.gpu absent → rhi-wgpu dynamic import + ensureReady().
-    it('case 2: navigator.gpu absent → dynamic-imports @forgeax/engine-rhi-wgpu + awaits ensureReady()', async () => {
-      vi.stubGlobal('navigator', { ...baseNavigator });
-      const canvas = makeMockCanvas({ webgpu: 'context', webgl2: 'context' });
-      vi.resetModules();
-      const before = spies.ensureReadyCount;
-
-      const { createRenderer } = (await import(
-        '../../../render/src/renderer/renderer-factory'
-      )) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: { shaderManifestUrl?: string | undefined },
-          bundler?: unknown,
-        ) => Promise<{ backend: string }>;
-      };
-      const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-
-      expect(renderer.backend).toBe('webgpu');
-      expect(spies.wgpuImportCount).toBeGreaterThanOrEqual(1);
-      expect(spies.ensureReadyCount).toBeGreaterThan(before);
-    });
-
-    // Case (3): escape hatch — explicit { rhi } injection bypasses auto-detect.
-    it('case 3: escape hatch { rhi } → explicit instance is used, no dynamic import triggered', async () => {
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeStubGPU() });
-      const canvas = makeMockCanvas({ webgpu: 'context', webgl2: 'context' });
-      const beforeWebgpu = spies.webgpuImportCount;
-      const beforeWgpu = spies.wgpuImportCount;
-
-      const rhiActual = await import('@forgeax/engine-rhi');
-      let explicitRequestAdapterCalls = 0;
-      const explicitInstance = {
-        requestAdapter: async () => {
-          explicitRequestAdapterCalls += 1;
-          return rhiActual.ok({
-            features: new Set<string>(),
-            limits: {} as Readonly<Record<string, number>>,
-            requestDevice: async () => rhiActual.ok(makeFakeRhiDevice()),
-          });
-        },
-        acquireCanvasContext: (_canvas: unknown) => {
-          return rhiActual.ok({
-            configure: () => rhiActual.ok(undefined),
-            unconfigure: () => rhiActual.ok(undefined),
-            getCurrentTexture: () => rhiActual.ok({ __brand: 'TextureView' }),
-          });
-        },
-      };
-
-      const { createRenderer: createRendererWithOpts } = (await import(
-        '../../../render/src/renderer/renderer-factory'
-      )) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: { rhi?: unknown; shaderManifestUrl?: string | undefined },
-          bundler?: unknown,
-        ) => Promise<{ backend: string }>;
-      };
-      const renderer = await createRendererWithOpts(
-        canvas,
-        {
-          rhi: explicitInstance,
-        },
+  // --- migrated from auto-select.test.ts ---
+  describe('runtime renderer assembly contract', () => {
+    it('returns a Result and unwraps an injected RHI renderer', async () => {
+      const created = await createRuntimeRenderer(
+        makeMockCanvas({ webgpu: 'context', webgl2: 'context' }),
+        { rhi },
         { shaderManifestUrl: undefined },
       );
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
 
-      expect(renderer.backend).toBe('webgpu');
-      expect(explicitRequestAdapterCalls).toBeGreaterThanOrEqual(1);
-      // Neither dynamic-import factory was invoked beyond previous tests.
-      expect(spies.webgpuImportCount).toBe(beforeWebgpu);
-      expect(spies.wgpuImportCount).toBe(beforeWgpu);
+      expect(created.value.inspect().state).toBe('alive');
+      expect(created.value).not.toHaveProperty('backend');
+      expect(created.value).not.toHaveProperty('ready');
+      expect(created.value).not.toHaveProperty('assets');
+      await created.value.dispose();
     });
 
-    // Case (4a): navigator.gpu absent + rhi-wgpu wasm load fails →
-    // createRenderer rejects (construction-time channel).
-    it('case 4a: rhi-wgpu wasm load failure → createRenderer rejects with structured error', async () => {
-      vi.stubGlobal('navigator', { ...baseNavigator });
-      const canvas = makeMockCanvas({ webgpu: 'context', webgl2: 'null' });
-      spies.rhiWgpuEnsureReadyShould = 'reject-load-failed';
-
-      const { createRenderer } = await import('../../../render/src/renderer/renderer-factory');
-      const { EngineEnvironmentError } = await import(
-        '../../../render/src/renderer/environment-error'
-      );
-
-      await expect(createRenderer(canvas)).rejects.toBeInstanceOf(EngineEnvironmentError);
-    });
-
-    // Case (4b): renderer.ready Promise reject (run-time channel).
-    // When rhi-webgpu adapter resolves but the downstream ready-build fails,
-    // `await renderer.ready` surfaces the structured RhiError to AI users.
-    it('case 4b: renderer.ready rejects with RhiError when downstream pipeline build fails', async () => {
-      // Use an explicit `rhi` instance whose adapter resolves but acquireCanvasContext fails;
-      // this forces buildReadyWebGPU (or the inner WebGPU outcome) to reject.
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeStubGPU() });
-      const canvas = makeMockCanvas({ webgpu: 'context', webgl2: 'context' });
-      const rhiActual = await import('@forgeax/engine-rhi');
-      let failingDevice!: Record<string, unknown>;
-      const explicitInstance = {
-        requestAdapter: async () =>
-          rhiActual.ok({
-            features: new Set<string>(),
-            limits: {} as Readonly<Record<string, number>>,
-            requestDevice: async () => {
-              failingDevice = makeFakeRhiDevice();
-              // Force the ready-step buffer creation to fail (simulates limit-exceeded).
-              failingDevice.createBindGroupLayout = () =>
-                rhiActual.err(
-                  new rhiActual.RhiError({
-                    code: 'limit-exceeded',
-                    expected: 'createBindGroupLayout succeeds',
-                    hint: 'unit-test: forced limit-exceeded on first BGL',
-                  }),
-                );
-              return rhiActual.ok(failingDevice);
-            },
-          }),
-        acquireCanvasContext: (_canvas: unknown) => {
-          return rhiActual.ok({
-            configure: () => rhiActual.ok(undefined),
-            unconfigure: () => rhiActual.ok(undefined),
-            getCurrentTexture: () => rhiActual.ok({ __brand: 'TextureView' }),
-          });
-        },
-      };
-
-      const { createRenderer: case4bCreateRenderer } = (await import(
-        '../../../render/src/renderer/renderer-factory'
-      )) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: { rhi?: unknown; shaderManifestUrl?: string | undefined },
-          bundler?: unknown,
-        ) => Promise<{ ready: Promise<unknown> }>;
-      };
-      const renderer = await case4bCreateRenderer(
-        canvas,
-        {
-          rhi: explicitInstance,
-        },
+    it('uses the injected RHI without consulting backend auto-selection', async () => {
+      const renderer = await requireRenderer(
+        makeMockCanvas({ webgpu: 'context', webgl2: 'context' }),
+        { rhi },
         { shaderManifestUrl: undefined },
       );
-
-      // The renderer is constructed successfully; the ready Promise carries the
-      // downstream structured error (w24 — Result.err shape).
-      const ready = (await renderer.ready) as { ok: boolean; error?: { code?: string } };
-      expect(ready.ok).toBe(false);
-      expect(ready.error?.code).toBeDefined();
+      expect(renderer.inspect().capabilities.backendKind).toBe('null');
+      const unsubscribe = renderer.subscribe(() => undefined);
+      expect(typeof unsubscribe).toBe('function');
+      unsubscribe();
+      await renderer.dispose();
     });
 
-    // Case (4c): onError fan-out — listener registered before draw catches
-    // the error when ready failure has already settled (D-P4 third channel).
-    it('case 4c: onError fan-out fires for listeners registered before draw on ready-failed path', async () => {
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeStubGPU() });
-      const canvas = makeMockCanvas({ webgpu: 'context', webgl2: 'context' });
-      const rhiActual = await import('@forgeax/engine-rhi');
-      const explicitInstance = {
-        requestAdapter: async () =>
-          rhiActual.ok({
-            features: new Set<string>(),
-            limits: {} as Readonly<Record<string, number>>,
-            requestDevice: async () => {
-              const dev = makeFakeRhiDevice();
-              // Force ready failure.
-              dev.createBindGroupLayout = () =>
-                rhiActual.err(
-                  new rhiActual.RhiError({
-                    code: 'limit-exceeded',
-                    expected: 'createBindGroupLayout succeeds',
-                    hint: 'unit-test: forced limit-exceeded on first BGL',
-                  }),
-                );
-              return rhiActual.ok(dev);
-            },
-          }),
-        acquireCanvasContext: (_canvas: unknown) => {
-          return rhiActual.ok({
-            configure: () => rhiActual.ok(undefined),
-            unconfigure: () => rhiActual.ok(undefined),
-            getCurrentTexture: () => rhiActual.ok({ __brand: 'TextureView' }),
-          });
-        },
-      };
-      const { createRenderer: case4cCreateRenderer } = (await import(
-        '../../../render/src/renderer/renderer-factory'
-      )) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: { rhi?: unknown; shaderManifestUrl?: string | undefined },
-          bundler?: unknown,
-        ) => Promise<{
-          onError: (cb: (e: { code: string }) => void) => void;
-          ready: Promise<unknown>;
-          draw: (opts: unknown) => void;
-        }>;
-      };
-      const renderer = await case4cCreateRenderer(
-        canvas,
-        {
-          rhi: explicitInstance,
-        },
+    it('binds a World lease to a submitted frame receipt', async () => {
+      const renderer = await requireRenderer(
+        makeMockCanvas({ webgpu: 'context', webgl2: 'context' }),
+        { rhi },
         { shaderManifestUrl: undefined },
       );
-      const seen: Array<{ code: string }> = [];
-      renderer.onError((e) => seen.push({ code: e.code }));
-      // Drain ready (rejects).
-      await renderer.ready.catch(() => undefined);
-      // First draw fires onError (D-S4 ready-not-settled-or-pipeline-null).
-      renderer.draw({} as unknown as Parameters<typeof renderer.draw>[0]);
-      expect(seen.length).toBeGreaterThanOrEqual(1);
-      expect(seen[0]?.code).toBeDefined();
-    });
-
-    // Case (5): escape-hatch instance without createShaderModule (top-level or device-level)
-    // exercises `invokeDeviceCreateShaderModule` "no candidate" fallback branch (covers
-    // the new code line + branch coverage target for the M3 D-P4 facade).
-    // feat-20260518 M5 / w22.9: seed pbr + unlit entries so the post-fallback
-    // pipeline-compile path reaches `invokeDeviceCreateShaderModule` (the
-    // step under test) before the manifest-empty short-circuit fires.
-    const emptyManifestUrl = `data:application/json,${encodeURIComponent(
-      JSON.stringify({
-        schemaVersion: 1,
-        entries: [
-          { hash: 'pbr00000', wgsl: '/* pbr stub - calls f_schlick( */', glsl: '', bindings: '' },
-          { hash: 'unlit000', wgsl: '/* unlit stub */', glsl: '', bindings: '' },
-          {
-            hash: 'tonemap0',
-            wgsl: '/* tonemap stub - struct TonemapParams { exposure: f32 }; */',
-            glsl: '',
-            bindings: '',
-          },
-        ],
-      }),
-    )}`;
-    it('case 5: escape hatch without createShaderModule → ready rejects rhi-not-available', async () => {
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeStubGPU() });
-      const canvas = makeMockCanvas({ webgpu: 'context', webgl2: 'context' });
-      const rhiActual = await import('@forgeax/engine-rhi');
-      const explicitInstance = {
-        requestAdapter: async () =>
-          rhiActual.ok({
-            features: new Set<string>(),
-            limits: {} as Readonly<Record<string, number>>,
-            requestDevice: async () => {
-              const dev = makeFakeRhiDevice();
-              // Strip createShaderModule entirely so the fallback walks the
-              // 'no candidate' branch.
-              delete (dev as { createShaderModule?: unknown }).createShaderModule;
-              return rhiActual.ok(dev);
-            },
-          }),
-        acquireCanvasContext: (_canvas: unknown) => {
-          return rhiActual.ok({
-            configure: () => rhiActual.ok(undefined),
-            unconfigure: () => rhiActual.ok(undefined),
-            getCurrentTexture: () => rhiActual.ok({ __brand: 'TextureView' }),
-          });
-        },
-      };
-      const { createRenderer } = await import('../../../render/src/renderer/renderer-factory');
-      const renderer = await createRenderer(
-        canvas,
-        {
-          rhi: explicitInstance,
-        } as unknown as Parameters<typeof createRenderer>[1],
-        { shaderManifestUrl: emptyManifestUrl },
-      );
-      const ready1 = (await renderer.ready) as { ok: boolean; error?: { code?: string } };
-      expect(ready1.ok).toBe(false);
-      expect(ready1.error?.code).toBe('rhi-not-available');
-      // dispose path coverage (idempotent).
-      renderer.dispose();
-      renderer.dispose();
-    });
-
-    // Case (7): navigator.gpu absent -> Channel 3 selected WITHOUT getContext('webgpu')
-    // (w22). The mock rhi-wgpu acquireCanvasContext goes through wasm surface path;
-    // rhi-webgpu's getContext('webgpu') is never invoked.
-    it('case 7: navigator.gpu absent → Channel 3 selected, getContext never called', async () => {
-      vi.stubGlobal('navigator', { ...baseNavigator });
-      const canvas = makeMockCanvas({ webgpu: 'context', webgl2: 'null' });
-      // Track whether getContext('webgpu') was called on the canvas.
-      let getContextWebgpuCalls = 0;
-      const originalGetContext = canvas.getContext.bind(canvas);
-      canvas.getContext = ((kind: string) => {
-        if (kind === 'webgpu') getContextWebgpuCalls += 1;
-        return originalGetContext(kind);
-      }) as typeof canvas.getContext;
-
-      const { createRenderer: case7CreateRenderer } = (await import(
-        '../../../render/src/renderer/renderer-factory'
-      )) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: { shaderManifestUrl?: string | undefined },
-          bundler?: unknown,
-        ) => Promise<{ backend: string }>;
-      };
-      try {
-        const renderer = await case7CreateRenderer(canvas, {}, { shaderManifestUrl: undefined });
-        expect(renderer.backend).toBe('webgpu');
-        // Channel 3 was selected (navigator.gpu absent), so canvas.getContext('webgpu')
-        // was NEVER called — the wasm surface path was used instead.
-        expect(getContextWebgpuCalls).toBe(0);
-      } catch (_e) {
-        // May fail in CI without a real GPU; either way getContext('webgpu')
-        // must not have been called.
-        expect(getContextWebgpuCalls).toBe(0);
+      const world = new World();
+      const attached = renderer.attach(world);
+      expect(attached.ok).toBe(true);
+      if (!attached.ok) return;
+      expect(world.update(1 / 60).ok).toBe(true);
+      const frame = renderer.draw({
+        leases: [attached.value],
+        camera: { lease: attached.value },
+        environment: { lease: attached.value },
+      });
+      expect(frame.ok).toBe(true);
+      if (frame.ok) {
+        const observed = await renderer.observe(frame.value, { include: ['timings'] });
+        expect(observed.ok).toBe(true);
       }
+      await renderer.dispose();
     });
 
-    // Case (8): acquireCanvasContext failure → structured error in detail (w22).
-    it('case 8: acquireCanvasContext fails → EngineEnvironmentError.detail has RhiError', async () => {
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeStubGPU() });
-      const canvas = makeMockCanvas({ webgpu: 'null', webgl2: 'null' }); // canvas.getContext('webgpu') returns null
-      const { createRenderer } = await import('../../../render/src/renderer/renderer-factory');
-      const { EngineEnvironmentError } = await import(
-        '../../../render/src/renderer/environment-error'
+    it('reports construction failures through Result and keeps lifecycle signals public', async () => {
+      const created = await createRuntimeRenderer(
+        makeMockCanvas({ webgpu: 'null', webgl2: 'null' }),
+        { rhi: undefined },
       );
+      expect(created.ok).toBe(false);
+      if (created.ok) return;
+      expect(created.error).toBeInstanceOf(EngineEnvironmentError);
 
-      try {
-        await createRenderer(canvas);
-        // If we get here, Channel 3 succeeded — skip assertion (CI without real GPU
-        // may not reach this path).
-      } catch (error: unknown) {
-        expect(error).toBeInstanceOf(EngineEnvironmentError);
-        if (error instanceof EngineEnvironmentError) {
-          // detail.webgpuError must be populated — the acquireCanvasContext failure
-          // on Channel 2 produced a RhiError with code='rhi-not-available'.
-          const webgpuErr = error.detail.webgpuError as
-            | { code?: string; hint?: string; expected?: string }
-            | undefined;
-          expect(webgpuErr).toBeDefined();
-          if (webgpuErr) {
-            expect(webgpuErr.code).toBeDefined();
-            expect(webgpuErr.hint).toBeTruthy();
-            expect(webgpuErr.expected).toBeTruthy();
-          }
-        }
-      }
-    });
-
-    // Case (9): both Channel 2 and Channel 3 fail → compound error with both fields (w22).
-    it('case 9: both channels fail → EngineEnvironmentError.detail.webgpuError + .wgpuError both populated', async () => {
-      // Force Channel 2 to fail (requestAdapter rejects) AND Channel 3 to fail
-      // (ensureReady rejects).
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeStubGPU() });
-      spies.rhiWebgpuRequestAdapterShould = 'reject-rhi-not-available';
-      spies.rhiWgpuEnsureReadyShould = 'reject-load-failed';
-      const canvas = makeMockCanvas({ webgpu: 'context', webgl2: 'null' });
-
-      const { createRenderer } = await import('../../../render/src/renderer/renderer-factory');
-      const { EngineEnvironmentError } = await import(
-        '../../../render/src/renderer/environment-error'
+      const renderer = await requireRenderer(
+        makeMockCanvas({ webgpu: 'context', webgl2: 'context' }),
+        { rhi },
+        { shaderManifestUrl: undefined },
       );
+      const events: Array<{ kind: string; current?: string }> = [];
+      const unsubscribe = renderer.subscribe((event) => {
+        events.push({
+          kind: event.kind,
+          current: event.kind === 'state-changed' ? event.current : undefined,
+        });
+      });
 
-      await expect(createRenderer(canvas)).rejects.toBeInstanceOf(EngineEnvironmentError);
+      expect(renderer.releaseSurface().ok).toBe(true);
+      expect(renderer.inspect().surface).toBe('released');
+      expect(renderer.restoreSurface().ok).toBe(true);
+      expect(renderer.inspect().surface).toBe('available');
+      const recovery = await renderer.recover();
+      expect(recovery.ok).toBe(false);
+      if (!recovery.ok) expect(recovery.error.code).toBe('renderer-state-invalid');
 
-      try {
-        await createRenderer(canvas);
-      } catch (error: unknown) {
-        expect(error).toBeInstanceOf(EngineEnvironmentError);
-        if (error instanceof EngineEnvironmentError) {
-          // Both fields must be present — Channel 2 produced webgpuError,
-          // Channel 3 produced wgpuError.
-          expect(error.detail.webgpuError).toBeDefined();
-          expect(error.detail.wgpuError).toBeDefined();
-          const webgpuErr = error.detail.webgpuError as { code?: string } | undefined;
-          const wgpuErr = error.detail.wgpuError as { code?: string } | undefined;
-          if (webgpuErr) expect(webgpuErr.code).toBe('rhi-not-available');
-          if (wgpuErr) expect(wgpuErr instanceof Error).toBe(true);
-        }
-      }
-    });
-
-    // Case (6): escape-hatch instance whose device.createShaderModule throws — exercises
-    // the synchronous-fallback catch branch in invokeDeviceCreateShaderModule.
-    it('case 6: escape hatch device.createShaderModule throws → ready rejects shader-compile-failed', async () => {
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeStubGPU() });
-      const canvas = makeMockCanvas({ webgpu: 'context', webgl2: 'context' });
-      const rhiActual = await import('@forgeax/engine-rhi');
-      const explicitInstance = {
-        requestAdapter: async () =>
-          rhiActual.ok({
-            features: new Set<string>(),
-            limits: {} as Readonly<Record<string, number>>,
-            requestDevice: async () => {
-              const dev = makeFakeRhiDevice();
-              dev.createShaderModule = () => {
-                throw new Error('unit-test forced sync throw on device.createShaderModule');
-              };
-              return rhiActual.ok(dev);
-            },
-          }),
-        acquireCanvasContext: (_canvas: unknown) => {
-          return rhiActual.ok({
-            configure: () => rhiActual.ok(undefined),
-            unconfigure: () => rhiActual.ok(undefined),
-            getCurrentTexture: () => rhiActual.ok({ __brand: 'TextureView' }),
-          });
-        },
-      };
-      const { createRenderer } = await import('../../../render/src/renderer/renderer-factory');
-      const renderer = await createRenderer(
-        canvas,
-        {
-          rhi: explicitInstance,
-        } as unknown as Parameters<typeof createRenderer>[1],
-        { shaderManifestUrl: emptyManifestUrl },
-      );
-      const ready2 = (await renderer.ready) as { ok: boolean; error?: { code?: string } };
-      expect(ready2.ok).toBe(false);
-      expect(ready2.error?.code).toBe('shader-compile-failed');
+      expect((await renderer.dispose()).ok).toBe(true);
+      expect(events).toContainEqual({ kind: 'state-changed', current: 'disposed' });
+      unsubscribe();
+      expect((await renderer.dispose()).ok).toBe(true);
     });
   });
 }
@@ -2759,7 +2425,8 @@ function makeStubGPU(): unknown {
   }
 
   function triangleRef(): MeshAsset {
-    return EXPECTED_TRIANGLE;
+    if (!EXPECTED_TRIANGLE.ok) throw new Error('meshFromInterleaved triangle fixture failed');
+    return EXPECTED_TRIANGLE.value;
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────────
@@ -2800,6 +2467,7 @@ function makeStubGPU(): unknown {
           indexOffset: 0,
           indexCount: 0,
           vertexCount: 0,
+          materialSlot: 0,
           topology: 'triangle-list',
         },
       ],
@@ -2996,8 +2664,8 @@ function makeStubGPU(): unknown {
 
 {
   // --- from cubemap-upload.test.ts ---
-  // feat-20260601-gpu-resource-store-extraction M1: uploadCubemapFromEquirect
-  // moved to GpuResourceStore. The store holds no registry reference (D-2/D-3);
+  // feat-20260601-device/gpu-residency-extraction M1: uploadCubemapFromEquirect
+  // moved to GpuResidencyCache. The store holds no registry reference (D-2/D-3);
   // the cube POD register-relay is injected at configureGpuDevice (D-3) and the
   // source POD is passed to the call. feat-20260614 M8: column handles are
   // minted by the World, so the relay is `(world, pod) => ok(world.allocSharedRef(...))`.
@@ -3034,6 +2702,7 @@ function makeStubGPU(): unknown {
         }),
       queue: {
         writeBuffer: () => okShim(undefined),
+        writeTexture: () => okShim(undefined),
         submit: () => {
           probe.submitCalls += 1;
           return okShim(undefined);
@@ -3079,7 +2748,7 @@ function makeStubGPU(): unknown {
       const probe: SubmitProbe = { submitCalls: 0 };
       const device = makeMockDevice(probe);
       const world = new World();
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
       const equirect = makeEquirect();
       // feat-20260614 M8: column handles are minted by the World, not the
       // registry. The cube register-relay also mints via world.allocSharedRef.
@@ -3092,6 +2761,11 @@ function makeStubGPU(): unknown {
         (w, pod: EquirectAsset) => rhiOk(w.allocSharedRef('EquirectAsset', pod)),
         mockCaps,
       );
+      store.configureIblDevice(
+        device,
+        async (_d, desc) => rhiOk({ __mock: 'shader', label: desc.label ?? '' }) as never,
+      );
+      store.bindDeviceScope(DeviceScope.create(0, 'asset-unit-t10'));
       // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
       const result = await (store as any)._uploadCubemapFromEquirect(world, sourceHandle, equirect);
       expect(result.ok).toBe(true);
@@ -3101,7 +2775,7 @@ function makeStubGPU(): unknown {
       const probe: SubmitProbe = { submitCalls: 0 };
       const device = makeMockDevice(probe);
       const world = new World();
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
       const ldr: EquirectAsset = {
         kind: 'equirect',
         width: 64,
@@ -3143,7 +2817,7 @@ function makeStubGPU(): unknown {
       const probe: SubmitProbe = { submitCalls: 0 };
       const device = makeMockDevice(probe);
       const world = new World();
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
       const equirect = makeEquirect();
       const sourceHandle = world.allocSharedRef('EquirectAsset', equirect);
       store.configureGpuDevice(
@@ -3154,6 +2828,11 @@ function makeStubGPU(): unknown {
         (w, pod: EquirectAsset) => rhiOk(w.allocSharedRef('EquirectAsset', pod)),
         mockCaps,
       );
+      store.configureIblDevice(
+        device,
+        async (_d, desc) => rhiOk({ __mock: 'shader', label: desc.label ?? '' }) as never,
+      );
+      store.bindDeviceScope(DeviceScope.create(1, 'asset-unit-t54'));
 
       // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
       const r1 = await (store as any)._uploadCubemapFromEquirect(world, sourceHandle, equirect);
@@ -3674,11 +3353,11 @@ function makeStubGPU(): unknown {
   // preserve.
 
   const createRendererSrc = readFileSync(
-    fileURLToPath(new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url)),
+    fileURLToPath(new URL('../../../render/src/assembly/factory.ts', import.meta.url)),
     'utf-8',
   );
   const rendererTypeSrc = readFileSync(
-    fileURLToPath(new URL('../../../render/src/renderer.ts', import.meta.url)),
+    fileURLToPath(new URL('../../../render/src/render-contract.ts', import.meta.url)),
     'utf-8',
   );
   // feat-20260705-runtime-tier2-decomposition M1 / w7 (D-4): the load-by-guid +
@@ -3693,12 +3372,13 @@ function makeStubGPU(): unknown {
 
   describe('w16 createRenderer transport injection (AC-03 / AC-05 / AC-08)', () => {
     it('(AC-05) createRenderer threads transport into the AssetRegistry ctor', () => {
-      // The AssetRegistry constructor is wired with the injected transport as the
-      // second positional argument (D-3: ctor-readonly single injection point).
+      // The AssetRegistry constructor is wired directly at the assembly owner;
+      // the injected transport remains the second positional argument (D-3:
+      // ctor-readonly single injection point).
       // The loaders are now self-contained: AssetRegistry internally builds its
       // own LoaderRegistry via createDefaultLoaderRegistry() (M3 w9).
       expect(createRendererSrc).toMatch(
-        /createAssetRegistry\(\s*shaderRegistry,\s*internals\.importTransport\b/,
+        /new AssetRegistry\(\s*shaderCatalog,\s*internals\.importTransport\s*,\s*\[audioLoader\]\s*,\s*postSpawnResolveJoints/,
       );
       // The injection arrives through a dedicated non-RendererOptions internal
       // parameter named `importTransport` on createRenderer.
@@ -4140,6 +3820,7 @@ function makeStubGPU(): unknown {
           indexOffset: 0,
           indexCount: 0,
           vertexCount: 0,
+          materialSlot: 0,
           topology: 'triangle-list',
         },
       ],
@@ -4254,6 +3935,7 @@ function makeStubGPU(): unknown {
             indexOffset: 0,
             indexCount: 0,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -4990,7 +4672,15 @@ function makeStubGPU(): unknown {
           packageUrl: '/assets/mesh.pack.json',
           kind: 'mesh',
           sourcePath: 'assets/mesh.pack.json',
-          submeshes: [{ indexOffset: 0, indexCount: 0, vertexCount: 0, topology: 'triangle-list' }],
+          submeshes: [
+            {
+              indexOffset: 0,
+              indexCount: 0,
+              vertexCount: 0,
+              materialSlot: 0,
+              topology: 'triangle-list',
+            },
+          ],
         },
         {
           guid: GUID_NON_MATERIAL_CHILD,
@@ -5218,6 +4908,7 @@ function makeStubGPU(): unknown {
           indexOffset: 0,
           indexCount: 0,
           vertexCount: 0,
+          materialSlot: 0,
           topology: 'triangle-list',
         },
       ],
@@ -5244,6 +4935,7 @@ function makeStubGPU(): unknown {
             indexOffset: 0,
             indexCount: 0,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -6442,11 +6134,13 @@ function makeStubGPU(): unknown {
         vertices: new Float32Array(0),
         indices: new Uint16Array(0),
         attributes: { position: new Float32Array(0) },
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 0,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -6475,8 +6169,12 @@ function makeStubGPU(): unknown {
       ]);
 
       const world = new World();
-      defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
-      defineComponent('MeshRenderer', { materials: 'array<shared<MaterialAsset>>' });
+      const MeshFilter = defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
+      const MeshRenderer = defineComponent('MeshRenderer', {
+        materials: 'array<shared<MaterialAsset>>',
+      });
+      world.components.register(MeshFilter);
+      world.components.register(MeshRenderer);
 
       // Private function access for unit-test isolation (same pattern as parseAssetPayload in
       // asset-registry-scene.test.ts).
@@ -6527,10 +6225,11 @@ function makeStubGPU(): unknown {
       ]);
 
       const world = new World();
-      defineComponent('Skin', {
+      const Skin = defineComponent('Skin', {
         skeleton: 'shared<SkeletonAsset>',
         joints: 'array<entity>',
       });
+      world.components.register(Skin);
 
       // biome-ignore lint/suspicious/noExplicitAny: private helper access
       const internal = reg as any as {
@@ -6563,11 +6262,13 @@ function makeStubGPU(): unknown {
         vertices: new Float32Array(0),
         indices: new Uint16Array(0),
         attributes: { position: new Float32Array(0) },
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 0,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -6589,7 +6290,8 @@ function makeStubGPU(): unknown {
       ]);
 
       const world = new World();
-      defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
+      const MeshFilter = defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
+      world.components.register(MeshFilter);
 
       // biome-ignore lint/suspicious/noExplicitAny: private helper access
       const internal = reg as any as {
@@ -6654,7 +6356,8 @@ function makeStubGPU(): unknown {
       ]);
 
       const world = new World();
-      defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
+      const MeshFilter = defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
+      world.components.register(MeshFilter);
 
       // biome-ignore lint/suspicious/noExplicitAny: private helper access
       const internal = reg as any as {
@@ -6686,11 +6389,13 @@ function makeStubGPU(): unknown {
         vertices: new Float32Array(0),
         indices: new Uint16Array(0),
         attributes: { position: new Float32Array(0) },
+        materialSlots: [{ slotName: 'Default' }],
         submeshes: [
           {
             indexOffset: 0,
             indexCount: 0,
             vertexCount: 0,
+            materialSlot: 0,
             topology: 'triangle-list',
           },
         ],
@@ -6714,7 +6419,8 @@ function makeStubGPU(): unknown {
       ]);
 
       const world = new World();
-      defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
+      const MeshFilter = defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
+      world.components.register(MeshFilter);
 
       // biome-ignore lint/suspicious/noExplicitAny: private helper access
       const internal = reg as any as {
@@ -6747,8 +6453,15 @@ function makeStubGPU(): unknown {
           vertices: new Float32Array(0),
           indices: new Uint16Array(0),
           attributes: { position: new Float32Array(0) },
+          materialSlots: [{ slotName: 'Default' }],
           submeshes: [
-            { indexOffset: 0, indexCount: 0, vertexCount: 0, topology: 'triangle-list' as const },
+            {
+              indexOffset: 0,
+              indexCount: 0,
+              vertexCount: 0,
+              materialSlot: 0,
+              topology: 'triangle-list' as const,
+            },
           ],
         };
       }
@@ -7122,14 +6835,14 @@ function makeStubGPU(): unknown {
     };
   }
 
-  // feat-20260601-gpu-resource-store-extraction M1: uploadTexture moved to
-  // GpuResourceStore; the POD carries the GPU format, the decoded image carries
+  // feat-20260601-device/gpu-residency-extraction M1: uploadTexture moved to
+  // GpuResidencyCache; the POD carries the GPU format, the decoded image carries
   // colorSpace (D-2 caller passes POD). The store holds no registry reference, so
   // the asset-not-found arm now lives at the registry `get` the caller does
   // before calling the store (the 3rd case below).
   describe('T-M3-01 (a) uploadTexture format <-> colorSpace consistency assertion', () => {
     it('rejects format=rgba8unorm-srgb + decoded colorSpace=linear (mismatch)', async () => {
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
       const pod = makeTexture('rgba8unorm-srgb', 'srgb');
       const handle = toShared<'TextureAsset'>(1);
       const decoded = makeDecoded('linear');
@@ -7146,7 +6859,7 @@ function makeStubGPU(): unknown {
     });
 
     it('rejects format=rgba8unorm + decoded colorSpace=srgb (mismatch reversed)', async () => {
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
       const pod = makeTexture('rgba8unorm', 'linear');
       const handle = toShared<'TextureAsset'>(1);
       const decoded = makeDecoded('srgb');
@@ -7177,7 +6890,7 @@ function makeStubGPU(): unknown {
 
 {
   // --- from verify-revisions.test.ts ---
-  const ENGINE = new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url).href;
+  const _ENGINE = new URL('../../../render/src/assembly/factory.ts', import.meta.url).href;
 
   // ─── Mock fixtures ──────────────────────────────────────────────────────────
 
@@ -7266,117 +6979,58 @@ function makeStubGPU(): unknown {
     vi.unstubAllGlobals();
   });
 
-  // ─── fix-f1: EngineEnvironmentError preserves the RhiError structured object ───
+  // ─── fix-f1: Result construction preserves structured environment detail ───
 
-  describe('fix-f1 — EngineEnvironmentError.detail.webgpuError preserves RhiError', () => {
-    it('all WebGPU channels fail → detail.webgpuError is a RhiError with .code', async () => {
-      // With the global vi.mock for rhi-webgpu, the mock factory controls
-      // adapter behavior. Force adapter rejection to get the right error code.
-      spies.rhiWebgpuRequestAdapterShould = 'reject-adapter-null';
-
-      // navigator.gpu.requestAdapter() === null → rhi.requestDevice() returns
-      // Result.err({ code: 'adapter-unavailable' }).
-      const mockGpu = {
-        requestAdapter: async () => null,
-      };
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: mockGpu });
-      const canvas = makeMockCanvas({ webgl2: 'null' });
-
-      const { createRenderer } = await import(
-        new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url).href
-      );
-      const { EngineEnvironmentError } = await import(
-        new URL('../../../render/src/renderer/environment-error.ts', import.meta.url).href
+  describe('fix-f1 — createRenderer Result failure detail', () => {
+    it('returns EngineEnvironmentError instead of throwing when no RHI is injected', async () => {
+      const result = await createRuntimeRenderer(
+        makeMockCanvas({ webgpu: 'null', webgl2: 'null' }),
+        { rhi: undefined },
       );
 
-      let caught: unknown;
-      try {
-        await createRenderer(canvas);
-      } catch (e) {
-        caught = e;
-      }
-      expect(caught).toBeInstanceOf(EngineEnvironmentError);
-      const err = caught as InstanceType<typeof EngineEnvironmentError>;
-      // F1 acceptance: webgpuError is a RhiError instance, AI consumers read .code via property access.
-      expect(spies.rhiErrorCtor).toBeDefined();
-      expect(err.detail.webgpuError).toBeInstanceOf(spies.rhiErrorCtor);
-      const rhiErr = err.detail.webgpuError as { code: string; expected: string; hint: string };
-      expect(rhiErr.code).toBe('adapter-unavailable');
-      expect(typeof rhiErr.expected).toBe('string');
-      expect(rhiErr.expected.length).toBeGreaterThan(0);
-      expect(typeof rhiErr.hint).toBe('string');
-      expect(rhiErr.hint.length).toBeGreaterThan(0);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toBeInstanceOf(EngineEnvironmentError);
+      expect(result.error.detail).toBeDefined();
     });
 
-    it('EngineEnvironmentError.detail is always present (even when webgpuError is undefined)', async () => {
-      const { EngineEnvironmentError } = await import(
-        new URL('../../../render/src/renderer/environment-error.ts', import.meta.url).href
+    it('keeps a successful renderer behind the public Result surface', async () => {
+      const renderer = await requireRenderer(
+        makeMockCanvas({ webgpu: 'context', webgl2: 'context' }),
+        { rhi },
+        { shaderManifestUrl: undefined },
       );
-      const e = new EngineEnvironmentError('test reason');
-      expect(e.detail).toBeDefined();
-      expect(e.detail.webgpuError).toBeUndefined();
+      expect(renderer.inspect().state).toBe('alive');
+      expect(renderer).not.toHaveProperty('backend');
+      expect(renderer).not.toHaveProperty('ready');
+      await renderer.dispose();
     });
   });
 
-  // ─── fix-f2: Renderer.onError listener entry ───────────────────────────────
+  // ─── fix-f2: Renderer.subscribe lifecycle entry ────────────────────────────
 
-  describe('fix-f2 — Renderer.onError(listener) explicit signal entry', () => {
-    it('createRenderer returns a renderer whose onError is a function and returns an unsubscribe fn', async () => {
-      const mockGpu = {
-        requestAdapter: async () => ({
-          requestDevice: async () => ({
-            lost: new Promise(() => undefined),
-            features: new Set(),
-            limits: {},
-            queue: { submit: () => undefined, writeBuffer: () => undefined },
-            createShaderModule: () => ({}),
-            createRenderPipeline: () => ({}),
-            createBuffer: () => ({
-              getMappedRange: () => new ArrayBuffer(64),
-              unmap: () => undefined,
-            }),
-            createTexture: () => ({}),
-            createSampler: () => ({}),
-            createBindGroupLayout: () => ({}),
-            createCommandEncoder: () => ({
-              beginRenderPass: () => ({
-                setPipeline: () => undefined,
-                setVertexBuffer: () => undefined,
-                draw: () => undefined,
-                end: () => undefined,
-              }),
-              finish: () => ({}),
-            }),
-            destroy: () => undefined,
-          }),
-        }),
-        getPreferredCanvasFormat: () => 'bgra8unorm',
-      };
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: mockGpu });
-      const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: { shaderManifestUrl?: string | undefined },
-          bundler?: unknown,
-        ) => Promise<{ onError?: unknown }>;
-      };
-      const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-
-      expect(typeof (renderer as { onError?: unknown }).onError).toBe('function');
-      const unsub = (
-        renderer as {
-          onError: (cb: (e: unknown) => void) => () => void;
-        }
-      ).onError(() => undefined);
-      expect(typeof unsub).toBe('function');
-      expect(() => unsub()).not.toThrow();
+  describe('fix-f2 — Renderer.subscribe explicit signal entry', () => {
+    it('returns an unsubscribe function and publishes the disposal transition', async () => {
+      const renderer = await requireRenderer(
+        makeMockCanvas({ webgl2: 'context', webgpu: 'context' }),
+        { rhi },
+        { shaderManifestUrl: undefined },
+      );
+      const events: unknown[] = [];
+      const unsubscribe = renderer.subscribe((event) => events.push(event));
+      expect(typeof unsubscribe).toBe('function');
+      expect((await renderer.dispose()).ok).toBe(true);
+      expect(events).toContainEqual({
+        kind: 'state-changed',
+        previous: 'alive',
+        current: 'disposed',
+      });
+      unsubscribe();
     });
 
     it('RhiErrorListenerRegistry late-attach replay: an add after fire immediately receives the last error', async () => {
       const { RhiError } = await import('@forgeax/engine-rhi');
-      const { RhiErrorListenerRegistry } = await import('@forgeax/engine-render/internal');
+      const { RhiErrorListenerRegistry } = await import('../../../render/src/lifecycle');
 
       const registry = new RhiErrorListenerRegistry();
       const fakeError = new RhiError({
@@ -7406,7 +7060,7 @@ function makeStubGPU(): unknown {
 
     it('RhiErrorListenerRegistry.clear detaches all listeners', async () => {
       const { RhiError } = await import('@forgeax/engine-rhi');
-      const { RhiErrorListenerRegistry } = await import('@forgeax/engine-render/internal');
+      const { RhiErrorListenerRegistry } = await import('../../../render/src/lifecycle');
       const registry = new RhiErrorListenerRegistry();
       let fired = 0;
       registry.add(() => {
@@ -7427,54 +7081,19 @@ function makeStubGPU(): unknown {
   // ─── fix-f6: dispose placeholder + listener detach ─────────────────────────
 
   describe('fix-f6 — Renderer.dispose() placeholder + listener detach', () => {
-    it('dispose followed by another dispose does not throw (idempotent)', async () => {
-      const mockGpu = {
-        requestAdapter: async () => ({
-          requestDevice: async () => ({
-            lost: new Promise(() => undefined),
-            features: new Set(),
-            limits: {},
-            queue: { submit: () => undefined, writeBuffer: () => undefined },
-            createShaderModule: () => ({}),
-            createRenderPipeline: () => ({}),
-            createBuffer: () => ({
-              getMappedRange: () => new ArrayBuffer(64),
-              unmap: () => undefined,
-            }),
-            createTexture: () => ({}),
-            createSampler: () => ({}),
-            createBindGroupLayout: () => ({}),
-            createCommandEncoder: () => ({
-              beginRenderPass: () => ({
-                setPipeline: () => undefined,
-                setVertexBuffer: () => undefined,
-                draw: () => undefined,
-                end: () => undefined,
-              }),
-              finish: () => ({}),
-            }),
-            destroy: () => undefined,
-          }),
-        }),
-        getPreferredCanvasFormat: () => 'bgra8unorm',
-      };
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: mockGpu });
-      const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (
-          canvas: unknown,
-          opts?: { shaderManifestUrl?: string | undefined },
-          bundler?: unknown,
-        ) => Promise<{ dispose: () => void }>;
-      };
-      const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
+    it('dispose is Result-valued and idempotent', async () => {
+      const renderer = await requireRenderer(
+        makeMockCanvas({ webgl2: 'context', webgpu: 'context' }),
+        { rhi },
+        { shaderManifestUrl: undefined },
+      );
 
-      expect(() => renderer.dispose()).not.toThrow();
-      expect(() => renderer.dispose()).not.toThrow();
+      expect((await renderer.dispose()).ok).toBe(true);
+      expect((await renderer.dispose()).ok).toBe(true);
     });
 
     it('LostListenerRegistry.clear detaches all listeners', async () => {
-      const { LostListenerRegistry } = await import('@forgeax/engine-render/internal');
+      const { LostListenerRegistry } = await import('../../../render/src/lifecycle');
       const registry = new LostListenerRegistry();
       let fired = 0;
       registry.add(() => {

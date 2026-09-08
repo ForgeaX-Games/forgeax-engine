@@ -33,7 +33,7 @@ import { World } from '../world';
 
 const N = 10_000;
 const ROUNDS = 5;
-const INNER_REPEATS = 30;
+const INNER_REPEATS = 300;
 const RATIO_GATE = 1.15;
 
 const BaselineTrs10 = defineComponent('W5_BaselineTrs10', {

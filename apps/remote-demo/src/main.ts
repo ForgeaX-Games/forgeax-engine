@@ -82,7 +82,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   console.warn(
-    `[remote-demo] backend=${app.renderer.backend} app.remote=${
+    `[remote-demo] state=${app.renderer.inspect().state} app.remote=${
       app.remote ? `ws:${app.remote.port}` : 'none'
     }`,
   );

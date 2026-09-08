@@ -80,38 +80,61 @@ function readPng(path) {
   return { width: png.width, height: png.height, nonBlack };
 }
 
-function copyCapture(capture) {
-  const tape = capture?.tapes?.[0];
-  if (!tape) throw new Error(`capture returned no tape: ${JSON.stringify(capture)}`);
+function copyArtifact(artifact) {
+  if (artifact?.kind !== 'rhi-tape' || typeof artifact.path !== 'string' || typeof artifact.digest !== 'string') {
+    throw new Error(`capture returned an invalid ArtifactRef: ${JSON.stringify(artifact)}`);
+  }
   const candidates = [
-    resolve(root, tape.tapePath),
-    resolve(root, 'apps/hello/m8-integrated-capstone', tape.tapePath),
-    resolve(root, 'apps/remote-demo', tape.tapePath),
+    artifact.path,
+    resolve(root, artifact.path),
+    resolve(root, 'apps/hello/m8-integrated-capstone', artifact.path),
   ];
-  const reportCandidates = [
-    resolve(root, tape.reportPath),
-    resolve(root, 'apps/hello/m8-integrated-capstone', tape.reportPath),
-    resolve(root, 'apps/remote-demo', tape.reportPath),
-  ];
-  const sourceTape = candidates.find((path) => existsSync(path));
-  const sourceReport = reportCandidates.find((path) => existsSync(path));
-  if (!sourceTape || !sourceReport) throw new Error(`capture artifacts missing: ${JSON.stringify(tape)}`);
-  const tapePath = resolve(artifactDir, 'frame-0.tape.bin');
-  const reportPath = resolve(artifactDir, 'frame-0.report.json');
-  copyFileSync(sourceTape, tapePath);
-  copyFileSync(sourceReport, reportPath);
-  return { tapePath, reportPath, runId: tape.runId };
+  const source = candidates.find((path) => existsSync(path));
+  if (source === undefined) throw new Error(`single tape artifact missing: ${JSON.stringify(artifact)}`);
+  const artifactPath = resolve(artifactDir, 'frame.rhitape');
+  copyFileSync(source, artifactPath);
+  return { ...artifact, path: artifactPath };
 }
 
 function runRhiCli(args, label) {
-  const cli = resolve(root, 'packages/rhi-debug/dist/cli.mjs');
-  const result = spawnSync(process.execPath, [cli, ...args], {
+  const cli = resolve(root, 'packages/devkit/dist/cli.mjs');
+  const result = spawnSync(process.execPath, [cli, ...args, '--json'], {
     cwd: root,
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
   });
   if (result.status !== 0) throw new Error(`${label} failed: ${result.stderr || result.stdout}`);
-  return parseJson(result.stdout, label);
+  const envelope = parseJson(result.stdout, label);
+  if (!envelope.ok) throw new Error(`${label} returned ${JSON.stringify(envelope.error)}`);
+  return envelope.value;
+}
+
+async function captureArtifact(label) {
+  const result = await page.evaluate(async (captureLabel) => {
+    const captureFn = globalThis.__forgeax?.captureFrame;
+    if (typeof captureFn !== 'function') return { ok: false, error: { code: 'capture-unavailable' } };
+    const captured = await captureFn();
+    if (!captured.ok) return captured;
+    const runId = `m8-${captureLabel}-${globalThis.crypto.randomUUID().replaceAll('-', '')}`;
+    const response = await fetch(`/__forgeax-debug/tape?runId=${encodeURIComponent(runId)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-forgeax-rhitape' },
+      body: captured.value.bytes,
+    });
+    const payload = await response.json();
+    if (!response.ok) return { ok: false, error: payload };
+    return {
+      ok: true,
+      value: {
+        ...payload,
+        source: 'rhi.capture',
+        digest: captured.value.digest,
+        runId,
+      },
+    };
+  }, label);
+  if (!result.ok) throw new Error(`${label} capture failed: ${JSON.stringify(result.error)}`);
+  return copyArtifact(result.value);
 }
 
 const dev = spawn(process.execPath, [resolve(root, 'scripts/dev-live.mjs'), appPackage], {
@@ -122,6 +145,7 @@ const dev = spawn(process.execPath, [resolve(root, 'scripts/dev-live.mjs'), appP
 dev.stdout.on('data', (chunk) => process.stdout.write(`[dev-live] ${chunk}`));
 dev.stderr.on('data', (chunk) => process.stderr.write(`[dev-live:err] ${chunk}`));
 let browser;
+let page;
 try {
   const url = await waitForUrl();
   browser = await chromium.launch({
@@ -129,7 +153,7 @@ try {
     channel: 'chrome',
     args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer', '--ignore-gpu-blocklist', '--autoplay-policy=user-gesture-required'],
   });
-  const page = await browser.newPage({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 1 });
+  page = await browser.newPage({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 1 });
   const pageErrors = [];
   const consoleErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
@@ -153,7 +177,9 @@ try {
   const beforePath = resolve(artifactDir, 'before.png');
   await page.screenshot({ path: beforePath });
 
-  await page.keyboard.press('Space');
+  await page.keyboard.down('Space');
+  await page.waitForTimeout(100);
+  await page.keyboard.up('Space');
   await page.waitForFunction(() => /audio=running/.test(document.querySelector('#audio-status')?.textContent ?? '') && /starts=[1-9]/.test(document.querySelector('#audio-status')?.textContent ?? ''), undefined, { timeout: 15_000 });
   const audio = await page.locator('#audio-status').textContent();
   const picked = liveEval('globalThis.__forgeaxM8.pickCenter()');
@@ -165,32 +191,33 @@ try {
     throw new Error(`M8 dynamic invariant failed: ${JSON.stringify(mutated)}`);
   }
 
-  const capture = liveEval("(async () => debugAdapter === undefined ? { available: false } : await debugAdapter.captureFrames(1, 'm8-capstone-before-fault'))()");
-  if (capture.available === false) throw new Error('M8 debugAdapter unavailable');
-  const captured = copyCapture(capture);
-  const rhiSummary = runRhiCli(['summary', captured.tapePath], 'M8 RHI summary');
-  if (!Array.isArray(rhiSummary.draws) || rhiSummary.draws.length < 1 || !Array.isArray(rhiSummary.commands) || rhiSummary.commands.length < 1) {
+  const captured = await captureArtifact('before-fault');
+  const rhiSummary = runRhiCli(
+    ['run', 'rhi.summary', '--artifact', captured.path, '--digest', captured.digest],
+    'M8 RHI summary',
+  );
+  if (!Array.isArray(rhiSummary.model?.works) || rhiSummary.model.works.length < 1 || !Array.isArray(rhiSummary.model.commands) || rhiSummary.model.commands.length < 1) {
     throw new Error(`M8 RHI summary lacks draw/command evidence: ${JSON.stringify(rhiSummary.meta)}`);
   }
   writeFileSync(resolve(artifactDir, 'rhi-summary.json'), `${JSON.stringify(rhiSummary, null, 2)}\n`);
-  const colorDrawIdx = rhiSummary.draws.findIndex((draw) => draw.colorAttachmentHandleId !== undefined);
-  if (colorDrawIdx < 0) throw new Error('M8 RHI summary has no color attachment draw');
+  const colorWorkIndex = rhiSummary.model.works.findIndex((work) => work.kind.startsWith('draw'));
+  if (colorWorkIndex < 0) throw new Error('M8 RHI summary has no draw work');
   const rhiInspect = runRhiCli(
-    ['inspect-offline', captured.tapePath, String(colorDrawIdx), '--fields=bindings,drawCall,rt'],
-    'M8 RHI offline inspect',
+    ['run', 'rhi.inspect', '--artifact', captured.path, '--digest', captured.digest, '--work-index', String(colorWorkIndex)],
+    'M8 RHI inspect',
   );
-  if (rhiInspect.drawIdx !== colorDrawIdx || rhiInspect.drawCall === undefined || rhiInspect.rt === undefined) {
-    throw new Error(`M8 RHI offline inspect lacks evidence: ${JSON.stringify(rhiInspect)}`);
+  if (rhiInspect.inspection?.workIndex !== colorWorkIndex || rhiInspect.inspection?.eventIndex === undefined) {
+    throw new Error(`M8 RHI inspect lacks work evidence: ${JSON.stringify(rhiInspect)}`);
   }
   writeFileSync(resolve(artifactDir, 'rhi-inspect.json'), `${JSON.stringify(rhiInspect, null, 2)}\n`);
-  console.log(`[m8-capstone] RHI capture/inspect: PASS draws=${rhiSummary.draws.length} commands=${rhiSummary.commands.length} drawIdx=${rhiInspect.drawIdx}`);
+  console.log(`[m8-capstone] RHI capture/inspect: PASS works=${rhiSummary.model.works.length} commands=${rhiSummary.model.commands.length} workIndex=${rhiInspect.inspection.workIndex}`);
   const fault = liveEval('globalThis.__forgeaxM8.injectFault()');
   if (fault.ok !== false || typeof fault.code !== 'string') throw new Error(`M8 fault oracle failed: ${JSON.stringify(fault)}`);
   const recovery = liveEval('globalThis.__forgeaxM8.recover()');
   if (recovery.ok !== true || recovery.entityCount !== baseline.entityCount) throw new Error(`M8 recovery call failed: ${JSON.stringify(recovery)}`);
   await page.waitForFunction(() => document.querySelector('#status')?.textContent?.includes('phase=recovered'), undefined, { timeout: 15_000 });
-  const draw = liveEval('globalThis.__forgeaxM8.draw()');
-  if (draw.ok !== true) throw new Error(`M8 post-recovery draw failed: ${JSON.stringify(draw)}`);
+  const rendererHealth = liveEval('globalThis.__forgeaxM8.health()');
+  if (rendererHealth?.reason !== 'alive') throw new Error(`M8 post-recovery renderer health failed: ${JSON.stringify(rendererHealth)}`);
   const afterPath = resolve(artifactDir, 'after-recovery.png');
   await page.screenshot({ path: afterPath });
   const after = liveEval('globalThis.__forgeaxM8.snapshot()');
@@ -201,10 +228,20 @@ try {
   if (consoleErrors.length > 0) throw new Error(`M8 console errors: ${consoleErrors.join(' | ')}`);
   console.log(`[m8-capstone] remote-live mutation: PASS pick=${picked.hit} render=${switched.renderMode} fixed=${mutated.fixedTicks}`);
   console.log(`[m8-capstone] structured fault/recovery: PASS code=${fault.code} phase=${after.phase} entities=${after.entityCount}`);
-  const summary = { health, reimport: { originalTitle: originalContent.title, mutatedTitle: mutatedContent.title, markers: baseline.content.markers }, baseline, audio, picked, switched, mutated, capture: captured, rhi: { draws: rhiSummary.draws.length, commands: rhiSummary.commands.length, drawIdx: rhiInspect.drawIdx }, fault, recovery, after, beforeVisual, afterVisual, pageErrors, consoleErrors };
+  const summary = { health, reimport: { originalTitle: originalContent.title, mutatedTitle: mutatedContent.title, markers: baseline.content.markers }, baseline, audio, picked, switched, mutated, capture: captured, rhi: { works: rhiSummary.model.works.length, commands: rhiSummary.model.commands.length, workIndex: rhiInspect.inspection.workIndex }, fault, recovery, after, beforeVisual, afterVisual, pageErrors, consoleErrors };
   writeFileSync(resolve(artifactDir, 'browser-summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
   console.log(`[m8-capstone] browser long-lived journey: PASS phase=${after.phase} entities=${after.entityCount} fixed=${after.fixedTicks} pick=${after.pickCount} fault=${fault.code} beforeNonBlack=${beforeVisual.nonBlack} afterNonBlack=${afterVisual.nonBlack}`);
 } catch (error) {
+  if (page !== undefined) {
+    const state = await page
+      .evaluate(() => ({
+        status: document.querySelector('#status')?.textContent ?? '',
+        audio: document.querySelector('#audio-status')?.textContent ?? '',
+        snapshot: globalThis.__forgeaxM8?.snapshot?.(),
+      }))
+      .catch(() => undefined);
+    if (state !== undefined) console.error(`[m8-capstone] failure state: ${JSON.stringify(state)}`);
+  }
   console.error(`[m8-capstone] browser long-lived journey: FAIL - ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
 } finally {

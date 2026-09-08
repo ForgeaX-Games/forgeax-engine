@@ -30,6 +30,27 @@
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-physics smoke",
+    "gauntletScenario": {
+      "id": "hello-physics-large-delta-recovery",
+      "script": "smoke",
+      "domains": ["World and host contract", "Simulation and media implementations"],
+      "packages": ["@forgeax/engine-ecs", "@forgeax/engine-physics", "@forgeax/engine-physics-rapier3d"],
+      "risks": ["baseline", "behavioral", "fault", "recovery", "cleanup"],
+      "phaseInputs": ["baseline", "behavioral", "fault", "recovery", "cleanup"],
+      "evidence": {
+        "frontDoors": ["physics-app", "dawn-node"],
+        "legs": ["semantic", "behavioral", "recovery"]
+      },
+      "oracle": {
+        "stdoutIncludes": [
+          "[m25] baseline: PASS",
+          "[m25] oversized delta: PASS",
+          "[m25] healthy recovery: PASS",
+          "[m25] cleanup: PASS",
+          "[m25] PASS - physics large-delta recovery"
+        ]
+      }
+    },
     "metrics": {
       "bundle-size": {
         "enabled": false,

@@ -85,4 +85,28 @@ describe('normalized GUID collision collection', () => {
 
     await expectGuidCollision([firstRoot, secondRoot], ['hero.png.meta.json']);
   });
+
+  it('reports a ScriptablePack output colliding with a JSON sidecar', async () => {
+    const root = await makeRoot('scriptable-meta');
+    await writeFile(join(root, 'image.png'), Buffer.from('fixture'));
+    await writeFile(
+      join(root, 'image.png.meta.json'),
+      JSON.stringify(meta(COLLIDING_GUID, 'image.png')),
+    );
+    await writeFile(
+      join(root, 'generated.pack.ts'),
+      `
+const guid = (value: string) => new Uint8Array(value.replaceAll('-', '').match(/../g)!.map((byte: string) => Number.parseInt(byte, 16)));
+export default {
+  schemaVersion: '1.0.0',
+  packageId: guid('018e7a4d-1234-7abc-8def-000000000002'),
+  assets: { mesh: { guid: guid('${COLLIDING_GUID}'), kind: 'mesh' } },
+  externalAssets: {},
+  build: () => ({ ok: true, value: { mesh: { kind: 'mesh' } } }),
+};
+`,
+    );
+
+    await expectGuidCollision([root], ['image.png.meta.json', 'generated.pack.ts']);
+  });
 });

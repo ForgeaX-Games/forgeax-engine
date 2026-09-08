@@ -22,6 +22,9 @@ import { readFileSync } from 'node:fs';
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
+const M27_RECOVERY = process.argv.includes('--m27-recovery');
+const M27_PNG_2X2_SOLID_RED_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAAklEQVR4AewaftIAAAARSURBVGP8z8DwnwEImBigAAAfFwIC5VM8ugAAAABJRU5ErkJggg==';
 
 const WIDTH = 200;
 const HEIGHT = 150;
@@ -114,10 +117,7 @@ const mockCanvas = {
 // --- 3. Drive engine ECS path --------------------------------------------------
 
 const { World } = await import('@forgeax/engine-ecs');
-const engine = await import('@forgeax/engine-runtime');
-const {
-  createRenderer,
-} = engine;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } =
   await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
@@ -130,8 +130,12 @@ const distShaders = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(distShaders, 'utf8'))}`;
 
 let renderer;
+let assets;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  assets = constructed.value.assets;
 } catch (err) {
   console.error(
     `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
@@ -141,11 +145,10 @@ try {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[hello-compressed] backend=${renderer.backend}`);
-
-const caps = renderer.device.caps;
+console.log('[hello-compressed] Standard pipeline active');
+const features = sharedDevice?.features;
 console.log(
-  `[hello-compressed] caps: bc=${caps.textureCompressionBc} etc2=${caps.textureCompressionEtc2} astc=${caps.textureCompressionAstc}`,
+  `[hello-compressed] Dawn features: bc=${features?.has('texture-compression-bc') ?? false} etc2=${features?.has('texture-compression-etc2') ?? false} astc=${features?.has('texture-compression-astc') ?? false}`,
 );
 
 // Build a synthetic 256x256 RGBA checkerboard texture at smoke time (self-contained,
@@ -169,16 +172,52 @@ for (let y = 0; y < TEX_H; y++) {
 }
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
-const assets = renderer.assets;
 if (!assets) {
-  console.error('[smoke] FAIL - AssetRegistry is null');
+  console.error('[smoke] FAIL - host assets are unavailable');
   process.exit(1);
 }
 
+let m27InvalidCode = null;
+let m27TextureAsset;
+if (M27_RECOVERY) {
+  const { decodeImageBytes } = await import('@forgeax/engine-assets-runtime');
+  const { parseImage } = await import('@forgeax/engine-image/parse-image');
+  const invalid = await decodeImageBytes(new Uint8Array([0, 1, 2]), 'image/png', {
+    mipmap: false,
+  });
+  if (invalid.ok || invalid.error.code !== 'image-decode-failed') {
+    console.error(`[m27] FAIL - invalid bytes result was ${invalid.ok ? 'ok' : invalid.error.code}`);
+    sharedDevice?.destroy?.();
+    process.exit(1);
+  }
+  m27InvalidCode = invalid.error.code;
+
+  const parsed = parseImage(
+    new Uint8Array(Buffer.from(M27_PNG_2X2_SOLID_RED_BASE64, 'base64')),
+    'image/png',
+    { mipmap: false },
+  );
+  if (!parsed.ok) {
+    console.error(`[m27] FAIL - Node PNG parse failed: ${parsed.error.code}`);
+    sharedDevice?.destroy?.();
+    process.exit(1);
+  }
+  m27TextureAsset = {
+    kind: 'texture',
+    width: parsed.value.width,
+    height: parsed.value.height,
+    format: 'rgba8unorm-srgb',
+    data: parsed.value.bytes,
+    colorSpace: parsed.value.colorSpace,
+    mipmap: false,
+    mipLevelCount: 1,
+  };
+}
+
 // Register synthetic texture + mint handles.
-const texHandle = world.allocSharedRef('TextureAsset', {
+const texHandle = world.allocSharedRef('TextureAsset', m27TextureAsset ?? {
   kind: 'texture',
   width: TEX_W,
   height: TEX_H,
@@ -194,7 +233,23 @@ const samplerHandle = world.allocSharedRef('SamplerAsset', {
   addressModeU: 'repeat',
   addressModeV: 'repeat',
 });
-const matHandle = world.allocSharedRef('MaterialAsset', {
+const matHandle = world.allocSharedRef('MaterialAsset', M27_RECOVERY ? {
+  kind: 'material',
+  passes: [
+    {
+      name: 'Forward',
+      program: { module: 'forgeax::default-standard-pbr' },
+      renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
+    },
+  ],
+  values: {
+    baseColor: [1, 1, 1, 1],
+    metallic: 0,
+    roughness: 0.8,
+    baseColorTexture: texHandle,
+    sampler: samplerHandle,
+  },
+} : {
   kind: 'material',
   passes: [
     {
@@ -211,12 +266,14 @@ const matHandle = world.allocSharedRef('MaterialAsset', {
 });
 
 // 4 staggered quads.
-const quads = [
-  [-1.5, 0.8, 0, 0.7, 0.7, 1],
-  [1.5, 0.8, 0, 0.5, 0.5, 1],
-  [-1.5, -0.8, 0, 0.5, 0.5, 1],
-  [1.5, -0.8, 0, 0.7, 0.7, 1],
-];
+const quads = M27_RECOVERY
+  ? [[0, 0, 0, 2.6, 1.8, 1]]
+  : [
+      [-1.5, 0.8, 0, 0.7, 0.7, 1],
+      [1.5, 0.8, 0, 0.5, 0.5, 1],
+      [-1.5, -0.8, 0, 0.5, 0.5, 1],
+      [1.5, -0.8, 0, 0.7, 0.7, 1],
+    ];
 for (const [px, py, pz, sx, sy, sz] of quads) {
   world.spawn(
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
@@ -251,11 +308,6 @@ world.spawn(
 
 // --- 4. Render loop -----------------------------------------------------------
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code}`);
-  process.exit(1);
-}
 
 const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
 const start = performance.now();
@@ -263,7 +315,11 @@ let totalFrames = 0;
 const pixelReads = [];
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update().unwrap();
-  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  renderer.draw({
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  });
   totalFrames++;
   await delay(0);
 }
@@ -318,7 +374,13 @@ if (!pixelsNonBlack) {
   process.exit(1);
 }
 
-console.log('[smoke] PASS');
+if (M27_RECOVERY) {
+  console.log(
+    `[m27] PASS invalidCode=${m27InvalidCode} parsed=${m27TextureAsset.width}x${m27TextureAsset.height} frames=${totalFrames} pixelSamples=${pixelJson}`,
+  );
+} else {
+  console.log('[smoke] PASS');
+}
 // dawn-node's GPU teardown does not settle the Node event loop on its own
 // (it hangs ~4min before the process exits), which the CI smoke-fleet step
 // reads as a cancel. Destroy the device and exit explicitly so the verdict

@@ -1,9 +1,9 @@
-import { matchPass, selectPasses } from '@forgeax/engine-render/internal';
 import type { MaterialPass, PassSelector } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { matchPass, selectPasses } from '../../../render/src/systems/pass-selector';
 
 /*
- * feat-20260609 M1 / T-003: AddScenePass/AddShadowPass selector required.
+ * feat-20260609 M1 / T-003: typed scene/shadow selector required.
  *
  * These tests verify the PassSelector matching semantics:
  *   - selector: {} matches every pass (AC-02)

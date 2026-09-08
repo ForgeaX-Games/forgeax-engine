@@ -36,6 +36,7 @@ import { createApp } from '@forgeax/engine-app';
 import type { App, CanvasAppError } from '@forgeax/engine-app';
 
 import { HANDLE_CUBE, HANDLE_QUAD, HANDLE_SPHERE, HANDLE_TRIANGLE } from '@forgeax/engine-assets-runtime';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { Transform } from '@forgeax/engine-scene';
 
 import { ANTIALIAS_MSAA, ANTIALIAS_NONE, perspective } from '@forgeax/engine-render';
@@ -73,13 +74,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;
     if (bus !== undefined) bus.push({ code: error.code, hint: error.hint });
   });
-  console.warn(`[msaa] backend=${app.renderer.backend}`);
-
-  const ready = await app.renderer.ready;
-  if (!ready.ok) {
-    console.error('[msaa] renderer.ready failed:', ready.error.code, ready.error.hint);
-    return;
-  }
+  console.warn(`[msaa] execution=${app.execution.report().actualTier}`);
 
   const world = app.world;
 
@@ -167,7 +162,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     after: ['input-frame-start-scan'],
     queries: [],
     fn: () => {
-      const snap = app.renderer.input.snapshot(world);
+      const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (snap === undefined) return;
 
       // InputSnapshot.keyboard matches KeyboardEvent.key (browser backend
@@ -201,27 +196,23 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
   console.warn('[msaa] running. Press Space to toggle MSAA.');
 
-  installCaptureHook(app, world);
+  installCaptureHook(app);
 }
 
-// RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives
-// one update + draw + readPixels so the live canvas read is anchored to the same
-// frame the capture records. Only meaningful when the page is served with
-// FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
-function installCaptureHook(app: App, world: App['world']): void {
-  type CaptureHook = () => Promise<Uint8Array>;
-  const win = window as unknown as { __captureAntiAliasingMsaa?: CaptureHook };
-  const renderer = app.renderer;
-  win.__captureAntiAliasingMsaa = async (): Promise<Uint8Array> => {
-    world.update(1 / 60).unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    const r = await renderer.readPixels();
-    if (!r.ok) {
-      throw new Error(
-        `[learn-render 4.10 anti-aliasing-msaa] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
-      );
+// RHI-debug hook for the capture smoke harness. App owns the capture
+// transaction and frame authority; this demo only exposes that capability.
+function installCaptureHook(app: App): void {
+  type CaptureFrameOptions = { readonly snapshotTimeoutMs?: number };
+  type CaptureFrame = (options?: CaptureFrameOptions) => Promise<unknown>;
+  const win = window as unknown as {
+    __captureAntiAliasingMsaaFrame?: (options?: CaptureFrameOptions) => Promise<unknown>;
+  };
+  const captureFrame = app.rhiCapture?.captureFrame as CaptureFrame | undefined;
+  win.__captureAntiAliasingMsaaFrame = (options?: CaptureFrameOptions): Promise<unknown> => {
+    if (typeof captureFrame !== 'function') {
+      throw new Error('[learn-render 4.10 anti-aliasing-msaa] RHI capture hook missing');
     }
-    return r.value;
+    return captureFrame(options);
   };
 }
 
@@ -237,7 +228,9 @@ function reportAppError(err: CanvasAppError | EngineEnvironmentError): void {
 
 declare global {
   interface Window {
-    __captureAntiAliasingMsaa?: () => Promise<Uint8Array>;
+    __captureAntiAliasingMsaaFrame?: (
+      options?: { readonly snapshotTimeoutMs?: number },
+    ) => Promise<unknown>;
     __learnRenderErrors?: Array<{ code: string; hint?: string }>;
   }
 }

@@ -1,6 +1,7 @@
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { type App } from '@forgeax/engine-app';
 import { World } from '@forgeax/engine-ecs';
+import type { Context } from '@forgeax/engine-plugin';
 import { Materials, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset } from '@forgeax/engine-runtime';
@@ -50,8 +51,8 @@ function spawnBeacon(
  * this composition explicit and updates the secondary World before drawing.
  */
 export function installMultiWorldOverlay(
+  context: Context,
   app: App,
-  registerCleanup?: (fn: () => void) => void,
 ): MultiWorldOverlay {
   const world = new World();
   spawnBeacon(world, [-6, 0.45, -1], [0.1, 0.85, 1, 1]);
@@ -85,6 +86,6 @@ export function installMultiWorldOverlay(
   };
 
   applyRouting();
-  registerCleanup?.(dispose);
+  context.effect(() => dispose, 'game-default/multi-world-overlay');
   return { world, snapshot, setEnabled, dispose };
 }

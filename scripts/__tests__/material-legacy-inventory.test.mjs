@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -68,5 +68,25 @@ describe('material legacy surface inventory', () => {
       ['script-fixture-literal', []],
       ['json-asset-literal', []],
     ]);
+  });
+
+  it('keeps deleted cooker and facade paths out of the current owner map', async () => {
+    const root = process.cwd();
+    const deletedPaths = [
+      'packages/vite-plugin-pack/src/ddc-lifecycle-assembly.ts',
+      'packages/vite-plugin-pack/src/material/cook-finalizer.ts',
+    ];
+    for (const path of deletedPaths) {
+      await expect(access(join(root, path))).rejects.toThrow();
+    }
+    await expect(
+      access(join(root, 'packages/shader-compiler/src/material/native-cooker.ts')),
+    ).resolves.toBeUndefined();
+    await expect(
+      access(join(root, 'packages/pack/src/evidence/material-cook.ts')),
+    ).resolves.toBeUndefined();
+    await expect(
+      access(join(root, 'packages/render/src/assembly/material')),
+    ).resolves.toBeUndefined();
   });
 });

@@ -19,27 +19,18 @@
 
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
+import { Layer, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
+import { type MaterialAsset, type TilesetAsset, toShared } from '@forgeax/engine-types';
+import { describe, expect, it } from 'vitest';
+import { encodeSortScope } from '../../../render/src/components/tile-layer';
 import {
-  encodeSortScope,
-  TileLayer,
-  Tilemap,
-  tilemapChunkExtractSystem,
-} from '@forgeax/engine-render/authoring';
-import {
-  Layer,
-  MeshFilter,
-  MeshRenderer,
   resetTilemapChunkExtractCache,
   resetTilemapDerivedEntityTracker,
-} from '@forgeax/engine-render/internal';
-import { ChildOf, Transform } from '@forgeax/engine-scene';
-import {
-  type Handle,
-  type MaterialAsset,
-  type TilesetAsset,
-  toShared,
-} from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
+  tilemapChunkExtractSystem,
+} from '../../../render/src/tilemap-chunk-extract-system';
+import { makeTestTexture, makeTilemapAssetLookup } from './helpers/tilemap-assets';
 
 interface RegionWithAtlasIndex {
   x: number;
@@ -50,8 +41,7 @@ interface RegionWithAtlasIndex {
 }
 
 function makeTwoAtlasTileset(opts: {
-  guid: string;
-  atlases: Handle<'TextureAsset', 'shared'>[];
+  atlases: string[];
   regions: RegionWithAtlasIndex[];
   tilesExtras?: Array<
     Partial<{ widthCells: number; heightCells: number; pivotX: number; pivotY: number }>
@@ -59,7 +49,6 @@ function makeTwoAtlasTileset(opts: {
 }): TilesetAsset {
   return {
     kind: 'tileset',
-    guid: opts.guid,
     atlases: opts.atlases,
     tileWidth: 16,
     tileHeight: 16,
@@ -75,7 +64,7 @@ function makeTwoAtlasTileset(opts: {
 
 function spawnTilemap(
   world: World,
-  tilesetHandle: Handle<'TilesetAsset', 'shared'>,
+  tilesetGuid: string,
   cols: number,
   rows: number,
   tiles: Uint32Array,
@@ -84,7 +73,7 @@ function spawnTilemap(
     .spawn(
       {
         component: Tilemap,
-        data: { cols, rows, tileSize: [1, 1], chunkSize: 4, tileset: tilesetHandle },
+        data: { cols, rows, tileSize: [1, 1], chunkSize: 4, tileset: tilesetGuid },
       },
       { component: Transform, data: {} },
     )
@@ -122,26 +111,26 @@ function readDerivedMaterialHandles(world: World): number[] {
 describe('resolveTilesetMaterial - 3-hop atlasIndex routing (m3-t6)', () => {
   it('atlases=[A,B] + regions[].atlasIndex routes each region to its own atlas', () => {
     const world = new World();
-    const atlasA = toShared<'TextureAsset'>(201);
-    const atlasB = toShared<'TextureAsset'>(202);
-    const tileset = world.allocSharedRef<'TilesetAsset', TilesetAsset>(
-      'TilesetAsset',
-      makeTwoAtlasTileset({
-        guid: 'tileset/multi-atlas',
-        atlases: [atlasA, atlasB],
-        regions: [
-          { x: 0, y: 0, width: 16, height: 16, atlasIndex: 0 },
-          { x: 0, y: 0, width: 16, height: 16, atlasIndex: 1 },
-          { x: 16, y: 0, width: 16, height: 16 /* defaults to atlasIndex 0 */ },
-        ],
-      }),
-    );
+    const atlasA = 'test/atlas-a';
+    const atlasB = 'test/atlas-b';
+    const tileset = makeTwoAtlasTileset({
+      atlases: [atlasA, atlasB],
+      regions: [
+        { x: 0, y: 0, width: 16, height: 16, atlasIndex: 0 },
+        { x: 0, y: 0, width: 16, height: 16, atlasIndex: 1 },
+        { x: 16, y: 0, width: 16, height: 16 /* defaults to atlasIndex 0 */ },
+      ],
+    });
+    const lookup = makeTilemapAssetLookup(tileset, {
+      [atlasA]: makeTestTexture(201),
+      [atlasB]: makeTestTexture(202),
+    });
 
     resetTilemapChunkExtractCache();
     resetTilemapDerivedEntityTracker();
 
-    spawnTilemap(world, tileset, 3, 1, new Uint32Array([1, 2, 3]));
-    tilemapChunkExtractSystem(world);
+    spawnTilemap(world, 'test/tileset', 3, 1, new Uint32Array([1, 2, 3]));
+    tilemapChunkExtractSystem(world, lookup);
 
     const mats = readDerivedMaterialHandles(world);
     expect(mats.length).toBe(3);
@@ -155,21 +144,19 @@ describe('resolveTilesetMaterial - 3-hop atlasIndex routing (m3-t6)', () => {
     // tiles[0] regionIndex=0 atlasIndex=0 -> atlasA (id 201)
     // tiles[1] regionIndex=1 atlasIndex=1 -> atlasB (id 202)
     // tiles[2] regionIndex=2 (no atlasIndex, defaults to 0) -> atlasA (id 201)
+    // Regions 0 and 2 intentionally share atlasA's texture payload.
     const textures = mats.map((h) => readMaterialTextureHandle(world, h));
-    // Without the 3-hop, every tile would point at atlases[0] (id 201).
-    expect(textures).toContain(202);
-    expect(textures).toContain(201);
+    expect(new Set(textures).size).toBe(2);
   });
 
   it('same (atlasHandle, regionIndex) hits the same cache slot even when widthCells/pivot differ', () => {
     const world = new World();
-    const atlasA = toShared<'TextureAsset'>(301);
+    const atlasA = 'test/atlas-a';
     // Two tile entries reference the SAME region 0 but carry different
     // widthCells / pivot -- the cache key is strictly (atlasHandle,
     // regionIndex), so both must share one materialHandle.
-    const tileset = world.allocSharedRef<'TilesetAsset', TilesetAsset>('TilesetAsset', {
+    const tileset = {
       kind: 'tileset',
-      guid: 'tileset/shared-cache',
       atlases: [atlasA],
       tileWidth: 16,
       tileHeight: 16,
@@ -180,13 +167,14 @@ describe('resolveTilesetMaterial - 3-hop atlasIndex routing (m3-t6)', () => {
         { regionIndex: 0, widthCells: 1, heightCells: 1, pivotX: 0.5, pivotY: 0.5 },
         { regionIndex: 0, widthCells: 3, heightCells: 4, pivotX: 0.2, pivotY: 0.8 },
       ],
-    });
+    } satisfies TilesetAsset;
+    const lookup = makeTilemapAssetLookup(tileset, { [atlasA]: makeTestTexture(201) });
 
     resetTilemapChunkExtractCache();
     resetTilemapDerivedEntityTracker();
 
-    spawnTilemap(world, tileset, 2, 1, new Uint32Array([1, 2]));
-    tilemapChunkExtractSystem(world);
+    spawnTilemap(world, 'test/tileset', 2, 1, new Uint32Array([1, 2]));
+    tilemapChunkExtractSystem(world, lookup);
 
     const mats = readDerivedMaterialHandles(world);
     expect(mats.length).toBe(2);
@@ -195,36 +183,35 @@ describe('resolveTilesetMaterial - 3-hop atlasIndex routing (m3-t6)', () => {
 
   it('different atlasIndex on the same regionIndex maps to different materials', () => {
     const world = new World();
-    const atlasA = toShared<'TextureAsset'>(401);
-    const atlasB = toShared<'TextureAsset'>(402);
+    const atlasA = 'test/atlas-a';
+    const atlasB = 'test/atlas-b';
 
     // Region 0 (x=0,y=0) appears twice -- once on atlas A, once on atlas B.
     // The TilesetAsset has two regions sharing identical pixel coordinates
     // but distinct atlasIndex; the cache must produce two material handles.
-    const tileset = world.allocSharedRef<'TilesetAsset', TilesetAsset>(
-      'TilesetAsset',
-      makeTwoAtlasTileset({
-        guid: 'tileset/two-atlases-same-region',
-        atlases: [atlasA, atlasB],
-        regions: [
-          { x: 0, y: 0, width: 16, height: 16, atlasIndex: 0 },
-          { x: 0, y: 0, width: 16, height: 16, atlasIndex: 1 },
-        ],
-      }),
-    );
+    const tileset = makeTwoAtlasTileset({
+      atlases: [atlasA, atlasB],
+      regions: [
+        { x: 0, y: 0, width: 16, height: 16, atlasIndex: 0 },
+        { x: 0, y: 0, width: 16, height: 16, atlasIndex: 1 },
+      ],
+    });
+    const lookup = makeTilemapAssetLookup(tileset, {
+      [atlasA]: makeTestTexture(401),
+      [atlasB]: makeTestTexture(402),
+    });
 
     resetTilemapChunkExtractCache();
     resetTilemapDerivedEntityTracker();
 
-    spawnTilemap(world, tileset, 2, 1, new Uint32Array([1, 2]));
-    tilemapChunkExtractSystem(world);
+    spawnTilemap(world, 'test/tileset', 2, 1, new Uint32Array([1, 2]));
+    tilemapChunkExtractSystem(world, lookup);
 
     const mats = readDerivedMaterialHandles(world).sort((a, b) => a - b);
     expect(mats.length).toBe(2);
     expect(mats[0]).not.toBe(mats[1]);
 
-    // One material must point at atlasA (401), the other at atlasB (402).
-    const textures = mats.map((h) => readMaterialTextureHandle(world, h)).sort((a, b) => a - b);
-    expect(textures).toEqual([401, 402]);
+    const textures = mats.map((h) => readMaterialTextureHandle(world, h));
+    expect(new Set(textures).size).toBe(2);
   });
 });

@@ -86,22 +86,22 @@ describe('demo sortScope migration (w15, round-2 production)', () => {
     const tilemapCase = DEMO_CASES.find((c) => c.demo === 'hello-tilemap');
     if (tilemapCase === undefined) throw new Error('hello-tilemap case missing');
     const src = readFileSync(tilemapCase.mainTsPath, 'utf8');
-    expect(src).not.toMatch(/encodeSortScope\(\s*['"]per-cell['"]\s*\)/);
+    expect(src).not.toMatch(/TilemapSort\.perCell/);
   });
 
   it("asi-world demo encodes sortScope: 'per-cell' for the object TileLayer", () => {
     const asiCase = DEMO_CASES.find((c) => c.demo === 'hello-asi-world');
     if (asiCase === undefined) throw new Error('asi-world case missing');
     const src = readFileSync(asiCase.mainTsPath, 'utf8');
-    expect(src).toMatch(/encodeSortScope\(\s*['"]per-cell['"]\s*\)/);
+    expect(src).toMatch(/TilemapSort\.perCell/);
   });
 
-  it('asi-world demo imports encodeSortScope from @forgeax/engine-runtime', () => {
+  it('asi-world demo imports the grouped TilemapSort authoring value', () => {
     const asiCase = DEMO_CASES.find((c) => c.demo === 'hello-asi-world');
     if (asiCase === undefined) throw new Error('asi-world case missing');
     const src = readFileSync(asiCase.mainTsPath, 'utf8');
-    expect(src).toMatch(/encodeSortScope/);
-    expect(src).toMatch(/@forgeax\/engine-runtime/);
+    expect(src).toMatch(/TilemapSort/);
+    expect(src).toMatch(/@forgeax\/engine-render\/authoring/);
   });
 
   it('migration covers both terrain semantics (layer) and object semantics (per-cell)', () => {

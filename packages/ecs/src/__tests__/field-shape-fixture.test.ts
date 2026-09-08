@@ -10,6 +10,8 @@ import {
   FieldShapeContainerFixture,
   FieldShapePrimitiveFixture,
 } from '../__fixtures__/field-shape-fixture';
+import { componentSchema } from '../component';
+import { componentDefinition } from '../component-schema';
 
 describe('R0-03A producer-owned field-shape fixtures', () => {
   it('covers every required field shape through component reflection', () => {
@@ -40,7 +42,7 @@ describe('R0-03A producer-owned field-shape fixtures', () => {
   });
 
   it('keeps storage type, defaults, and enum labels alongside the shape tag', () => {
-    expect(FieldShapePrimitiveFixture.schema).toMatchObject({
+    expect(componentSchema(FieldShapePrimitiveFixture)).toMatchObject({
       scalar: 'f32',
       enabled: 'bool',
       mode: 'enum',
@@ -49,7 +51,7 @@ describe('R0-03A producer-owned field-shape fixtures', () => {
       values: 'array<f32>',
       material: 'shared<MaterialAsset>',
     });
-    expect(FieldShapePrimitiveFixture.defaults).toMatchObject({
+    expect(componentDefinition(FieldShapePrimitiveFixture).defaults).toMatchObject({
       scalar: 0,
       enabled: false,
       mode: 0,

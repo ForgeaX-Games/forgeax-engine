@@ -37,6 +37,41 @@ const validPayload = {
 };
 
 describe('vfxGpuEffectPackLoader v2 boundary', () => {
+  it('keeps legacy artifact keys outside the v2 asset-local program contract', async () => {
+    const result = await vfxGpuEffectPackLoader.load(
+      input(validPayload, {
+        'effect/program.json': {
+          descriptor: { path: 'program.json', mediaType: 'application/json' },
+          bytes: new TextEncoder().encode('{}'),
+        },
+      }),
+      context(),
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatchObject({
+        code: 'vfx-asset-v2-invalid',
+        detail: { path: 'payload' },
+      });
+    }
+  });
+
+  it('rejects a summary-only v2 payload before reading a program artifact', async () => {
+    const result = await vfxGpuEffectPackLoader.load(
+      input({
+        kind: 'particle-effect',
+        schemaVersion: 2,
+        emitters: [],
+        programFingerprint: 'sha256:x',
+      }),
+      context(),
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.detail.path).toBe('payload');
+  });
+
   it('rejects a v1 package-global artifact shape', async () => {
     const result = await vfxGpuEffectPackLoader.load(
       input(validPayload, {

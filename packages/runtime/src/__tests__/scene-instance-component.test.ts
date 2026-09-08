@@ -13,35 +13,29 @@
 // Plan anchor: plan-strategy §D-2 (single ref wraps SceneInstanceState
 // dynamic structure); plan-tasks §M2 / w15.
 
-import { resolveComponent } from '@forgeax/engine-ecs';
-import { SceneInstance } from '@forgeax/engine-render/internal';
+import { componentSchema } from '@forgeax/engine-ecs/internal';
+import { SceneInstance } from '@forgeax/engine-render';
 import { describe, expect, it } from 'vitest';
 
 describe('SceneInstance component (w15)', () => {
-  it('registers via the global resolveComponent index', () => {
-    const token = resolveComponent('SceneInstance');
-    expect(token).toBeDefined();
-    expect(token).toBe(SceneInstance);
-  });
-
   it('has the D-2 3-field schema', () => {
-    const schema = SceneInstance.schema as Record<string, unknown>;
+    const schema = componentSchema(SceneInstance) as Record<string, unknown>;
     const fieldNames = Object.keys(schema).sort();
     expect(fieldNames).toEqual(['mapping', 'source', 'state']);
   });
 
   it('source field is shared<SceneAsset>', () => {
-    const schema = SceneInstance.schema as Record<string, string>;
+    const schema = componentSchema(SceneInstance) as Record<string, string>;
     expect(schema.source).toBe('shared<SceneAsset>');
   });
 
   it('mapping field is array<entity>', () => {
-    const schema = SceneInstance.schema as Record<string, string>;
+    const schema = componentSchema(SceneInstance) as Record<string, string>;
     expect(schema.mapping).toBe('array<entity>');
   });
 
   it('state field is ref<SceneInstanceState>', () => {
-    const schema = SceneInstance.schema as Record<string, string>;
+    const schema = componentSchema(SceneInstance) as Record<string, string>;
     expect(schema.state).toBe('unique<SceneInstanceState>');
   });
 

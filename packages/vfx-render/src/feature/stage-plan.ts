@@ -1,5 +1,8 @@
-import type { RenderFeatureGpuBindingsRef, RenderFeatureGpuDispatch } from '@forgeax/engine-render';
 import type { VfxGpuStageReflection } from '@forgeax/engine-vfx';
+import type {
+  RenderFeatureGpuBindingsRef,
+  RenderFeatureGpuDispatch,
+} from '../../../render/src/features/prepared-gpu-work.js';
 
 const MANAGED_STAGES = new Set(['spawn', 'update', 'scan', 'compact']);
 const RESOURCE_NAMES = new Set([
@@ -25,7 +28,7 @@ export interface VfxValidatedStage {
   readonly domain: 'particle';
   readonly resources: readonly {
     readonly name: string;
-    readonly access: 'read' | 'write' | 'read-write';
+    readonly access: VfxGpuStageReflection['resources'][number]['access'];
   }[];
   readonly dependsOn: readonly string[];
   readonly iterationBudget: number;

@@ -1,5 +1,5 @@
 import type { World } from '@forgeax/engine-ecs';
-import { Materials, type Renderer } from '@forgeax/engine-render';
+import { Materials } from '@forgeax/engine-render';
 import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
 import type { Handle, MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
@@ -36,23 +36,33 @@ const INDICES = new Uint16Array([
   16, 19, 17, 17, 19, 18, 20, 21, 23, 21, 22, 23,
 ]);
 
-export interface CustomProjectileMeshStore {
-  updateMesh(handle: Handle<'MeshAsset', 'shared'>, vertices: Float32Array, indices: Uint16Array): void;
-  getMeshGpuHandles?(handle: Handle<'MeshAsset', 'shared'>): unknown;
-}
-
 export interface CustomProjectileMesh {
+  readonly world: World;
   readonly meshHandle: Handle<'MeshAsset', 'shared'>;
   readonly materialHandle: Handle<'MaterialAsset', 'shared'>;
   readonly spriteMaterialHandle: Handle<'MaterialAsset', 'shared'>;
   readonly spriteLitMaterialHandle: Handle<'MaterialAsset', 'shared'>;
-  readonly store: CustomProjectileMeshStore;
   readonly baseVertices: Float32Array;
   readonly alternateVertices: Float32Array;
   uvMode: 'upper' | 'lower';
   toggles: number;
   readonly textureSource: 'procedural';
   readonly textureFormat: TextureAsset['format'];
+}
+
+function publishMesh(
+  world: World,
+  handle: Handle<'MeshAsset', 'shared'>,
+  vertices: Float32Array,
+  indices: Uint16Array,
+): void {
+  const resolved = world.sharedRefs.resolve<'MeshAsset', MeshAsset>(handle);
+  if (!resolved.ok) return;
+  resolved.value.vertices.set(vertices);
+  if (resolved.value.indices !== undefined && resolved.value.indices.length === indices.length) {
+    resolved.value.indices.set(indices);
+  }
+  world.sharedRefs.markChanged(handle);
 }
 
 function verticesFor(half: 'upper' | 'lower'): Float32Array {
@@ -93,7 +103,16 @@ function meshFrom(vertices: Float32Array): MeshAsset {
     vertices,
     attributes: { position: positions, normal: normals, uv, tangent },
     indices: INDICES,
-    submeshes: [{ indexOffset: 0, indexCount: INDICES.length, vertexCount: POSITIONS.length, topology: 'triangle-list' }],
+    submeshes: [
+      {
+        indexOffset: 0,
+        indexCount: INDICES.length,
+        vertexCount: POSITIONS.length,
+        topology: 'triangle-list',
+        materialSlot: 0,
+      },
+    ],
+    materialSlots: [{ slotName: 'Default' }],
     aabb: new Float32Array([-0.5, -0.5, -0.5, 0.5, 0.5, 0.5]),
   };
 }
@@ -116,27 +135,13 @@ function makeTexture(): TextureAsset {
 
 export async function createCustomProjectileMesh(
   world: World,
-  renderer: Renderer,
 ): Promise<CustomProjectileMesh | undefined> {
   const texture = makeTexture();
   const textureHandle = world.allocSharedRef('TextureAsset', texture);
-  const upload = await renderer.store.uploadTexture(textureHandle, texture, {
-    bytes: texture.data,
-    width: texture.width,
-    height: texture.height,
-    mime: 'image/png',
-    colorSpace: 'srgb',
-    mipmap: false,
-  });
-  if (!upload.ok) return undefined;
   const baseVertices = verticesFor('upper');
   const alternateVertices = verticesFor('lower');
   const meshAsset = meshFrom(baseVertices);
   const meshHandle = world.allocSharedRef('MeshAsset', meshAsset);
-  // The projectile is spawned lazily, but its teaching control is available
-  // from frame one. Pull the mesh into GPU residency now so updateMesh can
-  // demonstrate an in-place mutation before the first shot is fired.
-  renderer.store.ensureResident?.(meshHandle, meshAsset);
   const material = Materials.standard({
     baseColor: [1, 1, 1, 1],
     baseColorTexture: unwrapHandle(textureHandle),
@@ -179,11 +184,11 @@ export async function createCustomProjectileMesh(
     },
   });
   return {
+    world,
     meshHandle,
     materialHandle,
     spriteMaterialHandle: spriteMaterial,
     spriteLitMaterialHandle: spriteLitMaterial,
-    store: renderer.store as CustomProjectileMeshStore,
     baseVertices,
     alternateVertices,
     uvMode: 'upper',
@@ -194,14 +199,13 @@ export async function createCustomProjectileMesh(
 }
 
 export function toggleCustomProjectileMesh(mesh: CustomProjectileMesh): void {
-  if (mesh.store.getMeshGpuHandles !== undefined && mesh.store.getMeshGpuHandles(mesh.meshHandle) === undefined) return;
   mesh.uvMode = mesh.uvMode === 'upper' ? 'lower' : 'upper';
   mesh.toggles += 1;
-  mesh.store.updateMesh(mesh.meshHandle, mesh.uvMode === 'upper' ? mesh.baseVertices : mesh.alternateVertices, INDICES);
+  publishMesh(mesh.world, mesh.meshHandle, mesh.uvMode === 'upper' ? mesh.baseVertices : mesh.alternateVertices, INDICES);
 }
 
 export function resetCustomProjectileMesh(mesh: CustomProjectileMesh): void {
   if (mesh.uvMode === 'upper') return;
   mesh.uvMode = 'upper';
-  mesh.store.updateMesh(mesh.meshHandle, mesh.baseVertices, INDICES);
+  publishMesh(mesh.world, mesh.meshHandle, mesh.baseVertices, INDICES);
 }

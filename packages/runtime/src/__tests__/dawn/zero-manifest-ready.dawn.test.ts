@@ -8,7 +8,7 @@
 // gate: pre-fix the unconditional Step 2 entry-scan would reject because
 // the empty manifest carries neither the `f_schlick` PBR entry nor the
 // unlit entry; post-fix the gate skips Step 2 outright, the registry
-// yields zero entries, and `await renderer.ready` resolves `Result.ok`.
+// yields zero entries, and host construction reaches the ready state.
 //
 // AC: requirements section 4 AC-02 (Camera-only world reaches `ready ok`
 // without forcing shader compilation) projected onto the dawn / rhi-wgpu
@@ -16,16 +16,16 @@
 // matrix migration: dawn project mirror) + charter P4 (consistent
 // abstraction across rhi-webgpu / rhi-wgpu).
 
-import { createRenderer } from '@forgeax/engine-runtime';
 import { describe, expect, it } from 'vitest';
+import { constructRuntimeRendererHost } from '../../renderer-host';
 
 const WIDTH = 64;
 const HEIGHT = 64;
 const TEXTURE_USAGE_COPY_SRC = 0x01;
 const TEXTURE_USAGE_RENDER_ATTACHMENT = 0x10;
 
-describe('bug-20260519 AC-02 dawn mirror: zero manifest -> ready ok', () => {
-  it('createRenderer without shaderManifestUrl reaches ready.ok on dawn', async () => {
+describe('bug-20260519 AC-02 dawn mirror: zero manifest -> ready state', () => {
+  it('runtime host without shaderManifestUrl reaches ready state on dawn', async () => {
     const dawnAvailable = typeof globalThis.navigator?.gpu?.requestAdapter === 'function';
     if (!dawnAvailable) {
       throw new Error('dawn-node navigator.gpu not injected; vitest.setup-webgpu.ts regressed');
@@ -82,18 +82,17 @@ describe('bug-20260519 AC-02 dawn mirror: zero manifest -> ready ok', () => {
       removeEventListener() {},
     } as unknown as HTMLCanvasElement;
 
-    let renderer: Awaited<ReturnType<typeof createRenderer>>;
+    let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
     try {
       // Explicit `shaderManifestUrl: undefined` opts into zero-entry mode.
       // ShaderRegistry returns empty entries without issuing any fetch;
-      // createRenderer Step 2 is skipped entirely.
-      renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: undefined });
+      // Runtime host shader compilation is skipped entirely.
+      host = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: undefined });
     } finally {
       globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
     }
-    expect(renderer.backend).toBe('webgpu');
-
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
+    expect(host.ok).toBe(true);
+    if (!host.ok) throw host.error;
+    expect(host.value.renderer.inspect().state).toBe('alive');
   });
 });

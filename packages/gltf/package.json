@@ -18,6 +18,10 @@
       "types": "./dist/node-file-entry.d.ts",
       "import": "./dist/node-file-entry.mjs"
     },
+    "./importer": {
+      "types": "./dist/importer-entry.d.ts",
+      "import": "./dist/importer-entry.mjs"
+    },
     "./cli-gltf": {
       "types": "./dist/cli-gltf.d.ts",
       "node": "./dist/cli-gltf.mjs",
@@ -39,12 +43,14 @@
   },
   "dependencies": {
     "@forgeax/engine-animation": "workspace:*",
+    "@forgeax/engine-geometry": "workspace:*",
     "@forgeax/engine-import": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@webgpu/types": "^0.1.71",
-    "@forgeax/engine-scene": "workspace:*"
+    "@forgeax/engine-scene": "workspace:*",
+    "meshoptimizer": "^0.20.0"
   },
   "devDependencies": {
     "@forgeax/engine-assets-runtime": "workspace:*",

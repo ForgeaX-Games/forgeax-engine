@@ -13,18 +13,19 @@
 // (Camera clear pass is M3, not here.)
 
 import { vec3 } from '@forgeax/engine-math';
+import type { Buffer, RhiQueue } from '@forgeax/engine-rhi';
+import { ok } from '@forgeax/engine-rhi';
+import { describe, expect, it } from 'vitest';
+import { packPointLight, packSpotLight } from '../../../render/src/light-buffer-layout';
+import { writeViewUbo } from '../../../render/src/record/view-ubo';
+import type { CameraSnapshot } from '../../../render/src/render-contract';
 import type {
-  CameraSnapshot,
   DirectionalLightSnapshot,
   ExtractedLights,
   PointLightSnapshot,
   SkylightSnapshot,
   SpotLightSnapshot,
-} from '@forgeax/engine-render/internal';
-import { packPointLight, packSpotLight, writeViewUbo } from '@forgeax/engine-render/internal';
-import type { Buffer, RhiQueue } from '@forgeax/engine-rhi';
-import { ok } from '@forgeax/engine-rhi';
-import { describe, expect, it } from 'vitest';
+} from '../../../render/src/render-system-extract';
 
 function identityCamera(): CameraSnapshot {
   return {

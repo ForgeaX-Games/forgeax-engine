@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // Dawn-node smoke for Bevy's text2d mapping.
 //
 // The browser app and this smoke both call src/text2d.ts. Dawn cannot fetch a
@@ -75,8 +76,17 @@ const mockCanvas = {
 const { createApp } = await import('@forgeax/engine-app');
 const { Update } = await import('@forgeax/engine-ecs');
 const { MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
-const { Text2dMotion, registerSharedSampler, buildText2dWorld, stepText2d } = await import(resolve(here, '..', 'src', 'text2d.ts'));
+const {
+  Text2dMotion,
+  registerSharedSampler,
+  buildText2dFontRecoveryWorld,
+  buildText2dWorld,
+  createText2dFontRecoveryController,
+  stepText2d,
+} = await import(resolve(here, '..', 'src', 'text2d.ts'));
+const m34RecoveryMode = process.argv.includes('--m34-recovery');
 const manifestPath = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const manifestUrl = `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}`;
 
@@ -90,24 +100,45 @@ if (!result.ok) {
   process.exit(1);
 }
 const app = result.value;
-console.log(`[bevy-text2d] backend=${app.renderer.backend}`);
+console.log(`[bevy-text2d] backend=${rendererBackend(app.renderer)}`);
 const errors = [];
-app.onError((error) => errors.push({ code: error.code, hint: error.hint }));
-const ready = await app.renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code}`);
-  process.exit(1);
-}
-const attachment = app.renderer.attachWorld(app.world);
+const recordError = (error) =>
+  errors.push({
+    code: error.code,
+    hint: error.hint,
+    ...(error.expected === undefined ? {} : { expected: error.expected }),
+    ...(error.detail === undefined ? {} : { detail: error.detail }),
+  });
+app.onError(recordError);
+subscribeSmokeErrors(app.renderer, recordError);
+const attachment = app.renderer.attach(app.world);
 if (!attachment.ok) throw attachment.error;
 
-const assets = app.renderer.assets;
+const assets = app.assets;
 if (assets === null) {
   console.error('[smoke] FAIL - AssetRegistry is null');
   process.exit(1);
 }
 registerSharedSampler(assets);
-const fontPayload = await registerBakedFont(app.world, assets);
+const fontHandle = await registerBakedFont(app.world, assets);
+if (m34RecoveryMode) {
+  const fontPayload = app.world.sharedRefs.resolve(fontHandle).unwrap();
+  app.world.sharedRefs.release(fontHandle);
+  const recoveryScene = buildText2dFontRecoveryWorld(app.world, fontPayload);
+  let m34Phase = 0;
+  app.world.addSystem(Update, {
+    name: 'text2d-m34-frame-keepalive',
+    queries: [],
+    fn: (world) => {
+      world.set(recoveryScene.unrelated, Transform, { pos: [m34Phase, 0, 0] });
+      m34Phase += 0.001;
+    },
+  });
+  await runM34Recovery(app, fontPayload, errors, artifactDir, recoveryScene);
+  delete globalThis.navigator.gpu;
+  process.exit(0);
+}
+const fontPayload = fontHandle;
 const scene = buildText2dWorld(app.world, fontPayload);
 app.world.addSystem(Update, {
   name: 'text2d-motion',
@@ -125,7 +156,7 @@ for (let i = 0; i < framesTarget; i++) {
     console.error(`[smoke] FAIL - world.update frame=${i}: ${updated.error.code}`);
     process.exit(1);
   }
-  const drawn = app.renderer.draw([app.world], { cameraOwner: 0, resourceOwner: 0 });
+  const drawn = drawSmokeFrame(app.renderer, app.world);
   if (!drawn.ok) console.error(`[smoke] draw frame=${i}: ${drawn.error.code}`);
   frames++;
   await delay(0);
@@ -137,7 +168,7 @@ writeFileSync(resolve(artifactDir, 'text2d.png'), writeReferencePng(pixels, widt
 const visiblePixels = countVisiblePixels(pixels);
 const motion = app.world.get(scene.translation, Text2dMotion);
 const motionPhase = motion.ok ? motion.value.phase : 0;
-const metrics = { backend: app.renderer.backend, frames, attachedGlyphMeshes: attached(), motionPhase, visiblePixels, rhiErrors: errors.length };
+const metrics = { backend: rendererBackend(app.renderer), frames, attachedGlyphMeshes: attached(), motionPhase, visiblePixels, rhiErrors: errors.length };
 writeFileSync(resolve(artifactDir, 'metrics.json'), `${JSON.stringify(metrics, null, 2)}\n`);
 console.log(`[smoke] frames observed=${frames}`);
 console.log(`[smoke] GlyphText meshes attached=${metrics.attachedGlyphMeshes}/4`);
@@ -146,7 +177,7 @@ console.log(`[smoke] visible pixels=${visiblePixels}`);
 console.log(`[smoke] wrote PNG=${resolve(artifactDir, 'text2d.png')}`);
 
 const failures = [];
-if (app.renderer.backend !== 'webgpu') failures.push(`backend=${app.renderer.backend}`);
+if (rendererBackend(app.renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(app.renderer)}`);
 if (frames < framesTarget) failures.push(`frames=${frames}<${framesTarget}`);
 if (metrics.attachedGlyphMeshes !== 4) failures.push(`GlyphText mesh attachment=${metrics.attachedGlyphMeshes}/4`);
 if (motionPhase <= 0) failures.push(`motionPhase=${motionPhase} did not advance`);
@@ -216,4 +247,98 @@ function countVisiblePixels(pixels) {
     if (max > 40 || max - min > 18) count++;
   }
   return count;
+}
+
+async function runM34Recovery(app, font, errors, outputDir, providedScene) {
+  const scene = providedScene ?? buildText2dFontRecoveryWorld(app.world, font);
+  const controller = createText2dFontRecoveryController(
+    app.world,
+    scene,
+    async () => {
+      const updated = app.world.update(1 / 60);
+      if (!updated.ok) throw new Error(`M34 world.update failed: ${updated.error.code}`);
+      const drawn = drawSmokeFrame(app.renderer, app.world);
+      if (!drawn.ok) throw new Error(`M34 renderer.draw failed: ${drawn.error.code}`);
+      const repeated = drawSmokeFrame(app.renderer, app.world);
+      if (!repeated.ok) throw new Error(`M34 repeated renderer.draw failed: ${repeated.error.code}`);
+      await delay(0);
+    },
+    () => errors,
+  );
+
+  const capture = async (name, statePromise) => {
+    const state = await statePromise;
+    await delay(100);
+    const pixels = await readback(sharedDevice);
+    const visiblePixels = countVisiblePixels(pixels);
+    const path = resolve(outputDir, `m34-${name}.png`);
+    writeFileSync(path, writeReferencePng(pixels, width, height));
+    return { state, visiblePixels, path };
+  };
+
+  const baseline = await capture('baseline', controller.baseline());
+  const overflow = await capture('overflow', controller.overflow());
+  const recovered = await capture('recovered', controller.recover());
+  const cleanup = await capture('cleanup', controller.cleanup());
+  const cleanupAgain = await controller.cleanup();
+  const evidence = { baseline, overflow, recovered, cleanup, cleanupAgain, errors };
+  writeFileSync(resolve(outputDir, 'm34-recovery-evidence.json'), `${JSON.stringify(evidence, null, 2)}\n`);
+
+  const failures = [];
+  if (rendererBackend(app.renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(app.renderer)}`);
+  if (baseline.state.prefixAttached !== 8 || !baseline.state.targetAttached || baseline.state.errorCount !== 0) {
+    failures.push(`baseline=${JSON.stringify(baseline.state)}`);
+  }
+  const overflowError = overflow.state.lastError;
+  if (
+    overflow.state.prefixAttached !== 8 ||
+    overflow.state.targetAttached ||
+    overflow.state.errorCount !== 1 ||
+    overflow.state.liveRefs !== overflow.state.baselineLiveRefs - 2 ||
+    overflowError?.code !== 'font-concurrency-exceeded' ||
+    overflowError.expected !== '8' ||
+    JSON.stringify(overflowError.detail) !==
+      JSON.stringify({ active: 8, limit: 8, rejected: scene.fonts[8] })
+  ) {
+    failures.push(`overflow=${JSON.stringify(overflow.state)}`);
+  }
+  if (
+    recovered.state.prefixAttached !== 8 ||
+    !recovered.state.targetAttached ||
+    recovered.state.errorCount !== 1 ||
+    recovered.state.liveRefs !== recovered.state.baselineLiveRefs ||
+    recovered.state.targetMeshHandle === baseline.state.targetMeshHandle ||
+    recovered.state.targetMaterialHandle === baseline.state.targetMaterialHandle
+  ) {
+    failures.push(`recovered=${JSON.stringify(recovered.state)}`);
+  }
+  if (
+    cleanup.state.prefixAttached !== 0 ||
+    cleanup.state.targetAttached ||
+    !cleanup.state.unrelatedPresent ||
+    cleanup.state.liveRefs !== cleanup.state.baselineLiveRefs - 27 ||
+    JSON.stringify(cleanupAgain) !== JSON.stringify(cleanup.state) ||
+    cleanup.state.errorCount !== 1
+  ) {
+    failures.push(`cleanup=${JSON.stringify({ cleanup: cleanup.state, cleanupAgain })}`);
+  }
+  if (overflow.visiblePixels >= baseline.visiblePixels) {
+    failures.push(`overflow pixels did not remove target: ${baseline.visiblePixels}->${overflow.visiblePixels}`);
+  }
+  if (recovered.visiblePixels < baseline.visiblePixels * 0.8) {
+    failures.push(`recovered pixels did not return: ${baseline.visiblePixels}->${recovered.visiblePixels}`);
+  }
+  if (cleanup.visiblePixels >= recovered.visiblePixels * 0.2) {
+    failures.push(`cleanup pixels remained: ${cleanup.visiblePixels}`);
+  }
+  if (errors.length !== 1) failures.push(`errors=${JSON.stringify(errors)}`);
+  if (failures.length > 0) {
+    console.error(`[m34] FAIL - ${failures.join('; ')}`);
+    process.exit(1);
+  }
+  console.log(
+    `[m34] PASS baseline=${baseline.visiblePixels} overflow=${overflow.visiblePixels} ` +
+      `recovered=${recovered.visiblePixels} cleanup=${cleanup.visiblePixels} ` +
+      `active=8 limit=8 rejected=${scene.fonts[8]}`,
+  );
 }

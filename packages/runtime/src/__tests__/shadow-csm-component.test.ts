@@ -7,8 +7,22 @@
 // -> ShadowInvalidConfigError), and D-1 (legacy fixed-extent field deleted).
 
 import { World } from '@forgeax/engine-ecs';
-import { DirectionalLight, ShadowInvalidConfigError } from '@forgeax/engine-render/internal';
+import { componentDefinition, componentSchema } from '@forgeax/engine-ecs/internal';
+import { DirectionalLight } from '@forgeax/engine-render';
 import { describe, expect, it } from 'vitest';
+import { validateDirectionalLightData } from '../../../render/src/components/light-helpers';
+import { ShadowInvalidConfigError } from '../../../render/src/errors/render';
+
+type DirectionalSpawnResult = ReturnType<World['spawn']>;
+
+function spawnValidatedDirectional(
+  world: World,
+  data: Readonly<Record<string, unknown>>,
+): DirectionalSpawnResult {
+  const validation = validateDirectionalLightData(data);
+  if (!validation.ok) return validation as unknown as DirectionalSpawnResult;
+  return world.spawn({ component: DirectionalLight, data: data as never });
+}
 
 // ── AC-01: new field defaults ────────────────────────────────────────────
 
@@ -75,9 +89,9 @@ describe('CSM component schema (w1)', () => {
 
     it('cascadeCount=0 -> ShadowInvalidConfigError', () => {
       const world = new World();
-      const r = world.spawn({
-        component: DirectionalLight,
-        data: { direction: [0, -1, 0], cascadeCount: 0 } as any,
+      const r = spawnValidatedDirectional(world, {
+        direction: [0, -1, 0],
+        cascadeCount: 0,
       }) as unknown as ErrorShape;
       expect(r.ok).toBe(false);
       expect(r.error.code).toBe('shadow-invalid-config');
@@ -88,9 +102,9 @@ describe('CSM component schema (w1)', () => {
 
     it('cascadeCount=5 -> ShadowInvalidConfigError (max=4)', () => {
       const world = new World();
-      const r = world.spawn({
-        component: DirectionalLight,
-        data: { direction: [0, -1, 0], cascadeCount: 5 } as any,
+      const r = spawnValidatedDirectional(world, {
+        direction: [0, -1, 0],
+        cascadeCount: 5,
       }) as unknown as ErrorShape;
       expect(r.ok).toBe(false);
       expect(r.error.code).toBe('shadow-invalid-config');
@@ -102,9 +116,9 @@ describe('CSM component schema (w1)', () => {
 
     it('splitLambda=-0.1 -> ShadowInvalidConfigError (min=0)', () => {
       const world = new World();
-      const r = world.spawn({
-        component: DirectionalLight,
-        data: { direction: [0, -1, 0], splitLambda: -0.1 } as any,
+      const r = spawnValidatedDirectional(world, {
+        direction: [0, -1, 0],
+        splitLambda: -0.1,
       }) as unknown as ErrorShape;
       expect(r.ok).toBe(false);
       expect(r.error.code).toBe('shadow-invalid-config');
@@ -115,9 +129,9 @@ describe('CSM component schema (w1)', () => {
 
     it('splitLambda=1.1 -> ShadowInvalidConfigError (max=1)', () => {
       const world = new World();
-      const r = world.spawn({
-        component: DirectionalLight,
-        data: { direction: [0, -1, 0], splitLambda: 1.1 } as any,
+      const r = spawnValidatedDirectional(world, {
+        direction: [0, -1, 0],
+        splitLambda: 1.1,
       }) as unknown as ErrorShape;
       expect(r.ok).toBe(false);
       expect(r.error.code).toBe('shadow-invalid-config');
@@ -129,9 +143,9 @@ describe('CSM component schema (w1)', () => {
 
     it('cascadeBlend=-0.1 -> ShadowInvalidConfigError (min=0)', () => {
       const world = new World();
-      const r = world.spawn({
-        component: DirectionalLight,
-        data: { direction: [0, -1, 0], cascadeBlend: -0.1 } as any,
+      const r = spawnValidatedDirectional(world, {
+        direction: [0, -1, 0],
+        cascadeBlend: -0.1,
       }) as unknown as ErrorShape;
       expect(r.ok).toBe(false);
       expect(r.error.code).toBe('shadow-invalid-config');
@@ -142,9 +156,9 @@ describe('CSM component schema (w1)', () => {
 
     it('cascadeBlend=0.6 -> ShadowInvalidConfigError (max=0.5)', () => {
       const world = new World();
-      const r = world.spawn({
-        component: DirectionalLight,
-        data: { direction: [0, -1, 0], cascadeBlend: 0.6 } as any,
+      const r = spawnValidatedDirectional(world, {
+        direction: [0, -1, 0],
+        cascadeBlend: 0.6,
       }) as unknown as ErrorShape;
       expect(r.ok).toBe(false);
       expect(r.error.code).toBe('shadow-invalid-config');
@@ -202,12 +216,12 @@ describe('CSM component schema (w1)', () => {
     const legacyField = `ortho${'HalfExtent'}`;
 
     it('schema does not contain the legacy fixed-extent field', () => {
-      const schema = DirectionalLight.schema;
+      const schema = componentSchema(DirectionalLight);
       expect(legacyField in schema).toBe(false);
     });
 
     it('defaults do not contain the legacy fixed-extent field', () => {
-      const defaults = DirectionalLight.defaults;
+      const defaults = componentDefinition(DirectionalLight).defaults;
       expect(defaults).toBeDefined();
       expect(legacyField in (defaults as any)).toBe(false);
     });
@@ -237,9 +251,9 @@ describe('CSM component schema (w1)', () => {
   describe('pre-existing validate still works', () => {
     it('mapSize=0 -> ShadowInvalidConfigError (no max field)', () => {
       const world = new World();
-      const r = world.spawn({
-        component: DirectionalLight,
-        data: { direction: [0, -1, 0], mapSize: 0 },
+      const r = spawnValidatedDirectional(world, {
+        direction: [0, -1, 0],
+        mapSize: 0,
       });
       expect(r.ok).toBe(false);
       if (!r.ok) {

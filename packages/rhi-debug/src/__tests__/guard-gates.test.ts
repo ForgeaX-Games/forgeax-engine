@@ -1,16 +1,17 @@
 // @forgeax/engine-rhi-debug/src/__tests__/guard-gates.test.ts
 //
 // Build-time codebase guard assertions using filesystem reads. These act as canaries: any future change that adds a
-// flag-drift point or an unexpected DebugErrorCode member turns this test red.
+// flag-drift point or a second error owner turns this test red.
 //
 // AC-07: full-repo grep zero-hit for --runId / --ws-url (flag drift).
-// AC-09: DebugErrorCode union member count = 15 (closed, OOS-6).
 // AC-08 partial: import.meta.hot usage in create-app.ts is inside the
 //   rhiDebugFlag === '1' guard block.
 //
 // t10; requirements AC-07/AC-08/AC-09; plan-strategy §2 D-8.
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -51,27 +52,12 @@ describe('AC-07: flag drift grep gate', () => {
   });
 });
 
-describe('AC-09: DebugErrorCode member count gate', () => {
-  it('DebugErrorCode union has exactly 15 members', () => {
+describe('RHI-debug error owner gate', () => {
+  it('keeps the v7 error union as the only error owner', () => {
     const errorsPath = path.resolve(__dirname, '..', '..', 'src', 'errors.ts');
     const content = readFileSync(errorsPath, 'utf-8');
-    const lines = content.split('\n');
-
-    const unionStart = lines.findIndex((l) => l.includes('export type DebugErrorCode ='));
-    expect(unionStart).not.toBe(-1);
-
-    let memberCount = 0;
-    for (let i = unionStart + 1; i < lines.length; i++) {
-      const line = lines[i];
-      if (line === undefined) break;
-      if (line.trimStart().startsWith("| '")) {
-        memberCount++;
-      }
-      if (line.trimStart().startsWith(';')) {
-        break;
-      }
-    }
-    expect(memberCount).toBe(15);
+    expect(content).toContain('export type RhiDebugErrorCode =');
+    expect(content).not.toMatch(/\bDebugErrorCode\b/);
   });
 });
 
@@ -155,6 +141,179 @@ describe('AC-08 partial: import.meta.hot in rhiDebugFlag guard', () => {
           `import.meta.hot reference at line ${i + 1} is outside rhiDebugFlag guard (guard: ${guardOpenIdx + 1}-${guardCloseIdx + 1})`,
         ).toBeLessThanOrEqual(guardCloseIdx);
       }
+    }
+  });
+});
+
+describe('RHI-debug smoke roster gate', () => {
+  it('resolves every declared hello and learn-render smoke at 300 frames', () => {
+    const rosterPath = path.resolve(ENGINE_ROOT, 'scripts', 'rhi-debug-smoke-roster.mjs');
+    const result = spawnSync(
+      process.execPath,
+      [
+        rosterPath,
+        '--apps-root',
+        'apps/hello',
+        '--learn-root',
+        'apps/learn-render',
+        '--frames',
+        '300',
+      ],
+      { cwd: ENGINE_ROOT, encoding: 'utf8' },
+    );
+    expect(result.status).toBe(1);
+    const roster = JSON.parse(result.stdout) as {
+      status: string;
+      frameCount: number;
+      execution: { status: string; mode: string };
+      entries: readonly {
+        frames: number;
+        command: string;
+        invocation: string;
+        tokens: readonly string[];
+      }[];
+      unavailable: readonly { reason: string }[];
+    };
+    expect(roster.status).toBe('unavailable');
+    expect(roster.execution).toMatchObject({ status: 'not-executed', mode: 'declaration-only' });
+    expect(roster.frameCount).toBe(300);
+    expect(roster.entries.length).toBeGreaterThan(0);
+    expect(
+      roster.entries.every(
+        (entry) =>
+          entry.frames === 300 &&
+          entry.command === entry.invocation &&
+          entry.tokens.join(' ') === entry.invocation &&
+          entry.tokens[0] === 'pnpm' &&
+          entry.tokens[1] === '--filter',
+      ),
+    ).toBe(true);
+    expect(roster.entries.some((entry) => entry.invocation.includes('format-tier1 build'))).toBe(
+      true,
+    );
+    expect(roster.unavailable.length).toBeGreaterThan(0);
+    expect(roster.unavailable.every((item) => item.reason.length > 0)).toBe(true);
+  });
+
+  it('executes every declared command in a temporary workspace and fails closed', {
+    timeout: 30_000,
+  }, () => {
+    const fixture = mkdtempSync(path.join(tmpdir(), 'forgeax-rhi-debug-roster-'));
+    const appRoot = path.join(fixture, 'apps', 'hello');
+    const packageRoot = path.join(appRoot, 'fake-smoke');
+    const learnRoot = path.join(fixture, 'apps', 'learn-render');
+    const learnPackageRoot = path.join(learnRoot, 'fake-learn-smoke');
+    mkdirSync(packageRoot, { recursive: true });
+    mkdirSync(learnPackageRoot, { recursive: true });
+    writeFileSync(path.join(fixture, 'pnpm-workspace.yaml'), 'packages:\n  - apps/**\n');
+    const manifestPath = path.join(packageRoot, 'package.json');
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        name: '@fake/smoke',
+        private: true,
+        scripts: { 'smoke:browser': 'node -e "console.log(\'fake browser smoke\')"' },
+        forgeax: { smokeInvocation: 'pnpm --filter @fake/smoke smoke:browser' },
+      }),
+    );
+    writeFileSync(
+      path.join(learnPackageRoot, 'package.json'),
+      JSON.stringify({
+        name: '@fake/learn-smoke',
+        private: true,
+        scripts: { 'smoke:browser': 'node -e "console.log(\'fake learn browser smoke\')"' },
+        forgeax: { smokeInvocation: 'pnpm --filter @fake/learn-smoke smoke:browser' },
+      }),
+    );
+    const rosterPath = path.resolve(ENGINE_ROOT, 'scripts', 'rhi-debug-smoke-roster.mjs');
+    try {
+      const passed = spawnSync(
+        process.execPath,
+        [
+          rosterPath,
+          '--apps-root',
+          appRoot,
+          '--learn-root',
+          learnRoot,
+          '--cwd',
+          fixture,
+          '--frames',
+          '300',
+          '--execute',
+        ],
+        { cwd: ENGINE_ROOT, encoding: 'utf8' },
+      );
+      expect(passed.status).toBe(0);
+      const passedRoster = JSON.parse(passed.stdout) as {
+        status: string;
+        execution: { status: string; mode: string; passedCount: number; failedCount: number };
+        entries: readonly {
+          status: string;
+          returnCode: number | null;
+          stdout: string;
+          invocation: string;
+          tokens: readonly string[];
+          backend: string;
+          frames: number;
+        }[];
+      };
+      expect(passedRoster.status).toBe('passed');
+      expect(passedRoster.execution).toMatchObject({
+        status: 'passed',
+        mode: 'execute',
+        passedCount: 2,
+        failedCount: 0,
+      });
+      const passedEntry = passedRoster.entries.find(
+        (entry) => entry.invocation === 'pnpm --filter @fake/smoke smoke:browser',
+      );
+      expect(passedEntry).toMatchObject({
+        status: 'passed',
+        returnCode: 0,
+        invocation: 'pnpm --filter @fake/smoke smoke:browser',
+        tokens: ['pnpm', '--filter', '@fake/smoke', 'smoke:browser'],
+        backend: 'browser',
+        frames: 300,
+      });
+      expect(passedEntry?.stdout).toContain('fake browser smoke');
+
+      writeFileSync(
+        manifestPath,
+        JSON.stringify({
+          name: '@fake/smoke',
+          private: true,
+          scripts: {
+            'smoke:browser': 'node -e "console.error(\'fake failure\'); process.exit(7)"',
+          },
+          forgeax: { smokeInvocation: 'pnpm --filter @fake/smoke smoke:browser' },
+        }),
+      );
+      const failed = spawnSync(
+        process.execPath,
+        [
+          rosterPath,
+          '--apps-root',
+          appRoot,
+          '--learn-root',
+          learnRoot,
+          '--cwd',
+          fixture,
+          '--execute',
+        ],
+        { cwd: ENGINE_ROOT, encoding: 'utf8' },
+      );
+      expect(failed.status).toBe(1);
+      const failedRoster = JSON.parse(failed.stdout) as {
+        status: string;
+        execution: { status: string; failedCount: number };
+        entries: readonly { status: string; returnCode: number | null; stderr: string }[];
+      };
+      expect(failedRoster.status).toBe('failed');
+      expect(failedRoster.execution).toMatchObject({ status: 'failed', failedCount: 1 });
+      expect(failedRoster.entries[0]).toMatchObject({ status: 'failed', returnCode: 7 });
+      expect(failedRoster.entries[0]?.stderr).toContain('fake failure');
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
     }
   });
 });

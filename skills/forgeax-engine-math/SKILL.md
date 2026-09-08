@@ -1,9 +1,8 @@
 ---
 name: forgeax-engine-math
 description: >-
-  forgeax-engine 的纯函数数学库：vec / mat / quat / euler / color 的 out-param 风格函数，
-  从 Transform.world mat4 读 pose，screenToRay / rayAabbIntersects 做拾取。
-  Use when reading an entity's world pose, doing vector/matrix/quaternion math, color space conversion, or screen-to-world ray casting.
+  ForgeaX allocation-explicit vector, matrix, quaternion, color, and picking math. Use when
+  computing transforms, reading world pose, converting color, projecting, or casting rays.
 ---
 
 # forgeax-engine-math
@@ -142,7 +141,7 @@ const vp = mat4.computeViewProj(mat4.create(), eye, target, up, fovY, aspect, ne
 
 ## 屏幕拾取：顶点查询（pickVertex / pickVertexOnEntity）
 
-> feat-20260630-vertex-snapping-picking — 逐三角形顶点查询，对标编辑器顶点吸附工作流。引擎只查询，不编辑。从 `@forgeax/engine-runtime` 导入（非 math 包——底层调 `rayTriangleIntersects` + `screenToRay`），独立函数。
+> 顶点拾取只查询、不编辑。从 `@forgeax/engine-runtime` 导入；底层组合 `rayTriangleIntersects` 与 `screenToRay`。
 
 | 函数 / 类型 | 形态 | 用途 |
 |:--|:--|:--|
@@ -178,7 +177,7 @@ if (hit) {
 - **退化静默回退**：库内非法输入（零长度归一化、`w'=0` 透视除）静默回退到安全值（如 `(0,0,0)`），不 throw——调用方需自带守卫判断（charter P3 在 thin 数学层让位于性能）。见 README 退化策略表。
 - **worldToScreen 的 `behind` 标志不可忽略**：当 `behind === true` 时 `out` 无意义——调用方必须先查该位再做屏幕边缘 clamp，否则相机后方点的像素坐标会凭空"飞"到对角象限。
 - **pickVertex*/pickVertexOnEntity 调用前须 propagateTransforms**：与 `pick()` 同契约——函数直接读 `Transform.world` 列主序 mat4，不触发重新传布。请在调用前跑 `propagateTransforms(world)` 当前帧，否则读到 stale unit matrix（刚 spawn 无任何 Write 时为 identity，非 crash 但 worldPos 全错）。
-- **`deformed: true` 时 worldPos 是 rest-pose**：skinned mesh（skinIndex + skinWeight 双属性存在）的 `VertexHit.worldPos` 是 rest-pose 经 `Transform.world` 变换的位置——**不反映 GPU skinning 变形结果**。引擎不做 GPU 变形回读（OOS-3），吸附操作需自行承担变形偏移。
+- **`deformed: true` 时 worldPos 是 rest-pose**：skinned mesh（skinIndex + skinWeight 双属性存在）的 `VertexHit.worldPos` 是 rest-pose 经 `Transform.world` 变换的位置——**不反映 GPU skinning 变形结果**。引擎不做 GPU 变形回读，吸附操作需自行承担变形偏移。
 - 渲染 / 拾取相关的更高层症状见 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md)。
 
 ## 深入

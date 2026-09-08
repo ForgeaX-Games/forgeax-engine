@@ -6,7 +6,7 @@
     "noEmit": true,
     "emitDeclarationOnly": false,
     "allowImportingTsExtensions": true,
-    "types": ["@webgpu/types"]
+    "types": ["@webgpu/types", "vite/client"]
   },
   "include": ["src/**/*"],
   "references": [{ "path": "./tsconfig.node.json" }]

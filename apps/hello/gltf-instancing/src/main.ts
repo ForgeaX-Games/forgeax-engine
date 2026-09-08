@@ -6,21 +6,21 @@
 // drawcall (instanceCount === 4).
 //
 // 4-step recipe (mirrors apps/hello/gltf):
-//   (1) configurePackIndex('/instanced-box-pack-index.json')
+//   (1) configureRuntimeAssetCatalog(assets, runtimeBinding)
 //   (2) loadByGuid<MeshAsset>(meshGuid)
 //   (3) loadByGuid<MaterialAsset>(matGuid)
 //   (4) loadByGuid<SceneAsset>(sceneGuid) + sceneInstances.instantiate
 
-import { World } from '@forgeax/engine-ecs';
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
+import { createWorldContext, World } from '@forgeax/engine-ecs';
 import { gltfDocToSceneAsset, type GltfMaterialIr, type GltfMeshIr, parseGltf } from '@forgeax/engine-gltf';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { acquireCanvasContext, createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
-import {
-  type MaterialAsset,
-  type MeshAsset,
-  type SceneAsset,
-} from '@forgeax/engine-types';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
+import { type MaterialAsset, type MeshAsset, type SceneAsset } from '@forgeax/engine-types';
+import { renderComponentsPlugin } from '@forgeax/engine-render';
+import { scenePlugin } from '@forgeax/engine-scene';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import gltfUrl from '../assets/instanced-box.gltf?url';
 import metaJson from '../assets/instanced-box.gltf.meta.json' with { type: 'json' };
@@ -37,39 +37,27 @@ bootstrap(canvas).catch((err: unknown) => {
 });
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
-  const renderer = await createRenderer(target, {}, forgeaxBundlerAdapter());
-  const ctxResult = acquireCanvasContext(target);
-  if (ctxResult.ok) {
-    const cfgResult = ctxResult.value.configure({
-      device: renderer.device,
-      format: 'rgba8unorm',
-      usage: 0x10 | 0x01,
-    });
-    if (!cfgResult.ok)
-      console.error('[gltf-instancing] canvasContext.configure failed:', cfgResult.error);
-  } else {
-    console.error('[gltf-instancing] acquireCanvasContext failed:', ctxResult.error);
-  }
-  console.warn(`[gltf-instancing] backend=${renderer.backend}`);
+  const constructed = await constructRuntimeRendererHost(target, {}, {
+    ...forgeaxBundlerAdapter(),
+    importTransport: createRuntimeAssetImportTransport(runtimeBinding),
+  });
+  if (!constructed.ok) throw constructed.error;
+  const { renderer, assets } = constructed.value;
+  console.warn('[gltf-instancing] Standard pipeline active');
 
-  const ready = await renderer.ready;
-  if (!ready.ok) {
-    console.error('[gltf-instancing] renderer.ready failed:', ready.error);
-    return;
-  }
-
-  const assets = renderer.assets;
-  if (assets === null) {
-    console.error(
-      '[gltf-instancing] AssetRegistry is null (renderer construction did not complete successfully)',
-    );
-    return;
-  }
-
-  assets.configurePackIndex('/instanced-box-pack-index.json');
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
   const world = new World();
-  const worldAttachment1 = renderer.attachWorld(world);
+  const worldContext = await createWorldContext(world, [
+    renderComponentsPlugin(),
+    scenePlugin(),
+  ]);
+  const worldAttachment1 = renderer.attach(world);
   if (!worldAttachment1.ok) throw worldAttachment1.error;
+  const frameRequest = {
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  };
 
   const gltfRes = await fetch(gltfUrl);
   const gltfJson = (await gltfRes.json()) as unknown;
@@ -139,8 +127,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   const frame = (): void => {
+    void worldContext;
     world.update().unwrap();
-    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const r = renderer.draw(frameRequest);
     if (!r.ok) console.error('[gltf-instancing] draw error:', r.error);
     requestAnimationFrame(frame);
   };
@@ -217,6 +206,7 @@ function meshIrToPod(mesh: GltfMeshIr): MeshAsset {
     indexCount: mesh.indices !== undefined ? mesh.indices.length : 0,
     vertexCount: interleaved.length,
     topology: 'triangle-list' as const,
+    materialSlot: 0,
   };
   return {
     kind: 'mesh',
@@ -229,6 +219,7 @@ function meshIrToPod(mesh: GltfMeshIr): MeshAsset {
       tangent: mesh.tangents ?? new Float32Array(vertexCount * 4).fill(0),
     },
     submeshes: [submesh],
+    materialSlots: [{ slotName: 'Default' }],
   };
 }
 

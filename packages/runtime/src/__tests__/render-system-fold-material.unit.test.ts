@@ -9,13 +9,11 @@
 // Bucket key is the three-tuple (Layer.value, posZ, materialHandle). The
 // fold's correctness on the materialHandle leg is what this test pins.
 
-import type { DispatchEntry } from '@forgeax/engine-render/internal';
-import {
-  foldDispatchBuckets,
-  TRANSPARENT_SORT_MODE_LAYER_Z,
-} from '@forgeax/engine-render/internal';
 import { RenderQueue } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { foldDispatchBuckets } from '../../../render/src/record/mesh-ssbo';
+import type { DispatchEntry } from '../../../render/src/render-system-extract';
+import { TRANSPARENT_SORT_MODE_LAYER_Z } from '../../../render/src/systems/transparent-sort-config';
 
 function mockEntry(opts: {
   renderableIndex: number;

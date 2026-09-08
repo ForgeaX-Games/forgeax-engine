@@ -206,17 +206,24 @@ fn _cascadeLightViewProj(layer : u32) -> mat4x4<f32> {
   }
 }
 
-// Map a cascade layer to its atlas-tile origin in [0,1]^2 UV space.
-// tilesPerSide = 2 covers cascadeCount in 1..4 (atlas = 2 × mapSize).
-// cascadeCount=1 collapses to tile (0,0); the same code path applies.
+// Match the host's compact atlas exactly: 1 -> 1x1, 2 -> 2x1, 3/4 -> 2x2.
+// A square-only scale halves Y for the common two-cascade case even though
+// each raster viewport spans the atlas's full height, so receivers sample a
+// different region than casters wrote.
+fn _atlasTileGrid(count : u32) -> vec2<u32> {
+  let columns : u32 = select(2u, 1u, count <= 1u);
+  let rows : u32 = (count + columns - 1u) / columns;
+  return vec2<u32>(columns, rows);
+}
+
+fn _atlasTileScale(count : u32) -> vec2<f32> {
+  return vec2<f32>(1.0) / vec2<f32>(_atlasTileGrid(count));
+}
+
 fn _atlasTileOrigin(layer : u32, count : u32) -> vec2<f32> {
-  // tilesPerSide = ceil(sqrt(count)). count<=1 -> 1; count<=4 -> 2.
-  // Branch-free: count<=1 -> 1, else 2.
-  let tilesPerSide : u32 = select(2u, 1u, count <= 1u);
-  let col = layer % tilesPerSide;
-  let row = layer / tilesPerSide;
-  let inv = 1.0 / f32(tilesPerSide);
-  return vec2<f32>(f32(col) * inv, f32(row) * inv);
+  let grid = _atlasTileGrid(count);
+  let tile = vec2<u32>(layer % grid.x, layer / grid.x);
+  return vec2<f32>(tile) / vec2<f32>(grid);
 }
 
 // Sample the shadow atlas with the LO 3.1.3 slope-scaled bias + dynamic PCF
@@ -235,12 +242,11 @@ fn _sampleShadowForCascade(
   let lvp = _cascadeLightViewProj(layer);
   let lightClip = lvp * vec4<f32>(worldPos, 1.0);
   let projCoords = lightClip.xyz / lightClip.w;
-  let tilesPerSide : u32 = select(2u, 1u, count <= 1u);
-  let inv = 1.0 / f32(tilesPerSide);
+  let tileScale = _atlasTileScale(count);
   let tileOrigin = _atlasTileOrigin(layer, count);
-  // NDC [-1,1] -> tile-local UV [0,inv] -> atlas UV [tileOrigin, tileOrigin+inv].
+  // NDC [-1,1] -> tile-local UV -> compact atlas UV.
   let tileUv = vec2<f32>(projCoords.x * 0.5 + 0.5, -projCoords.y * 0.5 + 0.5);
-  let uv = tileUv * inv + tileOrigin;
+  let uv = tileUv * tileScale + tileOrigin;
   let currentDepth = projCoords.z;
   // feat-20260621-merge-directionallightshadow-into-directionallight M3 / m3-t4
   // (D-1): the slope-scaled bias is driven by the merged DirectionalLight's
@@ -265,10 +271,9 @@ fn _sampleShadowForCascade(
   // within one texel of a tile edge would sample into a NEIGHBOURING cascade's
   // tile, reading the wrong depth and producing a 1-texel seam at cascade
   // boundaries. Clamp every tap to this cascade's tile rect
-  // [tileOrigin, tileOrigin+inv) (one texel inset) so taps stay in-tile. For
-  // count<=1 (single full-atlas tile) this is a no-op widening of the bound.
+  // [tileOrigin, tileOrigin+tileScale) (one texel inset) so taps stay in-tile.
   let tileLo = tileOrigin + texel;
-  let tileHi = tileOrigin + vec2<f32>(inv) - texel;
+  let tileHi = tileOrigin + tileScale - texel;
   // Variable-width PCF kernel driven by view.pcfKernelSize (feat-20260621
   // 5.3-production-shadow-demos AC-14 merged with the DirectionalLightShadow
   // merge). Constant trip count to MAX_PCF_HALF with a per-iteration clip to the
@@ -391,6 +396,14 @@ fn evalDirectionalShadowFactor(
   worldPos : vec3<f32>,
   viewZ    : f32,
 ) -> f32 {
+  // `cascadeCount == 0` is the host-side sentinel for DirectionalLight
+  // `castShadow:false`.  A non-shadow-casting light must stay fully lit: the
+  // fallback depth view and zeroed light matrices only satisfy the bind-group
+  // shape and are not a valid CSM sample.  Do this before the count clamp so
+  // the disabled path cannot accidentally project through cascade zero.
+  if (view.cascadeCount < 1.0) {
+    return 1.0;
+  }
   let l = normalize(-view.lightDir);
   let count = u32(max(view.cascadeCount, 1.0));
   let viewDepth = -viewZ;

@@ -32,7 +32,8 @@
 // gap as `import-produced-no-assets`. A texture sub-asset that fails byte
 // extraction surfaces as `gltf-image-extract-failed` (D-6).
 
-import { packMeshBin } from '@forgeax/engine-import';
+import { packMeshBinV4 } from '@forgeax/engine-import/mesh-bin';
+import { AssetGuid as AssetGuidCodec } from '@forgeax/engine-pack/guid';
 import type {
   AssetGuid,
   AssetRef,
@@ -43,8 +44,16 @@ import type {
   ImportResult,
   MaterialTextureValue,
   MaterialValue,
+  MeshAsset,
+  MeshMaterialSlotTopologyEntry,
 } from '@forgeax/engine-types';
-import { toShared } from '@forgeax/engine-types';
+import {
+  IMPORT_ERROR_HINTS,
+  ImportError,
+  reconcileMeshMaterialSlotTopology,
+  resolveMeshMaterialSlotDefaultGuid,
+  toShared,
+} from '@forgeax/engine-types';
 import {
   gltfDocToSceneAsset,
   meshIrToMeshAsset,
@@ -54,24 +63,177 @@ import {
 import { gltfErr } from './errors.js';
 import { extractImageBytes } from './extract-image-bytes.js';
 import { deriveTextureColorSpace } from './image-color-space.js';
+import type { GltfBufferViewDecodeCapability } from './meshopt-decode.js';
 import type { GltfDoc, GltfMaterialIr, GltfTextureInfoIr } from './parse-gltf.js';
-import { parseGlb, parseGltf } from './parse-gltf.js';
+import { parseGlbForImporter, parseGltfForImporter } from './parse-gltf.js';
+
+type ParseDocResult =
+  | { readonly ok: true; readonly value: GltfDoc }
+  | { readonly ok: false; readonly error: ImportError };
 
 function isGlbBytes(source: string): boolean {
   return source.toLowerCase().endsWith('.glb');
 }
 
-async function parseDoc(source: string, bytes: Uint8Array, ctx: ImportContext): Promise<GltfDoc> {
+function publishesCatalogProduct(input: {
+  readonly importSettings: Readonly<Record<string, unknown>>;
+}): boolean {
+  return input.importSettings.geometry !== 'procedural';
+}
+
+function previousMaterialSlotTopology(
+  ctx: ImportContext,
+  meshSourceKey: string | undefined,
+): readonly MeshMaterialSlotTopologyEntry[] | undefined {
+  if (meshSourceKey === undefined) return undefined;
+  const value = ctx.sourceOverrides?.[meshSourceKey]?.materialSlots;
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new ImportError({
+      code: 'invalid-source-override-payload',
+      expected: `${meshSourceKey}.materialSlots to be an array`,
+      hint: IMPORT_ERROR_HINTS['invalid-source-override-payload'],
+      detail: {
+        sourceKey: meshSourceKey,
+        declaredSourceKeys: ctx.subAssets.flatMap((entry) => entry.sourceKey ?? []),
+        reason: 'materialSlots is not an array',
+      },
+    });
+  }
+  const slots: MeshMaterialSlotTopologyEntry[] = [];
+  for (const [index, raw] of value.entries()) {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new ImportError({
+        code: 'invalid-source-override-payload',
+        expected: `${meshSourceKey}.materialSlots[${index}] to be an object`,
+        hint: IMPORT_ERROR_HINTS['invalid-source-override-payload'],
+        detail: {
+          sourceKey: meshSourceKey,
+          declaredSourceKeys: ctx.subAssets.flatMap((entry) => entry.sourceKey ?? []),
+          reason: `materialSlots[${index}] is not an object`,
+        },
+      });
+    }
+    const slot = raw as Record<string, unknown>;
+    if (typeof slot.slotName !== 'string' || slot.slotName.trim().length === 0) {
+      throw new ImportError({
+        code: 'invalid-source-override-payload',
+        expected: `${meshSourceKey}.materialSlots[${index}].slotName to be non-empty`,
+        hint: IMPORT_ERROR_HINTS['invalid-source-override-payload'],
+        detail: {
+          sourceKey: meshSourceKey,
+          declaredSourceKeys: ctx.subAssets.flatMap((entry) => entry.sourceKey ?? []),
+          reason: `materialSlots[${index}].slotName is invalid`,
+        },
+      });
+    }
+    slots.push({
+      slotName: slot.slotName,
+      ...(typeof slot.sourceKey === 'string' ? { sourceKey: slot.sourceKey } : {}),
+      ...(typeof slot.defaultMaterialGuid === 'string'
+        ? { defaultMaterialGuid: slot.defaultMaterialGuid }
+        : {}),
+    });
+  }
+  return slots;
+}
+
+function stabilizeMeshMaterialSlots(
+  mesh: MeshAsset,
+  ctx: ImportContext,
+  meshGuid: string,
+  meshSourceKey: string | undefined,
+): MeshAsset {
+  const current = mesh.materialSlots.map(
+    (slot): MeshMaterialSlotTopologyEntry => ({
+      slotName: slot.slotName,
+      ...(slot.sourceKey === undefined ? {} : { sourceKey: slot.sourceKey }),
+      ...(slot.defaultMaterial === undefined
+        ? {}
+        : { defaultMaterialGuid: AssetGuidCodec.format(slot.defaultMaterial) }),
+    }),
+  );
+  const reconciled = reconcileMeshMaterialSlotTopology(
+    current,
+    previousMaterialSlotTopology(ctx, meshSourceKey),
+  );
+  if (!reconciled.ok) {
+    throw new ImportError({
+      code: 'mesh-material-slot-topology-change',
+      expected: `unambiguous material slot identity for mesh ${meshGuid}`,
+      hint: IMPORT_ERROR_HINTS['mesh-material-slot-topology-change'],
+      detail: {
+        meshGuid,
+        ...(meshSourceKey === undefined ? {} : { meshSourceKey }),
+        previousIndices: reconciled.error.previousIndices,
+        nextIndices: reconciled.error.nextIndices,
+      },
+    });
+  }
+  const authoredDefaults =
+    meshSourceKey === undefined
+      ? undefined
+      : ctx.sourceOverrides?.[meshSourceKey]?.materialSlotDefaultOverrides;
+  if (
+    authoredDefaults !== undefined &&
+    (authoredDefaults === null ||
+      typeof authoredDefaults !== 'object' ||
+      Array.isArray(authoredDefaults))
+  ) {
+    throw new ImportError({
+      code: 'invalid-source-override-payload',
+      expected: `${meshSourceKey}.materialSlotDefaultOverrides to be an object`,
+      hint: IMPORT_ERROR_HINTS['invalid-source-override-payload'],
+      detail: {
+        sourceKey: meshSourceKey,
+        declaredSourceKeys: [],
+        reason: 'materialSlotDefaultOverrides is invalid',
+      },
+    });
+  }
+  const authoredBySlot = authoredDefaults as Readonly<Record<string, unknown>> | undefined;
+  const activeStableSlots = new Set(reconciled.currentToStableSlot);
+  return {
+    ...mesh,
+    submeshes: mesh.submeshes.map((submesh) => ({
+      ...submesh,
+      materialSlot: reconciled.currentToStableSlot[submesh.materialSlot] as number,
+    })),
+    materialSlots: reconciled.slots.map((slot, stableIndex) => {
+      const active = activeStableSlots.has(stableIndex);
+      const authored = authoredBySlot?.[slot.sourceKey ?? slot.slotName];
+      const effectiveDefault = resolveMeshMaterialSlotDefaultGuid(
+        slot,
+        active && (typeof authored === 'string' || authored === null) ? authored : undefined,
+      );
+      const parsed =
+        effectiveDefault === undefined ? undefined : AssetGuidCodec.parse(effectiveDefault);
+      return {
+        slotName: slot.slotName,
+        ...(slot.sourceKey === undefined ? {} : { sourceKey: slot.sourceKey }),
+        ...(active && parsed?.ok ? { defaultMaterial: parsed.value } : {}),
+      };
+    }),
+  };
+}
+
+async function parseDoc(
+  source: string,
+  bytes: Uint8Array,
+  ctx: ImportContext,
+  meshopt?: GltfBufferViewDecodeCapability,
+): Promise<ParseDocResult> {
   const ab = bytes.buffer.slice(
     bytes.byteOffset,
     bytes.byteOffset + bytes.byteLength,
   ) as ArrayBuffer;
   if (isGlbBytes(source)) {
-    const res = await parseGlb(ab, source);
+    const res = await parseGlbForImporter(ab, source, meshopt === undefined ? {} : { meshopt });
     if (!res.ok) {
+      if (res.error instanceof ImportError) return { ok: false, error: res.error };
       throw new Error(`parseGlb failed: ${res.error.code} ${res.error.expected}`);
     }
-    return res.value;
+    return { ok: true, value: res.value };
   }
   let json: unknown;
   try {
@@ -91,11 +253,17 @@ async function parseDoc(source: string, bytes: Uint8Array, ctx: ImportContext): 
       sib.value.byteOffset + sib.value.byteLength,
     ) as ArrayBuffer;
   };
-  const res = await parseGltf(json, externalLoader, source);
+  const res = await parseGltfForImporter(
+    json,
+    externalLoader,
+    source,
+    meshopt === undefined ? {} : { meshopt },
+  );
   if (!res.ok) {
+    if (res.error instanceof ImportError) return { ok: false, error: res.error };
     throw new Error(`parseGltf failed: ${res.error.code} ${res.error.expected}`);
   }
-  return res.value;
+  return { ok: true, value: res.value };
 }
 
 interface HandleMaps {
@@ -309,14 +477,19 @@ function rewriteMaterialAssetRefs(
   return { ...matAsset, values };
 }
 
-async function importGltf(ctx: ImportContext): Promise<ImportResult> {
+async function importGltf(
+  ctx: ImportContext,
+  meshopt?: GltfBufferViewDecodeCapability,
+): Promise<ImportResult> {
   const read = await ctx.readSource();
   if (!read.ok) {
     throw new Error(
       `gltfImporter: readSource failed: ${read.error instanceof Error ? read.error.message : String(read.error)}`,
     );
   }
-  const doc = await parseDoc(ctx.source, read.value, ctx);
+  const parsed = await parseDoc(ctx.source, read.value, ctx, meshopt);
+  if (!parsed.ok) return parsed;
+  const doc = parsed.value;
   const maps = buildHandleMaps(ctx.subAssets, doc);
 
   // Pre-derive each images[] row's colorSpace from material slot bindings
@@ -382,18 +555,77 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
       const prims = doc.meshes.filter((m) => m.meshIndex === sub.sourceIndex);
       if (prims.length === 0) continue;
       const meshName = isMultiAsset ? prims[0]?.name : undefined;
-      const meshPayload = meshIrToMeshAsset(prims);
+      const materialNameByIndex = new Map<number, string>();
+      const materialSourceKeyByIndex = new Map<number, string>();
+      for (let materialIndex = 0; materialIndex < doc.materials.length; materialIndex++) {
+        const name = doc.materials[materialIndex]?.name;
+        if (typeof name === 'string') materialNameByIndex.set(materialIndex, name);
+      }
+      for (const material of ctx.subAssets) {
+        if (material.kind === 'material' && material.sourceKey !== undefined) {
+          materialSourceKeyByIndex.set(material.sourceIndex, material.sourceKey);
+        }
+      }
+      const bridged = meshIrToMeshAsset(prims, {
+        guidByIndex: maps.materialGuidByIndex,
+        nameByIndex: materialNameByIndex,
+        sourceKeyByIndex: materialSourceKeyByIndex,
+      });
+      if (!bridged.ok) {
+        return {
+          ok: false,
+          error: new ImportError({
+            code: 'import-internal-error',
+            expected: 'gltf mesh bridge to produce a canonical MeshAsset',
+            actual: bridged.error.code,
+            hint: 'repair the source primitive and re-run the glTF importer',
+            detail: {
+              reason: `gltf mesh bridge rejected mesh ${sub.sourceIndex}; inspect the bridge error detail`,
+            },
+          }),
+        };
+      }
+      const meshPayload = stabilizeMeshMaterialSlots(bridged.value, ctx, sub.guid, sub.sourceKey);
+      const materialRefs: AssetRef[] = [];
+      const seenMaterialGuids = new Set<string>();
+      for (let slotIndex = 0; slotIndex < meshPayload.materialSlots.length; slotIndex++) {
+        const defaultMaterial = meshPayload.materialSlots[slotIndex]?.defaultMaterial;
+        const guid =
+          defaultMaterial === undefined ? undefined : AssetGuidCodec.format(defaultMaterial);
+        if (guid !== undefined && !seenMaterialGuids.has(guid.toLowerCase())) {
+          seenMaterialGuids.add(guid.toLowerCase());
+          materialRefs.push({
+            guid,
+            sourceField: { fieldName: 'materialSlots', arrayIndex: slotIndex },
+          });
+        }
+      }
       out.push({
         guid: sub.guid,
         kind: 'mesh',
         ...(meshName !== undefined ? { name: meshName } : {}),
         payload: meshPayload,
-        refs: [],
+        refs: materialRefs,
         artifacts: {
           body: {
             mediaType: 'application/x-forgeax-mesh',
-            assetCodec: { name: 'mesh-binary', version: '2' },
-            bytes: packMeshBin(meshPayload as never),
+            assetCodec: { name: 'mesh-binary', version: '4' },
+            bytes: (() => {
+              const packed = packMeshBinV4(
+                meshPayload as never,
+                sub.sourceKey ?? ctx.source,
+                materialRefs.map((ref) => ref.guid),
+              );
+              if (!packed.ok) {
+                throw new ImportError({
+                  code: 'import-internal-error',
+                  expected: 'mesh-bin v4 producer to accept the canonical mesh projection',
+                  hint: 're-cook the source with its Meta sidecar after fixing the mesh payload',
+                  detail: { reason: `${packed.error.code}: ${packed.error.actual}` },
+                });
+              }
+              return packed.value;
+            })(),
           },
         },
       });
@@ -550,8 +782,10 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
         materialHandles: maps.materialHandles,
         skeletonGuidBySkinIndex: skeletonGuidBySourceIndex,
       });
-      // Scene refs are the declared mesh / material / texture / skeleton /
-      // skin sub-asset GUIDs the scene nodes (transitively) reference.
+      // Scene refs contain only dependencies authored directly by the scene:
+      // mesh, skeleton, and skin assets. Imported material defaults belong to
+      // MeshAsset.materialSlots, and textures belong to MaterialAsset refs;
+      // repeating either here would create a second dependency owner.
       // Skeleton GUIDs are appended so the runtime asset graph sees the
       // cross-edge when a skinned mesh node carries Skin { skeleton:
       // <guid-string> }; skin GUIDs (feat-20260612 M2 fixup) carry the
@@ -562,10 +796,8 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
       // D-2 / D-3: refs carries structured edge metadata (AssetRef[]).
       // Walk scene entities to build a handle-value -> (entityLocalId,
       // componentName, fieldName, arrayIndex?) provenance map, then
-      // produce AssetRef[] from the flat GUID superset with sourceField
-      // / sceneEntityId filled for mesh/material handle-field edges.
-      // Texture edges: sourceField=undefined (transitive, no per-entity
-      // origin). Skeleton edges: sourceField from Skin.skeleton if entity
+      // produce AssetRef[] with sourceField / sceneEntityId filled for mesh
+      // handle-field edges. Skeleton edges: sourceField from Skin.skeleton if entity
       // carries that GUID. Skin edges: sourceField=undefined (cross-edge
       // with no entity-component representation).
       const handleValueProvenance = new Map<
@@ -583,20 +815,6 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
             fieldName: 'assetHandle',
           });
         }
-        const mr = comps.MeshRenderer;
-        if (mr !== undefined && Array.isArray(mr.materials)) {
-          for (let arrIdx = 0; arrIdx < mr.materials.length; arrIdx++) {
-            const h = mr.materials[arrIdx];
-            if (typeof h === 'number') {
-              handleValueProvenance.set(h, {
-                sceneEntityId: entity.localId,
-                componentName: 'MeshRenderer',
-                fieldName: 'materials',
-                arrayIndex: arrIdx,
-              });
-            }
-          }
-        }
         const skin = comps.Skin;
         if (skin !== undefined && typeof skin.skeleton === 'string') {
           skeletonGuidProvenance.set(skin.skeleton, { sceneEntityId: entity.localId });
@@ -604,8 +822,6 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
       }
 
       const meshGuidList = [...maps.meshGuidByIndex.values()];
-      const materialGuidList = [...maps.materialGuidByIndex.values()];
-      const textureGuidList = [...maps.textureGuidByIndex.values()];
 
       function makeRef(guid: string, idx: number): AssetRef {
         const prov = handleValueProvenance.get(idx);
@@ -627,14 +843,6 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
       let cursor = 0;
       for (const guid of meshGuidList) {
         refs.push(makeRef(guid, cursor));
-        cursor++;
-      }
-      for (const guid of materialGuidList) {
-        refs.push(makeRef(guid, cursor));
-        cursor++;
-      }
-      for (const guid of textureGuidList) {
-        refs.push({ guid });
         cursor++;
       }
       {
@@ -721,10 +929,7 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
       // (gltf IR) and AnimationClip (runtime POD) are structurally compatible
       // — both carry duration + channels[]; channels' inner shape matches
       // (targetId / property / sampler). property is narrowed to the runtime
-      // closed union ('translation' | 'rotation' | 'scale') by an unsafe cast
-      // — parse-animation already fail-fasts on unsupported paths (morph
-      // 'weights' / CUBICSPLINE) so any clip reaching here is the supported
-      // subset. refs[] is empty (animation clips reference joints by name path
+      // closed union by the parser. refs[] is empty (animation clips reference joints by name path
       // resolved at post-spawn time, not by sub-asset cross-edge).
       const rec = doc.animationClips[sub.sourceIndex];
       if (rec === undefined) continue;
@@ -733,7 +938,7 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
         duration: rec.duration,
         channels: rec.channels.map((ch) => ({
           targetId: ch.targetId,
-          property: ch.property as 'translation' | 'rotation' | 'scale',
+          property: ch.property,
           sampler: {
             input: ch.sampler.input,
             output: ch.sampler.output,
@@ -759,7 +964,13 @@ async function importGltf(ctx: ImportContext): Promise<ImportResult> {
  * importers.register(gltfImporter);
  * ```
  */
-export const gltfImporter: Importer = {
-  key: 'gltf',
-  import: importGltf,
-};
+export function createGltfImporter(meshopt?: GltfBufferViewDecodeCapability): Importer {
+  return {
+    key: 'gltf',
+    import: (ctx) => importGltf(ctx, meshopt),
+    capabilities: { catalog: { publish: publishesCatalogProduct } },
+  };
+}
+
+/** Importer for hosts that provide an optional build-only Meshopt decoder. */
+export const gltfImporter: Importer = createGltfImporter();

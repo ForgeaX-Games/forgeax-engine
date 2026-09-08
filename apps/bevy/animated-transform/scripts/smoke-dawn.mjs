@@ -1,13 +1,16 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 import assert from 'node:assert/strict';
 import { AnimatedBy, AnimationTargetId, animationPlugin } from '@forgeax/engine-animation';
-import { World } from '@forgeax/engine-ecs';
+import { createWorldContext, World } from '@forgeax/engine-ecs';
 import { scenePlugin, Transform } from '@forgeax/engine-scene';
 import {
   buildAnimatedTransformWorld,
   replayAnimatedTransform,
   setAnimatedTransformPaused,
   setAnimatedTransformSpeed,
+  TRANSFORM_CLIP_GUID,
+  transformClip,
 } from '../src/animated-transform.ts';
 
 const near = (actual, expected, label) =>
@@ -20,9 +23,10 @@ function advance(world, seconds) {
 }
 
 const world = new World();
-assert.equal((await scenePlugin().build(world)).ok, true);
-assert.equal((await animationPlugin().build(world)).ok, true);
-const demo = buildAnimatedTransformWorld(world);
+const clip = transformClip();
+const clips = new Map([[TRANSFORM_CLIP_GUID, clip]]);
+await createWorldContext(world, [scenePlugin(), animationPlugin((guid) => clips.get(guid))]);
+const demo = buildAnimatedTransformWorld(world, clip);
 const [direct, graph] = demo.instances;
 assert.ok(direct);
 assert.ok(graph);

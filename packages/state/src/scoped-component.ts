@@ -44,6 +44,11 @@ function getOrCreateScopedComponent(token: StateToken): ReturnType<typeof define
   return comp;
 }
 
+/** Resolve the world-local ScopedTo token for a state. */
+export function getScopedComponent(token: StateToken): ReturnType<typeof defineComponent> {
+  return getOrCreateScopedComponent(token);
+}
+
 function resolveVariantIndex(token: StateToken, variant: string): number {
   const idx = token.nameToIdx.get(variant as never);
   if (idx === undefined) {
@@ -151,4 +156,4 @@ export function countScopedEntitiesByVariant(world: World, token: StateToken): n
   return counts;
 }
 
-// resolveScopedComponent removed — transitionStatesSystem uses ECS resolveComponent directly
+// resolveScopedComponent removed — transitionStatesSystem uses the World-local catalog.

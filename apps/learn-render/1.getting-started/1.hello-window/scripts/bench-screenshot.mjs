@@ -12,7 +12,7 @@
 //      mirroring scripts/bench/pixel-parity.mjs (charter F2 image
 //      capture must run in the same browser the bench reads from).
 //   4. page.goto -> waitForLoadState 'networkidle' -> a small idle
-//      delay so Engine.create + renderer.ready settle before capture.
+//      delay so Engine.create + host initialization settle before capture.
 //   5. page.screenshot({ clip: 0,0,512,512 }) into
 //      forgeax-engine-assets/feat-20260515-learn-render-getting-started/
 //      screenshots/round-1-hello-window.png.
@@ -135,7 +135,7 @@ async function main() {
     // 4. navigate + wait for the renderer to log its backend (the
     // bootstrap function in src/index.ts emits
     // `[learn-render 1.1 hello-window] backend=webgpu` via console.warn
-    // once renderer.ready resolves; that guarantees the clearColor frame
+    // once host initialization resolves; that guarantees the clearColor frame
     // has been drawn at least once). Add a small post-render settle
     // delay so the swap-chain compositor has a chance to present the
     // teal clear-pass before page.screenshot reads back.

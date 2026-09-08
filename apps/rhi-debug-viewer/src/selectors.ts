@@ -79,7 +79,7 @@ export function loadStatusAnchor(): string {
 /**
  * Attribute name for data-forgeax-rt-status. Value is an RtStatus string.
  *
- * SSOT anchor key consumed by TextureViewer (RT/depth preview status).
+ * SSOT anchor key consumed by DrawCallViewer (RT/depth preview status).
  * Callers write: `{...{ [rtStatusAnchor()]: status }}`.
  * Smoke CSS selector: `[data-forgeax-rt-status="ok"]`.
  */
@@ -90,7 +90,7 @@ export function rtStatusAnchor(): string {
 /**
  * Attribute name for data-forgeax-rt-canvas. Value is always empty string.
  *
- * SSOT anchor key consumed by TextureViewer to mark the RT/depth preview <canvas>.
+ * SSOT anchor key consumed by DrawCallViewer to mark the RT/depth preview <canvas>.
  * Callers write: `{...{ [rtCanvasAnchor()]: '' }}`.
  * Smoke CSS selector: `canvas[data-forgeax-rt-canvas]`.
  */
@@ -98,8 +98,18 @@ export function rtCanvasAnchor(): string {
   return 'data-forgeax-rt-canvas';
 }
 
+/** Attribute name for the viewer-private shader preview canvas. */
+export function previewCanvasAnchor(): string {
+  return 'data-forgeax-preview-canvas';
+}
+
+/** Attribute name for the shell capability branch shown by the viewer. */
+export function capabilityAnchor(): string {
+  return 'data-forgeax-capability';
+}
+
 // ============================================================================
-// M7: dockview four-panel anchors (AC-13 SSOT: all data-forgeax-* only here)
+// Four-panel Viewer anchors (AC-13 SSOT: all data-forgeax-* only here)
 // ============================================================================
 
 /**
@@ -134,19 +144,19 @@ export function pipelineStateAnchor(): string {
 }
 
 /**
- * Attribute name for data-forgeax-texture-viewer. Value is 'selected' or 'default'.
+ * Attribute name for data-forgeax-draw-call-viewer. Value is 'selected' or 'default'.
  *
- * SSOT anchor consumed by TextureViewer panel to mark its container.
- * Smoke CSS selector: `[data-forgeax-texture-viewer]`.
+ * SSOT anchor consumed by DrawCallViewer panel to mark its container.
+ * Smoke CSS selector: `[data-forgeax-draw-call-viewer]`.
  */
-export function textureViewerAnchor(): string {
-  return 'data-forgeax-texture-viewer';
+export function drawCallViewerAnchor(): string {
+  return 'data-forgeax-draw-call-viewer';
 }
 
 /**
  * Attribute name for data-forgeax-texture-thumbnail. Value is the integer thumbnail index.
  *
- * SSOT anchor consumed by TextureViewer to mark individual thumbnail entries.
+ * SSOT anchor consumed by DrawCallViewer to mark individual per-work texture entries.
  * Smoke CSS selector: `[data-forgeax-texture-thumbnail="N"]`.
  */
 export function textureThumbnailAnchor(): string {
@@ -156,7 +166,7 @@ export function textureThumbnailAnchor(): string {
 /**
  * Attribute name for data-forgeax-texture-slice. Value is the integer slice index.
  *
- * SSOT anchor consumed by TextureViewer to mark the array/cube slice <select>
+ * SSOT anchor consumed by DrawCallViewer to mark the array/cube slice <select>
  * (shown only for cube / cube-array / 2d-array bound textures). The attribute
  * value tracks the currently selected slice.
  * Callers write: `{...{ [textureSliceAnchor()]: String(slice) }}`.
@@ -170,7 +180,7 @@ export function textureSliceAnchor(): string {
  * Attribute name for data-forgeax-texture-zoom. Value is the current zoom: the
  * percentage as an integer string (e.g. '100', '800'), or 'fit' for fit-to-window.
  *
- * SSOT anchor consumed by TextureViewer to mark the zoom toolbar's percentage
+ * SSOT anchor consumed by DrawCallViewer to mark the zoom toolbar's percentage
  * input (and surface the active zoom to smoke/e2e).
  * Callers write: `{...{ [textureZoomAnchor()]: zoom === 'fit' ? 'fit' : String(pct) }}`.
  * Smoke CSS selector: `[data-forgeax-texture-zoom]`.

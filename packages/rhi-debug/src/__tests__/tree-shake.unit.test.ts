@@ -1,16 +1,16 @@
 // m3-3: tree-shake grep gate — verify FORGEAX_ENGINE_RHI_DEBUG=0 bundle does NOT
 // contain 'engine-rhi-debug' string (AC-03).
 //
-// This test uses a static grep on dist bundles. When no dist bundles exist
-// (cold worktree), the test skips with a descriptive reason; CI runs with
-// the full build chain produce real coverage.
+// This test uses a static grep on the hello-cube production bundle. The
+// coverage job materializes that cold bundle before running package tests, so
+// an absent dist is a real gate failure rather than an implicit pass.
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-function findDistMjsFiles(rootDir: string): string[] {
+function findDistFiles(rootDir: string): string[] {
   const results: string[] = [];
   function walk(dir: string): void {
     let entries: fs.Dirent[];
@@ -24,7 +24,10 @@ function findDistMjsFiles(rootDir: string): string[] {
       if (e.isDirectory()) {
         if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
         walk(full);
-      } else if (e.name.endsWith('.mjs') && full.includes('/dist/assets/')) {
+      } else if (
+        (e.name.endsWith('.mjs') || e.name.endsWith('.js')) &&
+        full.includes('/dist/assets/')
+      ) {
         results.push(full);
       }
     }
@@ -33,64 +36,53 @@ function findDistMjsFiles(rootDir: string): string[] {
   return results;
 }
 
-// I-14 fix-up (round 1 implement-review): the prior shape silently
-// `return`ed when no dist bundles existed (cold worktree), making the
-// gate look green every time without a real grep. We now compute the
-// dist file list at module load time and use `it.skipIf(...)` so the
-// test skip is explicit and visible in the test report rather than
-// disguised as a passed assertion (memory: empty-baseline-and-empty-
-// frame-falsely-pass-smoke same anti-pattern).
+// I-14 fix-up (round 1 implement-review): the prior shape silently returned
+// when no dist bundles existed (cold worktree), making the gate look green
+// without a real grep. The explicit coverage prebuild now makes the absence
+// assertion below actionable.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_ROOT = path.resolve(__dirname, '..', '..', '..', '..');
-const DIST_FILES = findDistMjsFiles(ENGINE_ROOT);
+const COLD_DIST_ROOT = path.resolve(ENGINE_ROOT, 'apps', 'hello', 'cube', 'dist', 'assets');
+const DIST_FILES = findDistFiles(COLD_DIST_ROOT);
 
 describe('tree-shake grep gate (AC-03)', () => {
-  it.skipIf(DIST_FILES.length === 0)(
-    'FORGEAX_ENGINE_RHI_DEBUG=0 dist bundles do not contain engine-rhi-debug string',
-    () => {
-      // Grep each .mjs file for the forbidden string.
-      const violations: string[] = [];
-      for (const fp of DIST_FILES) {
-        let content: string;
-        try {
-          content = fs.readFileSync(fp, 'utf-8');
-        } catch {
-          continue;
-        }
-        if (content.includes('engine-rhi-debug')) {
-          violations.push(fp);
-        }
+  it('hello-cube cold production dist exists and does not contain engine-rhi-debug string', () => {
+    expect(DIST_FILES.length).toBeGreaterThan(0);
+    // Grep each .mjs file for the forbidden string.
+    const violations: string[] = [];
+    for (const fp of DIST_FILES) {
+      let content: string;
+      try {
+        content = fs.readFileSync(fp, 'utf-8');
+      } catch {
+        continue;
       }
+      if (content.includes('engine-rhi-debug')) {
+        violations.push(fp);
+      }
+    }
 
-      // All demo dist bundles must be clean.
-      expect(violations).toEqual([]);
-    },
-  );
+    // All demo dist bundles must be clean.
+    expect(violations).toEqual([]);
+  });
 });
 
-// M3 / w16: capture-browser subpath node-identifier grep (AC-10).
+// Browser entry node-identifier grep (AC-16).
 //
-// The browser capture subpath (capture-browser.mjs) and its bundled import
-// closure (recorder-core + tape-format are inlined by tsup) must carry zero
-// Node-builtin / Node-only-dependency identifiers, so a browser bundle that
-// imports `@forgeax/engine-rhi-debug/capture-browser` never drags in fs / pngjs
-// / ws. The scan face is deliberately just this one dist file -- NOT the whole
-// app bundle: recorder.ts keeps its legitimate node:fs / node:path through the
-// barrel `wrap` path (Node-only finalize() tail), which lives outside this scan
-// face. The barrel source assertion below pins the AC-10 contract that the
-// capture-browser symbols are never re-exported from index.ts.
+// The browser entry and its bundled import closure must carry zero Node-only
+// dependencies. The root remains realm-neutral and is tested separately.
 
-const CAPTURE_BROWSER_DIST = path.resolve(__dirname, '..', '..', 'dist', 'capture-browser.mjs');
-const CAPTURE_BROWSER_DIST_EXISTS = fs.existsSync(CAPTURE_BROWSER_DIST);
+const BROWSER_DIST = path.resolve(__dirname, '..', '..', 'dist', 'browser.mjs');
+const BROWSER_DIST_EXISTS = fs.existsSync(BROWSER_DIST);
 
 const BARREL_SRC = path.resolve(__dirname, '..', 'index.ts');
 
-describe('capture-browser subpath isolation (AC-10)', () => {
-  it.skipIf(!CAPTURE_BROWSER_DIST_EXISTS)(
-    'capture-browser.mjs + import closure contain no fs / pngjs / ws identifiers',
+describe('browser entry isolation (AC-16)', () => {
+  it.skipIf(!BROWSER_DIST_EXISTS)(
+    'browser.mjs + import closure contain no fs / pngjs / ws identifiers',
     () => {
-      const content = fs.readFileSync(CAPTURE_BROWSER_DIST, 'utf-8');
+      const content = fs.readFileSync(BROWSER_DIST, 'utf-8');
       // Match Node-builtin imports + the two Node-only deps by their import
       // shapes. recorder-core / tape-format are inlined by tsup, so a hit here
       // means the isolation broke (a node-tainted module crept into the closure).
@@ -109,80 +101,51 @@ describe('capture-browser subpath isolation (AC-10)', () => {
     },
   );
 
-  it('barrel index.ts does not re-export capture-browser symbols', () => {
+  it('barrel index.ts does not re-export browser transport symbols', () => {
     const barrel = fs.readFileSync(BARREL_SRC, 'utf-8');
-    const leaked = [
-      'capture-browser',
-      'captureFramesToMemory',
-      'captureAndUpload',
-      'uploadTape',
-    ].filter((sym) => barrel.includes(sym));
+    const leaked = ['captureAndUpload', 'uploadTape'].filter((sym) => barrel.includes(sym));
     expect(leaked).toEqual([]);
   });
 });
 
-// M4 / w11: inspect-core + rt-to-canvas subpath node-identifier grep (AC-10/AC-11).
-//
-// The browser-inspect subpaths (inspect-core.mjs, rt-to-canvas.mjs) and their
-// bundled import closures (inlined by tsup) must carry zero Node-builtin /
-// Node-only-dependency identifiers, so a browser bundle that imports either
-// subpath never drags in fs / pngjs / ws. The barrel source assertion below
-// pins the AC-11 contract that inspect-core/rt-to-canvas symbols are never
-// re-exported from index.ts.
+describe('retained core dependency boundary (OOS-5)', () => {
+  it('does not include viewer or host dependency identifiers in core production sources', () => {
+    const sourceFiles = [
+      'index.ts',
+      'frame-model.ts',
+      'protocol/codec.ts',
+      'replay/session.ts',
+    ].map((file) => path.resolve(__dirname, '..', file));
+    const forbidden = [
+      '@codemirror/',
+      'dockview',
+      '@forgeax/engine-naga',
+      "from 'react'",
+      'node:fs',
+      'node:path',
+    ];
+    const hits = sourceFiles.flatMap((file) => {
+      const source = fs.readFileSync(file, 'utf8');
+      return forbidden.filter((token) => source.includes(token)).map((token) => `${file}:${token}`);
+    });
+    expect(hits).toEqual([]);
+  });
+});
 
-const INSPECT_CORE_DIST = path.resolve(__dirname, '..', '..', 'dist', 'inspect-core.mjs');
-const INSPECT_CORE_DIST_EXISTS = fs.existsSync(INSPECT_CORE_DIST);
-
-const RT_TO_CANVAS_DIST = path.resolve(__dirname, '..', '..', 'dist', 'rt-to-canvas.mjs');
-const RT_TO_CANVAS_DIST_EXISTS = fs.existsSync(RT_TO_CANVAS_DIST);
-
-const FRAME_MODEL_DIST = path.resolve(__dirname, '..', '..', 'dist', 'frame-model.mjs');
-const FRAME_MODEL_DIST_EXISTS = fs.existsSync(FRAME_MODEL_DIST);
-
-const FORBIDDEN_NODE_RE: RegExp[] = [
-  /\bnode:fs\b/,
-  /\bnode:path\b/,
-  /\bnode:crypto\b/,
-  /from\s+['"]fs['"]/,
-  /from\s+['"]path['"]/,
-  /\bpngjs\b/,
-  /from\s+['"]ws['"]/,
-  /require\(\s*['"]ws['"]\s*\)/,
-];
-
-describe('inspect-core + rt-to-canvas subpath isolation (AC-10, AC-11)', () => {
-  it.skipIf(!INSPECT_CORE_DIST_EXISTS)(
-    'inspect-core.mjs + import closure contain no fs / pngjs / ws identifiers',
-    () => {
-      const content = fs.readFileSync(INSPECT_CORE_DIST, 'utf-8');
-      const hits = FORBIDDEN_NODE_RE.filter((re) => re.test(content)).map((re) => re.source);
-      expect(hits).toEqual([]);
-    },
-  );
-
-  it.skipIf(!RT_TO_CANVAS_DIST_EXISTS)(
-    'rt-to-canvas.mjs + import closure contain no fs / pngjs / ws identifiers',
-    () => {
-      const content = fs.readFileSync(RT_TO_CANVAS_DIST, 'utf-8');
-      const hits = FORBIDDEN_NODE_RE.filter((re) => re.test(content)).map((re) => re.source);
-      expect(hits).toEqual([]);
-    },
-  );
-
-  it.skipIf(!FRAME_MODEL_DIST_EXISTS)(
-    'frame-model.mjs + import closure contain no fs / pngjs / ws identifiers',
-    () => {
-      const content = fs.readFileSync(FRAME_MODEL_DIST, 'utf-8');
-      const hits = FORBIDDEN_NODE_RE.filter((re) => re.test(content)).map((re) => re.source);
-      expect(hits).toEqual([]);
-    },
-  );
-
-  it('barrel index.ts does not re-export inspect-core / rt-to-canvas symbols', () => {
-    const barrel = fs.readFileSync(BARREL_SRC, 'utf-8');
-    const leaked = ['inspect-core', 'rt-to-canvas', 'inspectDrawJson', 'renderRtToCanvas'].filter(
-      (sym) => barrel.includes(sym),
-    );
-    expect(leaked).toEqual([]);
+describe('v7 cold model path', () => {
+  it('keeps protocol and model sources free of host-only imports', () => {
+    const sourcePaths = [
+      path.resolve(__dirname, '..', 'protocol', 'codec.ts'),
+      path.resolve(__dirname, '..', 'protocol', 'validation.ts'),
+      path.resolve(__dirname, '..', 'protocol', 'event-semantics.ts'),
+      path.resolve(__dirname, '..', 'protocol', 'tape-index.ts'),
+      path.resolve(__dirname, '..', 'frame-model.ts'),
+    ];
+    const forbidden = /^\s*(?:import|export).*\b(?:node:|pngjs|webgpu|vite|rhi-webgpu|rhi-wgpu)\b/m;
+    const hits = sourcePaths.flatMap((sourcePath) => {
+      const source = fs.readFileSync(sourcePath, 'utf8');
+      return forbidden.test(source) ? [sourcePath] : [];
+    });
+    expect(hits).toEqual([]);
   });
 });

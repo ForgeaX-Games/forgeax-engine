@@ -12,16 +12,15 @@
 // mapSize 2048 -> 1024 -> 2048 the same way. Asserts every draw returns
 // `ok: true` and no device-lost / structured RhiError fires.
 //
-// best-effort: we do not pixel-readback (M3 atlas slot debugReadback was
-// retuned in w28 transitional); the gate is "render loop completes
-// without device error".
+// This is a structural GPU behavior gate: the unified Standard shadow graph
+// must rebuild its atlas and continue drawing without device errors.
 
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
-import { Camera, DirectionalLight } from '@forgeax/engine-render/internal';
+import { Camera, DirectionalLight } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import { createRenderer } from '../createRenderer';
+import { constructRuntimeRendererHost } from '../renderer-host';
 import { drawPublished } from './draw-published';
 
 const ENGINE_MANIFEST = await (async () => {
@@ -127,13 +126,15 @@ describe('CSM runtime cascade + mapSize variation (M5/w26)', () => {
   it('cascadeCount 4 -> 2 -> 4 round-trip without device error', async () => {
     if (!dawnReady) return;
     const canvas = createMockCanvas();
-    const renderer = await createRenderer(
+    const host = await constructRuntimeRendererHost(
       canvas as unknown as HTMLCanvasElement,
       {},
       { shaderManifestUrl: ENGINE_MANIFEST_URL },
     );
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
+    expect(host.ok).toBe(true);
+    if (!host.ok) throw host.error;
+    const { renderer } = host.value;
+    expect(renderer.inspect().state).toBe('alive');
     const { world, shadowEntity } = buildScene(4, 2048);
 
     expect(drawPublished(renderer, world).ok).toBe(true);
@@ -156,13 +157,15 @@ describe('CSM runtime cascade + mapSize variation (M5/w26)', () => {
   it('mapSize 2048 -> 1024 -> 2048 RT rebuild without device error', async () => {
     if (!dawnReady) return;
     const canvas = createMockCanvas();
-    const renderer = await createRenderer(
+    const host = await constructRuntimeRendererHost(
       canvas as unknown as HTMLCanvasElement,
       {},
       { shaderManifestUrl: ENGINE_MANIFEST_URL },
     );
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
+    expect(host.ok).toBe(true);
+    if (!host.ok) throw host.error;
+    const { renderer } = host.value;
+    expect(renderer.inspect().state).toBe('alive');
     const { world, shadowEntity } = buildScene(4, 2048);
 
     expect(drawPublished(renderer, world).ok).toBe(true);
@@ -185,13 +188,15 @@ describe('CSM runtime cascade + mapSize variation (M5/w26)', () => {
   it('cascadeCount=1 renders through the unified pathway (AC-10)', async () => {
     if (!dawnReady) return;
     const canvas = createMockCanvas();
-    const renderer = await createRenderer(
+    const host = await constructRuntimeRendererHost(
       canvas as unknown as HTMLCanvasElement,
       {},
       { shaderManifestUrl: ENGINE_MANIFEST_URL },
     );
-    const ready = await renderer.ready;
-    expect(ready.ok).toBe(true);
+    expect(host.ok).toBe(true);
+    if (!host.ok) throw host.error;
+    const { renderer } = host.value;
+    expect(renderer.inspect().state).toBe('alive');
     const { world } = buildScene(1, 1024);
     expect(drawPublished(renderer, world).ok).toBe(true);
   });

@@ -125,6 +125,7 @@ function parseArgs(argv) {
     contract: null,
     sharedInputManifest: null,
     inputFingerprint: null,
+    sharedInputMode: null,
   };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--consumer' && i + 1 < argv.length) {
@@ -137,6 +138,8 @@ function parseArgs(argv) {
       args.sharedInputManifest = argv[++i];
     } else if (argv[i] === '--input-fingerprint' && i + 1 < argv.length) {
       args.inputFingerprint = argv[++i];
+    } else if (argv[i] === '--shared-input-mode' && i + 1 < argv.length) {
+      args.sharedInputMode = argv[++i];
     }
   }
   return args;
@@ -151,6 +154,18 @@ function main() {
   }
   if (!args.root) {
     process.stderr.write('Error: --root flag is required\n');
+    process.exit(2);
+  }
+  const sharedInputMode = args.sharedInputMode ?? 'catalog-only';
+  if (!['catalog-only', 'full'].includes(sharedInputMode)) {
+    process.stdout.write(
+      `${JSON.stringify({
+        code: 'ci-shared-input-mode-invalid',
+        expected: ['catalog-only', 'full'],
+        actual: sharedInputMode,
+        hint: 'Use catalog-only for app-shard projections or full for browser consumers that execute the serialized payload.',
+      })}\n`,
+    );
     process.exit(2);
   }
 
@@ -244,7 +259,9 @@ function main() {
           payloadClasses: ['shared-asset-pack', 'shared-engine-shaders'],
         }
       : null);
-  if (args.consumer === shared?.consumer) {
+  const consumesSharedInputs =
+    shared?.payloadClasses?.every((className) => requiredClasses.includes(className)) === true;
+  if (consumesSharedInputs) {
     const manifestPath = resolve(args.sharedInputManifest ?? join(root, shared.manifestPath));
     let manifest;
     try {
@@ -307,17 +324,26 @@ function main() {
         'Rebuild shared-app-inputs after its declared source inputs change.',
       );
     }
-    if (shared.payload !== undefined) {
-      if (JSON.stringify(manifest.payload) !== JSON.stringify(shared.payload)) {
+    const expectedPayload = sharedInputMode === 'full' ? shared.fullPayload : shared.payload;
+    if (sharedInputMode === 'full' && expectedPayload === undefined) {
+      failShared(
+        'ci-shared-input-payload-contract-missing',
+        'sharedInputs.fullPayload',
+        undefined,
+        'Declare the full serialized shared-input payload in build-artifact-contract.json before a full consumer downloads it.',
+      );
+    }
+    if (expectedPayload !== undefined) {
+      if (JSON.stringify(manifest.payload) !== JSON.stringify(expectedPayload)) {
         failShared(
           'ci-shared-input-payload-mismatch',
-          shared.payload,
+          expectedPayload,
           manifest.payload,
           'Rebuild shared-app-inputs so its serialized pack and compiled engine shader payload match the contract.',
         );
       }
       if (
-        shared.payload.assetPayloadRoot !== undefined &&
+        expectedPayload.assetPayloadRoot !== undefined &&
         !Array.isArray(manifest.payloadInventory)
       ) {
         failShared(
@@ -328,7 +354,7 @@ function main() {
         );
       }
       const missingPayload =
-        shared.payload.assetPayloadRoot === undefined
+        expectedPayload.assetPayloadRoot === undefined
           ? undefined
           : manifest.payloadInventory.find((path) => !existsSync(join(root, path)));
       if (missingPayload !== undefined) {

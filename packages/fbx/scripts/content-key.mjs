@@ -15,10 +15,8 @@
 //
 // What determines pkg/ output, and therefore the content key:
 //   - src/native/bridge.c — the hand-written C bridge over ufbx.
-//   - scripts/fetch-ufbx.mjs — pins the exact ufbx version (UFBX_VERSION); the
-//     upstream ufbx.h/.c is gitignored (downloaded on demand) but this pin
-//     uniquely fixes it, so hashing the pin script is equivalent to hashing the
-//     source.
+//   - scripts/fetch-ufbx.mjs + ufbx-source.lock.json — pin and verify the exact
+//     upstream ufbx.h/.c bytes, which are gitignored and downloaded on demand.
 //   - scripts/build-wasm.mjs — the emcc flag set that emits the .wasm/.mjs pair
 //     bit-for-bit.
 //
@@ -35,7 +33,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export const PKG_ROOT = join(__dirname, '..');
 
 export const RELEASE_TAG = 'wasm-artifacts';
-export const UFBX_VERSION = 'v0.23.0';
+export const UFBX_VERSION = JSON.parse(
+  await readFile(join(PKG_ROOT, 'scripts', 'ufbx-source.lock.json'), 'utf8'),
+).version;
 
 /**
  * Compute the full SHA-256 (hex) over every input that determines the pkg/
@@ -49,6 +49,7 @@ export async function computeContentSha256() {
   const inputs = [
     join(PKG_ROOT, 'src', 'native', 'bridge.c'),
     join(PKG_ROOT, 'scripts', 'fetch-ufbx.mjs'),
+    join(PKG_ROOT, 'scripts', 'ufbx-source.lock.json'),
     join(PKG_ROOT, 'scripts', 'build-wasm.mjs'),
   ];
   const hash = createHash('sha256');

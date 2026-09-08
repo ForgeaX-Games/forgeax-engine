@@ -13,6 +13,6 @@ describe('replication protocol version owner', () => {
     expect(authoritySource).toContain('REPLICATION_PROTOCOL_VERSION');
     expect(authoritySource).not.toMatch(/version:\s*1\b/);
     expect(codecSource).toContain('REPLICATION_PROTOCOL_VERSION');
-    expect(REPLICATION_PROTOCOL_VERSION).toBe(1);
+    expect(REPLICATION_PROTOCOL_VERSION).toBe(2);
   });
 });

@@ -28,9 +28,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { type EntityHandle, resolveComponent, World } from '@forgeax/engine-ecs';
+import { type EntityHandle, World } from '@forgeax/engine-ecs';
+import { componentDefinition } from '@forgeax/engine-ecs/internal';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { MeshRenderer, SceneInstance } from '@forgeax/engine-render/internal';
+import { MeshRenderer, SceneInstance } from '@forgeax/engine-render';
 // Importing the runtime components barrel populates the global component
 // table consulted by `World._buildSceneEntityComponentDatas` — without
 // these named bindings, Transform / MeshRenderer / ChildOf resolve to
@@ -40,6 +41,7 @@ import { ChildOf, Transform } from '@forgeax/engine-scene';
 import type { LocalEntityId, MaterialAsset, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+import { registerRuntimeComponents } from './helpers/register-runtime-components';
 
 function lid(n: number): LocalEntityId {
   return n as LocalEntityId;
@@ -85,6 +87,7 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
   it('(a) assets.instantiate returns the synthetic root Entity directly (no `byRef` indirection)', async () => {
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();
+    registerRuntimeComponents(world);
 
     const matGuid = AssetGuid.parse(MAT_GUID);
     expect(matGuid.ok).toBe(true);
@@ -129,6 +132,7 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
   it('(b) the synthetic root carries SceneInstance.mapping[localId] = Entity (per-node lookup the template walks)', async () => {
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();
+    registerRuntimeComponents(world);
 
     const matGuid = AssetGuid.parse(MAT_GUID);
     if (!matGuid.ok) throw new Error('parse');
@@ -187,13 +191,14 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
     }
   });
 
-  it('(c) world has no `sceneInstances` member; resolver wiring lives on world._setSceneAssetResolver', () => {
+  it('(c) world has no removed scene-instance container or resolver mutator', () => {
     const world = new World();
     expect((world as unknown as { sceneInstances?: unknown }).sceneInstances).toBeUndefined();
-    // Guard the rename: the API the template MUST migrate to.
+    // Resolver wiring is owned by the AssetRegistry/scene-instantiation path;
+    // the former private World mutator is not part of the ECS surface.
     expect(
       typeof (world as unknown as { _setSceneAssetResolver?: unknown })._setSceneAssetResolver,
-    ).toBe('function');
+    ).toBe('undefined');
   });
 
   // The template main.ts source file must consume the current API. Catches
@@ -244,11 +249,13 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
   // defensive no-ops in case an Edit round-trip ever re-writes a legacy shape.
   it('(e) [regression] every shipped scene.pack.json component field exists in its live schema', () => {
     // Touch the barrel bindings so the component-table side-effect import is
-    // not tree-shaken (resolveComponent reads that global table).
+    // not tree-shaken (World.components.resolve reads that per-World table).
     void Transform;
     void MeshRenderer;
     void ChildOf;
     void SceneInstance;
+    const world = new World();
+    registerRuntimeComponents(world);
 
     // Defensive back-compat projection (the shipped pack is already clean):
     // an editor ✎ Edit save would write `Collider` (Studio metadata) and could
@@ -279,12 +286,12 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
         for (const [compName, data] of Object.entries(node.components)) {
           if (STRIP_COMPONENTS.has(compName)) continue;
           scanned++;
-          const token = resolveComponent(compName);
+          const token = world.components.resolve(compName);
           if (token === undefined) {
             offenders.push(`${compName} (component not defined)`);
             continue;
           }
-          const schema = token.schema as Record<string, unknown>;
+          const schema = componentDefinition(token).fields;
           const rename = FIELD_RENAME[compName] ?? {};
           for (const rawField of Object.keys(data ?? {})) {
             const field = rename[rawField] ?? rawField;

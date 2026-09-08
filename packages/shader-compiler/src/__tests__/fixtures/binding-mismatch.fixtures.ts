@@ -84,7 +84,7 @@ const POS_EXTRA_BINDING_TOLERATED: BindingMismatchFixture = {
 };
 
 // ---- Negative: binding misnumbered ------------------------------------------
-// derive([{name:'mainTex', type:'texture2d'}]) -> sampler@0 + tex@1 (sampler-first §D-4).
+// derive([{name:'mainTex', type:'texture2d'}]) -> UBO@0, sampler@1 + tex@2.
 // Actual WGSL has sampler@2 + tex@3 (off-by-two). Missing entries at @0 and @1.
 
 const NEG_BINDING_MISNUMBERED: BindingMismatchFixture = {
@@ -96,10 +96,9 @@ const NEG_BINDING_MISNUMBERED: BindingMismatchFixture = {
     },
   ],
   verdict: 'mismatch',
-  // expected[0] is the auto-paired sampler at binding 0 ('mainTex_sampler'),
-  // which is missing on the actual side.
+  // expected[0] is the derived uniform buffer at binding 0, which is missing.
   mismatchBinding: 0,
-  mismatchParam: 'mainTex_sampler',
+  mismatchParam: 'mainTex',
 };
 
 // ---- Negative: missing binding ----------------------------------------------
@@ -124,8 +123,9 @@ const NEG_MISSING_BINDING: BindingMismatchFixture = {
 };
 
 // ---- Negative: type mismatch ------------------------------------------------
-// derive([{mainTex:texture2d}]) -> sampler@0, tex@1 (sampler-first §D-4).
-// Actual WGSL declares UBO@0 instead of sampler@0 (wrong resource kind).
+// derive([{mainTex:texture2d}]) -> UBO@0, sampler@1, tex@2.
+// Actual WGSL declares UBO@0 and tex@1; binding 1 has the wrong resource kind
+// for the derived auto-paired sampler.
 
 const NEG_TYPE_MISMATCH: BindingMismatchFixture = {
   name: 'neg-type-mismatch',
@@ -136,7 +136,7 @@ const NEG_TYPE_MISMATCH: BindingMismatchFixture = {
     },
   ],
   verdict: 'mismatch',
-  mismatchBinding: 0,
+  mismatchBinding: 1,
   mismatchParam: 'mainTex_sampler',
 };
 

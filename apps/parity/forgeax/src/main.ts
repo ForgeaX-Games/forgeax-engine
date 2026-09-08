@@ -47,7 +47,6 @@ import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { type Renderer } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
 import { createRenderer, EngineEnvironmentError, quat } from '@forgeax/engine-runtime';
 import { Materials } from '@forgeax/engine-render';
@@ -104,9 +103,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // `/shaders/manifest.json` carrying pbr/unlit entries (D-P5 case C unlit
   // path consumes the unlit entry). Default `shaderManifestUrl` resolves;
   // no inline data: URL is required.
-  const renderer = await createRenderer(target, {}, forgeaxBundlerAdapter());
-  const worldAttachment1 = renderer.attachWorld(world);
-  if (!worldAttachment1.ok) throw worldAttachment1.error;
+  const rendererResult = await createRenderer(target, {}, forgeaxBundlerAdapter());
+  if (!rendererResult.ok) throw rendererResult.error;
+  const renderer = rendererResult.value;
+  const worldAttachment = renderer.attach(world);
+  if (!worldAttachment.ok) throw worldAttachment.error;
+  const lease = worldAttachment.value;
   // Note: @forgeax/engine-runtime internally configures the canvas context
   // with its own `bgra8unorm` + alphaMode:'opaque' format during pipeline
   // setup (createRenderer.ts:1709 applyCanvasConfiguration). An additional
@@ -116,12 +118,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // (premultipliedAlpha + srgb framebuffer) surfaces as pixel-diff, not as
   // a bench block. Re-introducing the external configure needs a future
   // feat to propagate alphaMode + viewFormats through createRenderer options.
-  console.warn(`[forgeax] backend=${renderer.backend}`);
-  const ready = await renderer.ready;
-  if (!ready.ok) {
-    console.error('[forgeax] renderer.ready failed:', ready.error);
-    return;
-  }
+  console.warn(`[forgeax] backend=${renderer.inspect().capabilities.backendKind}`);
 
   // Cube entity: HANDLE_CUBE builtin geometry + MeshRenderer (referencing
   // an unlit MaterialAsset with #cc6633 baseColor) + Transform. NO
@@ -151,13 +148,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Static fixture: draw once. window.__captureRight re-issues a draw
   // before each readback so the canvas observes the latest frame even
   // if the compositor cleared it between calls.
-  world.update().unwrap();
-  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-
-  declare_capture_hook(renderer, () => {
+  const drawFrame = (): void => {
     world.update().unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-  });
+    const drawn = renderer.draw({
+      leases: [lease],
+      camera: { lease },
+      environment: { lease },
+    });
+    if (!drawn.ok) throw drawn.error;
+  };
+  drawFrame();
+
+  declare_capture_hook(target, drawFrame);
 }
 
 declare global {
@@ -167,27 +169,27 @@ declare global {
   }
 }
 
-function declare_capture_hook(renderer: Renderer, drawOnce: () => void): void {
+function declare_capture_hook(
+  target: HTMLCanvasElement,
+  drawOnce: () => void,
+): void {
   // D-1: both __captureLeft and __captureRight share the same capture
   // function. The parity bench now drives a single ForgeaX preview; left
   // vs right is a self-consistency check (same renderer, same frame,
   // same scene — epsilon should be 0 or near-0).
   const capture = async (): Promise<Uint8Array> => {
     drawOnce();
-    // Engine pixel readback (renderer.readPixels(); engine API since
-    // 2026-05-17, AGENTS.md §Breaking changes) returns top-left origin
-    // RGBA via createImageBitmap -> OffscreenCanvas 2D drawImage ->
-    // getImageData. Since both left and right now come from the same
-    // native renderer, the Y-flip is kept for consistency with the
-    // historical orientation (bottom-left origin); both hooks use the
-    // same pipeline so orientation match is trivial.
-    const r = await renderer.readPixels();
-    if (!r.ok) {
-      throw new Error(
-        `parity-forgeax: readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
-      );
-    }
-    const flat = r.value;
+    // Canvas capture is a host-owned inspection path. The renderer receipt
+    // proves the submit; the browser surface owns conversion to RGBA bytes.
+    const bitmap = await createImageBitmap(target);
+    const captureCanvas = new OffscreenCanvas(CANVAS_W, CANVAS_H);
+    const captureContext = captureCanvas.getContext('2d');
+    if (captureContext === null) throw new Error('parity-forgeax: 2d capture context missing');
+    captureContext.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const flat = new Uint8Array(
+      captureContext.getImageData(0, 0, CANVAS_W, CANVAS_H).data,
+    );
     const out = new Uint8Array(CANVAS_W * CANVAS_H * 4);
     const rowBytes = CANVAS_W * 4;
     for (let y = 0; y < CANVAS_H; y++) {

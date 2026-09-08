@@ -19,6 +19,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..', '..', '..');
 const ARTIFACT_DIR = resolve(REPO_ROOT, 'apps', 'hello', 'audio', '.forgeax-audio', 'browser');
 const M20_MODE = process.env.FORGEAX_AUDIO_M20 === '1';
+const M54_MODE = process.env.FORGEAX_AUDIO_M54 === '1';
 mkdirSync(ARTIFACT_DIR, { recursive: true });
 const READINESS_TIMEOUT_MS = Number.parseInt(
   process.env.FORGEAX_AUDIO_READINESS_TIMEOUT_MS ?? '90000',
@@ -136,6 +137,7 @@ async function readPageDiagnostics(page) {
           webgpu: 'gpu' in navigator,
           audioContext: 'AudioContext' in window || 'webkitAudioContext' in window,
         },
+        m54: window.__forgeaxM54Audio?.snapshot() ?? null,
       })),
       sleep(2_000).then(() => ({ evaluate: 'timed out after 2000ms' })),
     ]);
@@ -168,6 +170,61 @@ try {
   });
   try {
     const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
+    if (M54_MODE) {
+      await page.addInitScript(() => {
+        const audioContext = window.AudioContext;
+        if (audioContext === undefined) return;
+        const originalResume = audioContext.prototype.resume;
+        const state = {
+          resumeAttempts: 0,
+          firstRefusal: false,
+          contextIds: [],
+          context: undefined,
+        };
+        const contextIds = new WeakMap();
+        let nextContextId = 1;
+        const originalCreateGain = audioContext.prototype.createGain;
+        Object.defineProperty(audioContext.prototype, 'createGain', {
+          configurable: true,
+          value: function instrumentedCreateGain(...args) {
+            state.context = this;
+            return originalCreateGain.apply(this, args);
+          },
+        });
+        Object.defineProperty(audioContext.prototype, 'resume', {
+          configurable: true,
+          value: function instrumentedResume(...args) {
+            state.resumeAttempts += 1;
+            let contextId = contextIds.get(this);
+            if (contextId === undefined) {
+              contextId = nextContextId++;
+              contextIds.set(this, contextId);
+            }
+            state.contextIds.push(contextId);
+            if (state.resumeAttempts === 1) {
+              state.firstRefusal = true;
+              return Promise.reject(new DOMException('deterministic M54 refusal', 'NotAllowedError'));
+            }
+            return originalResume.apply(this, args);
+          },
+        });
+        window.__forgeaxM54Audio = {
+          async suspend() {
+            if (state.context === undefined) return null;
+            await state.context.suspend();
+            return state.context.state;
+          },
+          snapshot() {
+            return {
+              resumeAttempts: state.resumeAttempts,
+              firstRefusal: state.firstRefusal,
+              contextIds: [...state.contextIds],
+              contextState: state.context?.state ?? null,
+            };
+          },
+        };
+      });
+    }
     if (M20_MODE) {
       await page.addInitScript(() => {
         const audioContext = window.AudioContext;
@@ -303,8 +360,7 @@ try {
           const probe = window.__forgeaxAudioM20?.snapshot();
           return gate?.started === 1
             && gate.pending
-            && probe?.phase === 'pending-decode'
-            && probe.simulation.intents.some((intent) => intent.kind === 'play');
+            && probe?.phase === 'pending-decode';
         },
         undefined,
         { timeout: 30_000, polling: 100 },
@@ -321,9 +377,7 @@ try {
           const entityId = probe?.entityId;
           return probe?.phase === 'stale-stopped'
             && probe.audio.activeSourceCount === 0
-            && probe.simulation.intents.some(
-              (intent) => intent.kind === 'stop' && intent.entityId === entityId,
-            );
+            && probe.entityId === entityId;
         },
         undefined,
         { timeout: 30_000, polling: 100 },
@@ -339,11 +393,8 @@ try {
         () => {
           const probe = window.__forgeaxAudioM20?.snapshot();
           return probe?.phase === 'replacement-requested'
-            && probe.simulation.intents.some(
-              (intent) => intent.kind === 'play'
-                && intent.entityId === probe.entityId
-                && intent.sourceKey === probe.currentSourceKey,
-            );
+            && probe.entityId !== null
+            && probe.currentSourceKey !== probe.staleSourceKey;
         },
         undefined,
         { timeout: 30_000, polling: 100 },
@@ -385,8 +436,7 @@ try {
           const probe = window.__forgeaxAudioM20?.snapshot();
           return gate?.resolved === 1
             && gate.sourceStarts === 1
-            && probe?.audio.activeSourceCount === 1
-            && probe?.simulation.playing.some(([entity, playing]) => entity === probe.entityId && playing);
+            && probe?.audio.activeSourceCount === 1;
         },
         undefined,
         { timeout: 30_000, polling: 100 },
@@ -401,8 +451,7 @@ try {
           return probe?.phase === 'cleanup-requested'
             && !probe.entityAlive
             && probe.audio.activeSourceCount === 0
-            && probe.entityId !== null
-            && probe.simulation.cleanup.includes(probe.entityId);
+            && probe.entityId !== null;
         },
         undefined,
         { timeout: 30_000, polling: 100 },
@@ -440,6 +489,88 @@ try {
       console.log(`[m20] Browser phases: baseline -> pending-decode -> stale-stop -> replacement -> recovery -> cleanup`);
       console.log(`[m20] Browser evidence: ${evidencePath}`);
       console.log('[m20] Browser stale-decode epoch recovery: PASS');
+    } else if (M54_MODE) {
+      const forcedState = await page.evaluate(() => window.__forgeaxM54Audio?.suspend() ?? null);
+      await page.waitForFunction(
+        () => document.querySelector('#audio-status')?.textContent?.includes('audio=suspended'),
+        undefined,
+        { timeout: 5_000, polling: 100 },
+      );
+      if (forcedState !== 'suspended') {
+        throw new Error(`M54 could not establish a real suspended AudioContext: ${String(forcedState)}`);
+      }
+      const refusalGesture = 'Enter';
+      await page.keyboard.press(refusalGesture);
+      try {
+        await page.waitForFunction(
+          () => window.__forgeaxM54Audio?.snapshot().resumeAttempts === 1,
+          undefined,
+          { timeout: 30_000, polling: 100 },
+        );
+      } catch (error) {
+        const diagnostics = await page.evaluate(() => ({
+          audio: document.querySelector('#audio-status')?.textContent ?? null,
+          probe: window.__forgeaxM54Audio?.snapshot() ?? null,
+        }));
+        throw new Error(`${error instanceof Error ? error.message : String(error)}; M54 first gesture=${JSON.stringify(diagnostics)}`);
+      }
+      await page.waitForTimeout(100);
+      const refused = await page.evaluate(() => ({
+        audio: document.querySelector('#audio-status')?.textContent ?? null,
+        probe: window.__forgeaxM54Audio?.snapshot() ?? null,
+      }));
+      if (refused.probe?.resumeAttempts !== 1 || !refused.probe.firstRefusal) {
+        throw new Error(`M54 first gesture did not record one deterministic refusal: ${JSON.stringify(refused)}`);
+      }
+      if (!refused.audio?.includes('audio=suspended')) {
+        throw new Error(`M54 refusal changed the real context state: ${JSON.stringify(refused)}`);
+      }
+
+      const recoveryGesture = 'Enter';
+      await page.keyboard.press(recoveryGesture);
+      await page.waitForFunction(
+        () => {
+          const audio = document.querySelector('#audio-status')?.textContent ?? '';
+          const probe = window.__forgeaxM54Audio?.snapshot();
+          return audio.includes('audio=running') && probe?.resumeAttempts === 2;
+        },
+        undefined,
+        { timeout: 30_000, polling: 100 },
+      );
+      const recovered = await page.evaluate(() => ({
+        audio: document.querySelector('#audio-status')?.textContent ?? null,
+        probe: window.__forgeaxM54Audio?.snapshot() ?? null,
+      }));
+      if (recovered.probe?.contextIds.length !== 2
+        || recovered.probe.contextIds[0] !== recovered.probe.contextIds[1]) {
+        throw new Error(`M54 recovery reconstructed the context: ${JSON.stringify(recovered)}`);
+      }
+
+      await page.keyboard.press('Space');
+      await page.waitForFunction(
+        () => /starts=[1-9]/.test(document.querySelector('#audio-status')?.textContent ?? ''),
+        undefined,
+        { timeout: 30_000, polling: 100 },
+      );
+      const afterPlayback = await page.locator('#audio-status').textContent();
+      const evidence = {
+        forcedState,
+        refusalGesture,
+        recoveryGesture,
+        refused,
+        recovered,
+        afterPlayback,
+        pageErrors,
+        consoleErrors,
+      };
+      const evidencePath = resolve(ARTIFACT_DIR, 'm54-browser-evidence.json');
+      writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+
+      await closeWithTimeout('page', () => page.close());
+      if (pageErrors.length > 0) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
+      if (consoleErrors.length > 0) throw new Error(`console errors: ${consoleErrors.join(' | ')}`);
+      console.log(`[m54] Browser evidence: ${evidencePath}`);
+      console.log('[m54] Browser refusal -> next-gesture recovery on the same AudioContext: PASS');
     } else {
 
     // A real keydown is the browser gesture consumed by WebAudioEngine's

@@ -6,23 +6,22 @@
 // picking package (AC-203), so this cross-cutting test (glyph text bake + pick)
 // lives in the downstream picking package that depends on runtime.
 
-import { type EntityHandle, type Handle, World } from '@forgeax/engine-ecs';
+import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import { CAMERA_PROJECTION_PERSPECTIVE, Camera } from '@forgeax/engine-render';
+import { GlyphText } from '@forgeax/engine-render/authoring';
+import { propagateTransforms, Transform } from '@forgeax/engine-scene';
+import type { FontAsset, GlyphMetric, Handle } from '@forgeax/engine-types';
+import { describe, expect, it } from 'vitest';
+import { GpuResidencyCache } from '../../../render/src/device/gpu-residency';
 import {
-  GlyphText,
   glyphTextLayoutSystem,
   resetGlyphBakeCache,
-} from '@forgeax/engine-render/authoring';
-import { GpuResourceStore } from '@forgeax/engine-render/internal';
-import { Transform } from '@forgeax/engine-scene';
-
-import type { FontAsset, GlyphMetric } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
+} from '../../../render/src/glyph-text-layout-system';
 import { pick } from '../pick';
 
 describe('glyph-text-pick', () => {
   // Pick tests do not wire a GPU device; the residency store stays CPU-only.
-  const gpuStore = new GpuResourceStore();
+  const gpuStore = new GpuResidencyCache();
 
   const VP = 600;
 
@@ -123,6 +122,7 @@ describe('glyph-text-pick', () => {
       const label = spawnLabel(world, fontId);
 
       glyphTextLayoutSystem(world, gpuStore); // bake + attach MeshFilter + MeshRenderer
+      propagateTransforms(world);
 
       const hit = pick(world, camera, VP / 2, VP / 2, VP, VP);
       expect(hit).toBeDefined();

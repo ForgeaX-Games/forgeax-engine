@@ -63,6 +63,6 @@ import { defineComponent } from '@forgeax/engine-ecs';
 export const Skin = defineComponent('Skin', {
   // The renderer owns the live skeleton asset/palette binding; joint entity
   // relationships remain the portable simulation-side pose contract.
-  skeleton: { type: 'shared<SkeletonAsset>', simulationTransient: true },
+  skeleton: { type: 'shared<SkeletonAsset>' },
   joints: { type: 'array<entity>' },
 });

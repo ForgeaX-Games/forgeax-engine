@@ -13,8 +13,7 @@ describe('render feature visibility report deduplication', () => {
         context.reportHiddenEntity?.({ world, entity: 3 as never });
         return ok({ count: context.worlds.length });
       },
-      prepare: () => ok(undefined),
-      contribute: () => ok(undefined),
+      plan: () => ok({ resources: [], passes: [] }),
     };
     const host = createRenderFeatureHost([feature]).unwrap();
 
@@ -39,8 +38,7 @@ describe('render feature visibility report deduplication', () => {
         context.reportHiddenEntity?.({ world: second, entity: 1 as never });
         return ok({ count: context.worlds.length });
       },
-      prepare: () => ok(undefined),
-      contribute: () => ok(undefined),
+      plan: () => ok({ resources: [], passes: [] }),
     };
     const host = createRenderFeatureHost([feature]).unwrap();
     const result = runRenderFeatureFrame(host, {

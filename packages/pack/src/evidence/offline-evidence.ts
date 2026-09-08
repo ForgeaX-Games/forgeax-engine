@@ -1,5 +1,6 @@
 import type {
   ArtifactDescriptor,
+  ArtifactVerificationStatus,
   AssetEvidence,
   AssetEvidenceError,
   AssetEvidenceInputs,
@@ -17,7 +18,7 @@ import {
 
 /** Pack artifact descriptor with verification supplied by an offline verifier. */
 export interface OfflineArtifactInput extends ArtifactDescriptor {
-  readonly verification?: 'notChecked' | 'passed' | 'failed';
+  readonly verification?: ArtifactVerificationStatus;
 }
 
 /** Validated Pack v2 package facts consumed by the offline projector. */

@@ -2,8 +2,8 @@
 //
 // Implements AudioBackend for Web Audio API:
 //   1. Lazy AudioContext creation (D-3) -- ensureContext() on first play()
-//   2. One-shot gesture listener resume (D-3) -- register 'click'/'keydown'/'touchstart'
-//      listeners that call ctx.resume() and self-remove
+//   2. Gesture listener resume (D-3) -- register bounded 'click'/'keydown'/'touchstart'
+//      listeners that call ctx.resume(), re-arming them after a refusal
 //   3. Fixed two-bus topology (D-5): masterGain <= sfxGain + musicGain
 //   4. Per-source GainNode for individual volume control
 //   5. Active source Map<entityId, { node, sourceGain, bus }>
@@ -21,11 +21,13 @@
 // - P3 explicit failure: getState() returns real AudioContext.state, never a stale cache
 // - P4 consistent abstraction: implements AudioBackend interface, parallel to InputBackend
 
-import type {
-  AudioListenerPose,
-  AudioPlayOptions,
-  AudioState,
-  BusName,
+import {
+  AUDIO_ERROR_HINTS,
+  AudioError,
+  type AudioListenerPose,
+  type AudioPlayOptions,
+  type AudioState,
+  type BusName,
 } from '@forgeax/engine-audio';
 import type { AudioClipAsset } from '@forgeax/engine-types';
 
@@ -37,6 +39,7 @@ interface ActiveSource {
 }
 
 const GESTURE_EVENTS = ['click', 'keydown', 'touchstart'] as const;
+const GAIN_TRANSITION_SECONDS = 0.01;
 
 export class WebAudioEngine {
   private ctx: AudioContext | undefined;
@@ -48,7 +51,9 @@ export class WebAudioEngine {
   private readonly sources = new Map<number, ActiveSource>();
 
   private gestureListening = false;
+  private resumeInFlight: Promise<void> | undefined;
   private readonly gestureResumeHandler: () => void;
+  private lastError: AudioError | null = null;
 
   // Per-bus previous-volume cache for mute/unmute restore (D-5).
   private readonly busVolumes = new Map<BusName, number>([
@@ -97,6 +102,7 @@ export class WebAudioEngine {
 
   private ensureContext(): AudioContext {
     if (this.ctx) {
+      this.registerGestureListener(this.ctx);
       return this.ctx;
     }
 
@@ -120,14 +126,14 @@ export class WebAudioEngine {
     this.sfxGain = sfx;
     this.musicGain = music;
 
-    // Register one-shot gesture listener if ctx is suspended (autoplay gate).
+    // Register the bounded gesture listener set if ctx is suspended (autoplay gate).
     this.registerGestureListener(ctx);
 
     return ctx;
   }
 
   // -----------------------------------------------------------------------
-  // Gesture listener -- D-3 one-shot resume on user gesture
+  // Gesture listener -- D-3 bounded resume retry on user gesture
   // -----------------------------------------------------------------------
 
   private registerGestureListener(ctx: AudioContext): void {
@@ -155,17 +161,58 @@ export class WebAudioEngine {
   }
 
   private async tryResume(): Promise<void> {
-    if (!this.ctx) return;
-    if (this.ctx.state !== 'suspended') return;
+    const ctx = this.ctx;
+    if (!ctx || this.closed || ctx.state !== 'suspended') return;
+    if (this.resumeInFlight !== undefined) return this.resumeInFlight;
 
-    try {
-      await this.ctx.resume();
-    } catch {
-      // Resume failed -- state stays suspended. The tick system (M3) will
-      // defer playback until ctx.state becomes 'running' (charter P3).
-    } finally {
-      this.removeGestureListener();
-    }
+    const attempt = (async () => {
+      try {
+        await ctx.resume();
+      } catch {
+        // Inspect the real context state below so refusal remains recoverable.
+      } finally {
+        if (!this.closed && this.ctx === ctx) {
+          if (ctx.state === 'running') {
+            this.lastError = null;
+            this.removeGestureListener();
+          } else if (ctx.state === 'suspended') {
+            this.recordResumeFailure();
+            this.rearmGestureListener(ctx);
+          } else {
+            this.removeGestureListener();
+          }
+        }
+        this.resumeInFlight = undefined;
+      }
+    })();
+    this.resumeInFlight = attempt;
+    return attempt;
+  }
+
+  private recordResumeFailure(): void {
+    this.lastError = new AudioError({
+      code: 'context-suspended',
+      expected: 'AudioContext.resume() to make the existing context running',
+      hint: AUDIO_ERROR_HINTS['context-suspended'],
+      detail: { code: 'context-suspended' },
+    });
+  }
+
+  private recordDecodeFailure(sourceKey: string, cause: unknown): void {
+    this.lastError = new AudioError({
+      code: 'decode-failed',
+      expected: `browser-decodable audio bytes for sourceKey ${sourceKey}`,
+      hint: AUDIO_ERROR_HINTS['decode-failed'],
+      detail: {
+        code: 'decode-failed',
+        reason: cause instanceof Error ? cause.message : String(cause),
+      },
+    });
+  }
+
+  private rearmGestureListener(ctx: AudioContext): void {
+    this.removeGestureListener();
+    this.registerGestureListener(ctx);
   }
 
   // -----------------------------------------------------------------------
@@ -178,7 +225,15 @@ export class WebAudioEngine {
 
   play(entityId: number, clip: AudioBuffer | AudioClipAsset, opts: AudioPlayOptions): void {
     if ('kind' in clip) {
-      void this.decode(clip.bytes).then((buffer) => this.play(entityId, buffer, opts));
+      void this.decode(clip.bytes).then(
+        (buffer) => {
+          if (this.lastError?.code === 'decode-failed') {
+            this.lastError = null;
+          }
+          this.play(entityId, buffer, opts);
+        },
+        (cause) => this.recordDecodeFailure(clip.sourceKey, cause),
+      );
       return;
     }
     const clipBuffer = clip;
@@ -251,14 +306,14 @@ export class WebAudioEngine {
   setVolume(entityId: number, volume: number): void {
     const source = this.sources.get(entityId);
     if (!source) return;
-    source.sourceGain.gain.value = volume;
+    this.scheduleGainTransition(source.sourceGain, volume);
   }
 
   setBusVolume(busName: BusName, volume: number): void {
     const gain = this.busGainFor(busName);
     if (!gain) return;
 
-    gain.gain.value = volume;
+    if (!this.scheduleGainTransition(gain, volume)) return;
     this.busVolumes.set(busName, volume);
 
     // If we were muted, un-mute (setting volume is an explicit un-mute signal).
@@ -271,19 +326,9 @@ export class WebAudioEngine {
     const gain = this.busGainFor(busName);
     if (!gain) return;
 
-    if (muted) {
-      // Remember current volume before muting
-      const prev = gain.gain.value;
-      if (prev > 0) {
-        this.busVolumes.set(busName, prev);
-      }
-      this.busMuted.set(busName, true);
-      gain.gain.value = 0;
-    } else {
-      this.busMuted.set(busName, false);
-      // Restore previous volume
-      gain.gain.value = this.busVolumes.get(busName) ?? 1;
-    }
+    const target = muted ? 0 : (this.busVolumes.get(busName) ?? 1);
+    if (!this.scheduleGainTransition(gain, target)) return;
+    this.busMuted.set(busName, muted);
   }
 
   getState(): AudioState {
@@ -299,7 +344,7 @@ export class WebAudioEngine {
     return {
       contextState,
       activeSourceCount: this.sources.size,
-      lastError: null,
+      lastError: this.lastError,
     };
   }
 
@@ -343,6 +388,17 @@ export class WebAudioEngine {
   // -----------------------------------------------------------------------
   // Private helpers
   // -----------------------------------------------------------------------
+
+  private scheduleGainTransition(gain: GainNode, target: number): boolean {
+    if (!this.ctx || !Number.isFinite(target) || target < 0) return false;
+
+    const now = this.ctx.currentTime;
+    const param = gain.gain;
+    param.cancelScheduledValues(now);
+    param.setValueAtTime(param.value, now);
+    param.linearRampToValueAtTime(target, now + GAIN_TRANSITION_SECONDS);
+    return true;
+  }
 
   private busGainFor(busName: BusName): GainNode | undefined {
     switch (busName) {

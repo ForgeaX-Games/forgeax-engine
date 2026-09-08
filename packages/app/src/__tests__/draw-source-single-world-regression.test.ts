@@ -28,24 +28,21 @@
 //     seam insertion point)
 
 import { World } from '@forgeax/engine-ecs';
-import type { Renderer } from '@forgeax/engine-render';
+import { createRenderReadLease } from '@forgeax/engine-ecs/projection';
+import type { Renderer, RenderFrameInput } from '@forgeax/engine-render';
 import { describe, expect, it } from 'vitest';
 import { createFrameLoop, type FrameLoopOptions } from '../internal/frame-loop';
 
 interface DrawCall {
-  readonly worlds: unknown;
-  readonly options: unknown;
+  readonly request: RenderFrameInput;
 }
 
 function makeSpyRenderer(): { renderer: Renderer; calls: DrawCall[] } {
   const calls: DrawCall[] = [];
   const renderer = {
-    backend: 'webgpu' as const,
-    ready: Promise.resolve({ ok: true, value: undefined }),
-    attachWorld: () => ({ ok: true, value: undefined }),
-    detachWorld: () => {},
-    draw(worlds: unknown, options: unknown): { ok: true; value: undefined } {
-      calls.push({ worlds, options });
+    attach: (world: World) => ({ ok: true, value: createRenderReadLease(world) }),
+    draw(request: RenderFrameInput): { ok: true; value: undefined } {
+      calls.push({ request });
       return { ok: true, value: undefined };
     },
     onError(): () => void {
@@ -119,11 +116,10 @@ describe('drawSource seam degrades to single-world path (w8, AC-03 regression)',
 
     expect(calls.length).toBeGreaterThanOrEqual(3);
     for (const call of calls) {
-      expect(Array.isArray(call.worlds)).toBe(true);
-      const arr = call.worlds as unknown[];
-      expect(arr.length).toBe(1);
-      expect(arr[0]).toBe(world);
-      expect(call.options).toEqual({ cameraOwner: 0, resourceOwner: 0 });
+      expect(call.request.leases).toHaveLength(1);
+      expect(call.request.leases[0]?.worldIdentity).toBe(world.identity);
+      expect(call.request.camera.lease).toBe(call.request.leases[0]);
+      expect(call.request.environment.lease).toBe(call.request.leases[0]);
     }
 
     loop.stop();
@@ -150,11 +146,10 @@ describe('drawSource seam degrades to single-world path (w8, AC-03 regression)',
     expect(pulls).toBeGreaterThanOrEqual(3);
     expect(calls.length).toBeGreaterThanOrEqual(3);
     for (const call of calls) {
-      expect(Array.isArray(call.worlds)).toBe(true);
-      const arr = call.worlds as unknown[];
-      expect(arr.length).toBe(1);
-      expect(arr[0]).toBe(world);
-      expect(call.options).toEqual({ cameraOwner: 0, resourceOwner: 0 });
+      expect(call.request.leases).toHaveLength(1);
+      expect(call.request.leases[0]?.worldIdentity).toBe(world.identity);
+      expect(call.request.camera.lease).toBe(call.request.leases[0]);
+      expect(call.request.environment.lease).toBe(call.request.leases[0]);
     }
 
     loop.stop();
@@ -175,11 +170,15 @@ describe('drawSource seam degrades to single-world path (w8, AC-03 regression)',
     pump(1);
 
     expect(calls).toHaveLength(3);
-    expect(calls[0]?.options).toEqual({ cameraOwner: 0, resourceOwner: 0 });
-    expect(calls[1]?.worlds).toEqual([world, overlay]);
-    expect(calls[1]?.options).toEqual({ cameraOwner: 0, resourceOwner: 0 });
-    expect(calls[2]?.worlds).toEqual([world]);
-    expect(calls[2]?.options).toEqual({ cameraOwner: 0, resourceOwner: 0 });
+    expect(calls[0]?.request.leases).toHaveLength(1);
+    expect(calls[0]?.request.leases[0]?.worldIdentity).toBe(world.identity);
+    expect(calls[1]?.request.leases).toHaveLength(2);
+    expect(calls[1]?.request.leases[0]?.worldIdentity).toBe(world.identity);
+    expect(calls[1]?.request.leases[1]?.worldIdentity).toBe(overlay.identity);
+    expect(calls[1]?.request.camera.lease).toBe(calls[1]?.request.leases[0]);
+    expect(calls[1]?.request.environment.lease).toBe(calls[1]?.request.leases[0]);
+    expect(calls[2]?.request.leases).toHaveLength(1);
+    expect(calls[2]?.request.leases[0]?.worldIdentity).toBe(world.identity);
     loop.stop();
   });
 });

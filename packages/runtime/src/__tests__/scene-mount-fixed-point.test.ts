@@ -1,3 +1,5 @@
+import * as SceneOwner from '@forgeax/engine-scene';
+
 // scene-mount-fixed-point.test.ts — AC-09 structural-equivalence fixed-point
 // tests (feat-20260707-engine-world-clone-transient-for-editor-ssot,
 // plan-strategy D-10 + §3.2 fixed-point argument).
@@ -22,15 +24,15 @@
 // m2t4/m2t5, collect2.mounts is undefined (anchor unreachable) so the
 // equivalence and three-cycle assertions fail. GREEN after the fix.
 
+import type { Asset } from '@forgeax/engine-assets-runtime';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import '@forgeax/engine-render/internal';
-import type { Asset } from '@forgeax/engine-assets-runtime';
-import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '../collect-scene-asset';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+import { registerSceneComponents } from './helpers/register-scene-components';
 
 const G_CHILD = '11111111-1111-4111-8111-111111111111';
 const G_TOP = '22222222-2222-4222-8222-222222222222';
@@ -47,6 +49,7 @@ function cat(reg: AssetRegistry, g: string, p: SceneAsset): void {
   reg.catalog(pg(g), p as Asset);
 }
 function rs(w: World, a: SceneAsset): Handle<'SceneAsset', 'shared'> {
+  registerSceneComponents(w);
   return w.allocSharedRef('SceneAsset', a);
 }
 function accessParse(reg: AssetRegistry) {
@@ -70,7 +73,7 @@ function unpack(pack: Record<string, unknown>): {
  * would fold the synthetic root itself in as an extra owned entity.
  */
 function ownedRoots(w: World, syntheticRoot: import('@forgeax/engine-ecs').EntityHandle): number[] {
-  const si = w.getSceneInstanceState(syntheticRoot);
+  const si = SceneOwner.worldGetSceneInstanceState(w, syntheticRoot);
   if (!si.ok) throw new Error('no SceneInstance state on synthetic root');
   return si.value.rootEntities.map((e) => e as unknown as number);
 }
@@ -166,7 +169,7 @@ describe('AC-09 mount-collapse fixed-point (structural equivalence, D-10)', () =
     expect(noChildrenKey(c1.value)).toBe(true);
 
     // Cycle 2: serialize -> parse -> catalog -> reload -> collect.
-    const s1 = serializeSceneAssetToPack(c1.value, G_TOP);
+    const s1 = serializeSceneAssetToPack(c1.value, w.components.entries(), G_TOP);
     expect(s1.ok).toBe(true);
     if (!s1.ok) return;
     const u1 = unpack(s1.value);
@@ -187,7 +190,7 @@ describe('AC-09 mount-collapse fixed-point (structural equivalence, D-10)', () =
 
     // Cycle 3: reload once more and collect — the ghost-accretion point. From
     // the second collect onward the output is a strict fixed-point (D-10).
-    const s2 = serializeSceneAssetToPack(c2.value, G_TOP);
+    const s2 = serializeSceneAssetToPack(c2.value, w.components.entries(), G_TOP);
     expect(s2.ok).toBe(true);
     if (!s2.ok) return;
     const u2 = unpack(s2.value);
@@ -232,7 +235,7 @@ describe('AC-09 mount-collapse fixed-point (structural equivalence, D-10)', () =
     expect((c1.value.mounts ?? []).length).toBe(0);
     expect(c1.value.entities.length).toBe(2);
 
-    const s1 = serializeSceneAssetToPack(c1.value, G_TOP);
+    const s1 = serializeSceneAssetToPack(c1.value, w.components.entries(), G_TOP);
     expect(s1.ok).toBe(true);
     if (!s1.ok) return;
     const u1 = unpack(s1.value);

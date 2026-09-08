@@ -23,7 +23,7 @@ import {
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
-describe('ASSET_ERROR_HINTS runtime guard (26-member key set)', () => {
+describe('ASSET_ERROR_HINTS runtime guard (28-member key set)', () => {
   it('ASSET_ERROR_HINTS includes the tileset-tile-entry-malformed key with non-empty hint', () => {
     expect(ASSET_ERROR_HINTS).toHaveProperty('tileset-tile-entry-malformed');
     const hint: string = ASSET_ERROR_HINTS['tileset-tile-entry-malformed'];
@@ -45,9 +45,9 @@ describe('ASSET_ERROR_HINTS runtime guard (26-member key set)', () => {
     expect(hint.length).toBeGreaterThan(0);
   });
 
-  it('Object.keys(ASSET_ERROR_HINTS) length is 26 (M0 baseline 20 + M1 +1 + feat-20260621 +1 + feat-20260629 +1 + perf-20260706 +1 source-not-imported + feat-20260707 +1 mipgen-unsupported-compressed-format + F2 catalog-source-unconfigured +1)', () => {
+  it('Object.keys(ASSET_ERROR_HINTS) length is 28', () => {
     const keys = Object.keys(ASSET_ERROR_HINTS);
-    expect(keys.length).toBe(26);
+    expect(keys.length).toBe(28);
   });
 
   it('hint contains >= 3 of the 7 .detail.field tokens', () => {
@@ -66,8 +66,8 @@ describe('ASSET_ERROR_HINTS runtime guard (26-member key set)', () => {
   });
 });
 
-describe('AssetErrorCode 26-member exhaustive switch (M1 +tileset-tile-entry-malformed; feat-20260621 +asset-invalidated; feat-20260629 +mesh-bin-contract-violation; F2 +catalog-source-unconfigured)', () => {
-  it('exhaustive switch over the 26 members compiles without a default branch', () => {
+describe('AssetErrorCode 28-member exhaustive switch', () => {
+  it('exhaustive switch over the 28 members compiles without a default branch', () => {
     function classify(code: AssetErrorCode): string {
       switch (code) {
         case 'asset-not-found':
@@ -106,10 +106,14 @@ describe('AssetErrorCode 26-member exhaustive switch (M1 +tileset-tile-entry-mal
           return 'texture-source-not-imported';
         case 'source-not-imported':
           return 'source-not-imported';
-        case 'mesh-renderer-material-count-mismatch':
-          return 'mesh-renderer-material-count-mismatch';
+        case 'mesh-renderer-material-override-invalid':
+          return 'mesh-renderer-material-override-invalid';
+        case 'mesh-renderer-material-override-overflow':
+          return 'mesh-renderer-material-override-overflow';
         case 'mesh-asset-submeshes-empty':
           return 'mesh-asset-submeshes-empty';
+        case 'mesh-asset-material-slot-index-out-of-range':
+          return 'mesh-asset-material-slot-index-out-of-range';
         case 'mesh-submesh-index-range-out-of-bounds':
           return 'mesh-submesh-index-range-out-of-bounds';
         case 'tileset-region-index-out-of-range':

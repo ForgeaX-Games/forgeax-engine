@@ -23,7 +23,7 @@
 // Bootstrap uses createRenderer directly (not createApp): createApp owns a
 // single internal World and can only composite one world, whereas this demo
 // must hand the renderer an explicit [worldA, worldB] array. This mirrors the
-// hello-triangle / hello-room createRenderer + acquireCanvasContext path.
+// hello-triangle / hello-room createRenderer path.
 //
 // OOS-4: no gizmo code — the feature only guarantees correct multi-world
 // geometry + light compositing; gizmo picking/placement is a separate loop.
@@ -33,7 +33,8 @@ import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 
 import { perspective } from '@forgeax/engine-render';
-import { acquireCanvasContext, createRenderer, EngineEnvironmentError, type MaterialAsset } from '@forgeax/engine-runtime';
+import { constructRuntimeRendererHost } from '@forgeax/engine-runtime/internal/renderer-host';
+import { EngineEnvironmentError, type MaterialAsset } from '@forgeax/engine-runtime';
 import { Materials } from '@forgeax/engine-render';
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 
@@ -114,35 +115,23 @@ bootstrap(canvas).catch((err: unknown) => {
 });
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
-  const renderer = await createRenderer(target, {}, forgeaxBundlerAdapter());
+  const constructed = await constructRuntimeRendererHost(target, {}, forgeaxBundlerAdapter());
+  if (!constructed.ok) throw constructed.error;
+  const renderer = constructed.value.renderer;
 
-  const ctxResult = acquireCanvasContext(target);
-  if (ctxResult.ok) {
-    const cfgResult = ctxResult.value.configure({
-      device: renderer.device,
-      format: 'rgba8unorm',
-      usage: 0x10 | 0x01,
-    });
-    if (!cfgResult.ok) console.error('[multi-world] canvasContext.configure failed:', cfgResult.error);
-  } else {
-    console.error('[multi-world] acquireCanvasContext failed:', ctxResult.error);
-  }
-  console.warn(`[multi-world] backend=${renderer.backend}`);
+  console.warn('[multi-world] Standard pipeline active');
 
   const worldA = buildWorldA();
   const worldB = buildWorldB();
-  const attachmentA = renderer.attachWorld(worldA);
+  const attachmentA = renderer.attach(worldA);
   if (!attachmentA.ok) throw attachmentA.error;
-  const attachmentB = renderer.attachWorld(worldB);
+  const attachmentB = renderer.attach(worldB);
   if (!attachmentB.ok) throw attachmentB.error;
 
-  renderer.onError((e) => console.error('[multi-world] renderer.onError:', e.code, e.hint));
+  renderer.subscribe((event) => {
+    if (event.kind === 'error') console.error('[multi-world] renderer error:', event.error.code, event.error.hint);
+  });
 
-  const ready = await renderer.ready;
-  if (!ready.ok) {
-    console.error('[multi-world] renderer.ready failed:', ready.error);
-    return;
-  }
 
   // Composite both worlds every frame; world A (index 0) is the owner.
   const frame = (): void => {
@@ -158,7 +147,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       requestAnimationFrame(frame);
       return;
     }
-    const r = renderer.draw([worldA, worldB], { cameraOwner: 0, resourceOwner: 0 });
+    const r = renderer.draw({
+      leases: [attachmentA.value, attachmentB.value],
+      camera: { lease: attachmentA.value },
+      environment: { lease: attachmentA.value },
+    });
     if (!r.ok) console.error('[multi-world] draw error:', r.error);
     requestAnimationFrame(frame);
   };

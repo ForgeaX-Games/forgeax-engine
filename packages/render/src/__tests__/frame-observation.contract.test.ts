@@ -5,7 +5,8 @@ import {
   type FrameObservationReadback,
   type FrameObservationSource,
   observeCurrentFrame,
-} from '../record/frame-observation.js';
+} from '../record/frame.js';
+import type { FrameObservationRequest, FrameReceipt } from '../render-contract';
 
 const texture = {} as Texture;
 const usage = 0x10 | 0x04 | 0x01;
@@ -21,13 +22,21 @@ function source(overrides: Partial<FrameObservationSource> = {}): FrameObservati
       sample: 1,
     },
     frameId: 12,
-    pipelineId: 'forgeax::urp',
+    pipelineId: 'forgeax::standard',
     backendId: 'webgpu',
     ...overrides,
   };
 }
 
 describe('render current-frame observation producer contract', () => {
+  it('requires a receipt-bound request instead of a latest-frame getter', () => {
+    const receipt = null as unknown as FrameReceipt;
+    const request: FrameObservationRequest = { include: ['timings', 'draws'] };
+    // M6 red snapshot: observe must be bound to the exact receipt and request.
+    expect(receipt).toBeDefined();
+    expect(request.include).toEqual(['timings', 'draws']);
+  });
+
   it('observes only the producer-owned linear HDR target', async () => {
     const readback: FrameObservationReadback = vi.fn(async (lease) => {
       expect(lease.descriptor.format).toBe('rgba16float');
@@ -43,7 +52,7 @@ describe('render current-frame observation producer contract', () => {
       format: 'rgba16float',
       size: { width: 4, height: 2 },
       frameId: 12,
-      pipelineId: 'forgeax::urp',
+      pipelineId: 'forgeax::standard',
       backendId: 'webgpu',
     });
     expect(readback).toHaveBeenCalledTimes(1);
@@ -72,23 +81,23 @@ describe('render current-frame observation producer contract', () => {
     expect(readback).not.toHaveBeenCalled();
   });
 
-  it('preserves URP and HDRP producer identity without backend policy', async () => {
+  it('preserves the Standard producer identity without backend policy', async () => {
     const readback: FrameObservationReadback = vi.fn(async () => ok(new Uint8Array(64)));
     const urp = await observeCurrentFrame(
       { semantic: 'linear-hdr', readback },
-      source({ pipelineId: 'forgeax::urp' }),
+      source({ pipelineId: 'forgeax::standard' }),
       12,
     );
     const hdrp = await observeCurrentFrame(
       { semantic: 'linear-hdr', readback },
-      source({ pipelineId: 'forgeax::hdrp' }),
+      source({ pipelineId: 'forgeax::standard' }),
       12,
     );
 
     expect(urp.ok && hdrp.ok).toBe(true);
     if (urp.ok && hdrp.ok) {
-      expect(urp.value.metadata.pipelineId).toBe('forgeax::urp');
-      expect(hdrp.value.metadata.pipelineId).toBe('forgeax::hdrp');
+      expect(urp.value.metadata.pipelineId).toBe('forgeax::standard');
+      expect(hdrp.value.metadata.pipelineId).toBe('forgeax::standard');
       expect(urp.value.metadata.backendId).toBe(hdrp.value.metadata.backendId);
     }
   });

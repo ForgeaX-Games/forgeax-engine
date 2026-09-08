@@ -1,14 +1,12 @@
 import {
   defineComponent,
+  defineRelationship,
   Entity,
   type EntityHandle,
-  err,
-  ok,
-  type Result,
   type World,
 } from '@forgeax/engine-ecs';
 import { ChildOf, Name, Transform } from '@forgeax/engine-scene';
-import type { AnimationTargetIdValue } from '@forgeax/engine-types';
+import { type AnimationTargetIdValue, err, ok, type Result } from '@forgeax/engine-types';
 import { AnimationPlayer } from './animation-player';
 import { deriveAnimationTargetId, isAnimationTargetId } from './target-id';
 
@@ -16,24 +14,15 @@ export const AnimationTargetId = defineComponent('AnimationTargetId', {
   value: { type: 'string' },
 });
 
-export const AnimationTargets = defineComponent(
-  'AnimationTargets',
-  { targets: 'array<entity>' },
-  { transient: true },
-);
-
-export const AnimatedBy = defineComponent(
-  'AnimatedBy',
-  { player: 'entity' },
-  {
-    relationship: {
-      mirror: 'AnimationTargets',
-      field: 'targets',
-      exclusive: true,
-      linkedSpawn: false,
-    },
-  },
-);
+export const { target: AnimationTargets, source: AnimatedBy } = defineRelationship({
+  sourceName: 'AnimatedBy',
+  sourceField: 'player',
+  targetName: 'AnimationTargets',
+  targetField: 'targets',
+  exclusive: true,
+  linkedSpawn: false,
+  allowSelf: true,
+});
 
 export type BindAnimationTargetsErrorCode =
   | 'animation-target-player-invalid'
@@ -190,7 +179,7 @@ export function bindAnimationTargets(
   }
 
   const uniqueTargets = [...new Map(targets.map((target) => [target as number, target])).values()];
-  let mirror = world.get(player, AnimationTargets);
+  const mirror = world.get(player, AnimationTargets);
   const candidates: Candidate[] = [];
   const ids = new Map<AnimationTargetIdValue, EntityHandle[]>();
   if (mirror.ok) {
@@ -232,51 +221,7 @@ export function bindAnimationTargets(
     candidates.push(candidate.value);
   }
 
-  const mirrorWasMissing = !mirror.ok;
-  if (mirrorWasMissing) {
-    const added = world.addComponent(player, { component: AnimationTargets, data: {} });
-    if (!added.ok) {
-      return bindError(
-        'animation-target-bind-failed',
-        'an AnimationTargets mirror on the player',
-        'inspect the ECS error and retry with a live player',
-        { player: player as number, cause: added.error.code },
-      );
-    }
-    mirror = world.get(player, AnimationTargets);
-  }
-
   const existing = new Set(mirror.ok ? [...mirror.value.targets] : []);
-  const additions = candidates.filter((candidate) => !existing.has(candidate.entity)).length;
-  const reserved = world.reserveArrayCapacity(
-    player,
-    AnimationTargets,
-    'targets',
-    existing.size + additions,
-  );
-  if (!reserved.ok) {
-    if (mirrorWasMissing) {
-      const removed = world.removeComponent(player, AnimationTargets);
-      if (!removed.ok) {
-        return bindError(
-          'animation-target-bind-failed',
-          'the temporary AnimationTargets mirror to be removable',
-          'inspect the ECS error before retrying the batch',
-          { player: player as number, cause: removed.error.code },
-        );
-      }
-    }
-    return bindError(
-      'animation-target-capacity-reserve-failed',
-      'enough AnimationTargets mirror capacity for the whole batch',
-      'reduce the batch size or free managed-buffer capacity before retrying',
-      {
-        player: player as number,
-        requested: existing.size + additions,
-        cause: reserved.error.code,
-      },
-    );
-  }
 
   for (const candidate of candidates) {
     if (candidate.needsId) {

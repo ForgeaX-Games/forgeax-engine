@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "kind": "engine-generation-candidate",
+  "status": "blocked",
+  "engineCommit": "ad2188093fe41019b7037f754254fa0c1a19c566",
+  "prUrl": "https://github.com/ForgeaX-Games/forgeax-engine/pull/2739",
+  "branchOrWorktree": "/Users/you/projects/ForgeaX-Games/forgeax-engine/.codex-loop-worktrees/material-reflection-engine-worktrees/feat-20260825-material-reflection-engine-owner-cut-mainline",
+  "sourceContentKey": "sha256-46dafdc239db077e9b3b54b4d2622f10c8e9e5c76b8bd811a06c597d5ba8b1ef",
+  "wasm": {
+    "artifactSha256": "40c2b706ec3bb40a97cda8302491d0a34da0744b214db8993ae4c74590d550b7",
+    "glueSha256": "6cc49495a4686a2a0ecf7cb53fc933388f4f7ff42647ca686271aef26b730ff6",
+    "compilerFingerprint": "sha256-0f47b9f3deb7057ca22901763a13d9ef3a9c8f82c70a4a5c2f6a0819dfbdbfd5"
+  },
+  "cook": {
+    "generation": 1,
+    "artifactDigest": "sha256:f0b5c92177a263e4d0326d2b7556465471504451154c569daa467738fe126faf",
+    "layoutIdentity": "sha256-431a1859eae7a26437853168954444670f2148d9fc1eebe8d6aa3aeef5f4d954",
+    "programIdentity": "sha256:sha256-431a1859eae7a26437853168954444670f2148d9fc1eebe8d6aa3aeef5f4d954:pulse-material.wgsl:b714c840c30cc34872c391323caeca4c9e8616cad003be9075f33f285b264edf:01935b00-7d8c-7c4e-9f12-345678abcd11,01935b00-7d8c-7c4e-9f12-345678abcd12:",
+    "pipelineIdentity": "sha256:pipeline",
+    "cookIdentity": "sha256:sha256-431a1859eae7a26437853168954444670f2148d9fc1eebe8d6aa3aeef5f4d954:pulse-material.wgsl:b714c840c30cc34872c391323caeca4c9e8616cad003be9075f33f285b264edf:01935b00-7d8c-7c4e-9f12-345678abcd11,01935b00-7d8c-7c4e-9f12-345678abcd12:"
+  },
+  "sdk": {
+    "version": "0.0.0-m6-mainline",
+    "archiveA": null,
+    "archiveB": null,
+    "manifestSha256": null,
+    "buildStatus": "blocked"
+  },
+  "protectedPublication": {
+    "mainReachable": false,
+    "releaseAvailable": false,
+    "downstreamPinned": false
+  },
+  "gates": [
+    {"command": "node packages/wgpu-wasm/scripts/ensure-wasm.mjs", "status": "pass"},
+    {"command": "pnpm --filter @forgeax/hello-custom-shader smoke", "status": "pass", "evidence": "Dawn 300 frames with non-zero readback"},
+    {"command": "pnpm --filter @forgeax/hello-custom-shader smoke:browser", "status": "blocked", "evidence": "local Browser process timed out after the material comparator fix; no Browser green claimed"},
+    {"command": "pnpm sdk:build -- --version 0.0.0-m6-mainline --output /tmp/forgeax-sdk-m6-mainline-a", "status": "blocked", "exitCode": 1, "evidence": "check-engine-skills broken relative link"},
+    {"command": "pnpm sdk:build -- --version 0.0.0-m6-mainline --output /tmp/forgeax-sdk-m6-mainline-b", "status": "blocked", "exitCode": 1, "evidence": "check-engine-skills broken relative link"}
+  ],
+  "concerns": [
+    "SDK candidate archives were not produced because check-engine-skills rejects skills/forgeax-engine-cli/SKILL.md: references/authoring-operations.md is broken.",
+    "This Step 4 candidate does not claim main reachability, release availability, or downstream pin completion."
+  ]
+}

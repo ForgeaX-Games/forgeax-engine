@@ -13,6 +13,10 @@ export default defineConfig({
   test: {
     name: '@forgeax/apps-shared',
     alias: {
+      'virtual:forgeax/pack-runtime': resolve(
+        import.meta.dirname,
+        './src/__test-stubs__/pack-runtime-stub.ts',
+      ),
       'virtual:forgeax/bundler': resolve(
         import.meta.dirname,
         './src/__test-stubs__/virtual-bundler-stub.ts',

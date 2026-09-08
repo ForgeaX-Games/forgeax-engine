@@ -92,6 +92,8 @@ export class RhiNullDevice implements RhiDevice {
    *  (aggregated by the command encoder on finish, then reset). M3 unit tests
    *  (w17) read this to assert draw count >= 1 (AC-06). */
   totalDrawCount = 0;
+  /** Per-frame total direct and indirect compute dispatch count. */
+  totalDispatchCount = 0;
   /** Per-frame total bind group set count (AC-06 / AC-05 readback). */
   totalBindGroupCount = 0;
   /** Per-frame pass names executed this frame, in schedule order (AC-04). */

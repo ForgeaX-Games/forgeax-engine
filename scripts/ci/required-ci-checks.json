@@ -16,6 +16,8 @@
   "vitest-dawn",
   "webkit-fallback",
   "portability-bun",
+  "metrics-validate-browser",
+  "metrics-validate-runtime",
   "metrics-validate",
   "collectathon-boot-e2e"
 ]

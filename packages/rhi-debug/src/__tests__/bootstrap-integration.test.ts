@@ -1,4 +1,4 @@
-// biome-ignore-all lint/suspicious/noExplicitAny: getTape() now returns Tape | DebugError | undefined; existing self-contained tape tests always get Tape back, safe to narrow with any cast
+// biome-ignore-all lint/suspicious/noExplicitAny: getTape() returns Tape | RhiDebugError | undefined; existing self-contained tape tests always get Tape back, safe to narrow with any cast
 // biome-ignore-all lint/style/noNonNullAssertion: test assertions on mock stubs verified by parent expect guards
 // m3-3: bootstrap integration test — verify FORGEAX_ENGINE_RHI_DEBUG=1 wiring:
 // wrap -> wrapCreateShaderModule -> onFrameEnd listener register -> draw -> frameMark.

@@ -5,7 +5,7 @@ export interface IblGpuCaseResult {
   readonly capability: ReturnType<typeof projectIblCapabilityStatus>;
   readonly evidence: IblRawEvidence;
   readonly finalDisplay: {
-    readonly status: 'ready' | 'failed';
+    readonly status: IblRawEvidence['status'];
     readonly bytes: Uint8Array | null;
     readonly format: 'rgba8unorm' | null;
     readonly rawHash: string | null;
@@ -56,17 +56,18 @@ function analyticResult(): IblGpuCaseResult['analytic'] {
 
 function failedResult(rgba16floatRenderable: boolean, analytic: IblGpuCaseResult['analytic']): IblGpuCaseResult {
   const capability = projectIblCapabilityStatus({ rgba16floatRenderable });
+  const evidence = projectIblRawEvidence({
+    attachmentName: 'ibl.constant-environment',
+    layer: 0,
+    capabilitySnapshot: { rgba16floatRenderable },
+    fallbackArtifact: capability.fallbackArtifact,
+    lastKnownGood: 'ibl.constant-environment@rgba16float',
+    readback: { status: 'failed' },
+  });
   return {
     capability,
-    evidence: projectIblRawEvidence({
-      attachmentName: 'ibl.constant-environment',
-      layer: 0,
-      capabilitySnapshot: { rgba16floatRenderable },
-      fallbackArtifact: capability.fallbackArtifact,
-      lastKnownGood: 'ibl.constant-environment@rgba16float',
-      readback: { status: 'failed' },
-    }),
-    finalDisplay: { status: 'failed', bytes: null, format: null, rawHash: null },
+    evidence,
+    finalDisplay: { status: evidence.status, bytes: null, format: null, rawHash: null },
     analytic,
   };
 }
@@ -139,26 +140,27 @@ export async function captureIblGpuCase(gpu: GPU | undefined): Promise<IblGpuCas
     finalPass.end();
     device.queue.submit([finalEncoder.finish()]);
     const finalBytes = await readTextureBytes(device, finalTexture, 4);
+    const evidence = projectIblRawEvidence({
+      attachmentName: 'ibl.constant-environment',
+      layer: 0,
+      capabilitySnapshot: { rgba16floatRenderable: true },
+      fallbackArtifact: null,
+      lastKnownGood: 'ibl.constant-environment@rgba16float',
+      readback: {
+        status: 'ready',
+        bytes,
+        format: 'rgba16float',
+        size: { width: 1, height: 1 },
+        rawHash: hashBytes(bytes),
+        frameId: 0,
+        lifetime: { frameId: 0, state: 'active' },
+      },
+    });
     return {
       capability: projectIblCapabilityStatus({ rgba16floatRenderable: true }),
-      evidence: projectIblRawEvidence({
-        attachmentName: 'ibl.constant-environment',
-        layer: 0,
-        capabilitySnapshot: { rgba16floatRenderable: true },
-        fallbackArtifact: null,
-        lastKnownGood: 'ibl.constant-environment@rgba16float',
-        readback: {
-          status: 'ready',
-          bytes,
-          format: 'rgba16float',
-          size: { width: 1, height: 1 },
-          rawHash: hashBytes(bytes),
-          frameId: 0,
-          lifetime: { frameId: 0, state: 'active' },
-        },
-      }),
+      evidence,
       finalDisplay: {
-        status: 'ready',
+        status: evidence.status,
         bytes: finalBytes,
         format: 'rgba8unorm',
         rawHash: hashBytes(finalBytes),

@@ -6,6 +6,7 @@
 
 import { createApp } from '@forgeax/engine-app';
 import { Update } from '@forgeax/engine-ecs';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { Camera } from '@forgeax/engine-render';
 import { TONEMAP_MODES, TONEMAP_NAMES, buildTonemappingWorld } from './tonemapping';
 
@@ -35,7 +36,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     after: ['input-frame-start-scan'],
     queries: [],
     fn: () => {
-      const snap = app.renderer.input.snapshot(world);
+      const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (!snap) return;
       for (let i = 0; i < TONEMAP_MODES.length; i++) {
         if (snap.keyboard.down(String(i + 1))) {

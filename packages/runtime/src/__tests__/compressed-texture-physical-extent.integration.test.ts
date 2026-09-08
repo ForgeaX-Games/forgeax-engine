@@ -1,9 +1,10 @@
 import { numMipLevels } from '@forgeax/engine-assets-runtime';
-import { deriveMipUploadLayout, GpuResourceStore } from '@forgeax/engine-render/internal';
 import { ok, type RhiCaps } from '@forgeax/engine-rhi';
 import type { TextureAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { GpuResidencyCache } from '../../../render/src/device/gpu-residency';
+import { deriveMipUploadLayout } from '../../../render/src/render-data';
 
 type TextureCall = { readonly size: { readonly width: number; readonly height: number } };
 type WriteCall = {
@@ -34,11 +35,12 @@ const caps: RhiCaps = {
   maxColorAttachments: 8,
 };
 
-function makeStore(calls: { create: TextureCall[]; writes: WriteCall[] }): GpuResourceStore {
-  const store = new GpuResourceStore();
+function makeStore(calls: { create: TextureCall[]; writes: WriteCall[] }): GpuResidencyCache {
+  const store = new GpuResidencyCache();
   const texture = { tag: 'texture' };
   store.configureGpuDevice(
     {
+      limits: { maxTextureDimension2D: 16384 },
       createTexture: (descriptor: TextureCall) => {
         calls.create.push(descriptor);
         return ok(texture);

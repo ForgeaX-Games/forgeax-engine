@@ -1,3 +1,4 @@
+import { existsSync, readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
@@ -6,17 +7,23 @@ import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { fbxImporter } from '@forgeax/engine-fbx';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { fontImporter } from '@forgeax/engine-font/font-importer';
+import { createUiImporter } from '@forgeax/engine-ui/importer';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import vitePluginRhiDebug from '@forgeax/engine-vite-plugin-rhi-debug';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { defineConfig } from 'vite';
 import { targetProfileImporter } from '../../templates/game-default/assets/plugins/target-profile-importer';
 import { createParticleCodeNativeCookerFromRoots } from '@forgeax/engine-vfx-compiler';
+import { resolveProjectPort } from '@forgeax/engine-devkit';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..');
+const previewPort = resolveProjectPort(undefined);
 const templatesDir = resolve(monorepoRoot, 'templates');
 const templateAssetRoot = resolve(templatesDir, 'game-default', 'assets');
+const isPublicDistribution = existsSync(resolve(monorepoRoot, '.forgeax-public-distribution'));
+const publicTemplateResourceRoot = resolve(templateAssetRoot, 'sdk-resources');
+const brotatoAssetRoot = resolve(templatesDir, 'game-brotato-3d', 'assets');
 const previewUiAuthoringMetaPath = resolve(
   here,
   'assets',
@@ -46,54 +53,117 @@ const templatePackRoots = [
   'hit-vfx-effect.pack.json',
   'hit-vfx-materials.pack.json',
   'multi-material-target.pack.json',
+  'resonance-forge.pack.ts',
   'scene.pack.json',
   'target-profile.json.meta.json',
   'ui/hud.pack.json',
   'ui/settings.pack.json',
 ].map((relativePath) => resolve(templateAssetRoot, relativePath));
-// Binary demo-assets (sky.hdr, ...) live in the forgeax-engine-assets submodule
-// so the engine repo stays binary-free. Select the sky sidecar explicitly;
-// the submodule also mirrors the template UI sidecars, which must not be
-// scanned twice because GUIDs are globally unique.
-const submoduleSkyMetaPath = resolve(
+const sdkTemplatePackRoots = ['game-empty', 'game-3d'].flatMap((template) => {
+  const assetRoot = resolve(templatesDir, template, 'assets');
+  return readdirSync(assetRoot, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.pack.ts'))
+    .map((entry) => resolve(assetRoot, entry.name))
+    .sort();
+});
+templatePackRoots.push(
+  ...sdkTemplatePackRoots,
+  resolve(brotatoAssetRoot, 'brotato-3d.pack.ts'),
+  resolve(brotatoAssetRoot, 'brotato-impact-vfx.pack.json'),
+  resolve(brotatoAssetRoot, 'ui/hud.pack.json'),
+);
+// Contributor builds read the private asset checkout. Public SDK source builds
+// use the exact allowlisted files materialized below templates/game-default.
+const skyMetaPath = resolve(
   monorepoRoot,
-  'forgeax-engine-assets',
-  'demo-assets',
-  'template-game-default',
-  'sky.hdr.meta.json',
+  ...(isPublicDistribution
+    ? ['packages', 'preview', 'assets', 'canonical-kit', 'sky.hdr.meta.json']
+    : ['forgeax-engine-assets', 'demo-assets', 'template-game-default', 'sky.hdr.meta.json']),
 );
 const submoduleJpegMetaPath = resolve(
-  monorepoRoot,
-  'forgeax-engine-assets',
-  'demo-assets',
-  'hello-sprite',
-  'wood-container.jpg.meta.json',
+  isPublicDistribution ? publicTemplateResourceRoot : monorepoRoot,
+  ...(isPublicDistribution
+    ? ['demo-assets', 'hello-sprite', 'wood-container.jpg.meta.json']
+    : ['forgeax-engine-assets', 'demo-assets', 'hello-sprite', 'wood-container.jpg.meta.json']),
 );
-const submoduleSfxDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'sfx');
-const submoduleBgmMetaPath = resolve(monorepoRoot, 'forgeax-engine-assets', 'collectathon-audio', 'bgm-loop.wav.meta.json');
-const submoduleFbxDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'vendor', 'fbx-test');
+const submoduleSfxDir = resolve(
+  isPublicDistribution ? publicTemplateResourceRoot : monorepoRoot,
+  ...(isPublicDistribution ? ['sfx'] : ['forgeax-engine-assets', 'sfx']),
+);
+const submoduleBgmMetaPath = resolve(
+  isPublicDistribution ? publicTemplateResourceRoot : monorepoRoot,
+  ...(isPublicDistribution
+    ? ['collectathon-audio', 'bgm-loop.wav.meta.json']
+    : ['forgeax-engine-assets', 'collectathon-audio', 'bgm-loop.wav.meta.json']),
+);
+const submoduleFbxDir = resolve(
+  isPublicDistribution ? publicTemplateResourceRoot : monorepoRoot,
+  ...(isPublicDistribution ? ['vendor', 'fbx-test'] : ['forgeax-engine-assets', 'vendor', 'fbx-test']),
+);
 const submoduleGlbDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'khronos-gltf-samples', 'BoxTextured');
 const submoduleDejavuFontMetaPath = resolve(
-  monorepoRoot,
-  'forgeax-engine-assets',
-  'dejavu-fonts',
-  'DejaVuSansMono.ttf.meta.json',
+  isPublicDistribution ? publicTemplateResourceRoot : monorepoRoot,
+  ...(isPublicDistribution
+    ? ['dejavu-fonts', 'DejaVuSansMono.ttf.meta.json']
+    : ['forgeax-engine-assets', 'dejavu-fonts', 'DejaVuSansMono.ttf.meta.json']),
 );
 const submoduleDejavuLegacyAtlasMetaPath = resolve(
-  monorepoRoot,
-  'forgeax-engine-assets',
-  'dejavu-fonts',
-  'DejaVuSansMono.atlas.png.meta.json',
+  isPublicDistribution ? publicTemplateResourceRoot : monorepoRoot,
+  ...(isPublicDistribution
+    ? ['dejavu-fonts', 'DejaVuSansMono.atlas.png.meta.json']
+    : ['forgeax-engine-assets', 'dejavu-fonts', 'DejaVuSansMono.atlas.png.meta.json']),
 );
 const submoduleDejavuLegacyPackPath = resolve(
-  monorepoRoot,
-  'forgeax-engine-assets',
-  'dejavu-fonts',
-  'DejaVuSansMono.font.pack.json',
+  isPublicDistribution ? publicTemplateResourceRoot : monorepoRoot,
+  ...(isPublicDistribution
+    ? ['dejavu-fonts', 'DejaVuSansMono.font.pack.json']
+    : ['forgeax-engine-assets', 'dejavu-fonts', 'DejaVuSansMono.font.pack.json']),
 );
-const submoduleVideoDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'demo-assets', 'hello-video-cutscene');
-const submoduleSpriteAtlasDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'demo-assets', 'hello-sprite-atlas');
-
+const submoduleVideoDir = resolve(
+  isPublicDistribution ? publicTemplateResourceRoot : monorepoRoot,
+  ...(isPublicDistribution
+    ? ['demo-assets', 'hello-video-cutscene']
+    : ['forgeax-engine-assets', 'demo-assets', 'hello-video-cutscene']),
+);
+const submoduleSpriteAtlasDir = resolve(
+  isPublicDistribution ? publicTemplateResourceRoot : monorepoRoot,
+  ...(isPublicDistribution
+    ? ['demo-assets', 'hello-sprite-atlas']
+    : ['forgeax-engine-assets', 'demo-assets', 'hello-sprite-atlas']),
+);
+const externalAssetRoots = isPublicDistribution
+  ? [
+      skyMetaPath,
+      submoduleJpegMetaPath,
+      submoduleSfxDir,
+      submoduleBgmMetaPath,
+      submoduleFbxDir,
+      submoduleDejavuFontMetaPath,
+      submoduleDejavuLegacyAtlasMetaPath,
+      submoduleDejavuLegacyPackPath,
+      submoduleSpriteAtlasDir,
+    ]
+  : [
+      skyMetaPath,
+      submoduleJpegMetaPath,
+      submoduleSfxDir,
+      submoduleBgmMetaPath,
+      submoduleFbxDir,
+      submoduleGlbDir,
+      submoduleDejavuFontMetaPath,
+      submoduleDejavuLegacyAtlasMetaPath,
+      submoduleDejavuLegacyPackPath,
+      submoduleSpriteAtlasDir,
+    ];
+// The tracked template packs are the Preview's required catalog. Public SDK
+// source snapshots intentionally omit contributor-only binary fixtures, so
+// exclude only those missing optional roots instead of disabling Pack (and
+// therefore every tracked game-3d pack) as a unit.
+const packRoots = [
+  ...templatePackRoots,
+  previewUiAuthoringMetaPath,
+  ...externalAssetRoots.filter((root) => existsSync(root)),
+];
 export default defineConfig(({ command }) => ({
   define: command === 'build' ? { 'import.meta.env.FORGEAX_ENGINE_RHI_DEBUG': JSON.stringify('0') } : undefined,
   plugins: [
@@ -118,32 +188,30 @@ export default defineConfig(({ command }) => ({
     pluginPack({
       runtimeBinding: createStandaloneRuntimeAssetBinding('preview'),
       refresh: reloadAssetHost(),
-      roots: [
-        // game-default/assets/ holds the entry SceneAsset, material/VFX packs,
-        // and target-profile sidecar. WGSL stays beside them in
-        // game-default/assets/shaders but is intentionally build-only.
-        ...templatePackRoots,
-        previewUiAuthoringMetaPath,
-        submoduleSkyMetaPath,
-        submoduleJpegMetaPath,
-        submoduleSfxDir,
-        submoduleBgmMetaPath,
-        submoduleFbxDir,
-        submoduleGlbDir,
-        submoduleDejavuFontMetaPath,
-        submoduleDejavuLegacyAtlasMetaPath,
-        submoduleDejavuLegacyPackPath,
-        submoduleSpriteAtlasDir,
+      ddc: {
+        buildCacheRoot: resolve(monorepoRoot, 'shared-build-inputs', 'ddc'),
+        projectDdcRoot: resolve(here, '.forgeax', 'ddc', 'v2'),
+      },
+      roots: packRoots,
+      importers: [
+        audioImporter,
+        imageImporter,
+        fbxImporter,
+        gltfImporter,
+        fontImporter,
+        { key: 'ui', ...createUiImporter() },
+        targetProfileImporter(),
       ],
-      importers: [audioImporter, imageImporter, fbxImporter, gltfImporter, fontImporter, targetProfileImporter()],
-      cookers: [createParticleCodeNativeCookerFromRoots([templateAssetRoot])],
-    }) as never,
+      cookers: [createParticleCodeNativeCookerFromRoots([templateAssetRoot, brotatoAssetRoot])],
+    }),
   ],
   server: {
+    ...previewPort,
     fs: {
       allow: [monorepoRoot],
     },
   },
+  preview: previewPort,
   // VideoAsset is intentionally a runtime-only URL descriptor. Serve the
   // licensed WebM from the asset submodule without inventing a Pack importer.
   publicDir: submoduleVideoDir,

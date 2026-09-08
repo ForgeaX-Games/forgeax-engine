@@ -47,19 +47,17 @@
 
 // ── SSAO uniform (3 mat4 + vec4 intensityPad, 256 B, D-1 + D-C) ─────────────
 //
-// intensityPad.x carries the SSAO intensity scalar at host write time, but
-// the SSAO compute shaders themselves do not read it; the lighting shader
-// reads intensity from `cluster_uniform.near_far_log.w` (HDRP unified BGL
-// @group(2) @binding(6)) after scope-amend-webgl2-ubo folded the dedicated
-// @binding(9) into the cluster pad lane. The vec4 is kept here so the UBO
-// stays 256 B aligned and the host write site (single 256 B writeBuffer)
-// remains unchanged.
+// intensityPad carries the lighting intensity plus the calc radius/bias.
+// The lighting shader reads intensity from `cluster_uniform.near_far_log.w`
+// (HDRP unified BGL @group(2) @binding(6)); the calc shader reads radius and
+// bias here. Keeping the values in this existing vec4 preserves the one-shot
+// 256 B UBO write and avoids a second parameter binding.
 
 struct SsaoUniform {
   view              : mat4x4<f32>,  // world -> view
   projection        : mat4x4<f32>,  // view -> clip
   inverseProjection : mat4x4<f32>,  // NDC -> view
-  intensityPad      : vec4<f32>,    // x = intensity, yzw padding
+  intensityPad      : vec4<f32>,    // x = intensity, y = radius, z = bias
 };
 
 // ── SSAO binding declarations (@group(2)) ───────────────────────────────────
@@ -123,17 +121,16 @@ fn fs_ssao_calc(in : SsaoVsOut) -> @location(0) f32 {
   let bitangent = cross(viewNormal, tangent);
   let TBN = mat3x3<f32>(tangent, bitangent, viewNormal);
 
-  // SSAO parameters (hard-coded per LO 5.9 tutorial defaults; tune via
-  // SsaoUniform after M3/M4 integration).
-  let RADIUS = 0.5;
-  let BIAS = 0.025;
+  // SSAO parameters are install-time config values projected by the host.
+  let radius = ssao_uniform.intensityPad.y;
+  let bias = ssao_uniform.intensityPad.z;
 
   var occlusion = 0.0;
   for (var i = 0u; i < 64u; i = i + 1u) {
     // Tangent-space sample -> view-space via TBN.
     let sampleTangent = ssao_kernel[i].xyz;
     var sampleView = TBN * sampleTangent;
-    sampleView = viewPos + sampleView * RADIUS;
+    sampleView = viewPos + sampleView * radius;
 
     // Project sample to screen.
     var offset = ssao_uniform.projection * vec4<f32>(sampleView, 1.0);
@@ -148,8 +145,8 @@ fn fs_ssao_calc(in : SsaoVsOut) -> @location(0) f32 {
     let sampledViewZ = sampledViewPosH.z;
 
     // Range check: smoothstep based on distance along view-z axis.
-    let rangeCheck = smoothstep(0.0, 1.0, RADIUS / abs(viewPos.z - sampledViewZ));
-    let sampleContrib = select(0.0, 1.0, sampledViewZ >= sampleView.z + BIAS);
+    let rangeCheck = smoothstep(0.0, 1.0, radius / abs(viewPos.z - sampledViewZ));
+    let sampleContrib = select(0.0, 1.0, sampledViewZ >= sampleView.z + bias);
     occlusion += sampleContrib * rangeCheck;
   }
 

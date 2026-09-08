@@ -1,12 +1,19 @@
 import { World } from '@forgeax/engine-ecs';
-import type { Renderer } from '@forgeax/engine-render';
+import type { Renderer, RenderWorldLease } from '@forgeax/engine-render';
 import { describe, expect, it, vi } from 'vitest';
 import { commitAttachedWorld, SerializedRebuildQueue } from '../execution/attached-world-swap';
 
-function rendererOwner(): Pick<Renderer, 'attachWorld' | 'detachWorld'> {
+function rendererOwner(): Pick<Renderer, 'attach'> {
+  const lease = {
+    worldIdentity: {},
+    generation: 0,
+    readChanges: vi.fn(),
+    querySpans: vi.fn(),
+    inspectCursor: vi.fn(),
+    dispose: vi.fn(),
+  } as unknown as RenderWorldLease;
   return {
-    attachWorld: vi.fn(() => ({ ok: true as const, value: undefined })),
-    detachWorld: vi.fn(),
+    attach: vi.fn(() => ({ ok: true as const, value: lease })),
   };
 }
 
@@ -36,41 +43,27 @@ describe('worker attached World swap', () => {
 
   it('publishes the candidate before detaching the previous World', async () => {
     const renderer = rendererOwner();
-    const previous = new World();
     const next = new World();
 
-    await expect(commitAttachedWorld(renderer, previous, next, async () => true)).resolves.toBe(
-      true,
-    );
-    expect(renderer.attachWorld).toHaveBeenCalledWith(next);
-    expect(renderer.detachWorld).toHaveBeenCalledOnce();
-    expect(renderer.detachWorld).toHaveBeenCalledWith(previous);
+    await expect(commitAttachedWorld(renderer, next, async () => true)).resolves.toBe(true);
+    expect(renderer.attach).toHaveBeenCalledWith(next);
   });
 
   it('detaches a candidate whose bootstrap fails and keeps the previous World', async () => {
     const renderer = rendererOwner();
-    const previous = new World();
     const next = new World();
 
-    await expect(commitAttachedWorld(renderer, previous, next, async () => false)).resolves.toBe(
-      false,
-    );
-    expect(renderer.detachWorld).toHaveBeenCalledOnce();
-    expect(renderer.detachWorld).toHaveBeenCalledWith(next);
-    expect(renderer.detachWorld).not.toHaveBeenCalledWith(previous);
+    await expect(commitAttachedWorld(renderer, next, async () => false)).resolves.toBe(false);
   });
 
   it('detaches a candidate whose bootstrap throws', async () => {
     const renderer = rendererOwner();
-    const previous = new World();
     const next = new World();
 
     await expect(
-      commitAttachedWorld(renderer, previous, next, async () => {
+      commitAttachedWorld(renderer, next, async () => {
         throw new Error('bootstrap failed');
       }),
     ).rejects.toThrow('bootstrap failed');
-    expect(renderer.detachWorld).toHaveBeenCalledOnce();
-    expect(renderer.detachWorld).toHaveBeenCalledWith(next);
   });
 });

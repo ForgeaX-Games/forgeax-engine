@@ -5,6 +5,7 @@ import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import vitePluginRhiDebug from '@forgeax/engine-vite-plugin-rhi-debug';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
+import { optionalAssetPack } from '../../shared/src/optional-asset-pack.js';
 import { defineConfig } from 'vite';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -21,12 +22,14 @@ export default defineConfig({
   plugins: [
     forgeaxShader() as never,
     vitePluginRhiDebug(),
-    pluginPack({
-      runtimeBinding,
-      roots: legacyFontRoots,
-      importers: [imageImporter],
-      refresh: reloadAssetHost(),
-    }),
+    ...optionalAssetPack(legacyFontRoots, () =>
+      pluginPack({
+        runtimeBinding,
+        roots: legacyFontRoots,
+        importers: [imageImporter],
+        refresh: reloadAssetHost(),
+      }),
+    ),
   ],
   server: { fs: { allow: [monorepoRoot] } },
   build: { target: 'esnext', rollupOptions: { input: { main: resolve(here, 'index.html') } } },

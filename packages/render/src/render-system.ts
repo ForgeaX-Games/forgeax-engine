@@ -3,7 +3,7 @@
 //
 // Engine-internal phase: NOT registered to World schedule (AC-09);
 // `Renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 })` invokes once per frame. See `Renderer` JSDoc in
-// `./renderer.ts` for the full error tier table (D-S4..D-S8) and AGENTS.md
+// `./render-contract.ts` for the public error/frame contract and AGENTS.md
 // "ECS render bridge" section for the AI-user-facing contract.
 //
 // Stage carve-out (review round 1 finding #3 - 505 line cap fallback):
@@ -16,126 +16,108 @@
 // .invert` (charter proposition 5: no math reinvention; render-system.test.ts
 // asserts `/@forgeax\/engine-math/` shows up in render-system.ts source).
 
-import {
-  type AssetRegistry,
-  HANDLE_CUBE,
-  HANDLE_TRIANGLE,
-  resolveAssetHandle,
-} from '@forgeax/engine-assets-runtime';
+import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
-import type { Profiler, RecorderSession } from '@forgeax/engine-profiler';
-import type { ResolvedColorTargetDescriptor } from '@forgeax/engine-render-graph';
-import type {
-  BindGroupEntry,
-  BindGroupLayout,
-  Buffer,
-  ComputePipeline,
-  PipelineLayout,
-  RenderPipeline,
-  RhiCanvasContext,
-  RhiDevice,
-  Sampler,
-  TextureView,
-} from '@forgeax/engine-rhi';
+import type { RenderReadLease } from '@forgeax/engine-ecs/projection';
+import type { RecorderSession } from '@forgeax/engine-profiler';
+import type { BindGroupEntry, BindGroupLayout, Buffer, RenderPipeline } from '@forgeax/engine-rhi';
 import { err, ok, type Result, RhiError } from '@forgeax/engine-rhi';
-import type { MaterialRuntimeArtifact } from '@forgeax/engine-shader';
 import {
   derive,
   type Handle,
   type MaterialAsset,
-  type MaterialRenderState,
   type MaterialTextureValue,
-  type ParamSchemaEntry,
-  type PassKind,
-  type PrimitiveTopology,
+  type MeshAsset,
   type RenderPipelineAsset,
   RenderQueue,
   type SamplerAsset,
+  toShared,
 } from '@forgeax/engine-types';
 import { createClusterBinScratch } from './cluster-binner';
-import type { EngineMetrics } from './engine-metrics';
 import {
-  HdrpCapsInsufficientError,
   type ObservationUnavailableError,
+  PointsLinesMaterialUnsupportedError,
   type RenderError,
 } from './errors/render';
 import {
-  createRenderFeatureContributionStaging,
-  mergeRenderFeatureContributions,
-  type RenderFeatureGraphComposition,
-  type RenderFeatureGraphContribution,
-} from './features/graph-contribution';
-import {
-  type RenderFeatureHost,
   type RenderFeaturePreparedGraphicsResolverInput,
   runRenderFeatureFrame,
   settlePreparedGraphicsCompletion,
 } from './features/host';
 import {
-  createRenderFeatureGpuWorkResolver,
-  type RenderFeatureGpuWorkResolver,
+  createRenderFeatureGpuWorkOwner,
+  type RenderFeatureGpuWorkOwner,
 } from './features/prepared-gpu-work';
-import type { RenderFeaturePassContext } from './features/types';
+import { resolveStandardRenderFeatureTargets } from './features/targets';
 import {
   buildFullscreenPostProcessPass,
   DEPTH_MIN_PARAMS_BYTE_SIZE,
   entryHasDepthRead,
   type PostProcessShaderEntry,
 } from './fullscreen-post-process-pass';
-import type { GpuBuffer } from './gpu-resource';
-import type { GpuResourceStore } from './gpu-resource-store';
+import { GpuDrivenProduction } from './gpu-driven/production-raster';
+import type { RenderSceneInspection } from './inspection-types';
+import { admitPointsLines } from './points-lines/admission';
+import { PointsLinesExpansionCache } from './points-lines/expansion-cache';
 import {
-  GPU_TEXTURE_USAGE_COPY_SRC,
-  GPU_TEXTURE_USAGE_RENDER_ATTACHMENT,
-  GPU_TEXTURE_USAGE_TEXTURE_BINDING,
-} from './gpu-texture-usage';
-import { GPU_BUFFER_USAGE_COPY_DST, GPU_BUFFER_USAGE_UNIFORM } from './gpu-usage';
-import { validateClusterGrid } from './hdrp-pipeline';
+  inspectPointsLines,
+  type PointsLinesInspection,
+  type PointsLinesSourceError,
+} from './points-lines/inspection';
+import {
+  createPointsLinesLanePreparationAdapter,
+  type PointsLinesLanePreparationAdapter,
+} from './points-lines/prepare';
+import { createPointsLinesLaneAdapter, type PointsLinesBackend } from './points-lines/record';
+import type { PointsLinesRetainedSnapshot } from './points-lines/snapshot';
+import type { PointsLinesRecordOwner, PointsLinesRecordSubmission } from './record/render-context';
+
+export type { RenderSceneInspection } from './inspection-types';
+
+import { deriveVertexLayoutProjection } from '@forgeax/engine-geometry';
+import {
+  GPU_BUFFER_USAGE_COPY_DST,
+  GPU_BUFFER_USAGE_INDEX,
+  GPU_BUFFER_USAGE_UNIFORM,
+  GPU_BUFFER_USAGE_VERTEX,
+} from './gpu-usage';
 import { assembleMaterialWithSkylightEntries } from './ibl/skylight-bind-group';
 import { disposeInstanceBuffers, disposeTransientInstanceBuffers } from './instance-buffer-cache';
-import type { RhiErrorListenerRegistry } from './lifecycle';
-import { PipelineError } from './pipeline-errors';
+import type { MeshMaterialBindingObservation } from './mesh-material-bindings';
+import { validateClusterGrid } from './pipeline/standard-pipeline';
+import { DEFAULT_CLUSTER_GRID } from './pipeline/standard-profile';
 import { PostProcessError } from './post-process-errors';
 import {
   createPreparedGraphicsResolver,
   type PreparedGraphicsResolver,
 } from './prepare/prepared-graphics-resolver';
 import {
-  type RecordProfileRunner,
-  type RenderFrameState,
-  recordFrame,
-  retirePerFrameGraph,
-} from './record';
-import { buildPerFrameBindGroups } from './record/frame-lighting';
-import {
   type FrameObservation,
   type FrameObservationOptions,
-  type FrameObservationSource,
   observeCurrentFrame,
-} from './record/frame-observation';
+  type RecordProfileRunner,
+  recordFrame,
+} from './record/frame';
+import { buildPerFrameBindGroups } from './record/frame-lighting';
+import type { RenderFrameState } from './record/frame-snapshot';
 import { applyParamSnapshotToUbo, residentTextureView } from './record/main-pass-material';
-import type { MembershipTimingController } from './record/membership-timing';
-// The forgeax-concept RenderPipeline (registrable / installable unit) - aliased to avoid
-// the name collision with the RHI opaque `RenderPipeline` handle imported above. The RHI
-// handle stays internal (requirements line 155); this concept type is the public surface.
-import type { RenderPipeline as RenderPipelineDef } from './render-pipeline';
-import type { RenderPipelineContext } from './render-pipeline-context';
-import type {
-  CameraSnapshot,
-  DispatchEntry,
-  MaterialSnapshotCachesByWorld,
-  RenderableSnapshot,
-} from './render-system-extract';
-import { extractFrames } from './render-system-extract';
+import type { RenderSystemInternals } from './record/render-context';
 import {
+  type RenderFeatureGraphCandidate,
+  resetRenderFeatureGraphState,
+} from './record/typed-frame-graph';
+import {
+  type CameraSnapshot,
   type DrawOwnerOptions,
   RENDER_PHASE_CATALOG,
   type RenderPhase,
   type RenderPhaseSkipReason,
   type RenderRecordPhase,
-} from './renderer';
-import type { MaterialRenderProjection } from './renderer/material/assembly';
-import type { SkinPaletteAllocator } from './systems/skin-palette-allocator';
+} from './render-contract';
+import type { DispatchEntry, ExtractedFrame, RenderableSnapshot } from './render-system-extract';
+import { extractFrames } from './render-system-extract';
+import { PersistentRenderScene } from './scene/render-scene';
+import { resolveSsaoParameters } from './ssao-config';
 import {
   getTransparentSortConfig,
   TRANSPARENT_SORT_MODE_DISTANCE,
@@ -143,7 +125,24 @@ import {
   TRANSPARENT_SORT_MODE_LAYER_YZ,
   TRANSPARENT_SORT_MODE_LAYER_Z,
 } from './systems/transparent-sort-config';
-import { urpPipeline } from './urp-pipeline';
+
+export type {
+  _InternalRenderPipelineContext,
+  _StandardForwardSceneView,
+  PerPassResources,
+  PipelineState,
+  RenderSystemInternals,
+  RenderSystemRuntime,
+  SurfaceBackendKind,
+  SwapChainFormatPair,
+} from './record/render-context';
+export {
+  configureSurface,
+  MATERIAL_PER_ENTITY_STRIDE,
+  resolveSurfaceFormatPair,
+  STANDARD_PBR_UBO_SIZE,
+  selectSwapChainFormat,
+} from './record/render-context';
 
 /**
  * Unified transparent-queue sub-sort covering all four
@@ -235,7 +234,7 @@ function sortTransparentDispatch(
       const footY = posY - pivotY * sizeY;
       if (mode === TRANSPARENT_SORT_MODE_LAYER_Y) return -footY;
       if (mode === TRANSPARENT_SORT_MODE_LAYER_YZ) return footY + cfg.yzAlpha * posZ;
-      // Defensive fallback for any unknown mode that slips past setTransparentSortConfig.
+      // Defensive fallback for an unknown mode that slips past setTransparentSortConfig.
       return posZ;
     };
 
@@ -269,95 +268,6 @@ function sortTransparentDispatch(
 }
 
 /**
- * Per-entity material slice size in bytes — SSOT consumed by both
- * `createRenderer.ts` (BG entry size) and `render-system-record.ts`
- * (per-entity writeBuffer payload size).
- *
- * feat-20260613 fix-issue-3: the value is derived from the actual
- * default-standard-pbr sidecar paramSchema (post-D-8 channelMap split:
- * 12 numeric entries packed std140 + 3 textures). The transitional
- * STANDARD_PBR_LEGACY_UBO_SCHEMA placeholder schema (5 fake `color`
- * slots whose only purpose was to make `derive(...).totalBytes` return
- * 80) is gone — the sidecar paramSchema is the only SSOT for the layout.
- *
- * The schema below mirrors `default-standard-pbr.material.json` field-
- * for-field; trailing texture entries do not affect uboLayout.totalBytes
- * (only numeric entries occupy UBO bytes). std140 produces:
- *   baseColor          : vec4<f32>     0..16
- *   metallic           : f32          16..20
- *   roughness          : f32          20..24
- *   metallicChannel    : f32          24..28
- *   roughnessChannel   : f32          28..32
- *   aoChannel          : f32          32..36
- *   extraChannel       : f32          36..40
- *   (vec3 align=16 inserts implicit pad to 48)
- *   emissive           : vec3<f32>    48..60
- *   emissiveIntensity  : f32          60..64
- *   occlusionStrength  : f32          64..68
- *   alphaCutoff        : f32          68..72
- *   clearcoat          : f32          72..76
- *   clearcoatRoughness : f32          76..80
- *   specularTint       : vec3<f32>    80..92
- *                                     = alignUp(92, 16) = 96
- *   texture coordinates : six records 96..288
- *   normalScale        : f32          288..292
- *                                     = alignUp(292, 16) = 304
- */
-const STANDARD_PBR_SIDECAR_SCHEMA: readonly ParamSchemaEntry[] = [
-  { name: 'baseColor', type: 'color' },
-  { name: 'metallic', type: 'f32' },
-  { name: 'roughness', type: 'f32' },
-  { name: 'metallicChannel', type: 'f32' },
-  { name: 'roughnessChannel', type: 'f32' },
-  { name: 'aoChannel', type: 'f32' },
-  { name: 'extraChannel', type: 'f32' },
-  { name: 'emissive', type: 'vec3', colorSpace: 'srgb' },
-  { name: 'emissiveIntensity', type: 'f32' },
-  { name: 'occlusionStrength', type: 'f32' },
-  { name: 'alphaCutoff', type: 'f32' },
-  { name: 'clearcoat', type: 'f32' },
-  { name: 'clearcoatRoughness', type: 'f32' },
-  { name: 'specularTint', type: 'vec3', colorSpace: 'srgb' },
-];
-
-/**
- * Per-entity material slice size. The authored parameter schema owns the
- * leading 96-byte material payload; engine-owned per-slot coordinate records
- * begin at byte 96 and occupy 192 bytes (six 32-byte records).
- */
-export const STANDARD_PBR_UBO_SIZE = Math.max(
-  derive(STANDARD_PBR_SIDECAR_SCHEMA).uboLayout.totalBytes,
-  304,
-);
-
-function buildCurrentFrameObservationSource(
-  frameNumber: number,
-  perFrameGraph: {
-    getColorTargetDescriptor(name: string): ResolvedColorTargetDescriptor | undefined;
-  } | null,
-  isHdrpActive: boolean,
-  backendId: string,
-): FrameObservationSource | undefined {
-  const frameId = frameNumber - 1;
-  if (frameId < 0) return undefined;
-  const descriptor = perFrameGraph?.getColorTargetDescriptor('hdrColor');
-  if (descriptor === undefined) return undefined;
-  return {
-    texture: descriptor.texture,
-    descriptor,
-    frameId,
-    pipelineId: isHdrpActive ? 'forgeax::hdrp' : 'forgeax::urp',
-    backendId,
-  };
-}
-
-/**
- * Dynamic-offset stride for one material UBO slot. The 288-byte payload is
- * rounded to the next 256-byte dynamic-offset boundary.
- */
-export const MATERIAL_PER_ENTITY_STRIDE = 512;
-
-/**
  * Engine-internal Extract / Prepare / Record driver; constructed by createRenderer.
  *
  * w15 M5 dual-pipeline dispatch: `pipelineDispatchCounts` surfaces per-frame
@@ -375,7 +285,15 @@ export const MATERIAL_PER_ENTITY_STRIDE = 512;
  */
 export interface RenderSystem {
   /** Returns true only when this invocation reached queue submission. */
-  draw(worlds: readonly World[], opts: DrawOwnerOptions): boolean;
+  draw(
+    worlds: readonly World[],
+    opts: DrawOwnerOptions,
+    renderReadLeases?: readonly RenderReadLease[],
+  ): boolean;
+  /** Release renderer-owned persistent state for one detached World. */
+  detachScene(world: World): void;
+  /** Release the profiler catalog contribution owned by this RenderSystem. */
+  releaseProfilerCatalog(): void;
   observeCurrentFrame(
     options: FrameObservationOptions,
   ): Promise<Result<FrameObservation, ObservationUnavailableError>>;
@@ -389,6 +307,12 @@ export interface RenderSystem {
   readonly frustumStats: { culled: number; total: number };
   /** Per-frame candidate entities rejected by author visibility. */
   readonly visibilityStats: { explicitlyHidden: number };
+  /** Persistent scene maintenance evidence from the ordinary single-World path. */
+  readonly renderScene: RenderSceneInspection;
+  /** Retained Points/Lines authoring facts from the single scene projection. */
+  readonly pointsLinesSnapshots: readonly PointsLinesRetainedSnapshot[];
+  /** Current mesh-slot provenance and active diagnostics from the last frame. */
+  readonly meshMaterialBindings: readonly MeshMaterialBindingObservation[];
   /**
    * feat-20260531-bloom-first-declarative-render-graph-pass M4 fix-up w19:
    * per-frame render-graph pass names in declaration order. Empty array
@@ -417,54 +341,14 @@ export interface RenderSystem {
     readonly createBindGroup: number;
     readonly keys: readonly string[];
   };
-  /**
-   * feat-20260615-pipeline-spec-ssot M5-T2: latest URP shadow-atlas
-   * texture view resolved off the per-frame render-graph
-   * (`addColorTarget('shadowDepth', ...)`). Returns `null` when no
-   * frame has been drawn yet, or when the active pipeline does not
-   * declare the `shadowDepth` color target. Read-only debug seam:
-   * the engine itself reads the same view inline in `recordFrame`;
-   * this getter exists so debug readback paths
-   * (`Renderer.debugSampleShadowFactor`) read the same SSOT view as
-   * the engine's record stage (D-2: graph owns the lifecycle; no
-   * mirror slot on `pipelineState.perPassResources`).
-   */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-  getCurrentShadowView(): any | null;
-  /**
-   * feat-20260601-customizable-render-pipeline-seam M1 / w7: register a render-pipeline
-   * logic under `id`. Same-id re-register THROWS a PipelineError
-   * (`'pipeline-already-registered'`) - programmer-error fail-fast, mirroring
-   * ShaderRegistry.installMaterialArtifact. Engine builtins use the `forgeax::` prefix.
-   */
-  registerPipeline(id: string, impl: RenderPipelineDef): void;
-  /**
-   * feat-20260601-customizable-render-pipeline-seam M1 / w7 (D-19): install the pipeline
-   * described by a `RenderPipelineAsset` POD. Looks up `pipelineId` in the registry; on an
-   * unregistered id returns `Result.err(PipelineError{code:'pipeline-not-found'})`. On
-   * success the next `draw` detects the install-epoch bump and rebuilds the memoized
-   * per-frame graph (hot-swap). Takes the payload directly because installation happens at
-   * boot/swap time before any World exists -- there is no handle to resolve.
-   */
-  installPipeline(asset: RenderPipelineAsset): Result<() => void, PipelineError>;
-  /**
-   * feat-20260604-resource-owning-render-graph-and-fullscreen-postpr M2 / w13:
-   * fullscreen post-process shader registry, parallel to ShaderRegistry.installMaterialArtifact
-   * (D-4: material shader handles 4-BGL / 12-float-vertex / depth / triangle-list, while
-   * fullscreen post-process uses 0-vertex-buffer / no-depth / input-texture-BGL).
-   * Same-id re-register THROWS PostProcessError ('post-process-already-registered').
-   * Engine builtins use the `forgeax::` prefix.
-   */
-  readonly postProcess: {
-    register(id: string, entry: PostProcessShaderEntry): () => void;
-  };
+  /** Configure the sole Standard graph owner before the first frame. */
+  configureStandard(config: RenderPipelineAsset['config']): void;
+  /** Register one engine-owned post-process shader used by the Standard lane. */
+  registerBuiltinPostProcess(id: string, entry: PostProcessShaderEntry): () => void;
   /**
    * feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle / M5 / w21:
    * release the per-RenderSystem frame-state GPU bookkeeping during
-   * `Renderer.dispose()`. Walks the perFrameGraph drain (releases pooled
-   * transient + persistent textures via the stashed device, plan-strategy
-   * D-2 step 2) and the instanceBuffers cache (destroys + clears every
-   * GpuBuffer entry, plan-strategy D-2 step 3).
+   * `Renderer.dispose()`. Retires the compiled graph and clears the instance-buffer cache.
    *
    * Idempotent (architecture-principles §6): a second call after both
    * structures are cleared is a no-op. Per-step failures inside drain /
@@ -487,282 +371,6 @@ export interface RenderSystem {
   resetForRecover(): void;
   /** Recreate post-process GPU parameter resources after a device rebuild. */
   restorePostProcessResources(): void;
-}
-
-/**
- * feat-20260601-customizable-render-pipeline-seam M2 / w10: the NARROW runtime-services
- * surface a `RenderPipeline` pass closure consumes (UE `FRDGBuilder` runtime half). Bundles
- * exactly the four `RenderSystemInternals` members the 9 urp closures reach
- * directly: the GPU `device`, the structured-error sink `errorRegistry`, and the two
- * per-MaterialShader pipeline-cache / param-schema lookups. `RenderPipelineContext.runtime`
- * is typed as this interface, NOT the full `RenderSystemInternals` - a pipeline author
- * cannot reach `context` / `getPipelineState` / `canvas` (charter P4: a
- * consistent narrow abstraction over the runtime, not the kitchen-sink). `internals`
- * itself is unreachable through the public ctx (the AC-08 oracle: `ctx.internals` is a
- * compile error).
- */
-export interface RenderSystemRuntime {
-  readonly device: RhiDevice;
-  readonly errorRegistry: RhiErrorListenerRegistry;
-  /**
-   * feat-20260622-s5-device-surface-self-heal-recover M2 / w8: health registry
-   * threaded into the record stage so `recordFrame` can fire `internal-fault`
-   * when surface reconfigure+retry both fail (A-IN-2).
-   */
-  readonly healthRegistry: import('./lifecycle').HealthListenerRegistry;
-  /**
-   * Cooked material consumption boundary. Runtime record code may obtain a
-   * projection and content-addressed artifact here; it must not resolve an
-   * authored parent chain or compile a missing specialization.
-   */
-  readonly getMaterialProjection?: (materialGuid: string) => MaterialRenderProjection | undefined;
-  readonly getMaterialArtifact?: (specializationKey: string) => MaterialRuntimeArtifact | undefined;
-  // feat-20260523-shader-template-instance-split M9-T03 (D-PipelineBuilder):
-  // per-MaterialShader pipeline cache lookup. Returns the cached pipeline
-  // for `materialShaderId`, lazily building on first miss via
-  // ShaderRegistry.findMaterialArtifact -> buildPipelineForMaterialShader.
-  // Returns `null` when:
-  //   - the id is not registered in ShaderRegistry (caller falls back to
-  //     pipelineState.standardPipeline / standardPipelineHdr)
-  //   - the underlying async shader-module build is still pending (caller
-  //     falls back for one frame and retries on the next; mirrors the
-  //     `makeShaderDeviceAdapter` 1-frame-warmup idiom)
-  //   - the pipeline build itself fails (caller fires a structured
-  //     RhiError via errorRegistry; charter P3 explicit failure)
-  readonly getMaterialShaderPipeline?: (
-    materialShaderId: string,
-    isHdr: boolean,
-    renderState?: MaterialRenderState,
-    // feat-20260604 M3 / w9: per-mesh topology selects a per-topology PSO
-    // (WebGPU bakes topology into the immutable pipeline). Omitted resolves to
-    // 'triangle-list' (AC-03 zero-regression).
-    topology?: PrimitiveTopology,
-    // feat-20260604 M5 / w15: strip topologies bake the mesh's index width into
-    // primitive.stripIndexIndex. The record stage threads entry.mesh.indexFormat
-    // here so a uint16-indexed strip gets a uint16 PSO (not a hardcoded uint32).
-    // Ignored for list topologies (WebGPU spec: stripIndexFormat strip-only).
-    indexFormat?: 'uint16' | 'uint32',
-    // feat-20260609 M4 / w33: variantSet selects the per-variant WGSL from the
-    // shader manifest. When non-empty, the pipeline builder resolves the matching
-    // variant's composedWgsl instead of the boot-time default; the BGL is
-    // derived from paramSchema via derive() in pbr-pipeline (M3 / w12-w13).
-    // URP callers pass 'STORAGE_BUFFER_AVAILABLE=true'; HDRP callers pass
-    // 'CLUSTER_FORWARD_AVAILABLE=true+STORAGE_BUFFER_AVAILABLE=true'. Omitted
-    // (undefined / '') preserves backward-compatible behaviour (existing PSOs).
-    variantSet?: string,
-    // feat-20260609 M0 / T-002: passKind distinguishes forward (colour+DS)
-    // from shadow-caster passes in the PSO cache key. Defaults to
-    // 'forward' for backward compatibility (AC-06).
-    passKind?: PassKind,
-    // feat-20260611-fox-skinning-vertex-attribute-chain M4 / w16 (D-4):
-    // pbr-skin layoutKind reads its 6-attribute / 72-byte vertex buffer
-    // layout via `deriveVertexBufferLayout` (vertex-attribute-layout.ts SSOT).
-    // Callers with a resolved `MeshAsset.attributes` pass it through so the
-    // built PSO matches the mesh's real attribute set. Undefined falls
-    // through to the synthesized 6-key sentinel inside buildPipelineContext;
-    // non-skin layoutKinds ignore this parameter entirely.
-    meshAttributes?: import('@forgeax/engine-types').VertexAttributeMap,
-    // bug-20260615 M2 / m2-1: sampleCount drives the multisample descriptor
-    // field in the pipeline builder — it is a CAMERA fact (per-frame
-    // antialias setting). Default 1 preserves byte-identity of every
-    // pre-M2 cache slot + descriptor.
-    sampleCount?: number,
-    // feat-20260625-refactor-sprite-as-transparent-mesh R2 fix-up:
-    // LDR-color override for sub-passes whose attachment view is not the
-    // sRGB swap-chain view (LDR sprite split sub-pass writes through the
-    // storage / non-sRGB view of the same texture so premultiplied-alpha
-    // blends correctly). Threaded into the cache key + PSO descriptor.
-    // Undefined preserves the default sRGB view used by the geometry +
-    // tonemap + skybox callers. Ignored when `isHdr=true` or
-    // `passKind='shadow-caster'`.
-    colorFormatOverride?: GPUTextureFormat,
-    // Shader-declared UV count used by material pipeline cache aliases.
-    shaderUvSetCount?: number,
-    // `null` explicitly requests a color-only prepared-graphics pipeline;
-    // omitted keeps the normal forward material depth attachment.
-    depthFormatOverride?: GPUTextureFormat | null,
-    // Prepared graphics may select one of the host-owned canonical vertex
-    // layouts. Ordinary material callers leave this undefined.
-    vertexLayout?: string,
-  ) => RenderPipeline | null;
-  readonly getMaterialShaderBindingContract?: (
-    materialShaderId: string,
-  ) => 'group-0' | 'group-0-resource' | 'view-only' | 'render-material';
-  /**
-   * feat-20260527 M2 / w7: schema lookup for material param overlay.
-   * Returns the paramSchema for a registered material shader, or
-   * `undefined` when the shader is not in the ShaderRegistry.
-   * Record stage uses this instead of reading `MaterialSnapshot.paramSchema`.
-   */
-  readonly getParamSchema?: (materialShaderId: string) => readonly ParamSchemaEntry[] | undefined;
-  /**
-   * feat-20260621-learn-render-5-5-parallax M2 / w6 (D-1): the per-shader
-   * material BindGroupLayout for the given material shader. A custom shader
-   * declaring >3 user-region textures (e.g. parallax `heightTexture`) owns a
-   * material BGL whose entry count + injection start differ from the built-in
-   * 18-entry layout; the record stage must create the material bind group
-   * against THIS layout so the entry count matches. Returns `undefined` when
-   * the shader is unregistered or resolves to the shared built-in layout
-   * (3-texture shaders), in which case the caller falls back to
-   * `pipelineState.materialBindGroupLayout`.
-   */
-  readonly getMaterialBindGroupLayout?: (materialShaderId: string) => BindGroupLayout | undefined;
-  /**
-   * feat-20260527-sprite-nineslice M4 / w16 (D-5): per-Renderer metrics counter
-   * surfaced through `renderer.metrics`. Record-stage soft-warns (e.g.
-   * `nineslice.scale-too-small` when Transform.scale falls below the four
-   * 9-slice corner anchors) call `runtime.metrics.increment(name)` instead of
-   * a per-entity `console.warn` so AI users observe machine-readable counters
-   * (charter P3 over P-flooded text logs). Each Renderer owns its own
-   * EngineMetrics instance (D-5 candidate 1: multi-Renderer isolation).
-   */
-  readonly metrics: EngineMetrics;
-  /** Optional Render-owned membership timing capability. */
-  readonly membershipTiming?: MembershipTimingController | undefined;
-  /**
-   * feat-20260604-resource-owning-render-graph-and-fullscreen-postpr M3 / F-2 fix-up:
-   * post-process registry lookup. Returns the `PostProcessShaderEntry` registered
-   * via `renderer.postProcess.register(id, entry)`, or `undefined` when `id`
-   * resolves to no entry. `addFullscreenPass`'s execute closure dispatches on this
-   * to route to either the FXAA built-in path (id === 'fxaa') or the generic
-   * `buildFullscreenPostProcessPass + createFullscreenBindGroup` path; an
-   * unregistered id surfaces as a thrown `PostProcessError({code:'post-process-not-found'})`
-   * fail-fast (charter P3 / pipeline-errors throw template).
-   *
-   * Optional so a custom RenderSystemRuntime fixture (test doubles) need not
-   * supply it; the engine's own createRenderSystem populates it unconditionally.
-   */
-  readonly lookupPostProcess?: (id: string) => PostProcessShaderEntry | undefined;
-  /**
-   * feat-20260621-fullscreen-post-process-per-frame-uniform-params-l M-A2 / w8:
-   * per-shader params UBO accessor. Returns the eager-created (at register time,
-   * M-A1 / w5) GPU buffer for `id`, or `undefined` when the id has no params
-   * (param-less consumer) / is unregistered. dispatchFullscreenPass reads this to
-   * writeBuffer the per-frame snapshot bytes and bind the buffer at group(1)
-   * binding(2). Optional so test fixtures need not supply it; createRenderSystem
-   * populates it unconditionally (mirrors lookupPostProcess / getPostProcessPipeline).
-   */
-  readonly getPostProcessParamsBuffer?: (id: string) => Buffer | undefined;
-  /**
-   * feat-20260609-learn-render-4-5-framebuffers-demo-offscreen-rt-an M4 / T-10-a:
-   * post-process render-pipeline lookup with eager-on-first-call build. Returns a
-   * cached `RenderPipeline` (RHI handle) for `id`, lazily building on first call
-   * via the closure passed through `RenderSystemInternals.buildPostProcessPipeline`.
-   * Returns `null` when:
-   *   - the id is not registered in the post-process registry (caller skips the
-   *     pass — paired with the `'post-process-not-found'` throw site, this branch
-   *     is unreachable on the happy path)
-   *   - the underlying async shader-module compile is still pending (caller falls
-   *     back for one frame and retries on the next; mirrors the
-   *     `getMaterialShaderPipeline` 1-frame-warmup idiom)
-   *   - the pipeline build itself fails (caller skips the pass; the build path
-   *     fires a structured RhiError via errorRegistry; charter P3 explicit failure)
-   *
-   * Solves M1 CONCERN-1: the dispatcher in `dispatchFullscreenPass` previously
-   * passed `pipeline=null` to `built.createHandle` because the per-frame execute
-   * closure cannot await `createShaderModule` (async). With this lookup the
-   * dispatcher reads the pipeline synchronously; warm-up costs one frame.
-   *
-   * `bgl` is the fullscreen input-texture BGL the dispatcher already built via
-   * `buildFullscreenPostProcessPass`. The engine assumes a single static BGL
-   * shape (FULLSCREEN_BGL_DESCRIPTOR) so the pipeline cache keys on `id` only;
-   * subsequent calls reuse the cached pipeline regardless of which BGL identity
-   * is threaded.
-   *
-   * `colorFormat` is the swap-chain / target color format the post-process
-   * pipeline writes (`bgra8unorm-srgb` for swap-chain, the offscreen RT format
-   * otherwise). Cache key is `id|colorFormat`.
-   *
-   * Optional so a custom RenderSystemRuntime fixture (test doubles) need not
-   * supply it; the engine's own createRenderSystem populates it when
-   * `RenderSystemInternals.buildPostProcessPipeline` is provided.
-   */
-  readonly getPostProcessPipeline?: (
-    id: string,
-    bgl: BindGroupLayout,
-    colorFormat: GPUTextureFormat,
-  ) => RenderPipeline | null;
-  /**
-   * feat-20260623-world-space-video-asset M4 / w16 (D-3): transient per-frame
-   * texture store for VideoAsset sources. Independent of {@link gpuStore} — the
-   * record stage routes a `MaterialSnapshot.videoTextureFields` field through
-   * this store (per-frame copyExternalImageToTexture upload + current-frame view)
-   * instead of `gpuStore.ensureResident` (whose static cache video must never
-   * enter, AC-08). Optional so test fixtures that drive recordFrame manually
-   * need not supply one — a video field then degrades to the default view
-   * (charter P3). The production createRenderer always wires it.
-   */
-  readonly dynamicTextureStore?:
-    | import('@forgeax/engine-assets-runtime').DynamicTextureStore
-    | undefined;
-}
-
-export interface RenderSystemInternals extends RenderSystemRuntime {
-  readonly canvas: HTMLCanvasElement | OffscreenCanvas;
-  /** Optional feature host supplied by the renderer assembly layer. */
-  readonly featureHost?: RenderFeatureHost | undefined;
-  readonly shaderModuleFactory?: import('./pipeline-builder').PipelineBuilderShaderModuleFactory;
-  /** Optional host profiler capability for the existing Render path. */
-  readonly profiler?: Profiler | undefined;
-  // M6 / w41 (feat-20260510-rhi-resource-creation): the canvas context is the
-  // forgeax `RhiCanvasContext` brand; render-system-record.ts uses
-  // `getCurrentTexture()` -> `device.createTextureView(...)` (K-4 two-step
-  // explicit form, charter proposition 5 consistent abstraction red line).
-  readonly context: RhiCanvasContext | null;
-  // feat-20260608-create-app-param-surface-trim / M1 / AC-02: the legacy
-  // `clearColor` field is removed. The record stage reads clear color
-  // straight from the Camera SoA (`camera.clearColor`, array<f32,4> as of
-  // feat-20260709 M3); zero-Camera fallback uses
-  // `ZERO_CAMERA_CLEAR_FALLBACK = [0, 0, 0, 1]`.
-  readonly getPipelineState: () => PipelineState | null;
-  readonly assets: AssetRegistry;
-  // feat-20260601-gpu-resource-store-extraction M1: GPU residency layer
-  // extracted out of AssetRegistry. Record stage reads GPU texture / cubemap /
-  // mesh handles through the store; CPU POD reads stay on `assets`.
-  readonly gpuStore: GpuResourceStore;
-  // feat-20260608-mesh-ssbo-dynamic-grow-l1-lift-1024-entity-cap M3 / T-M3-04:
-  // mesh-SSBO grow hook + read-only state surface threaded into the record
-  // stage so `ensureMeshSsboCapacity(internals, validatedOrdered.length)` can
-  // bridge the recordFrame → growController seam without leaking the full
-  // controller object into RenderSystemRuntime (the narrow ctx). Both fields
-  // are optional for test fixtures that wire createRenderSystem manually
-  // without a controller (legacy path returns ok:true and short-circuits);
-  // the production createRenderer always sets both. The `| undefined`
-  // suffix keeps both fields assignable from the WebGPU-internals carrier
-  // whose own field is `?:` -- exactOptionalPropertyTypes ABI compat.
-  readonly growMeshSsbo?:
-    | ((neededSlots: number) =>
-        | { readonly ok: true }
-        | {
-            readonly ok: false;
-            readonly code: 'mesh-ssbo-ceiling-reached' | 'mesh-ssbo-capacity-exceeded';
-            readonly degradedToSlotCount: number;
-          })
-    | undefined;
-  readonly meshSsboState?: { readonly slotCount: number } | undefined;
-  /**
-   * feat-20260609 M4 / T-10-a: factory backing `getPostProcessPipeline`. Provided
-   * by `createRenderer.ts` (it owns the shared `getShaderModuleAdapter` and the
-   * fullscreen pipeline-layout builder); receives a registered
-   * `PostProcessShaderEntry` + the fullscreen BGL the dispatcher already
-   * composed + the target color format, returns a built `RenderPipeline`
-   * (RHI handle) or `null` (shader still compiling / build failed). The first
-   * call per id triggers the async shader compile; subsequent calls hit the
-   * RenderSystem-level cache and never reach this factory.
-   *
-   * Optional so test fixtures (createRenderSystem with a stub
-   * RenderSystemInternals) need not provide a real factory; without it
-   * `getPostProcessPipeline` resolves to `undefined` on the runtime surface
-   * and the dispatcher falls through to its existing `null`-skip branch.
-   */
-  readonly buildPostProcessPipeline?:
-    | ((
-        entry: PostProcessShaderEntry,
-        bgl: BindGroupLayout,
-        colorFormat: GPUTextureFormat,
-        label: string,
-      ) => RenderPipeline | null)
-    | undefined;
 }
 
 function isStructuredRendererError(error: unknown): error is RhiError | RenderError {
@@ -803,52 +411,6 @@ function reportPreparedGraphicsCompletionError(
   );
 }
 
-export interface RenderFeatureGraphRuntimeState {
-  contributions: readonly RenderFeatureGraphContribution<RenderFeaturePassContext>[];
-  topologySignature: string | undefined;
-  composition:
-    | RenderFeatureGraphComposition<RenderPipelineContext, RenderFeaturePassContext>
-    | undefined;
-}
-
-const renderFeatureGraphStates = new WeakMap<
-  RenderSystemInternals,
-  RenderFeatureGraphRuntimeState
->();
-
-export function getRenderFeatureGraphState(
-  internals: RenderSystemInternals,
-): RenderFeatureGraphRuntimeState {
-  const existing = renderFeatureGraphStates.get(internals);
-  if (existing !== undefined) return existing;
-  const created: RenderFeatureGraphRuntimeState = {
-    contributions: [],
-    topologySignature: undefined,
-    composition: undefined,
-  };
-  renderFeatureGraphStates.set(internals, created);
-  return created;
-}
-
-function resetRenderFeatureGraphState(internals: RenderSystemInternals): void {
-  const state = getRenderFeatureGraphState(internals);
-  state.contributions = [];
-  state.topologySignature = undefined;
-  state.composition = undefined;
-}
-
-function reportRenderFeatureGraphError(internals: RenderSystemInternals, error: RenderError): void {
-  if (internals.featureHost !== undefined && 'detail' in error) {
-    const detail = error.detail;
-    if (detail !== undefined && 'featureIdentity' in detail && 'order' in detail) {
-      const owned = internals.featureHost.recordError(detail.featureIdentity, error);
-      internals.errorRegistry.fire(owned);
-      return;
-    }
-  }
-  internals.errorRegistry.fire(error);
-}
-
 function isPendingRenderFeaturePreparation(error: RenderError): boolean {
   return (
     error.code === 'render-feature-preparation-failed' &&
@@ -864,795 +426,320 @@ function makePreparedPipelinePendingError(): RhiError {
   });
 }
 
-export interface PipelineState {
-  readonly meshes: ReadonlyMap<number, MeshGpuHandles>;
-  readonly format: string;
-  // Color-attachment view format. May differ from `format` (canvas storage)
-  // when an sRGB-encoding view is requested over a linear storage texture.
-  // Backend-aware SSOT: selectSwapChainFormat in createRenderer.ts derives
-  // both format and colorAttachmentFormat from storageBufferCapable
-  // (Channel 2 UA-preferred bgra8unorm / Channel 3 GLES fallback rgba8unorm);
-  // bug-20260612-webgpu-canvas-format-prefer-bgra supersedes the previous
-  // module-level SWAP_CHAIN_VIEW_FORMAT constant (bug-20260519 / bug-20260610).
-  // Equal to `format` for offscreen render targets.
-  readonly colorAttachmentFormat: string;
-
-  // Per-frame uniform / storage buffers + bind group layouts used to compose
-  // the 3 BindGroups (view / material / mesh-array) the pbr.wgsl pipeline
-  // expects (D-S2 + plan-strategy 1 architecture). The view + material UBOs
-  // and the mesh SSBO are reused across frames; only the contents are
-  // queue.writeBuffer-updated each draw([world], { cameraOwner: 0, resourceOwner: 0 }) invocation.
-  readonly viewBindGroupLayout: BindGroupLayout;
-  readonly materialBindGroupLayout: BindGroupLayout;
-  readonly meshBindGroupLayout: BindGroupLayout;
-  readonly viewUniformBuffer: Buffer;
-  // feat-20260613-csm-cascaded-shadow-maps M5 / w28: per-pass shadow_caster
-  // cascade-index UBO. 16 B (1 u32 + 12 B pad to satisfy the 16 B uniform
-  // buffer alignment). The host writes `index = i` (0..3) before each
-  // cascade's recordShadowPass submit; shadow_caster.wgsl reads it via
-  // `@group(0) @binding(5) shadowCasterCascade.index` to pick the matching
-  // `view.lightViewProj_X`. Forward shaders declare the binding (so the
-  // shared view BGL accommodates both pipelines) but never reference it.
-  readonly shadowCasterCascadeBuffer: Buffer;
-  // feat-20260608-mesh-ssbo-dynamic-grow-l1-lift-1024-entity-cap M2 / T-M2-06:
-  // materialUniformBuffer + meshStorageBuffer fields hold wrapper objects
-  // (`{ buffer, sizeInBytes }`) instead of bare `Buffer` handles. The outer
-  // wrapper-object identity is stable across grow events (research §F8 R1)
-  // so PipelineState references survive grow without re-bind cycles; the
-  // inner `.buffer` is replaced by `growMeshSsbo` (createRenderer.ts /
-  // T-M2-05). Consumers must read `.buffer` to reach the underlying
-  // `Buffer` handle (M3-04: `pipelineState.meshStorageBuffer.buffer` /
-  // `.materialUniformBuffer.buffer`); using the wrapper directly as a
-  // WeakMap chain key would bind the cache to the wrapper object identity
-  // (which never changes) instead of the inner buffer identity (which DOES
-  // change on grow), defeating the cache miss -> re-bind path (D-3
-  // grep-gate guards this).
-  readonly materialUniformBuffer: { readonly buffer: Buffer; readonly sizeInBytes: number };
-  readonly meshStorageBuffer: { readonly buffer: Buffer; readonly sizeInBytes: number };
-  // feat-20260519-light-casters-point-spot-pbr M3 / w20 (D-S1 + D-S2):
-  // PointLight + SpotLight std430 storage buffers occupy two new
-  // viewBindGroupLayout entries (binding 1 + 2) alongside the existing
-  // viewUniformBuffer (binding 0). Each buffer carries a 16 B std430 header
-  // (count u32 + 12 B pad) followed by a fixed 4-slot first-slice cap
-  // (32 B per PointLight / 48 B per SpotLight; total 144 B / 208 B). The
-  // record stage rewrites both buffers per frame via `queue.writeBuffer`
-  // (D-S6 per-frame full rewrite); the bind-group layout entries exist
-  // even when shaders do not yet reference them so the M4 pbr.wgsl
-  // multi-light helper landing requires no further createRenderer
-  // changes (charter P5 consistent abstraction; AC-04 c byte-frozen
-  // layout). Cap-gate at createRenderer time
-  // (`assertStorageBufferCap >= 4`) keeps the layout reachable before any
-  // frame records (R-4 + plan-strategy 4 risk table).
-  readonly pointLightsBuffer: Buffer;
-  readonly spotLightsBuffer: Buffer;
-  // feat-20260513-instanced-mesh M3 (T-M3-2 / T-M3-3): SSBO single-branch
-  // record-stage. `meshStorageBuffer` carries one `entity_world` mat4 per
-  // renderable (256-byte stride for dynamic-offset alignment); the
-  // `instancesBindGroupLayout` + `identityInstanceBuffer` form the second
-  // tier of the chained transform: shader composes
-  // `world = entity_world * instances_local[instance_index]`. When a
-  // renderable does not carry an `Instances` component the record stage
-  // binds the shared 1-element identity-mat4 fallback (`drawIndexed
-  // instanceCount=1`); when it does, the per-entity GPU storage buffer
-  // owned by the record stage's `frameState.instanceBuffers` cache is
-  // bound (`drawIndexed instanceCount=Instances.transforms.count / 16`).
-  // feat-20260514 M3 / w15: the legacy
-  // `AssetRegistry.createInstancedBuffer` triplet is gone — Instances data
-  // flows entirely through the ECS-managed `array<f32>` field; the record
-  // stage owns GPU storage buffer allocation + `LimitExceededDetail`
-  // emit + `caps.storageBuffer` cap-gate.
-  readonly instancesBindGroupLayout: BindGroupLayout;
-  readonly identityInstanceBuffer: Buffer;
-
-  // feat-20260515 M3 / T-M3-05 (research F-6 fix): default sampler +
-  // fallback 1x1 white textureView seed the materialBindGroup binding=1 /
-  // binding=2 entries when MaterialAsset.baseColorTexture is undefined.
-  // The defaults follow research F-5 SSOT (linear min/mag/mipmap +
-  // repeat) so AI users that don't supply a texture still get a sensible
-  // sampling configuration without having to register a SamplerAsset
-  // (charter F2 minimal surface).
-  readonly defaultSampler: Sampler;
-  // Nearest-neighbour (mag=nearest, min=nearest, mip=nearest, clamp-to-edge)
-  // sampler used for sprite / tilemap materials so pixel-art tiles render sharp.
-  readonly nearestSampler: Sampler;
-  readonly fallbackTextureView: TextureView;
-
-  // bug-20260519: BUILTIN_CUBE / BUILTIN_TRIANGLE migrated to 12-floats
-  // (position + normal + uv + tangent) so a single (`unlit-procedural` /
-  // `standard`) pipeline pair handles all renderables. The legacy
-  // `unlitBuiltinPipeline` + zero-stride `unlitBuiltinDummyAttrBuffer`
-  // (which hard-coded uv = (0,0) for BUILTIN cubes) are deleted.
-  //
-  //   - `unlitPipeline` : unlit module + 12F vertex stride.
-  //                                  Routed to every entity whose
-  //                                  shader identity is `forgeax::default-unlit`.
-  //   - `standardPipeline`        : pbr module + 12F vertex stride.
-  //                                  Routed to every entity carrying a
-  //                                  standard / GGX-PBR material.
-  //
-  // Both pipelines share the same 4-BindGroupLayout chain (view + material +
-  // mesh-array + instances). The record stage selects between them on
-  // `mat.materialShaderId` only (D-2 BUILTIN-vs-procedural distinction retired).
-  // bug-20260519 D-3: nullable when manifest carries zero entries (Camera-
-  // only / clear-pass-only path; D-1 + D-2 + plan-strategy section 1
-  // mermaid). The render-time access point in `render-system-record.ts`
-  // narrows on `=== null` and fires a structured `RhiError
-  // shader-compile-failed` (charter P3 explicit failure; AC-03).
-  readonly unlitPipeline: RenderPipeline | null;
-  readonly standardPipeline: RenderPipeline | null;
-  /**
-   * feat-20260604-learn-render-4.10-anti-aliasing-msaa M2 / w8: count=4
-   * multisample variants of the 7 geometry pipelines that write the screen
-   * or HDR colour target. A pipeline's `multisample.count` must match the
-   * sampleCount of the colour attachment it writes (WebGPU validation),
-   * so a count=4 pass cannot reuse a count=1 pipeline -- the record stage
-   * picks the `*Msaa` variant when the active camera carries
-   * `antialias === 'msaa'`. Post-process + shadow pipelines stay single-
-   * sample (AC-06) and have no MSAA variant. `null` when the base pipeline
-   * is null (empty-manifest path).
-   */
-  readonly unlitPipelineMsaa: RenderPipeline | null;
-  readonly standardPipelineMsaa: RenderPipeline | null;
-  // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w14 (D-7 / AC-12):
-  // the four sprite-dedicated PSO fields are gone — sprite PSO now flows
-  // through `runtime.getMaterialShaderPipeline('forgeax::sprite', ...)`
-  // keyed on the premultiplied-alpha renderState the record stage
-  // assembles for any transparent material (plan-strategy D-7). Concept
-  // count -4 fields on PipelineState; sprite's "is a transparent mesh"
-  // story is told entirely by the generic cache + `material.transparent`
-  // (derived by the extract stage from `passes[0].renderState.blend !==
-  // undefined`, the post-feat-20260626-collapse SSOT).
-  readonly unlitPipelineHdrMsaa: RenderPipeline | null;
-  readonly standardPipelineHdrMsaa: RenderPipeline | null;
-  /**
-   * feat-20260523-shader-template-instance-split M9-T03 (D-PipelineBuilder):
-   * the shared 4-BindGroupLayout chain pipeline layout (`[view, material,
-   * mesh-array, instances]`) -- same handle the standard / unlit / sprite
-   * pipelines share. M9 exposes it on PipelineState so the per-MaterialShader
-   * pipeline cache (`getMaterialShaderPipeline`) can reuse it at lazy build
-   * time without re-running pbrLayouts construction (charter P4 consistent
-   * abstraction). `null` when the manifest is empty (Camera-only / clear-
-   * pass-only path; bug-20260519 D-3 nullable).
-   */
-  readonly pbrPipelineLayout: PipelineLayout | null;
-  /**
-   * feat-20260609-hdrp-cluster-fragment-ggx M4.5 / w36 (D-10 option A):
-   * per-variant PipelineLayout for HDRP. Mirrors `pbrPipelineLayout` but
-   * substitutes the HDRP unified 7-slot group(2) BGL
-   * (`createHdrpBindGroupLayoutDescriptor`) for the 1-slot pbr-mesh-array
-   * BGL. Built once at boot and reused for any HDRP variant PSO. `null`
-   * when the manifest is empty (parallel to `pbrPipelineLayout`) or when
-   * the boot-time createBindGroupLayout / createPipelineLayout fails (in
-   * which case `selectPipelineLayoutForVariant` falls back to the URP
-   * `pbrPipelineLayout` instead of hard-disabling the build path).
-   */
-  readonly hdrpPbrPipelineLayout: PipelineLayout | null;
-  /** WebGPU storage-path producer for ordered HDRP cluster memberships. */
-  readonly hdrpClusterMembershipPipeline: ComputePipeline | null;
-  /** Compute bind-group layout paired with the membership producer pipeline. */
-  readonly hdrpClusterMembershipBindGroupLayout: BindGroupLayout | null;
-  /**
-   * bug-20260611-skin-pipeline-layout: dedicated PipelineLayout for the
-   * `forgeax::pbr-skin` material shader. Mirrors `pbrPipelineLayout` but
-   * substitutes a 2-entry mesh-array BGL (binding 0 = meshes, binding 1 =
-   * palette) for standard PBR's 1-entry mesh-array BGL. Built once at boot
-   * by `buildPbrSkinLayouts` and selected by
-   * `selectPipelineLayoutForVariant` when the caller passes
-   * `LayoutKind = 'pbr-skin'`. `null` when manifest is empty or the skin
-   * shader is not registered (storage-buffer cap gate / register failure);
-   * `selectPipelineLayoutForVariant` returns `null` rather than silently
-   * falling back to URP layout (charter P3 explicit failure, mirroring the
-   * `hdrp-active-must-not-fallback-to-urp-pipeline` guard).
-   */
-  readonly pbrSkinPipelineLayout: PipelineLayout | null;
-  /**
-   * feat-20260611 R2 / M8 / w28 (IS-14): record-stage handle to the
-   * 2-binding `pbr-skin-mesh-array-bgl` returned by `buildPbrSkinLayouts`
-   * (binding 0 mesh-array UBO, binding 1 palette UBO; both
-   * `hasDynamicOffset: true`). The record stage builds a BG against this
-   * BGL for skin entries (`entry.source.skin !== undefined`) and binds it
-   * at group(2) when the entry's pipeline layout is `pbr-skin-pl`. The
-   * URP path keeps using `meshBindGroupLayout` (1-binding) at group(2),
-   * so `pbr-mesh-array-bgl` is unchanged. Stays `null` when
-   * `pbrSkinPipelineLayout` itself failed to build (charter P3 explicit
-   * failure -- skin path is hard-disabled, mirroring the pipeline-layout
-   * fallback in `selectPipelineLayoutForVariant`).
-   */
-  readonly pbrSkinMeshBindGroupLayout: BindGroupLayout | null;
-  /**
-   * feat-20260612-skin-palette-per-frame-upload M1 / m1-2: animator-ready
-   * skin-palette storage allocator. Replaces the prior identity-buffer
-   * stub (PR #353 / feat-20260611 R2 / M8 / w28 IS-14) -- a single 16320 B
-   * identity-seeded UBO shared by every skin entry. The allocator owns the
-   * lifecycle of the per-frame palette buffer (`createSkinPaletteAllocator`
-   * from `./systems/skin-palette-allocator`); the record stage reads the
-   * GPU buffer through `skinPaletteAllocator.buffer` and the extract stage
-   * (M2) calls `allocateSlice` + `writeJointPalette` to land animated
-   * palette data per skinned entity. Per plan-strategy D-1 candidate (b) the
-   * allocator is the single authoritative carrier -- no parallel fallback
-   * stub. `null` when `pbrSkinPipelineLayout` itself failed (skin path
-   * hard-disabled, mirroring the prior stub field's gating).
-   */
-  readonly skinPaletteAllocator: SkinPaletteAllocator | null;
-  // 1x1 white texture view (feat-20260518 M3 / w13 + AC-06): seeds the
-  // baseColorTexture (binding 2) and metallicRoughnessTexture (binding 4)
-  // entries when the schema-driven MaterialAsset values omit the optional textures.
-  // Reuses the same sampling-friendly default as `fallbackTextureView`
-  // (above); the alias keeps the new MVP code path declarative without
-  // renaming the existing field. Note: normalTexture (binding 6) does
-  // NOT use this view -- it has its own RG-encoded fallback below.
-  readonly defaultWhiteTextureView: TextureView;
-  // 1x1 RGBA8 (128,128,255,255) view dedicated to the normalTexture slot
-  // (binding 6). pbr.wgsl decodes sample.rg * 2 - 1 + z = sqrt(1-x^2-y^2),
-  // so RG=(128,128)=0.5 maps to tangent (0,0,1) -- zero perturbation when
-  // normalTexture is absent. White (255,255) would yield sqrt(1-2)=NaN
-  // under saturate (clamps to 0) -> tangent.z=0 -> N rotated into the
-  // tangent plane (severely wrong). Separate view because baseColor /
-  // metallicRoughness require white-on-missing, normal requires (0,0,1).
-  readonly defaultNormalTextureView: TextureView;
-
-  // ── feat-20260519-tonemap-reinhard-mvp / M2 / T-M2.5 ──────────────────────
-  //
-  // HDR (rgba16float) variants of `unlitPipeline` / `standardPipeline`. AI
-  // users opt in via `Camera.tonemap === 'reinhard-extended'`; the record
-  // stage picks `unlitPipelineHdr` / `standardPipelineHdr` when the active
-  // camera's tonemap field is non-'none', and writes the geometry pass into
-  // `hdrColorView` instead of the swap-chain view. The post-process tonemap
-  // pass then reads `hdrColorView` and writes the final LDR pixels into the
-  // swap-chain view (charter P3 explicit failure: a wrong format combination
-  // would otherwise silently produce mis-tonemapped pixels).
-  //
-  // Both HDR pipelines share the same 4-BindGroupLayout chain as their
-  // sRGB siblings — only the colour-attachment format differs (D-2 +
-  // plan-strategy D-3).
-  //
-  // bug-20260519 D-3 nullable extension: when the renderer starts with a
-  // zero-entry shader manifest the entire HDR + tonemap-resource block in
-  // `createRenderer.ts` is skipped (Camera-only / clear-pass-only path),
-  // so these fields stay `null`. Record-stage HDR pipeline dispatch +
-  // fullscreen tonemap pass narrow on `=== null` and fire structured
-  // `shader-compile-failed` (charter P3 explicit failure; AC-03).
-  readonly unlitPipelineHdr: RenderPipeline | null;
-  readonly standardPipelineHdr: RenderPipeline | null;
-
-  /**
-   * feat-20260520-directional-light-shadow-mapping M2 / w14 (D-1):
-   * 1x1 depth32float fallback bound at viewBindGroup binding(3) when no
-   * shadow RT exists (castShadow:false or allocation failed).
-   * Cleared to 1.0 (far plane) so comparison-sampler always returns fully lit.
-   */
-  readonly shadowFallbackTextureView: TextureView;
-
-  /**
-   * feat-20260612-point-light-shadows-urp-hdrp Round-2 F-1: 1x1x6
-   * depth32float `texture_depth_cube_array` (layers=1) fallback bound at
-   * viewBindGroup binding(5) when no PointLightShadow snapshots are active
-   * (zero-shadow scene = AC-09 zero allocation -- the real cube_array atlas
-   * stays in `ShadowAtlas` and is only allocated when the extract stage
-   * sees its first PointLightShadow). Cleared to 1.0 so the
-   * comparison-sampler returns fully lit on the no-shadow path. The view
-   * dimension is `cube-array` to satisfy the BGL `viewDimension:
-   * 'cube-array'`; the underlying texture has 6 layers (one cube).
-   */
-  readonly shadowAtlasFallbackTextureView: TextureView;
-
-  /**
-   * feat-20260612-point-light-shadows-urp-hdrp Round-2 F-1: 64 B uniform
-   * buffer carrying `array<vec4<f32>, 4>` -- one lane per shadow-casting
-   * point light slot. Lane N stores `(near, far, 1/(far-near), 0)` for the
-   * point light with `shadowAtlasLayer === N`. Lanes for non-shadow-casting
-   * slots stay zeroed; the WGSL sample path is gated by
-   * `PointLight.shadowAtlasLayer >= 0` so zeroed lanes are never read.
-   * Bound at viewBindGroup binding(6); written per frame from the
-   * `pointShadowSnapshots` array.
-   */
-  readonly shadowParamsBuffer: Buffer;
-
-  // feat-20260625-spot-light-shadow-mapping w25 (scope-amend webkit-fallback):
-  // the per-spot fragment-read perspective lightViewProj matrices no longer
-  // occupy a dedicated `spotLightViewProjBuffer` / view-BG binding 9 — they fold
-  // into the View UBO tail (`view.spotLightViewProj`, bytes 528..784) written by
-  // render-system-record's viewPayload. The standalone uniform buffer pushed the
-  // WebGL2 fallback fragment uniform-buffer count to 12, over GLES 3.0's
-  // `max_uniform_buffers_per_shader_stage = 11`. Caster vertex channel (binding
-  // 7) is untouched: same-frame write contention only applies to casters (D-1).
-
-  // ── feat-20260520-directional-light-shadow-mapping M2 / w15 (AC-12) ─────
-  //
-  // GPU shadow-factor probe pipeline. `debugSampleShadowFactor` packs N world
-  // positions into `shadowProbeInputBuf` (`array<vec4<f32>, PROBE_MAX_COUNT>`),
-  // writes the active lightSpaceMatrix into `shadowProbeLsmUbo`, builds a
-  // transient BindGroup binding the active shadow texture + comparison
-  // sampler, and renders 1 pixel per probe into `shadowProbeOutputTex`
-  // (1xN rgba32float). The fragment stage runs the same atlas-depth PCF path
-  // as `pbr.wgsl::evalDirectional()` and returns factor, center depth,
-  // cascade index, and receiver depth in the four channels. The 1-row staging
-  // buffer (1024 B = PROBE_MAX_COUNT * 16 B; already 256B-aligned) is mapped
-  // and the leading N vec4 records returned. Compiled once at pipeline build
-  // time; null when the shader manifest is empty (no probe possible).
-  readonly shadowProbePipeline: RenderPipeline | null;
-  readonly shadowProbeBindGroupLayout: BindGroupLayout | null;
-  readonly shadowProbeLsmUbo: Buffer | null;
-  readonly shadowProbeInputBuf: Buffer | null;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle (matches sibling fields)
-  readonly shadowProbeOutputTex: any | null;
-  readonly shadowProbeOutputView: TextureView | null;
-  readonly shadowProbeStagingBuf: Buffer | null;
-
-  /**
-   * Fallback Skylight resource bundle (feat-20260520-skylight-ibl-cubemap
-   * M2 round-2 / t40, plan-strategy D-5). 1x1 all-zero rgba16float
-   * texture_cube * 2 (irradiance + prefilter) + 1x1 approximate rg16float
-   * brdfLut + intensity=0 16 B uniform buffer + 7-entry BindGroup compose
-   * the @group(4) skylight binding for the "no Skylight ECS entity"
-   * branch. The M4 round-2 recordFrame branch binds `bindGroup` when
-   * `skylightCount === 0` so `standardPipeline` / `standardPipelineHdr`
-   * (which keep a 4-slot pipeline layout per D-5 round-4) dispatch with
-   * ambient=0 -- physical convergence with D-4 (charter F1: AI users
-   * writing demos do not need a "is there a skylight?" branch).
-   *
-   * D-5 round-4: the fallback bundle no longer carries a stand-alone
-   * BindGroup. The PBR material BindGroupLayout now holds 14 entries
-   * (material 0..6 + Skylight 7..13) and the per-frame material
-   * BindGroup assembly site (render-system-record) merges Skylight
-   * resources at binding 7..13 -- active when a Skylight component
-   * exists, fallback identity when `skylightCount === 0`.
-   *
-   * bug-20260519 D-3 nullable extension: the empty-manifest path
-   * (Camera-only / clear-pass-only) skips the entire PBR pipeline build
-   * block; we still allocate the fallback bundle in the normal path,
-   * but tests / OOS paths that mock the manifest empty land here with
-   * `null` (charter P3 explicit failure: M4 record-stage gates on
-   * `skylightFallback !== null` before binding fallback resources at
-   * material BG entries 7..13).
-   */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque SkylightFallback shape
-  readonly skylightFallback: any | null;
-
-  /**
-   * feat-20260529-rendergraph-pass-abstraction M3 / w11 (D-2 + Finding 3):
-   * per-pass mutable texture cache slots extracted from the global
-   * PipelineState. These fields are the lazily-allocated texture attachments
-   * + pass-specific pipelines and bindgroups that belong to a single render
-   * pass (depth / shadow / tonemap / FXAA). M4 render-graph resource
-   * declarations will read these descriptors to derive transient/persistent
-   * resources; shadow probe (OOS-4) stays on PipelineState directly.
-   */
-  readonly perPassResources: PerPassResources;
-}
+type PointsLinesGpuResources = {
+  readonly vertexBuffer: Buffer;
+  readonly indexBuffer: Buffer;
+};
+type PointsLinesPreparationAdapter = PointsLinesLanePreparationAdapter<PointsLinesGpuResources>;
 
 /**
- * Configure a canvas surface from the two PipelineState format fields, applying
- * the WebGL2-fallback gate: native WebGPU uses the storage format plus an sRGB
- * view format, while the wgpu WebGL2 surface uses its direct sRGB format and
- * COLOR_TARGET-only usage because its GLES surface rejects COPY_SRC. The
- * storage-buffer capability still controls TEXTURE_BINDING usage, but it does
- * not determine whether native WebGPU supports viewFormats. Single SSOT for
- * the configure descriptor consumed by both the
- * lazy first-frame path (ensureContextConfigured in createRenderer.ts) and the
- * F2 surface-outdated reconfigure-and-retry branch (render-system-record.ts) so
- * the two cannot drift (architecture-principles #1 SSOT). Returns the configure
- * Result; callers own the `state.perPassResources.configured` flag + the
- * `__forgeaxSwapChainFormat` probe write (those differ per call site).
+ * The Standard renderer's single Points/Lines prepare owner.
+ *
+ * The retained snapshot is the identity boundary; this owner only resolves
+ * the source assets, runs admission, and publishes the existing preparation
+ * and record contracts to the main geometry loop. The expansion cache is
+ * shared across lanes and this owner keeps the one prepared vertex/index
+ * resource pair for each retained identity.
  */
-export function configureSurface(
-  context: RhiCanvasContext,
-  device: RhiDevice,
-  format: string,
-  colorAttachmentFormat: string,
-): Result<void, RhiError> {
-  const isWebGl2 = device.caps?.backendKind === 'wgpu-webgl2';
-  const supportsTextureBinding = device.caps?.storageBuffer ?? true;
-  return context.configure({
-    device,
-    format: (isWebGl2 ? colorAttachmentFormat : format) as unknown as GPUTextureFormat,
-    alphaMode: isWebGl2 ? 'opaque' : 'premultiplied',
-    usage:
-      GPU_TEXTURE_USAGE_RENDER_ATTACHMENT |
-      (supportsTextureBinding ? GPU_TEXTURE_USAGE_TEXTURE_BINDING : 0) |
-      (isWebGl2 ? 0 : GPU_TEXTURE_USAGE_COPY_SRC),
-    ...(!isWebGl2 ? { viewFormats: [colorAttachmentFormat as unknown as GPUTextureFormat] } : {}),
+class StandardPointsLinesOwner implements PointsLinesRecordOwner {
+  private readonly cache = new PointsLinesExpansionCache();
+  private readonly preparations = new Map<string, PointsLinesPreparationAdapter>();
+  private readonly active = new Map<string, PointsLinesInspection>();
+  private readonly layoutProjection = deriveVertexLayoutProjection({
+    position: new Float32Array(0),
+    normal: new Float32Array(0),
+    uv: new Float32Array(0),
+    tangent: new Float32Array(0),
   });
-}
 
-/**
- * feat-20260529-rendergraph-pass-abstraction M3 / w11 (D-2):
- * per-pass mutable resource slots extracted from PipelineState per
- * research Finding 3 fact-based grouping (depth / shadow / tonemap / fxaa).
- * These fields are the lazily-allocated texture caches + pass-specific
- * pipeline/bindgroup handles that belong to a single render pass.
- * Mutable (non-readonly) because the record stage writes back after
- * lazy-alloc on size drift.
- */
-export interface PerPassResources {
-  /**
-   * Per-frame depth attachment. Lazily allocated by
-   * `ensureContextConfigured` and recreated whenever the canvas resizes
-   * (see `ensureDepthTexture` in createRenderer.ts). Bound at the
-   * `beginRenderPass.depthStencilAttachment` slot with `depthLoadOp:'clear'`
-   * + `clearValue:1` so each frame starts with a far-plane depth buffer
-   * and the back-face / inside-of-cube fragments are correctly occluded
-   * (bug-20260519).
-   *
-   * `depthTextureView` is `null` until the canvas dimensions are known
-   * (first draw); the record stage skips the frame and fires
-   * `webgpu-runtime-error` if it stays null past configure.
-   */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle (matches sibling fields)
-  depthTexture: any | null;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-  depthTextureView: any | null;
-  depthTextureWidth: number;
-  depthTextureHeight: number;
-  configured: boolean;
+  constructor(private readonly internals: RenderSystemInternals) {}
 
-  // ── feat-20260519-tonemap-reinhard-mvp / M2 / T-M2.5 ──────────────────────
-  // feat-20260621 M-A3 (D-5): the dedicated tonemap pipeline / BGL / sampler /
-  // params-UBO fields are deleted — the built-in tonemap now flows through the
-  // unified fullscreen post-process channel (`postProcess.register(
-  // 'forgeax::tonemap', { source, params })` + the per-frame PostProcessParams
-  // channel). dispatchFullscreenPass owns the pipeline (getPostProcessPipeline
-  // cache), the BGL + sampler (buildFullscreenPostProcessPass), and the params
-  // UBO (eager-created at register). Only the HDR colour/depth attachments below
-  // remain here — they belong to the geometry pass, not the tonemap pass.
+  beginFrame(): void {
+    this.active.clear();
+  }
 
-  /**
-   * Lazy HDR colour + depth attachments for the opt-in tonemap path. Both
-   * are `null` until the first frame whose active camera carries
-   * `tonemap !== 'none'`; the record stage allocates them at the swap-chain
-   * size and re-creates on resize (mirrors `depthTexture` / `depthTextureView`
-   * idiom; AC-12).
-   *
-   * `hdrColor`'s format is `rgba16float` (AC-03(d)); the depth attachment is
-   * the same `depth24plus-stencil8` format the geometry pipelines already declare
-   * (`DEPTH_TEXTURE_FORMAT` SSOT in `createRenderer.ts`). When a camera
-   * downgrades to `tonemap === 'none'` between frames the textures stay
-   * allocated for cheap re-opt-in; full dispose happens via
-   * `Renderer.dispose()` -> browser GC (matches the `depthTexture` fix-f6
-   * placeholder).
-   */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle (matches sibling fields)
-  hdrColorTexture: any | null;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-  hdrColorView: any | null;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-  hdrDepthTexture: any | null;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-  hdrDepthView: any | null;
-  hdrTextureWidth: number;
-  hdrTextureHeight: number;
-  /**
-   * feat-20260604 M2 / w10: sampleCount the `hdrDepth` attachment was last
-   * allocated at (1 or 4). The HDR colour target is always sampled
-   * single-sample (`hdrColorView`); the depth pairs with the geometry colour
-   * target's sampleCount, which flips with `antialias === 'msaa'`. Tracking it
-   * lets the record stage reallocate depth when MSAA toggles between frames
-   * (a stale count=4 depth under a count=1 pipeline fails WebGPU validation).
-   */
-  hdrDepthSampleCount: number;
+  prepare(
+    entry: import('./record/frame-snapshot').ValidatedRenderable,
+    clustered: boolean,
+  ): PointsLinesRecordSubmission | undefined {
+    const snapshot = entry.source.pointsLines;
+    if (snapshot === undefined || snapshot.component === undefined || entry.world === undefined) {
+      return undefined;
+    }
+    const key = `${snapshot.worldId}:${snapshot.entityKey}`;
+    const topology = snapshot.component === 'Points' ? 'point-list' : 'line-list';
+    const backend = this.backend();
+    const lane = backend === 'wgpu-webgl2' ? 'cpu-webgl2' : clustered ? 'clustered' : 'direct';
+    const meshResult = resolveAssetHandle<MeshAsset>(
+      entry.world,
+      toShared<'MeshAsset'>(entry.source.assetHandle),
+    );
+    const materialResult = resolveAssetHandle<MaterialAsset>(
+      entry.world,
+      toShared<'MaterialAsset'>(snapshot.materialHandle),
+    );
+    if (!meshResult.ok || !materialResult.ok) {
+      this.publishRefusal(
+        snapshot,
+        new PointsLinesMaterialUnsupportedError({
+          entity: snapshot.entityKey,
+          material: 'unresolved',
+          pass: 'forward',
+          module: 'asset-resolution',
+          reason: 'source MeshAsset or MaterialAsset could not be resolved',
+        }),
+      );
+      return undefined;
+    }
+    const admission = admitPointsLines({
+      entity: snapshot.entityKey,
+      mesh: meshResult.value,
+      material: materialResult.value,
+      ...(snapshot.style?.kind === 'points'
+        ? {
+            points: {
+              sizePx: snapshot.style.sizePx,
+              shape: snapshot.style.shape === 'circle' ? 1 : 0,
+            },
+          }
+        : { lines: { widthPx: snapshot.style?.widthPx ?? 1 } }),
+    });
+    if (!admission.ok) {
+      this.publishRefusal(snapshot, admission.error);
+      return undefined;
+    }
+    const geometryKey = this.cache.getOrCreate(snapshot, meshResult.value).key;
+    const prepKey = `${geometryKey}:${lane}:${backend}`;
+    let preparation = this.preparations.get(prepKey);
+    if (preparation === undefined) {
+      preparation = createPointsLinesLanePreparationAdapter(lane, backend, {
+        cache: this.cache,
+        adapter: {
+          create: (geometry) => {
+            const vertex = this.internals.device.createBuffer({
+              label: `points-lines-vertices:${geometryKey}`,
+              size: Math.max(4, geometry.vertices.byteLength),
+              usage: GPU_BUFFER_USAGE_VERTEX | GPU_BUFFER_USAGE_COPY_DST,
+              mappedAtCreation: false,
+            });
+            if (!vertex.ok) return err(vertex.error);
+            const index = this.internals.device.createBuffer({
+              label: `points-lines-indices:${geometryKey}`,
+              size: Math.max(4, geometry.indices.byteLength),
+              usage: GPU_BUFFER_USAGE_INDEX | GPU_BUFFER_USAGE_COPY_DST,
+              mappedAtCreation: false,
+            });
+            if (!index.ok) {
+              this.internals.device.destroyBuffer(vertex.value);
+              return err(index.error);
+            }
+            return ok({ vertexBuffer: vertex.value, indexBuffer: index.value });
+          },
+          upload: (resource, geometry) => {
+            if (geometry.vertices.byteLength > 0) {
+              const vertexWrite = this.internals.device.queue.writeBuffer(
+                resource.vertexBuffer,
+                0,
+                geometry.vertices,
+              );
+              if (!vertexWrite.ok) return err(vertexWrite.error);
+            }
+            if (geometry.indices.byteLength > 0) {
+              const indexWrite = this.internals.device.queue.writeBuffer(
+                resource.indexBuffer,
+                0,
+                geometry.indices,
+              );
+              if (!indexWrite.ok) return err(indexWrite.error);
+            }
+            return ok(geometry.derivedBytes);
+          },
+          validate: (_resource, geometry) =>
+            geometry.expandedVertexCount > 0 && geometry.expandedIndexCount > 0
+              ? ok(undefined)
+              : err(new Error('Points/Lines expansion contains no drawable triangles')),
+          destroy: (resource) => {
+            this.internals.device.destroyBuffer(resource.vertexBuffer);
+            this.internals.device.destroyBuffer(resource.indexBuffer);
+          },
+        },
+      });
+      this.preparations.set(prepKey, preparation);
+    }
+    const prepared = preparation.prepare(snapshot, meshResult.value);
+    if (!prepared.ok) {
+      const lkg = preparation.lastKnownGood();
+      if (lkg !== undefined) {
+        const lkgPlan = createPointsLinesLaneAdapter(lane, backend).createRecordPlan(
+          lkg.snapshot,
+          lkg.geometry,
+        );
+        const state = preparation.inspect();
+        this.active.set(
+          key,
+          inspectPointsLines({
+            snapshot,
+            topology,
+            lane,
+            pointCount: lkg.geometry.pointCount,
+            segmentCount: lkg.geometry.segmentCount,
+            sourceBytes: lkg.geometry.sourceBytes,
+            derivedBytes: lkg.geometry.derivedBytes,
+            cache: { hit: true, rebuilds: state.rebuilds, evictions: 0 },
+            drawCount: lkgPlan.drawCount,
+            uploadBytes: 0,
+            lastKnownGood: true,
+            refusal: {
+              code: prepared.error.code,
+              expected: prepared.error.expected,
+              hint: prepared.error.hint,
+              detail: prepared.error.detail,
+              generation: prepared.error.detail.generation,
+              lastKnownGood: true,
+            },
+          }),
+        );
+        return {
+          plan: lkgPlan,
+          vertexBuffer: lkg.resource.vertexBuffer,
+          indexBuffer: lkg.resource.indexBuffer,
+          layoutProjection: this.layoutProjection,
+        };
+      }
+      this.publishRefusal(snapshot, prepared.error);
+      return undefined;
+    }
+    const plan = createPointsLinesLaneAdapter(lane, backend).createRecordPlan(
+      snapshot,
+      prepared.value.geometry,
+    );
+    const state = preparation.inspect();
+    this.active.set(
+      key,
+      inspectPointsLines({
+        snapshot,
+        topology,
+        lane,
+        pointCount: prepared.value.geometry.pointCount,
+        segmentCount: prepared.value.geometry.segmentCount,
+        sourceBytes: prepared.value.geometry.sourceBytes,
+        derivedBytes: prepared.value.geometry.derivedBytes,
+        cache: {
+          hit: prepared.value.uploadedBytes === 0,
+          rebuilds: state.rebuilds,
+          evictions: 0,
+        },
+        drawCount: plan.drawCount,
+        uploadBytes: prepared.value.uploadedBytes,
+        lastKnownGood: prepared.value.lastKnownGood,
+      }),
+    );
+    return {
+      plan,
+      vertexBuffer: prepared.value.resource.vertexBuffer,
+      indexBuffer: prepared.value.resource.indexBuffer,
+      layoutProjection: this.layoutProjection,
+    };
+  }
 
-  // -- feat-20260528-fxaa-post-processing M2 / w7 ----------------------------------
-  //
-  // FXAA fullscreen post-process pipeline resources. Mirrors the tonemap
-  // pipeline shape: compiled at buildReadyWebGPU step 2 alongside the tonemap
-  // pipeline and stored on PipelineState for per-frame consumption in the
-  // record stage.
-  //
-  // D-2: 2-entry BGL (texture + sampler), no UBO. D-3: intermediate texture
-  // format = bgra8unorm (swap-chain storage format). D-7: antialias=0
-  // zero-overhead -- all FXAA fields stay null/0 until the first frame with
-  // antialias='fxaa'.
-  readonly fxaaPipeline: RenderPipeline | null;
-  readonly fxaaBindGroupLayout: BindGroupLayout | null;
-  readonly fxaaSampler: Sampler | null;
+  resetForDeviceLoss(): void {
+    for (const preparation of this.preparations.values()) preparation.resetForDeviceLoss();
+    this.active.clear();
+  }
 
-  // ── feat-20260604-learn-render-4.10-anti-aliasing-msaa M2 / w7 ──────────
-  //
-  // MSAA (4x multisample) attachment slots. All `null`/0 until the first
-  // frame whose active camera carries `antialias === 'msaa'`; the record
-  // stage allocates them at the swap-chain size and re-creates on resize
-  // (mirrors the hdrColor size-drift idiom; D-1). When
-  // antialias is none/fxaa these stay null with zero allocation (C-9: MSAA
-  // is a per-Camera switch derived from `camera.antialias === 'msaa'`, D-6).
-  //
-  // LDR swap-chain path (tonemapActive=false):
-  //   ONE count=4 multisample texture backs both the geometry and sprite
-  //   sub-passes. Two views of that same texture are taken: an srgb view
-  //   (msaaColorView, geometry pass) and an unorm view (msaaSpriteColorView,
-  //   sprite-split sub-pass; F-1). The single texture's storage format is
-  //   bgra8unorm, so the srgb and unorm views are both valid view formats of
-  //   it (same trick as the non-MSAA split path). The srgb view resolves to
-  //   the swap-chain srgb view; the unorm view resolves to the swap-chain
-  //   unorm view. No second multisample texture is allocated.
-  //   msaaDepth (depth24plus-stencil8, count=4) -> paired, never resolved (D-3).
-  //
-  // HDR path (tonemapActive=true): hdrColor/hdrDepth are themselves
-  //   allocated count=4 (record stage); hdrColorResolve is the single-sample
-  //   resolve output the tonemap/bloom passes sample (AC-03).
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle (matches sibling fields)
-  msaaColorTexture: any | null;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-  msaaColorView: any | null;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-  msaaSpriteColorTexture: any | null;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-  msaaSpriteColorView: any | null;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-  msaaDepthTexture: any | null;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-  msaaDepthView: any | null;
-  msaaTextureWidth: number;
-  msaaTextureHeight: number;
-  // HDR path MSAA: the count=4 multisample rgba16float geometry target. The
-  // geometry + skybox passes write it; it resolves to the single-sample
-  // `hdrColorView` (which the tonemap / bloom passes keep sampling unchanged).
-  // Allocated alongside hdrColor when antialias='msaa' && tonemap!='none'.
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle (HDR multisample target)
-  hdrColorMsaaTexture: any | null;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-  hdrColorMsaaView: any | null;
+  inspections(): readonly PointsLinesInspection[] {
+    return [...this.active.values()];
+  }
 
-  // ── feat-20260531-skybox-env-background M3 / w15 ─────────────────────────
-  //
-  // Skybox fullscreen cubemap pipeline resources. Mirrors tonemap/fxaa
-  // construction: 4-entry BGL (texture_cube + sampler + View UBO + rotation UBO), fullscreen
-  // triangle vertex stage, cubemap-sample fragment stage. Skybox writes HDR to
-  // hdrColor rgba16float (targeted by the hdrColor render target); the tonemap
-  // pass later reads hdrColor and maps to the LDR swap-chain. Fields are null
-  // when the manifest has no skybox entry (D-7 optional, legacy manifests
-  // continue to boot).
-  readonly skyboxPipeline: RenderPipeline | null;
-  // feat-20260604 M2 / w8: count=4 multisample variant of the skybox pipeline.
-  // Used when the active camera carries antialias='msaa' (the skybox writes the
-  // count=4 hdrColorMsaa target alongside the main geometry pass). null when
-  // the base skybox pipeline is null (legacy manifest) or its MSAA build failed.
-  readonly skyboxPipelineMsaa: RenderPipeline | null;
-  readonly skyboxBindGroupLayout: BindGroupLayout | null;
-  readonly skyboxSampler: Sampler | null;
-  /** Stable 16 B quaternion UBO updated by the skybox record pass. */
-  readonly skyboxRotationBuffer: Buffer | null;
+  private backend(): PointsLinesBackend {
+    switch (this.internals.device.caps.backendKind) {
+      case 'wgpu-webgl2':
+        return 'wgpu-webgl2';
+      case 'null':
+        return 'null';
+      default:
+        return 'webgpu';
+    }
+  }
 
-  // ── feat-20260520-directional-light-shadow-mapping M1c / w8 ────────────
-  //
-  // Shadow RT (depth32float) lazy-allocated per mapSize; recreated on mapSize
-  // drift. Used by the shadow depth pass (colorAttachments: []) and sampled
-  // by the main pass as @group(0) binding(3) in M2/M3. debugReadback copies
-  // the depth texture to a staging buffer for Inspector readback (D-2/D-5).
-  //
-  // feat-20260609 M4 / T-009: shadowCasterPipeline / shadowCasterPipelineLayout
-  // removed — shadow PSO now obtained via frameState.pipelineCache lookup
-  // (runtime.getMaterialShaderPipeline, passKind: 'shadow-caster'), same
-  // path as forward passes (charter P4 consistent abstraction).
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-  shadowTexture: any | null;
-  shadowMapSize: number;
-  shadowCascadeCount: number;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-  shadowSampler: any | null;
-  /**
-   * feat-20260520-directional-light-shadow-mapping M1c / w11 +
-   * feat-20260613-csm-cascaded-shadow-maps M5 / w28:
-   * latest cascade-0 lightViewProj mat4 (16 f32, col-major). Kept under
-   * the legacy field name as an Inspector backward-compat surface
-   * (`runtime.lights.directionalShadow.lightSpaceMatrix` JSON-RPC), per
-   * AGENTS.md §Change stance exception for external-visible wire
-   * protocols with known downstream consumers. Populated each frame
-   * from `lights.lightViewProj[0]`. Null before the first extract with
-   * an active shadow-casting DirectionalLight.
-   */
-  shadowLightSpaceMatrix: Float32Array | null;
-  /**
-   * feat-20260613-csm-cascaded-shadow-maps M5 / w28: full 4-cascade
-   * lightViewProj concatenation (4 × 16 = 64 f32, col-major) consumed by
-   * `debugSampleShadowFactor` so the probe can project against the selected
-   * cascade. Null before the first extract
-   * with an active shadow-casting DirectionalLight.
-   */
-  shadowCsmLightViewProj: Float32Array | null;
-  /**
-   * Producer-owned CSM receiver-selection facts. The debug probe must use the
-   * same view-space depth + split-plane selector as the main receiver path;
-   * keeping the two inputs together prevents a selector mirror from silently
-   * drifting at cascade boundaries.
-   */
-  shadowCsmSelection: {
-    readonly viewMatrix: Float32Array;
-    readonly splitPlanes: Float32Array;
-  } | null;
-
-  // ── feat-20260531-bloom-first-declarative-render-graph-pass w13/w16 ────
-  //
-  // Bloom post-processing chain: 4 passes (bright / blur-H / blur-V / composite)
-  // operating in HDR rgba16float domain. Pipeline handles assembled at
-  // buildReadyWebGPU (optional — legacy manifests without bloom.wgsl leave
-  // these null). Intermediate textures are graph-owned transient targets
-  // resolved per-frame; the bloom bind groups are identity-cached on those
-  // views (frameState.postProcessBgCache) and rebuild automatically when a
-  // resize retires the old textures.
-  //
-  // D-1: blur H/V share the same module, per-axis texelSize baked at UBO write.
-  // D-4: 3 distinct BGL layouts (bright/blur: 1-tex+UBO, composite: 2-tex+UBO).
-  // D-6: all intermediate textures use rgba16float format.
-  readonly bloomBrightPipeline: RenderPipeline | null;
-  readonly bloomBlurHPipeline: RenderPipeline | null;
-  readonly bloomBlurVPipeline: RenderPipeline | null;
-  readonly bloomCompositePipeline: RenderPipeline | null;
-  readonly bloomBrightBindGroupLayout: BindGroupLayout | null;
-  readonly bloomBlurBindGroupLayout: BindGroupLayout | null;
-  readonly bloomCompositeBindGroupLayout: BindGroupLayout | null;
-  readonly bloomSampler: Sampler | null;
-  readonly bloomBrightParamsBuffer: Buffer | null;
-  // bug-20260625: H and V blur passes need SEPARATE params UBOs. They run in
-  // the same frame encoder; with one shared buffer the later writeBuffer (V's
-  // texelSize=(0,1/h)) clobbers H's (texelSize=(1/w,0)) before the GPU runs the
-  // H pass, so both passes blurred vertically -> only vertical bloom, no
-  // horizontal spread. One buffer per axis keeps each pass's params intact.
-  readonly bloomBlurHParamsBuffer: Buffer | null;
-  readonly bloomBlurVParamsBuffer: Buffer | null;
-  readonly bloomCompositeParamsBuffer: Buffer | null;
-
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-  bloomBrightTexture: any | null;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-  bloomBrightView: any | null;
-  bloomBrightWidth: number;
-  bloomBrightHeight: number;
-
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-  bloomBlurHTexture: any | null;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-  bloomBlurHView: any | null;
-  bloomBlurHWidth: number;
-  bloomBlurHHeight: number;
-
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-  bloomBlurVTexture: any | null;
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-  bloomBlurVView: any | null;
-  bloomBlurVWidth: number;
-  bloomBlurVHeight: number;
-
-  // ── feat-20260612-hdrp-ssao M6 / w26 + M8 / w37 + w38 ───────────────────
-  //
-  // SSAO post-processing chain: 2 passes (calc + blur) operating on
-  // half-resolution R8 single-channel textures. RenderPipeline handles
-  // assembled at buildReadyWebGPU (optional — manifests without
-  // hdrp-ssao.wgsl leave these null). Dedicated BGL (9 entries matching
-  // current WGSL @group(0) bindings 0-8) shared by both pipelines: calc
-  // and blur both bind all 9 entries; the blur uses ssaoRaw (binding 7) +
-  // ssaoSampler (binding 8) while the calc binds a 1x1 fallback view at
-  // 7 (the calc shader never samples ssaoRaw).
-  // plan-strategy D-A; D-D; D-E.
-  //
-  // Samplers (filtering + non-filtering depth) and the 1x1 ssaoRaw fallback
-  // view used by the calc pass are lazy-allocated inside the record closure
-  // on first frame and cached on the mutable slots below — keeps createRenderer
-  // free of additional state and matches bloom's lazy bind-group pattern.
-  readonly ssaoCalcPipeline: RenderPipeline | null;
-  readonly ssaoBlurPipeline: RenderPipeline | null;
-  readonly ssaoBgl: BindGroupLayout | null;
-  /** Filtering sampler shared by ssao_noise_sampler (binding 3) + ssaoSampler (binding 8). */
-  ssaoFilteringSampler: Sampler | null;
-  /** Non-filtering sampler dedicated to hdr_depth (binding 6); WebGPU validation. */
-  ssaoDepthSampler: Sampler | null;
-  /** 1x1 fallback view bound at ssaoRaw (binding 7) in the calc pass. */
-  // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-  ssaoFallbackRawView: any | null;
-}
-
-export interface MeshGpuHandles {
-  /**
-   * Vertex buffer wrapped as a GpuBuffer (M-3 / w11). Consumers reach the
-   * raw RHI Buffer via `.handle` for `setVertexBuffer` etc.; `.destroy()`
-   * routes through the RHI shim's lifecycle SSOT (charter §F1 single-entry
-   * indexability + plan-strategy D-9 wrapper migration).
-   */
-  readonly vertexBuffer: GpuBuffer;
-  /**
-   * Index buffer wrapper, or `null` for a vertex-only mesh (no
-   * `MeshAsset.indices`). When `null` the record stage takes the non-indexed
-   * `pass.draw(vertexCount)` path and never calls `setIndexBuffer`. Gated
-   * on `indexed` below.
-   */
-  readonly indexBuffer: GpuBuffer | null;
-  /** Allocation byte size of the vertex buffer (mirrors GPUBuffer.size). */
-  readonly vboBytes: number;
-  /** Allocation byte size of the index buffer, or 0 when `indexBuffer` is null. */
-  readonly iboBytes: number;
-  readonly indexCount: number;
-  /**
-   * Index buffer format inferred from the source `MeshAsset.indices` typed
-   * array (`Uint16Array` -> `'uint16'`, `Uint32Array` -> `'uint32'`). The
-   * record stage threads this into `pass.setIndexBuffer(..., format)` so
-   * the GPU reads the correct stride per index. bug-20260519: the prior
-   * hard-coded `'uint16'` corrupted procedural meshes whose factories
-   * (`createBoxGeometry` etc) emit Uint32Array indices.
-   */
-  readonly indexFormat: 'uint16' | 'uint32';
-  /**
-   * Vertex layout discriminator stamped at upload time. `'12F'` = 48 B
-   * (position+normal+uv+tangent); BUILTIN and procedural geometry stay 12F
-   * (bug-20260519). `'18F'` = 72 B (12F + skinIndex uint16x4 + skinWeight
-   * float32x4) for skinned glTF meshes (feat-20260611). The MeshRenderData
-   * (render-data.ts) / MeshGpuEntry (gpu-resource-store.ts) / MeshGpuHandles
-   * layout fields are the same union and move together.
-   */
-  readonly layout: '12F' | '18F';
-  /**
-   * Number of UV sets the interleaved vertex buffer carries (1 = single `uv`,
-   * +1 per `uv1..uv7`). feat-20260629-multi-uv-set-support: the `layout`
-   * discriminator only encodes the 12F/18F base stride; a mesh with a real
-   * extra UV set has a wider stride (56 B for two sets). The forward record
-   * stage threads this into `getMaterialShaderPipeline` so the PSO vertex
-   * layout matches the buffer (otherwise post-first vertices land off-screen).
-   * Mirrors MeshRenderData.uvSetCount / MeshGpuEntry.uvSetCount.
-   */
-  readonly uvSetCount: number;
-  /**
-   * Vertex count uses 18F for skin or the geometry-owned canonical base stride.
-   * The non-indexed draw path passes this to `pass.draw(vertexCount)`.
-   */
-  readonly vertexCount: number;
-  /**
-   * True when the mesh carries an index buffer (`MeshAsset.indices` present).
-   * `false` for vertex-only meshes. The record stage branches on this to pick
-   * `drawIndexed` vs `draw` and to gate `setIndexBuffer`.
-   */
-  readonly indexed: boolean;
-  /**
-   * Primitive topology of this mesh (first submesh's topology, default
-   * 'triangle-list'). WebGPU bakes topology into the immutable PSO, so the
-   * record stage threads this into `getMaterialShaderPipeline` to select a
-   * per-topology PSO (feat-20260604 M3 / w9).
-   *
-   * feat-20260608 M4 / w16: topology is per-submesh; this field reflects
-   * `submeshes[0].topology` for backward compat. Use `submeshes` field for
-   * per-submesh draw iteration.
-   */
-  readonly topology: PrimitiveTopology;
-  /**
-   * Submeshes from MeshAsset.submeshes, carried through from the GPU store
-   * so the record stage can iterate per-submesh drawIndexed (feat-20260608 M4 / w16).
-   */
-  readonly submeshes: readonly import('@forgeax/engine-types').Submesh[];
+  private publishRefusal(
+    snapshot: PointsLinesRetainedSnapshot,
+    error: PointsLinesSourceError,
+  ): void {
+    this.active.set(
+      `${snapshot.worldId}:${snapshot.entityKey}`,
+      inspectPointsLines({
+        snapshot,
+        topology: snapshot.component === 'Points' ? 'point-list' : 'line-list',
+        lane: 'refused',
+        pointCount: 0,
+        segmentCount: 0,
+        sourceBytes: 0,
+        derivedBytes: 0,
+        cache: { hit: false, rebuilds: 0, evictions: 0 },
+        drawCount: 0,
+        uploadBytes: 0,
+        lastKnownGood: false,
+        refusal: {
+          code: error.code,
+          expected: error.expected,
+          hint: error.hint,
+          detail: error.detail,
+          generation: snapshot.meshGeneration,
+          lastKnownGood: false,
+        },
+      }),
+    );
+  }
 }
 
 export function createRenderSystem(internals: RenderSystemInternals): RenderSystem {
-  internals.profiler?.registerPhaseCatalog('render', RENDER_PHASE_CATALOG);
-  // Material handles are scoped to a World. Keep resolved snapshots scoped to
-  // this RenderSystem and this World so Edit/Play handles can never collide;
-  // WeakMap also lets a dropped Play world release its cache with the world.
-  const materialSnapshotCachesByWorld: MaterialSnapshotCachesByWorld = new WeakMap();
-  const featureGpuWork = new Map<string, RenderFeatureGpuWorkResolver>();
-  const getFeatureGpuWork = (featureIdentity: string): RenderFeatureGpuWorkResolver => {
-    const existing = featureGpuWork.get(featureIdentity);
-    if (existing !== undefined) return existing;
-    const created = createRenderFeatureGpuWorkResolver({
-      device: internals.device,
-      shaderModuleFactory:
-        internals.shaderModuleFactory ??
-        ({
-          createShaderModule: () =>
-            err(
-              new RhiError({
-                code: 'rhi-not-available',
-                expected: 'the renderer backend exposes shader module creation',
-                hint: 'construct the renderer through the backend pack before installing GPU features',
-              }),
-            ),
-        } satisfies import('./pipeline-builder').PipelineBuilderShaderModuleFactory),
-      generation: internals.featureHost?.preparedGeneration ?? 0,
-      featureIdentity,
-    });
-    featureGpuWork.set(featureIdentity, created);
-    return created;
-  };
+  const phaseCatalogRegistration = internals.profiler?.registerPhaseCatalog(
+    'render',
+    RENDER_PHASE_CATALOG,
+  );
+  let releaseProfilerCatalog =
+    phaseCatalogRegistration?.ok === true ? phaseCatalogRegistration.value : undefined;
+  let preparedWorlds: readonly World[] = [];
+  const pointsLinesOwner = new StandardPointsLinesOwner(internals);
+  const persistentRenderScene = new PersistentRenderScene({
+    getDevice: () => internals.device,
+    onGpuError: (error) => internals.errorRegistry.fire(error),
+    onSharedRefMutation: (worldId, handle) => {
+      internals.gpuStore.invalidateMesh(handle, preparedWorlds[worldId] ?? worldId);
+    },
+  });
+  const gpuDrivenShaderFactory =
+    internals.shaderModuleFactory ??
+    ({
+      createShaderModule: () =>
+        err(
+          new RhiError({
+            code: 'rhi-not-available',
+            expected: 'the renderer backend exposes shader module creation',
+            hint: 'construct the renderer through the backend pack before activating GPU-driven rendering',
+          }),
+        ),
+    } satisfies import('./pipeline-builder').PipelineBuilderShaderModuleFactory);
+  let gpuDrivenProduction = new GpuDrivenProduction(internals.device, gpuDrivenShaderFactory);
+  const featureGpuWork: RenderFeatureGpuWorkOwner = createRenderFeatureGpuWorkOwner({
+    getDevice: () => internals.device,
+    getShaderModuleFactory: () =>
+      internals.shaderModuleFactory ??
+      ({
+        createShaderModule: () =>
+          err(
+            new RhiError({
+              code: 'rhi-not-available',
+              expected: 'the renderer backend exposes shader module creation',
+              hint: 'construct the renderer through the backend pack before activating GPU features',
+            }),
+          ),
+      } satisfies import('./pipeline-builder').PipelineBuilderShaderModuleFactory),
+  });
   const disposeFeatureGpuWork = (): void => {
-    for (const resolver of featureGpuWork.values()) {
-      const disposed = resolver.dispose();
-      if (!disposed.ok) internals.errorRegistry.fire(disposed.error);
-    }
-    featureGpuWork.clear();
+    const disposed = featureGpuWork.dispose();
+    if (!disposed.ok) internals.errorRegistry.fire(disposed.error);
   };
   // Per-RenderSystem frame state: closure-internal frameNumber + the
   // per-entity instance GPU buffer cache (feat-20260514 M3 / w15: the
@@ -1671,10 +758,14 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     frameNumber: 0,
     directionalShadowCache: null,
     directionalShadowCacheRecorded: false,
-    perFrameGraph: null,
-    perFrameGraphTopologyKey: null,
-    retiredPerFrameGraphs: new Set(),
+    compiledFrameGraph: null,
+    compiledFrameGraphTopologyKey: null,
+    retiredCompiledFrameGraphs: new Set(),
+    currentFrameObservationSource: undefined,
+    currentDirectionalShadowView: null,
+    currentSpotShadowView: null,
     instanceBuffers: new Map(),
+    morphBuffers: new Map(),
     hdrpClusterBinScratch: createClusterBinScratch(),
     hdrpClusterGridScratch: null,
     hdrpLightIndexListScratch: null,
@@ -1726,13 +817,13 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     // WeakMap chain so resize-retired transient targets rebuild automatically.
     postProcessBgCache: new WeakMap(),
     // feat-20260601-customizable-render-pipeline-seam M1 / w7: installed-pipeline state.
-    // 0 = nothing installed yet (createRenderer dogfood installs the default before any
+    // 0 = nothing installed yet (createRenderer dogfood installs the default before a
     // draw). activePipeline defaults to the built-in forward pipeline.
     installedPipelineHandle: 0,
-    activePipeline: urpPipeline,
+    activePipeline: internals.standardPipeline,
     // feat-20260601 verify round 2: the standard forward pipeline installs with no config
-    // (its topology is frame-invariant). installPipeline overwrites this with the resolved
-    // asset's `config` on every swap so a custom pipeline reads its install-time config.
+    // (its topology is frame-invariant). Standard configuration overwrites this with the
+    // resolved asset config on every swap so the active graph reads its current config.
     installedPipelineConfig: undefined,
     // feat-20260608-cluster-lighting M2 / w10 + M5 / w20: HDRP active flag + once-per-frame
     // warn dedup set for hdrp-light-budget-exceeded / hdrp-index-list-overflow.
@@ -1742,7 +833,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     // cube_array shadow atlas + per-frame snapshot list. Atlas is null until the
     // first frame whose extracted lights.pointShadow is non-empty (zero-shadow
     // scenes never allocate; AC-09); the snapshot list defaults to an empty
-    // tuple so the URP `addPointShadowPass` gate sees zero shadow lights as the
+    // tuple so the typed point-shadow graph sees zero shadow lights as the
     // initial steady state.
     pointShadowAtlas: null,
     pointShadowSnapshots: [],
@@ -1760,7 +851,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
   function beginProfilePhase(session: RecorderSession | undefined, phase: RenderPhase): boolean {
     if (session === undefined) return false;
     try {
-      return session.beginPhase({ source: 'render', phase }).ok;
+      return session.beginPhase('render', phase).ok;
     } catch {
       return false;
     }
@@ -1800,52 +891,61 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       if (opened) endProfilePhase(session);
     }
   }
-  // feat-20260601 M1 / w7: pipeline registry (id -> impl) + the handle the memoized
-  // perFrameGraph was last built for. Both live in the createRenderSystem closure
-  // (plan-strategy D-D: all real logic on the RenderSystem layer; the Renderer facade
-  // only forwards). The registry dedups same-id register (Map.has -> throw), mirroring
-  // ShaderRegistry.installMaterialArtifact.
-  const pipelineRegistry = new Map<string, RenderPipelineDef>();
-  const pipelineInstalls: Array<{
-    readonly token: object;
-    readonly pipeline: RenderPipelineDef;
-    readonly config: RenderPipelineAsset['config'];
-    readonly isHdrp: boolean;
-  }> = [];
   let lastBuiltPipelineHandle = 0;
-  // Monotonic install epoch: bumped on every installPipeline call to brand the
+  // Monotonic configuration epoch: bumped on every Standard configuration change to brand the
   // installed pipeline so `draw` can detect a swap and rebuild the per-frame
-  // graph. Replaces the prior raw-handle brand (D-19: installPipeline takes a
+  // graph. Replaces the prior raw-handle brand (D-19: the pipeline configuration takes a
   // POD, no handle).
   let installEpoch = 0;
-  // feat-20260604-resource-owning-render-graph-and-fullscreen-postpr M2 / w13:
-  // post-process shader registry (id -> PostProcessShaderEntry), parallel to pipelineRegistry.
-  // Dedups same-id register (Map.has -> throw), mirroring ShaderRegistry.installMaterialArtifact.
-  const postProcessRegistry = new Map<string, PostProcessShaderEntry>();
-  // CPU post-process declarations are the logical registry and remain live
-  // across recovery. Only device-bound buffers and pipelines are rebuilt.
+  // CPU post-process declarations are owned by the feature host and remain live
+  // across recovery. Only device-bound buffers and pipelines are rebuilt here.
   // D-3 / D-8: per-shader params UBO resource table (id -> GPU Buffer).
   // Eager-created at register time when entry.params is present (byteSize >= 16,
   // defaultValue.length === byteSize); reused frame-to-frame via queue.writeBuffer.
   const postProcessParamsBuffers = new Map<string, Buffer>();
-  // F-2 fix-up: expose registry lookup through the narrow runtime surface so
-  // addFullscreenPass's execute closure (in render-graph-primitives.ts) can
-  // resolve a registered shader id without reaching into RenderSystemInternals.
-  // Inject as a post-construction property on `internals` (typed as readonly
-  // optional on RenderSystemRuntime, so a one-time cast is the only path);
-  // every consumer that types `RenderPipelineContext.runtime` will see it.
+  const builtinPostProcessEntries = new Map<string, PostProcessShaderEntry>();
+  let activeFeaturePostProcessEntries: ReadonlyMap<string, PostProcessShaderEntry> = new Map();
   const lookupPostProcess = (id: string): PostProcessShaderEntry | undefined =>
-    postProcessRegistry.get(id);
-  (internals as unknown as { lookupPostProcess: typeof lookupPostProcess }).lookupPostProcess =
-    lookupPostProcess;
+    builtinPostProcessEntries.get(id) ?? activeFeaturePostProcessEntries.get(id);
   // feat-20260621 M-A2 / w8: expose the eager-created per-id params UBO through
   // the narrow runtime surface so dispatchFullscreenPass can writeBuffer the
   // per-frame snapshot + bind it at group(1) binding(2).
   const getPostProcessParamsBuffer = (id: string): Buffer | undefined =>
     postProcessParamsBuffers.get(id);
-  (
-    internals as unknown as { getPostProcessParamsBuffer: typeof getPostProcessParamsBuffer }
-  ).getPostProcessParamsBuffer = getPostProcessParamsBuffer;
+  const ensurePostProcessParamsResources = (
+    featureEntries: ReadonlyMap<string, PostProcessShaderEntry>,
+  ): void => {
+    const declarations = new Map<string, PostProcessShaderEntry>([
+      ...builtinPostProcessEntries.entries(),
+      ...featureEntries.entries(),
+    ]);
+    for (const [id, entry] of declarations) {
+      const byteSize =
+        entry.params?.byteSize ?? (entryHasDepthRead(entry) ? DEPTH_MIN_PARAMS_BYTE_SIZE : 0);
+      if (byteSize === 0 || postProcessParamsBuffers.has(id)) continue;
+      const created = internals.device.createBuffer({
+        label: `post-process-params-${id}`,
+        size: byteSize,
+        usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
+        mappedAtCreation: false,
+      });
+      if (!created.ok) throw created.error;
+      const buffer = created.value;
+      if (entry.params !== undefined) {
+        const written = internals.device.queue.writeBuffer(buffer, 0, entry.params.defaultValue);
+        if (!written.ok) {
+          internals.device.destroyBuffer(buffer);
+          throw written.error;
+        }
+      }
+      postProcessParamsBuffers.set(id, buffer);
+    }
+    for (const [id, buffer] of postProcessParamsBuffers) {
+      if (declarations.has(id)) continue;
+      internals.device.destroyBuffer(buffer);
+      postProcessParamsBuffers.delete(id);
+    }
+  };
   // feat-20260609 M4 / T-10-a: post-process pipeline cache (id|colorFormat -> RhiRenderPipeline).
   // Solves CONCERN-1: dispatcher previously passed `pipeline=null` to
   // built.createHandle because per-frame execute closures cannot await async
@@ -1861,7 +961,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     const key = `${id}|${colorFormat}`;
     const cached = postProcessPipelineCache.get(key);
     if (cached !== undefined) return cached;
-    const entry = postProcessRegistry.get(id);
+    const entry = lookupPostProcess(id);
     if (entry === undefined) return null;
     const factory = internals.buildPostProcessPipeline;
     if (factory === undefined) return null;
@@ -1870,9 +970,11 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     postProcessPipelineCache.set(key, built);
     return built;
   };
-  (
-    internals as unknown as { getPostProcessPipeline: typeof getPostProcessPipeline }
-  ).getPostProcessPipeline = getPostProcessPipeline;
+  Object.assign(internals, {
+    lookupPostProcess,
+    getPostProcessParamsBuffer,
+    getPostProcessPipeline,
+  });
   // w15 M5 (plan-strategy D-P4 / AC-07): per-frame dispatch counters. Reset
   // on every `draw([world], { cameraOwner: 0, resourceOwner: 0 })` entry; bumped once per actual `pass.setPipeline`
   // dispatch in render-system-record.ts. Two-way split mirrors the two
@@ -1890,14 +992,11 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     createBindGroup: 0,
     keys: [],
   };
-  let preparedViewBindGroup: import('@forgeax/engine-rhi').BindGroup | null = null;
-  let preparedWorlds: readonly World[] = [];
   const preparedPipelineIds = new WeakMap<object, string>();
   const preparedMaterialPipelineShaders = new WeakMap<object, string>();
   const preparedGroup0Pipelines = new WeakSet<object>();
   const preparedViewOnlyPipelines = new WeakSet<object>();
   const preparedRenderMaterialPipelines = new WeakSet<object>();
-  const preparedColorOnlyPipelines = new WeakSet<object>();
   const preparedAssetHandles = new WeakMap<World, Map<string, number>>();
   const preparedHandle = <Brand extends string>(
     world: World,
@@ -1974,11 +1073,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         if (handle !== undefined) {
           const asset = resolveAssetHandle<SamplerAsset>(world, handle);
           if (asset.ok) {
-            const resident = internals.gpuStore.ensureSamplerResident(
-              handle,
-              asset.value,
-              worldIndex,
-            );
+            const resident = internals.gpuStore.ensureSamplerResident(handle, asset.value, world);
             if (resident.ok) sampler = resident.value;
           }
         }
@@ -1987,8 +1082,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       if (textureValue !== undefined) {
         const handle = preparedHandle(world, String(textureValue.texture), 'TextureAsset');
         if (handle !== undefined) {
-          view =
-            residentTextureView(world, internals.gpuStore, internals, handle, worldIndex) ?? view;
+          view = residentTextureView(world, internals.gpuStore, internals, handle) ?? view;
         }
       }
       textureResources.push({ sampler, view });
@@ -2077,10 +1171,14 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
   };
   const lastFrustumStats: { culled: number; total: number } = { culled: 0, total: 0 };
   const lastVisibilityStats: { explicitlyHidden: number } = { explicitlyHidden: 0 };
+  let lastMeshMaterialBindings: readonly MeshMaterialBindingObservation[] = [];
+  let lastMeshMaterialBindingFrame: ExtractedFrame | undefined;
   const preparedResolverFactory = (
     input: RenderFeaturePreparedGraphicsResolverInput,
-  ): PreparedGraphicsResolver =>
-    createPreparedGraphicsResolver({
+  ): PreparedGraphicsResolver => {
+    activeFeaturePostProcessEntries = input.fullscreenEffects;
+    ensurePostProcessParamsResources(input.fullscreenEffects);
+    return createPreparedGraphicsResolver({
       device: internals.device,
       featureIdentity: input.featureIdentity,
       generation: input.generation,
@@ -2088,9 +1186,11 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       featureOrder: input.order,
       lookup: input.lookup,
       resolveGpuBuffer: (reference) =>
-        getFeatureGpuWork(input.featureIdentity).resolveBuffer(reference),
+        featureGpuWork.resolveBuffer(input.featureIdentity, reference),
       resolvePipeline: (descriptor) => {
-        const postProcessEntry = internals.lookupPostProcess?.(descriptor.shader);
+        const postProcessEntry =
+          input.fullscreenEffects.get(descriptor.shader) ??
+          builtinPostProcessEntries.get(descriptor.shader);
         if (postProcessEntry !== undefined) {
           const fullscreen = buildFullscreenPostProcessPass(
             { device: internals.device, errorRegistry: internals.errorRegistry },
@@ -2149,9 +1249,6 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
             preparedRenderMaterialPipelines.add(pipeline as object);
           }
         }
-        if (pipeline !== null && descriptor.depthFormat === undefined) {
-          preparedColorOnlyPipelines.add(pipeline as object);
-        }
         return pipeline === null ? err(makePreparedPipelinePendingError()) : ok(pipeline);
       },
       resolveBindings: (descriptor, pipeline) => {
@@ -2164,6 +1261,9 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
           return descriptor.values.sceneDepth === undefined
             ? err(new Error('prepared group-0 resource pipeline requires a scene target'))
             : ok(undefined);
+        }
+        if (bindingContract === 'view-and-scene-depth') {
+          return ok(undefined);
         }
         if (preparedGroup0Pipelines.has(pipeline as object)) {
           const layout =
@@ -2180,14 +1280,12 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
             : internals.device.createBindGroup({ layout, entries: [] });
         }
         if (
-          preparedViewBindGroup !== null &&
-          (preparedViewOnlyPipelines.has(pipeline as object) ||
-            (preparedRenderMaterialPipelines.has(pipeline as object) &&
-              descriptor.values.group === 0) ||
-            pipeline === internals.getPipelineState()?.unlitPipeline ||
-            preparedColorOnlyPipelines.has(pipeline as object))
+          preparedViewOnlyPipelines.has(pipeline as object) ||
+          (preparedRenderMaterialPipelines.has(pipeline as object) &&
+            descriptor.values.group === 0) ||
+          pipeline === internals.getPipelineState()?.unlitPipeline
         ) {
-          return ok(preparedViewBindGroup);
+          return ok(undefined);
         }
         const group = descriptor.values.group;
         const layout =
@@ -2257,8 +1355,29 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
             });
       },
     });
+  };
   return {
-    draw(worlds: readonly World[], opts: DrawOwnerOptions): boolean {
+    releaseProfilerCatalog(): void {
+      releaseProfilerCatalog?.();
+      releaseProfilerCatalog = undefined;
+    },
+    get renderScene(): RenderSceneInspection {
+      return {
+        ...persistentRenderScene.inspect(),
+        gpuDriven: gpuDrivenProduction.inspect(),
+      };
+    },
+    get pointsLinesSnapshots(): readonly PointsLinesRetainedSnapshot[] {
+      return persistentRenderScene.pointsLinesSnapshots();
+    },
+    detachScene(world: World): void {
+      persistentRenderScene.detach(world);
+    },
+    draw(
+      worlds: readonly World[],
+      opts: DrawOwnerOptions,
+      renderReadLeases?: readonly RenderReadLease[],
+    ): boolean {
       preparedWorlds = worlds;
       const profileSession = internals.profiler?.activeSession();
       let ownsProfileFrame = false;
@@ -2271,22 +1390,21 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         }
       }
       try {
+        pointsLinesOwner.beginFrame();
         // cameraOwner drives the surfaced cameras + frustum
         // cull; resourceOwner drives skylight/skybox/postProcess + per-world
         // record config.
         const { cameraOwner, resourceOwner } = opts;
-        // feat-20260601 M1 / w7: pipeline hot-swap detection. If the installed handle
-        // changed since the memoized graph was built (a SWAP, not an effect toggle), null
-        // perFrameGraph so recordFrame rebuilds it via the now-active pipeline impl. The
-        // brand-number compare is the cheap gate; the rebuild reuses the existing
-        // perFrameGraph === null memoization path.
+        // Keep the compiled graph as last-known-good until the candidate topology
+        // compiles. The failed candidate frame does not execute it; successful
+        // replacement retires it atomically in ensureCompiledFrameGraph.
         if (frameState.installedPipelineHandle !== lastBuiltPipelineHandle) {
-          retirePerFrameGraph(frameState);
           // Feature contributions describe the active pipeline graph. Drop the
-          // old composition before the next frame re-runs feature contribution
+          // old graph before the next frame re-runs feature contribution
           // so a hot-swap cannot reuse passes compiled for the retired pipeline.
           resetRenderFeatureGraphState(internals);
           lastBuiltPipelineHandle = frameState.installedPipelineHandle;
+          persistentRenderScene.invalidate();
         }
         dispatchCounts.unlit = 0;
 
@@ -2312,16 +1430,23 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         // `resourceWorld` so the record-stage reads are self-describing (they
         // are resource-owner reads, not camera reads).
         const resourceWorld = worlds[resourceOwner] as World;
-        const frame = runProfiledRenderPhase(profileSession, 'extract', () =>
-          extractFrames(
+        const frame = runProfiledRenderPhase(profileSession, 'extract', () => {
+          return persistentRenderScene.extractComposition(
             worlds,
             { cameraOwner, resourceOwner },
-            internals.assets,
-            internals.getPipelineState(),
-            internals.gpuStore,
-            materialSnapshotCachesByWorld,
-          ),
-        );
+            internals.assets.catalogEpoch,
+            () =>
+              extractFrames(
+                worlds,
+                { cameraOwner, resourceOwner },
+                internals.assets,
+                internals.getPipelineState(),
+                persistentRenderScene.materialSnapshotCacheStore(),
+                { cull: 'none' },
+              ),
+            renderReadLeases,
+          );
+        });
         const {
           cameras,
           lights,
@@ -2335,6 +1460,18 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
           visibilityStats,
           postProcessParams,
         } = frame;
+        if (lastMeshMaterialBindingFrame !== frame) {
+          lastMeshMaterialBindingFrame = frame;
+          lastMeshMaterialBindings = renderables.map((renderable) => ({
+            worldId: renderable.worldId,
+            entityKey: renderable.entityKey,
+            bindings: renderable.materials.map((material, slotIndex) => ({
+              handle: material.materialHandle ?? 0,
+              source: renderable.materialBindingSources[slotIndex] ?? 'engine-default',
+            })),
+            diagnostics: renderable.materialBindingDiagnostics ?? [],
+          }));
+        }
 
         bindGroupCounts.createBindGroup = 0;
         bindGroupCounts.keys = [];
@@ -2355,15 +1492,17 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
             'bind-groups',
             bindGroupSkipReason ?? 'pipeline-state-unavailable',
           );
-          preparedViewBindGroup = null;
         } else {
-          const pipelineState = preparedPipelineState;
-          preparedViewBindGroup = runProfiledRenderPhase(
-            profileSession,
-            'bind-groups',
-            () =>
-              buildPerFrameBindGroups(internals, frameState, pipelineState, true, bindGroupCounts)
-                .viewBindGroup,
+          runProfiledRenderPhase(profileSession, 'bind-groups', () =>
+            buildPerFrameBindGroups(
+              internals,
+              frameState,
+              preparedPipelineState,
+              true,
+              bindGroupCounts,
+              undefined,
+              false,
+            ),
           );
         }
         lastFrustumStats.culled = frustumStats.culled;
@@ -2372,12 +1511,14 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         const featureTargets =
           preparedPipelineState === null || cameras[0] === undefined
             ? []
-            : (frameState.activePipeline.getRenderFeatureTargets?.({
-                camera: cameras[0],
+            : resolveStandardRenderFeatureTargets({
+                tonemap: cameras[0].tonemap,
+                antialias: cameras[0].antialias,
                 colorAttachmentFormat: preparedPipelineState.colorAttachmentFormat,
-                backendKind: internals.device.caps.backendKind,
                 storageBuffer: internals.device.caps.storageBuffer,
-              }) ?? []);
+                multisample: internals.device.caps.backendKind !== 'wgpu-webgl2',
+              });
+        let featureGraphCandidate: RenderFeatureGraphCandidate | undefined;
         const preparedResourceBatches = runProfiledRenderPhase(profileSession, 'features', () => {
           if (internals.featureHost === undefined) return [];
           const featureFrame = runRenderFeatureFrame(internals.featureHost, {
@@ -2389,50 +1530,35 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
             targets: featureTargets,
             generation: internals.featureHost?.preparedGeneration ?? 0,
             caps: internals.device.caps,
-            createContributionStaging: (
-              identity,
-              order,
-              validateGraphics,
-              resolveGraphics,
-              resolveGpuCompute,
-            ) =>
-              createRenderFeatureContributionStaging<RenderFeaturePassContext>(
-                identity,
-                order,
-                validateGraphics,
-                resolveGraphics,
-                resolveGpuCompute,
-              ),
+            ...(internals.getMaterialShaderBindingContract === undefined
+              ? {}
+              : { materialShaderBindingContract: internals.getMaterialShaderBindingContract }),
             createPreparedGraphicsResolver: preparedResolverFactory,
-            getGpuWorkResolver: getFeatureGpuWork,
+            gpuWork: featureGpuWork,
           });
+          activeFeaturePostProcessEntries = featureFrame.fullscreenEffects;
+          ensurePostProcessParamsResources(featureFrame.fullscreenEffects);
           lastVisibilityStats.explicitlyHidden = featureFrame.hiddenEntityReports.length;
           for (const featureError of featureFrame.errors) {
             if (!isPendingRenderFeaturePreparation(featureError)) {
               internals.errorRegistry.fire(featureError);
             }
           }
-          const featureGraphState = getRenderFeatureGraphState(internals);
-          const merged = mergeRenderFeatureContributions(featureFrame.contributions);
-          if (!merged.ok) {
-            reportRenderFeatureGraphError(internals, merged.error);
-            if (featureGraphState.composition !== undefined) {
-              retirePerFrameGraph(frameState);
-              featureGraphState.composition = undefined;
-            }
-            featureGraphState.contributions = [];
-            featureGraphState.topologySignature = undefined;
-          } else {
-            const topologyChanged =
-              featureGraphState.topologySignature !== undefined &&
-              featureGraphState.topologySignature !== merged.value.topologySignature;
-            featureGraphState.contributions = featureFrame.contributions;
-            featureGraphState.topologySignature = merged.value.topologySignature;
-            if (topologyChanged) {
-              retirePerFrameGraph(frameState);
-              featureGraphState.composition = undefined;
-            }
-          }
+          featureGraphCandidate = {
+            plans: featureFrame.plans,
+            fullscreenEffects: featureFrame.fullscreenEffects,
+            ...(featureFrame.preparedResourceBatches.length === 0
+              ? {}
+              : { preparedResourceKey: `frame-${frameState.frameNumber}` }),
+            onRejected: () => {
+              for (const batch of featureFrame.preparedResourceBatches) {
+                const released = batch.release();
+                if (!released.ok) {
+                  internals.errorRegistry.fire(released.error);
+                }
+              }
+            },
+          };
           return featureFrame.preparedResourceBatches;
         });
 
@@ -2500,8 +1626,20 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
             postProcessParams,
             worlds,
             recordProfilePhase,
+            {
+              owner: gpuDrivenProduction,
+              scene: persistentRenderScene.compositionGpuDrivenState(),
+              onCoverage: (ownsAll) => {
+                const key = `${internals.gpuStore.meshResidencyEpoch}:${frameState.isHdrpActive ? 'hdrp' : 'urp'}`;
+                persistentRenderScene.setCompositionGpuDrivenCoverage(key, ownsAll);
+              },
+            },
+            renderReadLeases,
+            featureGraphCandidate,
+            pointsLinesOwner,
           ),
         );
+        persistentRenderScene.setPointsLinesInspections(pointsLinesOwner.inspections());
         if (internals.featureHost !== undefined && preparedResourceBatches.length > 0) {
           const batches = preparedResourceBatches;
           if (submitted) {
@@ -2544,195 +1682,153 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     pipelineDispatchCounts: dispatchCounts,
     observeCurrentFrame(options: FrameObservationOptions) {
       const currentFrameId = frameState.frameNumber - 1;
-      const source = buildCurrentFrameObservationSource(
-        frameState.frameNumber,
-        frameState.perFrameGraph,
-        frameState.isHdrpActive,
-        internals.device.caps.backendKind,
-      );
-      return observeCurrentFrame(options, source, currentFrameId);
+      return observeCurrentFrame(options, frameState.currentFrameObservationSource, currentFrameId);
     },
     bindGroupCounts: bindGroupCounts,
     frustumStats: lastFrustumStats,
     visibilityStats: lastVisibilityStats,
+    get meshMaterialBindings(): readonly MeshMaterialBindingObservation[] {
+      return lastMeshMaterialBindings;
+    },
     get perFramePassNames(): readonly string[] {
-      return frameState.perFrameGraph?.listPasses().map((p: { name: string }) => p.name) ?? [];
+      return frameState.compiledFrameGraph?.inspect().passes.map((pass) => pass.name) ?? [];
     },
-    // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
-    getCurrentShadowView(): any | null {
-      return frameState.perFrameGraph?.getColorTargetView('shadowDepth') ?? null;
-    },
-    registerPipeline(id: string, impl: RenderPipelineDef): void {
-      if (pipelineRegistry.has(id)) {
-        throw new PipelineError({ code: 'pipeline-already-registered', detail: { id } });
-      }
-      pipelineRegistry.set(id, impl);
-    },
-    installPipeline(asset: RenderPipelineAsset): Result<() => void, PipelineError> {
-      const impl = pipelineRegistry.get(asset.pipelineId);
-      if (impl === undefined) {
-        return err(
-          new PipelineError({ code: 'pipeline-not-found', detail: { handle: installEpoch } }),
-        );
-      }
-      // feat-20260608-cluster-lighting M2 / w10: HDRP grid validation.
-      // When the pipelineId is 'forgeax::hdrp', validate clusterGrid dimensions
-      // before installing. Grid-invalid throws a standalone HdrpInstallError
-      // (NOT in RuntimeErrorCode; synchronous install-time config error).
-      //
-      // feat-20260608-cluster-lighting M5 / w20: HDRP caps gate.
-      // A zero storage-buffer ceiling is the supported WebGL2 downlevel path:
-      // HDRP's cluster light list is transported through a bounded uniform
-      // array. Partial storage support (1..3 slots) is still unsupported
-      // because it cannot satisfy either the clustered or the complete
-      // uniform fallback contract.
-      if (asset.pipelineId === 'forgeax::hdrp') {
-        const storageBuffersCap = internals.device.limits.maxStorageBuffersPerShaderStage;
-        if (storageBuffersCap > 0 && storageBuffersCap < 4) {
-          throw new HdrpCapsInsufficientError(
-            'maxStorageBuffersPerShaderStage',
-            storageBuffersCap,
-            4,
-          );
-        }
-        const grid = asset.config?.clusterGrid ?? { x: 16, y: 9, z: 24 };
+    configureStandard(config: RenderPipelineAsset['config']): void {
+      const profileConfig = internals.standardProfile;
+      const resolvedConfig =
+        profileConfig === undefined
+          ? config
+          : {
+              ...(profileConfig.lighting === 'clustered'
+                ? { clusterGrid: DEFAULT_CLUSTER_GRID }
+                : {}),
+              ...(profileConfig.ssao ? { ssao: { enabled: true } } : {}),
+              ...config,
+            };
+      if (resolvedConfig?.clusterGrid !== undefined) {
+        const grid = resolvedConfig.clusterGrid;
         const gridResult = validateClusterGrid(grid);
         if (!gridResult.ok) {
           throw gridResult.error;
         }
       }
-      const install = {
-        token: {},
-        pipeline: impl,
-        config: asset.config,
-        isHdrp: asset.pipelineId === 'forgeax::hdrp',
-      };
-      pipelineInstalls.push(install);
-      frameState.activePipeline = install.pipeline;
-      // installPipeline no longer carries a handle (D-19: RenderPipelineAsset is
-      // installed as a POD at boot/swap time before any World exists). The
+      if (resolvedConfig?.ssao?.enabled === true) {
+        const ssaoResult = resolveSsaoParameters(resolvedConfig.ssao);
+        if (!ssaoResult.ok) {
+          throw ssaoResult.error;
+        }
+      }
+      // Standard configuration no longer carries a handle (D-19: RenderPipelineAsset is
+      // supplied as a POD at boot/swap time before a World exists). The
       // brand-number that `draw` compares to force a per-frame graph rebuild is
       // now a monotonic epoch bumped on every install -- distinct configs (and
       // even identical re-installs) trigger the rebuild, which is correct: install
       // is a rare boot/swap event, never a per-frame cost.
       installEpoch += 1;
       frameState.installedPipelineHandle = installEpoch;
-      frameState.isHdrpActive = install.isHdrp;
-      // feat-20260601 verify round 2: thread the install-time config to buildGraph. The
-      // install epoch changes on every install (two assets sharing one logic id
-      // but differing in config get different epochs), so the `draw` brand-number compare
-      // already forces a graph rebuild; the rebuilt graph now reads this config via
-      // RenderPipelineData.config. config.passCount is no longer a silent no-op.
-      frameState.installedPipelineConfig = install.config;
-      let active = true;
-      return ok(() => {
-        if (!active) return;
-        active = false;
-        const index = pipelineInstalls.findIndex((candidate) => candidate.token === install.token);
-        if (index < 0) return;
-        const wasCurrent = index === pipelineInstalls.length - 1;
-        pipelineInstalls.splice(index, 1);
-        if (!wasCurrent) return;
-        const current = pipelineInstalls.at(-1);
-        frameState.activePipeline = current?.pipeline ?? urpPipeline;
-        frameState.isHdrpActive = current?.isHdrp ?? false;
-        frameState.installedPipelineConfig = current?.config;
-        installEpoch += 1;
-        frameState.installedPipelineHandle = installEpoch;
-      });
+      frameState.isHdrpActive = resolvedConfig?.clusterGrid !== undefined;
+      frameState.installedPipelineConfig = resolvedConfig;
     },
-    postProcess: {
-      register(id: string, entry: PostProcessShaderEntry): () => void {
-        if (postProcessRegistry.has(id)) {
+    registerBuiltinPostProcess(id: string, entry: PostProcessShaderEntry): () => void {
+      // D-3: eager-create params UBO at register time + fail-fast
+      // byteSize / defaultValue validation (q5=A).
+      let paramsBuffer: Buffer | undefined;
+      try {
+        if (entry.params !== undefined) {
+          const { byteSize, defaultValue } = entry.params;
+          if (byteSize < 16 || defaultValue.length !== byteSize) {
+            throw new PostProcessError({
+              code: 'params-size-mismatch',
+              detail: { byteSize, actualLength: defaultValue.length },
+            });
+          }
+          const paramsBufferResult = internals.device.createBuffer({
+            label: `post-process-params-${id}`,
+            size: byteSize,
+            usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
+            mappedAtCreation: false,
+          });
+          if (!paramsBufferResult.ok) throw paramsBufferResult.error;
+          paramsBuffer = paramsBufferResult.value;
+          const writeResult = internals.device.queue.writeBuffer(paramsBuffer, 0, defaultValue);
+          if (!writeResult.ok) throw writeResult.error;
+        } else if (entryHasDepthRead(entry)) {
+          const paramsBufferResult = internals.device.createBuffer({
+            label: `post-process-params-${id}`,
+            size: DEPTH_MIN_PARAMS_BYTE_SIZE,
+            usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
+            mappedAtCreation: false,
+          });
+          if (!paramsBufferResult.ok) throw paramsBufferResult.error;
+          paramsBuffer = paramsBufferResult.value;
+        }
+        if (builtinPostProcessEntries.has(id)) {
           throw new PostProcessError({
             code: 'post-process-already-registered',
             detail: { id },
           });
         }
-        // D-3: eager-create params UBO at register time + fail-fast
-        // byteSize / defaultValue validation (q5=A).
-        let paramsBuffer: Buffer | undefined;
-        try {
-          if (entry.params !== undefined) {
-            const { byteSize, defaultValue } = entry.params;
-            if (byteSize < 16 || defaultValue.length !== byteSize) {
-              throw new PostProcessError({
-                code: 'params-size-mismatch',
-                detail: { byteSize, actualLength: defaultValue.length },
-              });
-            }
-            const paramsBufferResult = internals.device.createBuffer({
-              label: `post-process-params-${id}`,
-              size: byteSize,
-              usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
-              mappedAtCreation: false,
-            });
-            if (!paramsBufferResult.ok) throw paramsBufferResult.error;
-            paramsBuffer = paramsBufferResult.value;
-            const writeResult = internals.device.queue.writeBuffer(paramsBuffer, 0, defaultValue);
-            if (!writeResult.ok) throw writeResult.error;
-          } else if (entryHasDepthRead(entry)) {
-            const paramsBufferResult = internals.device.createBuffer({
-              label: `post-process-params-${id}`,
-              size: DEPTH_MIN_PARAMS_BYTE_SIZE,
-              usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
-              mappedAtCreation: false,
-            });
-            if (!paramsBufferResult.ok) throw paramsBufferResult.error;
-            paramsBuffer = paramsBufferResult.value;
-          }
-          postProcessRegistry.set(id, entry);
-          if (paramsBuffer !== undefined) postProcessParamsBuffers.set(id, paramsBuffer);
-        } catch (cause) {
-          if (paramsBuffer !== undefined) internals.device.destroyBuffer(paramsBuffer);
-          throw cause;
-        }
+        builtinPostProcessEntries.set(id, entry);
+        if (paramsBuffer !== undefined) postProcessParamsBuffers.set(id, paramsBuffer);
         return () => {
-          if (postProcessRegistry.get(id) !== entry) return;
-          postProcessRegistry.delete(id);
-          const paramsBuffer = postProcessParamsBuffers.get(id);
-          if (paramsBuffer !== undefined) {
-            internals.device.destroyBuffer(paramsBuffer);
+          if (builtinPostProcessEntries.get(id) === entry) {
+            builtinPostProcessEntries.delete(id);
+          }
+          const current = postProcessParamsBuffers.get(id);
+          if (current !== undefined) {
+            internals.device.destroyBuffer(current);
             postProcessParamsBuffers.delete(id);
           }
           for (const key of postProcessPipelineCache.keys()) {
             if (key.startsWith(`${id}|`)) postProcessPipelineCache.delete(key);
           }
         };
-      },
+      } catch (cause) {
+        if (paramsBuffer !== undefined) internals.device.destroyBuffer(paramsBuffer);
+        throw cause;
+      }
     },
     disposeFrameState(): void {
+      persistentRenderScene.dispose();
+      gpuDrivenProduction.dispose();
       disposeFeatureGpuWork();
-      // feat-20260612 M5 / w21 (plan-strategy D-2 steps 2 + 3): drain the
-      // perFrameGraph's pooled textures and walk the instanceBuffers cache.
+      // Retire graph-owned resources and dispose instance-buffer caches.
       // Both calls are idempotent + tolerate per-handle errors silently;
       // the Renderer.dispose() cascade owns the surrounding try/catch
       // (D-3 method A: void signature, sub-errors fan out via
       // errorRegistry.fire at the cascade layer, dispose still walks all
       // 6 steps).
-      const graph = frameState.perFrameGraph;
-      if (graph !== null) {
-        graph.drain();
-        frameState.perFrameGraph = null;
-        frameState.perFrameGraphTopologyKey = null;
-      }
       frameState.directionalShadowCache = null;
       frameState.directionalShadowCacheRecorded = false;
-      for (const retiredGraph of frameState.retiredPerFrameGraphs) {
-        retiredGraph.drain();
+      frameState.currentFrameObservationSource = undefined;
+      frameState.currentDirectionalShadowView = null;
+      frameState.currentSpotShadowView = null;
+      const compiled = frameState.compiledFrameGraph;
+      frameState.compiledFrameGraph = null;
+      frameState.compiledFrameGraphTopologyKey = null;
+      if (compiled !== null) compiled.retire().catch(() => undefined);
+      for (const retired of frameState.retiredCompiledFrameGraphs) {
+        retired.retire().catch(() => undefined);
       }
-      frameState.retiredPerFrameGraphs.clear();
+      frameState.retiredCompiledFrameGraphs.clear();
       // feat-20260619 M4 (D-6): pass errorRegistry to disposeInstanceBuffers
       // so destroy failures fire structured errors (unified per-frame +
       // dispose error strategy).
       disposeInstanceBuffers(frameState.instanceBuffers, internals.errorRegistry);
       disposeTransientInstanceBuffers(frameState.transientInstanceBuffers, internals.errorRegistry);
+      if (frameState.morphBuffers !== undefined) {
+        for (const entry of frameState.morphBuffers.values()) {
+          if (!entry.buffer.isDestroyed) {
+            const result = entry.buffer.destroy();
+            if (!result.ok) internals.errorRegistry.fire(result.error);
+          }
+        }
+        frameState.morphBuffers.clear();
+      }
       // feat-20260612-point-light-shadows-urp-hdrp M4 / T-M4-2: dispose the
       // cube_array shadow atlas owned by the RenderSystem closure. The atlas
       // is per-RenderSystem (= per Renderer) and is shared transparently
-      // between URP and HDRP pipelines (recordPointShadowPass reads it from
-      // frameState; the buildGraph closures of both pipelines invoke the
-      // same addPointShadowPass primitive, so a single atlas serves both).
+      // between URP and HDRP pipelines.
       // Idempotent: dispose() on a null / already-disposed atlas is a no-op.
       if (frameState.pointShadowAtlas !== null) {
         frameState.pointShadowAtlas.dispose();
@@ -2740,21 +1836,29 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       }
     },
     resetForRecover(): void {
+      persistentRenderScene.resetGpuForRecover();
+      gpuDrivenProduction.dispose();
+      gpuDrivenProduction = new GpuDrivenProduction(internals.device, gpuDrivenShaderFactory);
       disposeFeatureGpuWork();
       // feat-20260622-s5 M3 / B-2 / w18: recover() rebuild drops device-bound
       // state minted by the lost device. The active graph and per-entity caches
       // must be discarded, not merely marked for destruction: their opaque
       // handles cannot be used on the fresh device and the next draw must
       // lazily build a new graph from the preserved ECS / asset POD caches.
-      frameState.perFrameGraph?.clearPendingDestroy();
-      frameState.perFrameGraph = null;
+      frameState.compiledFrameGraph?.retire().catch(() => undefined);
+      frameState.compiledFrameGraph = null;
+      frameState.compiledFrameGraphTopologyKey = null;
       frameState.directionalShadowCache = null;
       frameState.directionalShadowCacheRecorded = false;
-      for (const retiredGraph of frameState.retiredPerFrameGraphs) {
-        retiredGraph.clearPendingDestroy();
+      frameState.currentFrameObservationSource = undefined;
+      frameState.currentDirectionalShadowView = null;
+      frameState.currentSpotShadowView = null;
+      for (const retired of frameState.retiredCompiledFrameGraphs) {
+        retired.retire().catch(() => undefined);
       }
-      frameState.retiredPerFrameGraphs.clear();
+      frameState.retiredCompiledFrameGraphs.clear();
       frameState.instanceBuffers.clear();
+      frameState.morphBuffers?.clear();
       frameState.transientInstanceBuffers = [];
       frameState.pointShadowAtlas = null;
       // Bind groups retain opaque handles from the lost device. WeakMap roots
@@ -2769,18 +1873,22 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       frameState.materialBgAssemblyCache.clear();
       frameState.singletonMaterialCache.clear();
       frameState.postProcessBgCache = new WeakMap();
-      // Post-process PSOs are cached outside frameState because the normal
+      // Fullscreen PSOs are cached outside frameState because the normal
       // path reuses them across frames. They still carry opaque handles from
       // the lost device, so recovery must invalidate this cache alongside the
-      // post-process registry/UBOs below.
+      // feature-host declarations and UBOs below.
       postProcessPipelineCache.clear();
-      // Logical declarations stay live so unregister remains authoritative
-      // while a replacement device is being requested.
+      // Logical declarations stay live in the feature host while a replacement
+      // device is being requested.
       postProcessParamsBuffers.clear();
       resetRenderFeatureGraphState(internals);
     },
     restorePostProcessResources(): void {
-      for (const [id, entry] of postProcessRegistry) {
+      const declarations = [
+        ...builtinPostProcessEntries.entries(),
+        ...activeFeaturePostProcessEntries.entries(),
+      ];
+      for (const [id, entry] of declarations) {
         let buffer: Buffer | undefined;
         if (entry.params !== undefined) {
           const created = internals.device.createBuffer({
@@ -2806,7 +1914,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
           if (!created.ok) throw created.error;
           buffer = created.value;
         }
-        if (buffer !== undefined && postProcessRegistry.get(id) === entry) {
+        if (buffer !== undefined && lookupPostProcess(id) === entry) {
           postProcessParamsBuffers.set(id, buffer);
         } else if (buffer !== undefined) {
           internals.device.destroyBuffer(buffer);
@@ -2816,9 +1924,13 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
   };
 }
 
-// F-1 single-import contract part 3/3: AI users discover RenderSystem +
-// builtin handles + AssetRegistry from the same `@forgeax/engine-runtime` import.
-export const RENDER_SYSTEM_BUILTIN_HANDLES = Object.freeze({
-  cube: HANDLE_CUBE,
-  triangle: HANDLE_TRIANGLE,
-});
+// @forgeax/engine-render - built-in record context extension.
+//
+// The public RenderPipelineContext is canonical in render-contract.ts. This
+// owner adds only concrete assembly state for built-in record closures.
+
+/**
+ * Package-private extension consumed by the built-in record closures only.
+ * Custom pipeline authors see the leaf RenderPipelineContext contract and
+ * never this surface.
+ */

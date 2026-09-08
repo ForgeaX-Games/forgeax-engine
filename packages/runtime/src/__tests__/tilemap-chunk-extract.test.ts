@@ -15,21 +15,18 @@
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { encodeTileBits } from '@forgeax/engine-graphics-extras';
+import { Layer, MeshFilter } from '@forgeax/engine-render';
+import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
+import type { TilesetAsset } from '@forgeax/engine-types';
+import { describe, expect, it } from 'vitest';
+import { encodeSortScope } from '../../../render/src/components/tile-layer';
 import {
-  encodeSortScope,
-  TileLayer,
-  Tilemap,
-  tilemapChunkExtractSystem,
-} from '@forgeax/engine-render/authoring';
-import {
-  Layer,
-  MeshFilter,
   resetTilemapChunkExtractCache,
   resetTilemapDerivedEntityTracker,
-} from '@forgeax/engine-render/internal';
-import { ChildOf, Transform } from '@forgeax/engine-scene';
-import { type TilesetAsset, toShared } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
+  tilemapChunkExtractSystem,
+} from '../../../render/src/tilemap-chunk-extract-system';
+import { makeTilemapAssetLookup } from './helpers/tilemap-assets';
 
 const SQRT1_2 = Math.SQRT1_2;
 
@@ -43,8 +40,7 @@ function makeSetup(opts: {
   const world = new World();
   const tileset: TilesetAsset = {
     kind: 'tileset',
-    guid: 'test/tileset',
-    atlases: [toShared<'TextureAsset'>(101)],
+    atlases: ['test/atlas'],
     tileWidth: 16,
     tileHeight: 16,
     columns: opts.cols,
@@ -52,7 +48,7 @@ function makeSetup(opts: {
     regions: [{ x: 0, y: 0, width: 16, height: 16 }],
     tiles: [{ regionIndex: 0 }],
   };
-  const tilesetHandle = world.allocSharedRef<'TilesetAsset', TilesetAsset>('TilesetAsset', tileset);
+  const lookup = makeTilemapAssetLookup(tileset);
   const tilemap = world
     .spawn(
       {
@@ -62,7 +58,7 @@ function makeSetup(opts: {
           rows: opts.rows,
           tileSize: opts.tileSize ?? [1, 1],
           chunkSize: opts.chunkSize ?? 16,
-          tileset: tilesetHandle,
+          tileset: 'test/tileset',
         },
       },
       { component: Transform, data: {} },
@@ -84,7 +80,7 @@ function makeSetup(opts: {
     .unwrap();
   resetTilemapChunkExtractCache();
   resetTilemapDerivedEntityTracker();
-  return { world, tilemap, layer };
+  return { world, tilemap, layer, lookup };
 }
 
 describe('tilemapChunkExtractSystem (M0 baseline)', () => {
@@ -95,8 +91,8 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
     tiles[0] = 1;
     tiles[5] = 1;
     tiles[10] = 1;
-    const { world } = makeSetup({ cols, rows, tiles });
-    tilemapChunkExtractSystem(world);
+    const { world, lookup } = makeSetup({ cols, rows, tiles });
+    tilemapChunkExtractSystem(world, lookup);
     // 3 non-zero cells -> 3 derived entities.
     let derivedCount = 0;
     for (const arch of world.inspect().archetypes) {
@@ -118,13 +114,13 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
     const tileSize = 16;
     const tiles = new Uint32Array(cols * rows);
     tiles[3] = 1; // cellX=1, cellY=1
-    const { world } = makeSetup({
+    const { world, lookup } = makeSetup({
       cols,
       rows,
       tileSize: [tileSize, tileSize],
       tiles,
     });
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
     let px = Number.NaN;
     let py = Number.NaN;
     const query = world.query({ read: [Transform], with: [MeshFilter, Layer] }).unwrap();
@@ -141,13 +137,13 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
     const tileSize = 16;
     const tiles = new Uint32Array(1);
     tiles[0] = encodeTileBits(1, true, true, true, false);
-    const { world } = makeSetup({
+    const { world, lookup } = makeSetup({
       cols: 1,
       rows: 1,
       tileSize: [tileSize, tileSize],
       tiles,
     });
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, lookup);
     let sx = Number.NaN;
     let sy = Number.NaN;
     let qz = Number.NaN;
@@ -169,8 +165,8 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
   it('uses HANDLE_QUAD as the MeshFilter handle on derived entities', () => {
     const tiles = new Uint32Array(1);
     tiles[0] = 1;
-    const { world } = makeSetup({ cols: 1, rows: 1, tiles });
-    tilemapChunkExtractSystem(world);
+    const { world, lookup } = makeSetup({ cols: 1, rows: 1, tiles });
+    tilemapChunkExtractSystem(world, lookup);
     const query = world.query({ read: [MeshFilter], with: [Layer] }).unwrap();
     for (const row of query) {
       const mf = row.get(MeshFilter);
@@ -183,8 +179,8 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
     const tiles = new Uint32Array(2);
     tiles[0] = 1;
     tiles[1] = 1;
-    const { world } = makeSetup({ cols: 2, rows: 1, tiles });
-    tilemapChunkExtractSystem(world);
+    const { world, lookup } = makeSetup({ cols: 2, rows: 1, tiles });
+    tilemapChunkExtractSystem(world, lookup);
     let count = 0;
     for (const arch of world.inspect().archetypes) {
       if (
@@ -214,8 +210,8 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
     const rows = 8;
     const tiles = new Uint32Array(cols * rows);
     for (let i = 0; i < tiles.length; i++) tiles[i] = 1;
-    const { world } = makeSetup({ cols, rows, chunkSize: 4, tiles });
-    expect(() => tilemapChunkExtractSystem(world)).not.toThrow();
+    const { world, lookup } = makeSetup({ cols, rows, chunkSize: 4, tiles });
+    expect(() => tilemapChunkExtractSystem(world, lookup)).not.toThrow();
     // Without a Camera entity, all 64 cells must have spawned derived
     // entities (per-cell sortScope path under null frustum -> all chunks
     // visible -> every non-empty cell yields one derived entity).

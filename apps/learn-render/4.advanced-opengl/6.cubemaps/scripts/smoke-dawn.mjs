@@ -166,8 +166,7 @@ if (!existsSync(HDR_PATH)) {
 // --- 4. Engine imports + renderer bootstrap ---
 
 const { World } = await import('@forgeax/engine-ecs');
-const enginePkg = await import('@forgeax/engine-runtime');
-const { createRenderer } = enginePkg;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { SkyboxBackground, Skylight } = await import('@forgeax/engine-render');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer, TONEMAP_REINHARD_EXTENDED } = await import('@forgeax/engine-render');
 const { SKYBOX_MODE_CUBEMAP } = await import('@forgeax/engine-render');
@@ -186,32 +185,30 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  var hostAssets = constructed.value.assets;
 } catch (err) {
   console.error(
-    `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
+    `[smoke] FAIL - constructRuntimeRendererHost failed: ${err instanceof Error ? err.message : String(err)}`,
   );
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
 
-console.log(`[learn-render-6-cubemaps] backend=${renderer.backend}`);
+console.log(`[learn-render-6-cubemaps] backend=${renderer.inspect().capabilities.backendKind}`);
 
-const assets = renderer.assets;
+const assets = hostAssets;
 if (!assets) {
   console.error('[smoke] FAIL - AssetRegistry is null');
   process.exit(1);
 }
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => { if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint }); });
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 // --- 5. Load real newport_loft.hdr + upload cubemap ---
 
@@ -416,12 +413,18 @@ async function readbackPixels(device) {
 // --- 9. Draw frames helper ---
 
 async function drawFrames(world, frames) {
-  const attachment = renderer.attachWorld(world);
+  const attachment = renderer.attach(world);
   if (!attachment.ok) throw attachment.error;
+  const lease = attachment.value;
   for (let i = 0; i < frames; i++) {
     world.update(1 / 60).unwrap();
-    const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+    const r = renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } });
+    if (!r.ok) {
+    console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  } else {
+    const completed = await r.value.completed;
+    if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+  }
   }
   await sharedDevice.queue.onSubmittedWorkDone();
 }
@@ -464,8 +467,8 @@ if (FALSIFY === 'skybox-reuse-buffer') {
 const failures = [];
 
 // (a) Backend must be webgpu.
-if (renderer.backend !== 'webgpu') {
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (renderer.inspect().capabilities.backendKind !== 'webgpu') {
+  failures.push(`(a) backend=${renderer.inspect().capabilities.backendKind} (expected webgpu)`);
 }
 
 // (b) Both passes must produce valid buffers.

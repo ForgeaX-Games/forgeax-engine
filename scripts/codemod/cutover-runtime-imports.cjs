@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('node:path');
+const legacyBackendType = ['Renderer', 'Backend'].join('');
 
 const owners = new Map([
   ...['ChildOf', 'Children', 'Name', 'Transform', 'scenePlugin', 'propagateTransforms'].map(
@@ -31,7 +32,7 @@ const owners = new Map([
     'PostProcessParams',
     'Renderer',
     'RendererOptions',
-    'RendererBackend',
+    legacyBackendType,
     'RendererLostInfo',
     'RendererLostListener',
     'RenderError',

@@ -35,17 +35,19 @@
 //   subAssets[0].guid = 019e7535-5e5e-75fe-a328-0b08e3a72744
 const SFX_GUID = '019e7535-5e5e-75fe-a328-0b08e3a72744';
 
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import type { App } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import { Time, Update } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '@forgeax/engine-ecs';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import {
   AudioListener,
   AudioSource,
   audioPlugin,
-  captureAudioSimulationState,
   type AudioBackend,
 } from '@forgeax/engine-audio';
+import { webAudioPlugin } from '@forgeax/engine-audio-webaudio';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import {
   Collider,
@@ -58,28 +60,21 @@ import {
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { Transform } from '@forgeax/engine-scene';
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
-import {
-  createStandaloneRuntimeAssetBinding,
-  type AudioClipAsset,
-  type Handle,
-} from '@forgeax/engine-types';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { type AudioClipAsset, type Handle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'hello-audio',
-);
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('hello-audio: missing <canvas id="app"> in index.html');
 
 // M3 (w16): input is now in the canvas-form default set (D-2); audioPlugin()
-// signals the app layer to auto-create the WebAudioBackend before runPlugins.
+// provides the Host-owned backend before the ECS audio consumer activates.
 const appRes = await createApp(canvas, {
-  plugins: [audioPlugin(), physicsPlugin('rapier-3d')],
+  plugins: [webAudioPlugin(), audioPlugin(), physicsPlugin('rapier-3d')],
 }, {
   ...forgeaxBundlerAdapter(),
-  importTransport: createDevImportTransport(runtimeBinding),
+  importTransport: createRuntimeAssetImportTransport(runtimeBinding),
 });
 if (!appRes.ok) {
   if (appRes.error instanceof EngineEnvironmentError) {
@@ -90,19 +85,15 @@ if (!appRes.ok) {
   throw new Error('hello-audio: createApp failed');
 }
 const app: App = appRes.value;
-console.warn(`[hello-audio] backend=${app.renderer.backend}`);
+console.warn(`[hello-audio] backend=${app.renderer.inspect().capabilities.backendKind}`);
 
-const ready = await app.renderer.ready;
-if (!ready.ok) {
-  console.error('[hello-audio] renderer.ready failed:', ready.error.code, ready.error.hint);
-  throw new Error('hello-audio: renderer.ready failed');
-}
 
 // Step 2: point AssetRegistry at the Vite-emitted catalog. `loadByGuid` owns
 // both dev and build lookup plus Web Audio decoding; demos never inspect the
 // pack-index row or fetch the source URL themselves.
-const assets = app.renderer.assets;
-assets.configureRuntimeBinding(runtimeBinding);
+const assets = app.assets;
+if (assets === undefined) throw new Error('hello-audio: assets unavailable');
+configureRuntimeAssetCatalog(assets, runtimeBinding);
 
 const world = app.world;
 
@@ -234,16 +225,6 @@ type M20AudioSnapshot = {
   readonly entityAlive: boolean;
   readonly cleanupCalls: number;
   readonly audio: ReturnType<AudioBackend['getState']>;
-  readonly simulation: {
-    readonly playing: readonly (readonly [number, boolean])[];
-    readonly epochs: readonly (readonly [number, number])[];
-    readonly intents: readonly {
-      readonly kind: string;
-      readonly entityId?: number;
-      readonly sourceKey?: string;
-    }[];
-    readonly cleanup: readonly number[];
-  };
 };
 
 let m20ProbeEntity: EntityHandle | undefined;
@@ -251,7 +232,6 @@ let m20Phase = 'idle';
 let m20CleanupCalls = 0;
 
 function m20Snapshot(): M20AudioSnapshot {
-  const simulation = captureAudioSimulationState(audioEngine);
   const entityId = m20ProbeEntity === undefined ? null : Number(m20ProbeEntity);
   const entityAlive = m20ProbeEntity !== undefined && world.get(m20ProbeEntity, AudioSource).ok;
   return {
@@ -262,16 +242,6 @@ function m20Snapshot(): M20AudioSnapshot {
     entityAlive,
     cleanupCalls: m20CleanupCalls,
     audio: audioEngine.getState(),
-    simulation: {
-      playing: simulation.playing,
-      epochs: simulation.epochs,
-      intents: simulation.intents.slice(-12).map((intent) => ({
-        kind: intent.kind,
-        ...('entityId' in intent ? { entityId: intent.entityId } : {}),
-        ...('sourceKey' in intent ? { sourceKey: intent.sourceKey } : {}),
-      })),
-      cleanup: simulation.cleanup,
-    },
   };
 }
 
@@ -388,14 +358,11 @@ world
     fn: () => {
       const _dt = world.getResource(Time).delta;
       const audioState = audioEngine.getState();
-      audioStarts = captureAudioSimulationState(audioEngine).intents.filter(
-        (intent) => intent.kind === 'play',
-      ).length;
       // Re-read clip handle in case asset loaded after boot.
   const currentClip = sfxClipHandleLoaded();
 
   // --- Input ---
-  const snap = app.renderer.input.snapshot(world);
+  const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
 
   // Camera movement (WASD).
   if (snap) {
@@ -438,6 +405,7 @@ world
         spatialBlend: 1.0,
         bus: 'sfx',
       });
+      audioStarts += 1;
       spacebarReArm = true;
 
       // The same user gesture also starts the physics leg. The actor owns its
@@ -491,6 +459,7 @@ world
           spatialBlend: 1.0,
           bus: 'sfx',
         });
+        audioStarts += 1;
         collisionAudioStarted = true;
         collisionAudioAge = 0;
       }

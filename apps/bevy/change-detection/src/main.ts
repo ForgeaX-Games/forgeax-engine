@@ -33,8 +33,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     for (let frame = 0; frame < 30 && after.changedHits <= before.changedHits; frame += 1) {
       const updated = app.world.update(1 / 60);
       if (!updated.ok) throw updated.error;
-      const drawn = app.renderer.draw([app.world], { cameraOwner: 0, resourceOwner: 0 });
-      if (!drawn.ok) throw drawn.error;
       after = readChangeDetectionState(app.world, state);
     }
     if (

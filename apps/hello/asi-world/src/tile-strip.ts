@@ -15,8 +15,7 @@ import { ChildOf, Transform } from '@forgeax/engine-scene';
 
 import { CAMERA_PROJECTION_ORTHOGRAPHIC } from '@forgeax/engine-render';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
-import { setTransparentSortConfig, TRANSPARENT_SORT_MODE_LAYER_Y } from '@forgeax/engine-render/internal';
-import { Tilemap, TileLayer } from '@forgeax/engine-render/authoring';
+import { TransparentSort, Tilemap, TileLayer } from '@forgeax/engine-render/authoring';
 import { Camera } from '@forgeax/engine-render';
 
 import type {
@@ -54,20 +53,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
   const app: App = appRes.value;
 
-  const ready = await app.renderer.ready;
-  if (!ready.ok) {
-    setStatus(`renderer.ready failed: ${ready.error.code}`);
-    return;
-  }
 
-  const assets = app.renderer.assets;
-  if (assets === null) {
+  const assets = app.assets;
+  if (assets === undefined) {
     setStatus('AssetRegistry null');
     return;
   }
 
   const world = app.world;
-  setTransparentSortConfig(world, { mode: TRANSPARENT_SORT_MODE_LAYER_Y, yzAlpha: 1 });
+  TransparentSort.configure(world, { mode: TransparentSort.layerY, yzAlpha: 1 });
 
   setStatus('loading atlases...');
   const [terrainTsj, objectTsj] = await Promise.all([
@@ -80,8 +74,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     fetchPngAsRgba(`${WORLD}/object_atlas.png`),
   ]);
 
-  const terrainTex = registerTexture(world, terrainPng);
-  const objectTex = registerTexture(world, objectPng);
+  const terrainPayload = makeTextureAsset(terrainPng);
+  const objectPayload = makeTextureAsset(objectPng);
+  registerTexture(world, terrainPng);
+  registerTexture(world, objectPng);
 
   world.allocSharedRef<'SamplerAsset', SamplerAsset>('SamplerAsset', {
     kind: 'sampler',
@@ -114,10 +110,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     tiles.push({ regionIndex: regions.length - 1, widthCells: 1, heightCells: 1 });
   }
 
-  const tilesetHandle = world.allocSharedRef<'TilesetAsset', TilesetAsset>('TilesetAsset', {
+  const tileset: TilesetAsset = {
     kind: 'tileset',
-    guid: `tile-strip-${numTerrain}-${numObject}`,
-    atlases: [terrainTex, objectTex],
+    atlases: ['asi-world/terrain-atlas', 'asi-world/object-atlas'],
     tileWidth: 16,
     tileHeight: 16,
     columns: Math.ceil(Math.max(terrainTsj.imagewidth, objectTsj.imagewidth) / 16),
@@ -128,7 +123,16 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     ],
     regions,
     tiles,
-  });
+  };
+  const catalogResults = [
+    assets.catalog('asi-world/terrain-atlas', terrainPayload),
+    assets.catalog('asi-world/object-atlas', objectPayload),
+    assets.catalog('asi-world/tile-strip', tileset),
+  ];
+  if (catalogResults.some((result) => !result.ok)) {
+    setStatus('asset catalog failed');
+    return;
+  }
 
   // Grid layout (y-up coordinates):
   //   high y  → terrain band (terrainRows rows)
@@ -146,7 +150,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
     {
       component: Tilemap,
-      data: { cols: totalCols, rows: totalRows, tileSize: [1, 1], tileset: tilesetHandle },
+      data: { cols: totalCols, rows: totalRows, tileSize: [1, 1], tileset: 'asi-world/tile-strip' },
     },
   );
   if (!tilemapRes.ok) {
@@ -245,7 +249,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   setStatus(
     `terrain ${numTerrain} tiles | objects ${numObject} tiles` +
-      ` | grid ${totalCols}×${totalRows} | backend=${app.renderer.backend}`,
+      ` | grid ${totalCols}×${totalRows} | backend=${app.renderer.inspect().capabilities.backendKind}`,
   );
 }
 
@@ -263,7 +267,13 @@ function registerTexture(
   world: App['world'],
   png: { width: number; height: number; rgba: Uint8Array },
 ): Handle<'TextureAsset', 'shared'> {
-  return world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', {
+  return world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', makeTextureAsset(png));
+}
+
+function makeTextureAsset(
+  png: { width: number; height: number; rgba: Uint8Array },
+): TextureAsset {
+  return {
     kind: 'texture',
     width: png.width,
     height: png.height,
@@ -272,7 +282,7 @@ function registerTexture(
     colorSpace: 'srgb',
     mipmap: false,
     mipLevelCount: 1,
-  });
+  };
 }
 
 

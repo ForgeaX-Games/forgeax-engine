@@ -12,7 +12,7 @@
 
 /// <reference types="@webgpu/types" />
 
-import type { ShaderError } from '@forgeax/engine-shader-compiler';
+import type { ShaderError, ShaderErrorDetail } from '@forgeax/engine-shader-compiler';
 
 /**
  * Extension to the Rollup `RollupLog` shape — the top-level `hint` surface is
@@ -30,6 +30,10 @@ export interface ForgeaXShaderRollupLog {
   readonly code: string;
   readonly message: string;
   readonly hint: string;
+  readonly expected: string;
+  readonly lineNum?: number | undefined;
+  readonly linePos?: number | undefined;
+  readonly detail?: ShaderErrorDetail | undefined;
   readonly loc?:
     | {
         readonly line: number;
@@ -67,6 +71,10 @@ export function toRollupLog(err: ShaderError): ForgeaXShaderRollupLog {
     code: string;
     message: string;
     hint: string;
+    expected: string;
+    lineNum?: number;
+    linePos?: number;
+    detail?: ShaderErrorDetail;
     loc?: { line: number; column: number };
     meta: {
       hint: string;
@@ -80,6 +88,7 @@ export function toRollupLog(err: ShaderError): ForgeaXShaderRollupLog {
     code: err.code,
     message: err.message,
     hint: err.hint, // top-level surface (forgeax custom, charter proposition 5)
+    expected: err.expected,
     meta: {
       hint: err.hint, // Rollup spec forwarding contract
       expected: err.expected,
@@ -92,6 +101,9 @@ export function toRollupLog(err: ShaderError): ForgeaXShaderRollupLog {
   if (err.lineNum !== undefined && err.linePos !== undefined) {
     log.loc = { line: err.lineNum, column: err.linePos };
   }
+  if (err.lineNum !== undefined) log.lineNum = err.lineNum;
+  if (err.linePos !== undefined) log.linePos = err.linePos;
+  if (err.detail !== undefined) log.detail = err.detail;
 
   // Forward detail.compilerMessages / detail.reason (byte-for-byte aligned with
   // RhiError.detail). The typed ShaderErrorDetail union narrows

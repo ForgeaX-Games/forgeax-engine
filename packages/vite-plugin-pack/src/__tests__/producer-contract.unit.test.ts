@@ -1,13 +1,10 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { NativeCookerRegistry } from '@forgeax/engine-pack/native-cooker';
+import { createAcceptedPublicationStore, scriptablePackOutputSetDigest } from '@forgeax/engine-ddc';
+import { buildCatalogResult } from '@forgeax/engine-import';
+import type { AssetPublicationEnvelope, AssetPublicationOutput } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildCatalogResult, buildCatalogStrict, projectLegacyCatalog } from '../build-catalog.js';
-import {
-  type NativeCookerLifecycleSnapshot,
-  runNativeCookerLifecycle,
-} from '../dev/native-cooker-lifecycle.js';
 
 const roots: string[] = [];
 
@@ -16,49 +13,184 @@ afterEach(async () => {
 });
 
 describe('producer-owned catalog contract', () => {
-  it('commits a valid candidate and recovers the last-known-good draft on publication failure', async () => {
-    const registry = new NativeCookerRegistry();
-    registry.register({
-      key: 'lifecycle-fixture',
-      cook: (input: { readonly value: string }) => ({
-        guid: '01890000-0000-7000-8000-ffffffffffff',
-        payload: input,
+  function envelope(generation: number): AssetPublicationEnvelope {
+    const outputs: AssetPublicationOutput[] = [
+      {
+        guid: '01890000-0000-7000-8000-111111111111',
+        sourceKey: 'mesh/main',
+        kind: 'mesh',
+        digest: `sha256:mesh-${generation}`,
         refs: [],
-        artifacts: {},
-        inputFingerprint: `sha256:${input.value}`,
-      }),
-    });
-    const first = await runNativeCookerLifecycle<
-      { readonly value: string },
-      { readonly value: string }
-    >({
-      registry,
-      key: 'lifecycle-fixture',
-      input: { value: 'good' },
-    });
+      },
+      {
+        guid: '01890000-0000-7000-8000-222222222222',
+        sourceKey: 'scene/main',
+        kind: 'scene',
+        digest: `sha256:scene-${generation}`,
+        refs: ['01890000-0000-7000-8000-111111111111'],
+      },
+    ];
+    const outputSetDigest = scriptablePackOutputSetDigest(outputs);
+    const externalEvidence = [] as const;
+    return {
+      schemaVersion: 'asset-publication/1',
+      sourcePath: 'fixture.pack.ts',
+      sourceRevision: `sha256:source-${generation}`,
+      generation,
+      digest: `sha256:publication-${generation}`,
+      outputSetDigest,
+      outputs,
+      receipt: {
+        schemaVersion: 'asset-publication-receipt/1',
+        sourcePath: 'fixture.pack.ts',
+        sourceRevision: `sha256:source-${generation}`,
+        inputFingerprint: `sha256:input-${generation}`,
+        outputDigest: `sha256:publication-${generation}`,
+        outputSetDigest,
+        externalEvidence,
+      },
+      externalEvidence,
+    };
+  }
+
+  it('commits one complete generation and preserves current/LKG on stale or failed routes', async () => {
+    const store = createAcceptedPublicationStore();
+    const firstEnvelope = envelope(1);
+    expect(store.stage(firstEnvelope.sourcePath, { envelope: firstEnvelope }).ok).toBe(true);
+    const first = await store.commit(
+      firstEnvelope.sourcePath,
+      { envelope: firstEnvelope },
+      () => undefined,
+    );
     expect(first.ok).toBe(true);
-    if (!first.ok) return;
-    const previous: NativeCookerLifecycleSnapshot<{ readonly value: string }> = first.value;
-    const recovered = await runNativeCookerLifecycle({
-      registry,
-      key: 'lifecycle-fixture',
-      input: { value: 'candidate' },
-      previous,
-      publish: () => {
-        throw new Error('publication failed');
+    expect(store.observe(firstEnvelope.sourcePath).current?.generation).toBe(1);
+
+    let routeCommits = 0;
+    const secondEnvelope = envelope(2);
+    expect(store.stage(secondEnvelope.sourcePath, { envelope: secondEnvelope }).ok).toBe(true);
+    const second = await store.commit(
+      secondEnvelope.sourcePath,
+      { envelope: secondEnvelope },
+      () => {
+        routeCommits += 1;
+      },
+    );
+    expect(second.ok).toBe(true);
+    expect(store.observe(secondEnvelope.sourcePath).current?.generation).toBe(2);
+
+    const staleEnvelope = envelope(1);
+    const stale = store.stage(staleEnvelope.sourcePath, { envelope: staleEnvelope });
+    expect(stale).toMatchObject({
+      ok: false,
+      error: { code: 'asset-publication-stale', stage: 'cancelled' },
+    });
+    expect(routeCommits).toBe(1);
+    expect(store.observe(secondEnvelope.sourcePath).current?.generation).toBe(2);
+
+    const failedEnvelope = envelope(3);
+    expect(store.stage(failedEnvelope.sourcePath, { envelope: failedEnvelope }).ok).toBe(true);
+    const failed = await store.commit(
+      failedEnvelope.sourcePath,
+      { envelope: failedEnvelope },
+      () => {
+        routeCommits += 1;
+        throw new Error('route unavailable');
+      },
+    );
+    expect(failed).toMatchObject({
+      ok: false,
+      error: {
+        code: 'asset-publication-route-failed',
+        stage: 'route',
+        recovery: { preserveCurrent: true, useLastKnownGood: true },
       },
     });
-    expect(recovered).toMatchObject({ ok: true, value: { status: 'recovered', generation: 1 } });
-    if (recovered.ok) expect(recovered.value.draft.payload).toEqual({ value: 'good' });
+    expect(routeCommits).toBe(2);
+    expect(store.observe(failedEnvelope.sourcePath).current?.generation).toBe(2);
+    expect(store.observe(failedEnvelope.sourcePath).lastKnownGood?.generation).toBe(1);
   });
 
-  it('does not expose a parallel MaterialCookResult completion contract', async () => {
-    const source = await readFile(
-      new URL('../material/cook-finalizer.ts', import.meta.url),
-      'utf8',
+  it('accepts an exact same-generation tuple as an idempotent republish', async () => {
+    const store = createAcceptedPublicationStore();
+    const first = envelope(1);
+    expect(store.stage(first.sourcePath, { envelope: first }).ok).toBe(true);
+    expect((await store.commit(first.sourcePath, { envelope: first }, () => undefined)).ok).toBe(
+      true,
     );
-    expect(source).toContain('CookProduct');
-    expect(source).not.toContain('export interface MaterialCookResult');
+
+    let routeCommits = 0;
+    expect(store.stage(first.sourcePath, { envelope: first }).ok).toBe(true);
+    const repeated = await store.commit(first.sourcePath, { envelope: first }, () => {
+      routeCommits += 1;
+    });
+
+    expect(repeated).toMatchObject({ ok: true, value: { current: { generation: 1 } } });
+    expect(routeCommits).toBe(1);
+    expect(store.observe(first.sourcePath).failure).toBeUndefined();
+  });
+
+  it('keeps an overlapping identical tuple owned by the current candidate', async () => {
+    const store = createAcceptedPublicationStore();
+    const staleOwner = envelope(1);
+    const currentOwner = envelope(1);
+
+    expect(store.stage(staleOwner.sourcePath, { envelope: staleOwner }).ok).toBe(true);
+    expect(store.stage(currentOwner.sourcePath, { envelope: currentOwner }).ok).toBe(true);
+    store.discard(staleOwner.sourcePath, staleOwner);
+
+    const committed = await store.commit(
+      currentOwner.sourcePath,
+      { envelope: currentOwner },
+      () => undefined,
+    );
+
+    expect(committed.ok).toBe(true);
+    expect(store.observe(currentOwner.sourcePath).current?.generation).toBe(1);
+  });
+
+  it('discards a staged candidate without changing the accepted DDC snapshot', async () => {
+    const store = createAcceptedPublicationStore();
+    const first = envelope(1);
+    const second = envelope(2);
+    expect(store.stage(first.sourcePath, { envelope: first }).ok).toBe(true);
+    expect((await store.commit(first.sourcePath, { envelope: first }, () => undefined)).ok).toBe(
+      true,
+    );
+    expect(store.stage(second.sourcePath, { envelope: second }).ok).toBe(true);
+
+    store.discard(second.sourcePath, second);
+
+    const restored = store.observe(first.sourcePath);
+    expect(restored).toMatchObject({ current: { generation: 1, digest: first.digest } });
+    expect(restored.lastKnownGood).toBeUndefined();
+    expect(restored.failure).toBeUndefined();
+  });
+
+  it('restores the accepted publication snapshot after a failed generation commit', async () => {
+    const store = createAcceptedPublicationStore();
+    const first = envelope(1);
+    const second = envelope(2);
+    expect(store.stage(first.sourcePath, { envelope: first }).ok).toBe(true);
+    expect((await store.commit(first.sourcePath, { envelope: first }, () => undefined)).ok).toBe(
+      true,
+    );
+    const previous = store.observe(first.sourcePath);
+
+    expect(store.stage(second.sourcePath, { envelope: second }).ok).toBe(true);
+    expect((await store.commit(second.sourcePath, { envelope: second }, () => undefined)).ok).toBe(
+      true,
+    );
+    expect(store.observe(second.sourcePath).current?.generation).toBe(2);
+
+    store.restore(second.sourcePath, previous);
+
+    expect(store.observe(second.sourcePath)).toEqual(previous);
+  });
+
+  it('does not expose a parallel material completion contract', async () => {
+    const source = await readFile(new URL('../plugin-pack.ts', import.meta.url), 'utf8');
+    expect(source).not.toContain("from './material/");
+    expect(source).not.toContain('MaterialCookResult');
   });
 
   it('publishes package, provenance, revision, relations, diagnostics, and topology key', async () => {
@@ -89,10 +221,10 @@ describe('producer-owned catalog contract', () => {
       }),
     );
 
-    const result = await buildCatalogStrict([root]);
-    expect(result.errors).toEqual([]);
-    expect(result.catalog).toHaveLength(1);
-    expect(result.catalog[0]).toMatchObject({
+    const result = await buildCatalogResult([root]);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
       guid,
       packageId: 'pkg/materials',
       provenance: { provider: 'fixture-importer', version: '2.3.0', source: 'fixture' },
@@ -134,9 +266,9 @@ describe('producer-owned catalog contract', () => {
         ],
       }),
     );
-    const result = await buildCatalogStrict([root]);
-    expect(result.errors).toEqual([]);
-    expect(result.catalog[0]).toMatchObject({ kind: 'host/blob', sourceKey: 'blob/main' });
+    const result = await buildCatalogResult([root]);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.entries[0]).toMatchObject({ kind: 'host/blob', sourceKey: 'blob/main' });
   });
 
   it('returns one authoritative result and derives the legacy array from it', async () => {
@@ -166,7 +298,12 @@ describe('producer-owned catalog contract', () => {
     const result = await buildCatalogResult([root]);
     expect(result).toMatchObject({ authority: 'authoritative', diagnostics: [] });
     expect(result.entries).toHaveLength(1);
-    expect(projectLegacyCatalog(result)).toEqual({
+    expect({
+      schemaVersion: 'catalog-legacy-v1',
+      authority: 'authoritative',
+      diagnostics: [],
+      entries: [...result.entries],
+    }).toEqual({
       schemaVersion: 'catalog-legacy-v1',
       authority: 'authoritative',
       diagnostics: [],

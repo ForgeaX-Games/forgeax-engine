@@ -19,13 +19,33 @@
 // w23: perf — 100 entities x 5 components instantiates < 50ms (plan §5.4).
 
 import { defineComponent, World } from '@forgeax/engine-ecs';
-import { SceneInstance } from '@forgeax/engine-render/internal';
-import { ChildOf, Transform } from '@forgeax/engine-scene';
+import { SceneInstance } from '@forgeax/engine-render';
+import {
+  ChildOf,
+  Transform,
+  worldGetSceneAssetForInstance,
+  worldInstantiateScene,
+} from '@forgeax/engine-scene';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
-function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
+function registerSceneAsset(
+  world: World,
+  asset: SceneAsset,
+  extraComponents: readonly Parameters<World['components']['register']>[0][] = [],
+): Handle<'SceneAsset', 'shared'> {
+  for (const component of [SceneInstance, ChildOf, Transform, ...extraComponents]) {
+    world.components.register(component).unwrap();
+  }
   return world.allocSharedRef('SceneAsset', asset);
+}
+
+function instantiateScene(
+  world: World,
+  handle: Handle<'SceneAsset', 'shared'>,
+  parent?: Parameters<typeof worldInstantiateScene>[2],
+) {
+  return worldInstantiateScene(world, handle, parent);
 }
 
 describe('world.instantiateScene basic (w17)', () => {
@@ -41,7 +61,7 @@ describe('world.instantiateScene basic (w17)', () => {
       ],
     };
     const handle = registerSceneAsset(world, asset);
-    const r = world.instantiateScene(handle);
+    const r = instantiateScene(world, handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const inst = world.get(r.value.root, SceneInstance);
@@ -59,7 +79,7 @@ describe('world.instantiateScene basic (w17)', () => {
       ],
     };
     const handle = registerSceneAsset(world, asset);
-    const r = world.instantiateScene(handle);
+    const r = instantiateScene(world, handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const inst = world.get(r.value.root, SceneInstance);
@@ -81,7 +101,7 @@ describe('world.instantiateScene basic (w17)', () => {
       ],
     };
     const handle = registerSceneAsset(world, asset);
-    const r = world.instantiateScene(handle);
+    const r = instantiateScene(world, handle);
     if (!r.ok) throw new Error('instantiateScene failed');
     const inst = world.get(r.value.root, SceneInstance);
     if (!inst.ok) throw new Error('get SceneInstance failed');
@@ -107,7 +127,7 @@ describe('world.instantiateScene basic (w17)', () => {
       entities: [{ localId: 0 as never, components: { Transform: {} } }],
     };
     const handle = registerSceneAsset(world, asset);
-    const r = world.instantiateScene(handle, parent);
+    const r = instantiateScene(world, handle, parent);
     if (!r.ok) throw new Error('instantiateScene failed');
     const rootChildOf = world.get(r.value.root, ChildOf);
     expect(rootChildOf.ok).toBe(true);
@@ -124,9 +144,9 @@ describe('world.getSceneAssetForInstance (w22)', () => {
       entities: [{ localId: 0 as never, components: { Transform: {} } }],
     };
     const handle = registerSceneAsset(world, asset);
-    const r = world.instantiateScene(handle);
+    const r = instantiateScene(world, handle);
     if (!r.ok) throw new Error('instantiateScene failed');
-    const got = world.getSceneAssetForInstance(r.value.root);
+    const got = worldGetSceneAssetForInstance(world, r.value.root);
     expect(got.ok).toBe(true);
     if (!got.ok) return;
     expect(got.value as unknown as number).toBe(handle as unknown as number);
@@ -136,7 +156,7 @@ describe('world.getSceneAssetForInstance (w22)', () => {
     const world = new World();
     const e = world.spawn({ component: Transform, data: {} });
     if (!e.ok) throw new Error('spawn failed');
-    const got = world.getSceneAssetForInstance(e.value);
+    const got = worldGetSceneAssetForInstance(world, e.value);
     expect(got.ok).toBe(false);
   });
 });
@@ -164,9 +184,9 @@ describe('world.instantiateScene perf (w23) — 100 entities x 5 components', ()
       },
     }));
     const asset: SceneAsset = { kind: 'scene', entities };
-    const handle = registerSceneAsset(world, asset);
+    const handle = registerSceneAsset(world, asset, [C1, C2, C3, C4]);
     const t0 = performance.now();
-    const r = world.instantiateScene(handle);
+    const r = instantiateScene(world, handle);
     const dt = performance.now() - t0;
     expect(r.ok).toBe(true);
     expect(dt).toBeLessThan(50);

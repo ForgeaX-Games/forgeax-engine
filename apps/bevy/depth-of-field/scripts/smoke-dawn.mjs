@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // Headless Dawn smoke for Bevy depth_of_field.
 // The effect-off/on pair falsifies a depth-independent fullscreen blur.
 
@@ -80,53 +81,45 @@ const shaderPath = resolve(appRoot, 'src', 'depth-of-field.wgsl');
 const shaderSource = readFileSync(shaderPath, 'utf8');
 const { World } = await import('@forgeax/engine-ecs');
 const { createRenderer } = await import('@forgeax/engine-runtime');
-const { PostProcessParams, URP_PIPELINE_ID } = await import('@forgeax/engine-render/internal');
+const { PostProcessParams } = await import('@forgeax/engine-render');
+const { createFullscreenRenderFeature } = await import('@forgeax/engine-app');
 const { buildDepthOfFieldWorld, DOF_MODE_BOKEH, DOF_MODE_OFF, DOF_PARAM_BYTES, packDofParams } = await import(resolve(appRoot, 'src', 'depth-of-field.ts'));
+const effectId = 'bevy-depth-of-field::camera';
+const offParams = packDofParams(7, 0.8, DOF_MODE_OFF);
+const onParams = packDofParams(7, 0.8, DOF_MODE_BOKEH);
+const effect = createFullscreenRenderFeature({
+  identity: effectId,
+  source: shaderSource,
+  reads: [{ key: 'sceneColor' }, { key: 'depth', sampleType: 'depth' }],
+  params: { byteSize: DOF_PARAM_BYTES, defaultValue: onParams },
+});
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: manifestUrl });
+  renderer = await createSmokeRenderer(createRenderer, mockCanvas, { features: [effect] }, { shaderManifestUrl: manifestUrl });
 } catch (error) {
   console.error(`[smoke] FAIL - createRenderer threw: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
-renderer.onError((error) => errors.push({ code: error.code, hint: error.hint, detail: error.detail }));
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
+subscribeSmokeErrors(renderer, (error) => errors.push({ code: error.code, hint: error.hint, detail: error.detail }));
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const scene = buildDepthOfFieldWorld(world, width / height);
-const effectId = 'bevy-depth-of-field::camera';
-const offParams = packDofParams(7, 0.8, DOF_MODE_OFF);
-const onParams = packDofParams(7, 0.8, DOF_MODE_BOKEH);
 const paramsEntity = world.spawn({ component: PostProcessParams, data: { shader: effectId, data: offParams } }).unwrap();
-renderer.postProcess.register(effectId, {
-  source: shaderSource,
-  reads: [{ key: 'sceneColor' }, { key: 'depth', sampleType: 'depth' }],
-  params: { byteSize: DOF_PARAM_BYTES, defaultValue: onParams },
-});
 
 function installEffect(enabled) {
-  const result = renderer.installPipeline({
-    kind: 'render-pipeline',
-    pipelineId: URP_PIPELINE_ID,
-    config: { postEffects: enabled ? [effectId] : [] },
-  });
-  if (!result.ok) throw new Error(`installPipeline(${enabled ? 'on' : 'off'}): ${result.error.code} - ${result.error.hint}`);
+  world.set(paramsEntity, PostProcessParams, { data: enabled ? onParams : offParams });
 }
 
 function drawFrames(count) {
   let failures = 0;
   for (let i = 0; i < count; i += 1) {
     world.update().unwrap();
-    const result = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+    const result = drawSmokeFrame(renderer, world);
     if (!result.ok) failures += 1;
   }
   return failures;
@@ -168,16 +161,16 @@ function compare(left, right) {
 let framesObserved = 0;
 let drawErrors = 0;
 const firstHalf = Math.floor(targetFrames / 3);
-installEffect(true);
+installEffect(false);
 drawErrors += drawFrames(firstHalf);
 framesObserved += firstHalf;
 const offPixels = await capturePixels();
-world.set(paramsEntity, PostProcessParams, { data: onParams });
+installEffect(true);
 const secondHalf = Math.floor(targetFrames / 3);
 drawErrors += drawFrames(secondHalf);
 framesObserved += secondHalf;
 const onPixels = await capturePixels();
-const passNames = [...renderer.perFramePassNames];
+const passNames = [...renderer.inspect().perFramePassNames];
 const remainder = targetFrames - firstHalf - secondHalf;
 drawErrors += drawFrames(remainder);
 framesObserved += remainder;
@@ -188,13 +181,13 @@ mkdirSync(dirname(offPng), { recursive: true });
 writeFileSync(offPng, writeReferencePng(offPixels, width, height));
 writeFileSync(onPng, writeReferencePng(onPixels, width, height));
 const diff = compare(offPixels, onPixels);
-console.log(`[bevy-depth-of-field] backend=${renderer.backend} sceneMeshes=${scene.meshCount}`);
+console.log(`[bevy-depth-of-field] backend=${rendererBackend(renderer)} sceneMeshes=${scene.meshCount}`);
 console.log(`[smoke] frames=${framesObserved} dofDiffMean=${diff.mean.toFixed(4)} changedPixels=${diff.changedPixels} visiblePixels=${diff.visiblePixels} passes=${passNames.join(',')}`);
 console.log(`[smoke] off=${offPng} on=${onPng}`);
 if (errors.length > 0) console.log(`[smoke] rendererErrorsDetail=${JSON.stringify(errors.slice(0, 3))}`);
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`backend=${renderer.backend}`);
+if (rendererBackend(renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(renderer)}`);
 if (framesObserved < targetFrames) failures.push(`frames=${framesObserved} < ${targetFrames}`);
 if (drawErrors > 0) failures.push(`drawErrors=${drawErrors}`);
 if (errors.length > 0) failures.push(`rendererErrors=${errors.map((error) => error.code).join(',')}`);

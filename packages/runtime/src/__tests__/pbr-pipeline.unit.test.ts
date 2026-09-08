@@ -10,14 +10,14 @@
 // must be replaced by buildBindGroupLayoutDescriptor calls without changing
 // what the device sees.
 
-import type { PipelineSpec } from '@forgeax/engine-render/internal';
+import { describe, expect, it } from 'vitest';
 import {
   appendInjection,
-  buildBindGroupLayoutDescriptor,
   buildPbrMaterialUserRegionEntries,
   buildPbrViewBglEntries,
-} from '@forgeax/engine-render/internal';
-import { describe, expect, it } from 'vitest';
+} from '../../../render/src/pbr-pipeline';
+import type { PipelineSpec } from '../../../render/src/pipeline-spec';
+import { buildBindGroupLayoutDescriptor } from '../../../render/src/pipeline-spec';
 
 // Stable spec stub — the dispatcher uses spec.shader for reflection only when
 // a registry is supplied; without registry the BGL shape comes purely from
@@ -44,7 +44,7 @@ function makeSpec(): PipelineSpec {
 
 describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', () => {
   describe('pbr-view', () => {
-    it('storageBuffer=true: 9 entries with read-only-storage on bindings 1+2', () => {
+    it('storageBuffer=true: 10 entries with read-only-storage on bindings 1+2', () => {
       const spec = makeSpec();
       const out = buildBindGroupLayoutDescriptor(spec, {
         kind: 'pbr-view',
@@ -56,12 +56,15 @@ describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', (
       };
       expect(out).toEqual(expected);
       // feat-20260625-spot-light-shadow-mapping: binding 8 (spot shadow atlas,
-      // w14) raised the view BGL to 9 entries (always-on, D-5). w25 (scope-amend
+      // w14) raised the view BGL to 9 entries (always-on, D-5). The
+      // Points/Lines viewport UBO occupies binding 10, while w25 (scope-amend
       // webkit-fallback) folded the former binding 9 spotLightViewProj matrices
       // UBO into the View UBO (`view.spotLightViewProj`), so the BGL stays at 9
-      // entries (bindings 0..8) — keeping the WebGL2 fallback fragment uniform-
+      // entries (bindings 0..8 plus binding 10) — keeping the WebGL2 fallback fragment uniform-
       // buffer count <= 11 (GLES 3.0).
-      expect(out.entries.length).toBe(9);
+      expect(out.entries.length).toBe(10);
+      expect(out.entries.find((entry) => entry.binding === 9)).toBeUndefined();
+      expect(out.entries.find((entry) => entry.binding === 10)?.buffer?.type).toBe('uniform');
     });
 
     it('storageBuffer=false: bindings 1+2 fall back to uniform', () => {
@@ -79,7 +82,7 @@ describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', (
   });
 
   describe('pbr-material-merged', () => {
-    it('20 entries: user-region 9 (derived) + ibl 7 + lightmap 4', () => {
+    it('24 entries: user-region 13 (derived) + ibl 7 + lightmap 4', () => {
       const spec = makeSpec();
       const out = buildBindGroupLayoutDescriptor(spec, {
         kind: 'pbr-material-merged',
@@ -94,7 +97,7 @@ describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', (
         entries: [...afterIbl, ...appendInjection(afterIbl, 'lightmap')],
       };
       expect(out).toEqual(expected);
-      expect(out.entries.length).toBe(20);
+      expect(out.entries.length).toBe(24);
     });
   });
 
@@ -182,7 +185,7 @@ describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', (
   });
 
   describe('unlit-material', () => {
-    it('9 entries: base PBR material only (no skylight injection)', () => {
+    it('13 entries: base PBR material only (no skylight injection)', () => {
       const spec = makeSpec();
       const out = buildBindGroupLayoutDescriptor(spec, {
         kind: 'unlit-material',
@@ -191,7 +194,7 @@ describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', (
         label: 'unlit-material-bgl',
         entries: buildPbrMaterialUserRegionEntries(),
       });
-      expect(out.entries.length).toBe(9);
+      expect(out.entries.length).toBe(13);
     });
   });
 });

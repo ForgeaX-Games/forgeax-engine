@@ -11,19 +11,21 @@
 // interleaved `vertices` buffer; 8 floats per vertex). This is the AC-15
 // narrowing anchor: each factory includes a
 // `for (const [key] of Object.entries(attrs))` loop that TypeScript infers as
-// the 6-member VertexAttributeMap key union (no `as` cast).
+// the VertexAttributeMap key union (no `as` cast).
 //
 // Related: requirements §AC-06 / §AC-14 / §AC-15;
 //          plan-strategy §M3 + D-P5 (6 procedural geometries lowercase keys);
 //          plan-tasks.json w8 acceptanceCheck;
 //          research Finding 4 (Three.js r184 BufferGeometry mental migration).
 
-import { err, ok, type Result } from '@forgeax/engine-ecs';
 import { box3 } from '@forgeax/engine-math';
 import {
   ASSET_ERROR_HINTS,
   AssetError,
+  err,
   type MeshAsset,
+  ok,
+  type Result,
   type VertexAttributeMap,
 } from '@forgeax/engine-types';
 import { computeTangentVec4 } from './tangent';
@@ -47,13 +49,22 @@ export const FACTORY_FLOATS_PER_VERTEX = 8;
  */
 export const PROCEDURAL_FLOATS_PER_VERTEX = 12;
 
+function interleavedInputError(field: string, value: number, reason: string): AssetError {
+  return new AssetError({
+    code: 'asset-parse-failed',
+    expected: `valid interleaved triangle topology: ${reason}`,
+    hint: ASSET_ERROR_HINTS['asset-parse-failed'],
+    detail: { field, value, reason },
+  });
+}
+
 /**
  * Build the VertexAttributeMap by binding `position` / `normal` / `uv`
  * Float32Array views over the interleaved `vertices` buffer.
  *
  * AC-15 narrowing anchor: the `for (const [key] of Object.entries(attrs))`
  * loop below sees `key` typed as `'position' | 'normal' | 'uv' | 'tangent' |
- * 'skinIndex' | 'skinWeight'` (the 6-member VertexAttributeMap key closed
+ * 'skinIndex' | 'skinWeight' | 'color'` (the VertexAttributeMap key closed
  * set) — no `as` cast anywhere. Any typo (e.g. `'POSITION'`) would be a
  * tsc strict compile-time error (requirements §AC-15 narrowing evidence).
  */
@@ -84,7 +95,7 @@ function buildAttributes(vertices: Float32Array, vertexCount: number): VertexAtt
     tangent: tangents,
   };
   // AC-15 narrowing evidence: deriveVertexBufferLayout is the SSOT
-  // for the 6-key VertexAttributeMap -> GPU vertex layout translation.
+  // for the VertexAttributeMap -> GPU vertex layout translation.
   // The call validates that attrs conforms to the closed key set.
   deriveVertexBufferLayout(attrs);
   return attrs;
@@ -101,8 +112,38 @@ function buildAttributes(vertices: Float32Array, vertexCount: number): VertexAtt
 export function meshFromInterleaved(
   vertices: Float32Array,
   indices: Uint16Array | Uint32Array,
-): MeshAsset {
+): Result<MeshAsset, AssetError> {
+  if (vertices.length % FACTORY_FLOATS_PER_VERTEX !== 0) {
+    return err(
+      interleavedInputError(
+        'vertices',
+        vertices.length,
+        `vertices.length must be divisible by the interleaved stride of ${FACTORY_FLOATS_PER_VERTEX}`,
+      ),
+    );
+  }
   const vertexCount = vertices.length / FACTORY_FLOATS_PER_VERTEX;
+  if (indices.length % 3 !== 0) {
+    return err(
+      interleavedInputError(
+        'indices',
+        indices.length,
+        'indices.length must be divisible by the triangle size of 3',
+      ),
+    );
+  }
+  for (let indexPosition = 0; indexPosition < indices.length; indexPosition++) {
+    const index = indices[indexPosition];
+    if (index === undefined || !Number.isInteger(index) || index < 0 || index >= vertexCount) {
+      return err(
+        interleavedInputError(
+          'indices',
+          index ?? -1,
+          `indices[${indexPosition}] must be an integer in [0, ${vertexCount})`,
+        ),
+      );
+    }
+  }
   // Slice positions / normals / uvs out of the 8-floats interleaved
   // buffer for the tangent computation. The helper requires them in
   // tight-packed Float32Array form per attribute.
@@ -120,7 +161,9 @@ export function meshFromInterleaved(
     uvs[i * 2 + 0] = vertices[base + 6] as number;
     uvs[i * 2 + 1] = vertices[base + 7] as number;
   }
-  const tangents = computeTangentVec4(positions, normals, uvs, indices);
+  const tangentResult = computeTangentVec4(positions, normals, uvs, indices);
+  if (!tangentResult.ok) return tangentResult;
+  const tangents = tangentResult.value;
   const expanded = new Float32Array(vertexCount * PROCEDURAL_FLOATS_PER_VERTEX);
   for (let i = 0; i < vertexCount; i++) {
     const dst = i * PROCEDURAL_FLOATS_PER_VERTEX;
@@ -138,7 +181,7 @@ export function meshFromInterleaved(
     expanded[dst + 10] = tangents[i * 4 + 2] as number;
     expanded[dst + 11] = tangents[i * 4 + 3] as number;
   }
-  return {
+  return ok({
     kind: 'mesh',
     vertices: expanded,
     indices,
@@ -149,14 +192,16 @@ export function meshFromInterleaved(
         indexCount: indices.length,
         vertexCount,
         topology: 'triangle-list',
+        materialSlot: 0,
       },
     ],
+    materialSlots: [{ slotName: 'Default' }],
     // Procedural meshes carry their own local-space AABB: after feat-20260614
     // (D-15) `allocSharedRef` stores the payload verbatim -- there is no
     // `withMeshAabb` pass like the old `register`/`catalog` path -- so the cull
     // + pick path can only read an AABB the POD already holds.
     aabb: box3.fromPositions(box3.create(), positions),
-  };
+  });
 }
 
 /** Shared helper: AssetError for degenerate geometry parameters. */
@@ -388,5 +433,5 @@ export function createBoxGeometry(
     }
   }
 
-  return ok(meshFromInterleaved(vertices, indices));
+  return meshFromInterleaved(vertices, indices);
 }

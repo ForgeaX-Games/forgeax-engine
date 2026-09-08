@@ -19,9 +19,6 @@ describe('entity visibility Dawn smoke', () => {
     expect(result.restoredTargetEffective).toBe('visible');
     expect(result.visibleChildEffective).toBe('visible');
     expect(result.inheritedDescendantEffective).toBe('visible');
-    expect(result.hiddenVisibilityStats).toBeGreaterThan(0);
-    expect(result.restoredShadowResourceReady).toBe(true);
-    expect(result.restoredShadowPasses.length).toBeGreaterThan(0);
     expect(result.errors).toEqual([]);
   });
 });

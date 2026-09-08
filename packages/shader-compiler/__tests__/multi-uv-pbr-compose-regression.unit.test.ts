@@ -29,7 +29,9 @@ function loadEngineImports(): Record<string, string> {
   const read = (name: string) => readFileSync(join(srcDir, name), 'utf8');
   return {
     'forgeax_view::common': read('common.wgsl'),
+    'forgeax_view::fog': read('fog.wgsl'),
     'forgeax_pbr::brdf': read('brdf.wgsl'),
+    'forgeax_pbr::temporal': read('pbr-temporal.wgsl'),
     'forgeax_pbr::ibl_shared': read('ibl-shared.wgsl'),
     'forgeax_pbr::ibl_sampling': read('ibl-sampling.wgsl'),
     'forgeax_pbr::tbn': read('tbn.wgsl'),
@@ -148,7 +150,11 @@ describe('built-in standard-PBR single-UV + multi-UV pathway regression (F-3 + F
     const fragmentBody = source.slice(fragmentStart, fragmentEnd);
     // The authored material now carries one UV transform per texture slot;
     // the composed shader resolves each slot through that shared helper.
-    expect(fragmentBody).toMatch(/transformedMaterialUv\s*\(\s*material\.baseColorCoordinates\s*,\s*in\s*\)/);
-    expect(fragmentBody).toMatch(/transformedMaterialUv\s*\(\s*material\.normalCoordinates\s*,\s*in\s*\)/);
+    expect(fragmentBody).toMatch(
+      /transformedMaterialUv\s*\(\s*material\.baseColorTextureCoordinatesTransform\s*,\s*material\.baseColorTextureCoordinatesMetadata\s*,\s*in\s*\)/,
+    );
+    expect(fragmentBody).toMatch(
+      /transformedMaterialUv\s*\(\s*material\.normalTextureCoordinatesTransform\s*,\s*material\.normalTextureCoordinatesMetadata\s*,\s*in\s*\)/,
+    );
   });
 });

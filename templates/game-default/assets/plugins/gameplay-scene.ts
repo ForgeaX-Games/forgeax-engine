@@ -1,4 +1,4 @@
-import type { BootstrapContext } from '@forgeax/engine-app';
+import type { GameHost } from '@forgeax/engine-app';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import type { AnimatedMaterialTarget } from './animated-target-material';
 import { createAnimatedMaterialTarget } from './animated-target-material';
@@ -31,9 +31,9 @@ export type GameplaySceneAssembly = {
 };
 
 /** Load the authored scene, attach gameplay ECS components, and expose only the assembly facts. */
-export async function assembleGameplayScene(world: World, host: BootstrapContext | undefined): Promise<GameplaySceneAssembly> {
+export async function assembleGameplayScene(world: World, host: GameHost | undefined): Promise<GameplaySceneAssembly> {
   let loaded: LoadedScene | null = host ? loadedFromHost(world, host) : null;
-  if (loaded && host?.assets && host.defaultScene) loaded = await expandLoadedScene(host.assets, host.defaultScene, loaded);
+  if (loaded && host?.assets && host.defaultScene) loaded = await expandLoadedScene(world, host.assets, host.defaultScene, loaded);
   if (!loaded) {
     try { loaded = host?.assets === undefined ? await loadScene({ world }) : await loadScene({ world, assets: host.assets }); }
     catch (error) { console.warn('[game] scene asset unavailable:', error); }

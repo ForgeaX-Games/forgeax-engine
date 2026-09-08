@@ -133,7 +133,7 @@ export interface SkinJointPathUnresolvedDetail {
 /**
  * Structured error for unresolved jointPath post-spawn.
  *
- * Emitted by postSpawnResolveJoints when Name lookup fails.
+ * Emitted by resolveSkinJoints when Name lookup fails.
  *   - `.code = 'skin-joint-path-unresolved'`
  *   - `.expected` — Name-bearing entity exists for each jointPath leaf
  *   - `.hint` — verify glTF node Name preservation in the importer

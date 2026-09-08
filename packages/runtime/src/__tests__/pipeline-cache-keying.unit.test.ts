@@ -1,10 +1,7 @@
-import {
-  cacheKeyOf,
-  type PipelineSpec,
-  SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET,
-} from '@forgeax/engine-render/internal';
 import { KNOWN_PASS_KINDS, type PassKind, type VertexAttributeMap } from '@forgeax/engine-types';
 import { describe, expect, expectTypeOf, it } from 'vitest';
+import { SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET } from '../../../render/src/pbr-pipeline';
+import { cacheKeyOf, type PipelineSpec } from '../../../render/src/pipeline-spec';
 
 /*
  * feat-20260615-pipeline-spec-ssot M2-T2: cache key axis tests migrated from
@@ -129,17 +126,18 @@ describe('cacheKeyOf passKind dimension', () => {
  */
 describe('PassKind open string + KNOWN_PASS_KINDS (feat-20260615 D-10)', () => {
   // M2-T4 expanded KNOWN_PASS_KINDS from 4 to 6 entries by adding 'post-process'
-  // and 'skybox' so fullscreen-post + skybox passes can route through
-  // SPEC_CONST_TABLE / getOrBuildPipeline rather than raw createRenderPipeline.
-  it('KNOWN_PASS_KINDS has exactly 6 entries', () => {
-    expect(KNOWN_PASS_KINDS).toHaveLength(6);
+  // and 'skybox'; point-shadow-caster is the engine's depth-only point-light
+  // pass and is part of the discoverable catalogue as well.
+  it('KNOWN_PASS_KINDS has exactly 7 entries', () => {
+    expect(KNOWN_PASS_KINDS).toHaveLength(7);
   });
 
-  it('KNOWN_PASS_KINDS contains the 6 engine-shipped pass kinds', () => {
+  it('KNOWN_PASS_KINDS contains the 7 engine-shipped pass kinds', () => {
     expect(KNOWN_PASS_KINDS).toContain('forward');
     expect(KNOWN_PASS_KINDS).toContain('deferred');
     expect(KNOWN_PASS_KINDS).toContain('lighting');
     expect(KNOWN_PASS_KINDS).toContain('shadow-caster');
+    expect(KNOWN_PASS_KINDS).toContain('point-shadow-caster');
     expect(KNOWN_PASS_KINDS).toContain('post-process');
     expect(KNOWN_PASS_KINDS).toContain('skybox');
   });

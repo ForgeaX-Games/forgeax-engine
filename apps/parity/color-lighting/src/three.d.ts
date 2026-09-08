@@ -1,9 +1,12 @@
 declare module 'three' {
   export const BackSide: number;
+  export const BufferAttribute: new (array: ArrayLike<number>, itemSize: number) => any;
+  export const BufferGeometry: new () => any;
   export const PerspectiveCamera: new (fov: number, aspect: number, near: number, far: number) => any;
   export const Color: new (value?: number) => any;
   export const DataTexture: new (...args: any[]) => any;
   export const DoubleSide: number;
+  export const HalfFloatType: number;
   export const DirectionalLight: new (...args: any[]) => any;
   export const LinearSRGBColorSpace: string;
   export const Mesh: new (...args: any[]) => any;

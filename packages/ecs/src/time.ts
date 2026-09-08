@@ -1,17 +1,34 @@
 export interface TimeResource {
-  delta: number;
-  elapsed: number;
-  maxDeltaSeconds: number;
+  readonly delta: number;
+  readonly elapsed: number;
+  readonly maxDeltaSeconds: number;
 }
 
 export interface FixedTimeResource {
-  delta: number;
-  maxStepsPerUpdate: number;
-  tick: number;
+  readonly delta: number;
+  readonly maxStepsPerUpdate: number;
+  readonly tick: number;
   /** Seconds accumulated toward the next fixed update. */
-  overstep: number;
-  droppedSeconds: number;
-  droppedUpdates: number;
+  readonly overstep: number;
+  readonly droppedSeconds: number;
+  readonly droppedUpdates: number;
+}
+
+export type MutableTimeResource = { -readonly [K in keyof TimeResource]: TimeResource[K] };
+export type MutableFixedTimeResource = {
+  -readonly [K in keyof FixedTimeResource]: FixedTimeResource[K];
+};
+
+/** Scheduler-only mutable clock capability; World never exposes this publicly. */
+export interface ClockWriter {
+  readonly time: MutableTimeResource;
+  readonly fixed: MutableFixedTimeResource;
+}
+
+export interface WorldClock {
+  readonly time: TimeResource;
+  readonly fixed: FixedTimeResource;
+  readonly writer: ClockWriter;
 }
 
 interface ResourceToken<T> {
@@ -60,5 +77,46 @@ export function createFixedTimeResource(policy: Required<TimePolicy>): FixedTime
     overstep: 0,
     droppedSeconds: 0,
     droppedUpdates: 0,
+  };
+}
+
+export function createWorldClock(policy: Required<TimePolicy>): WorldClock {
+  const time = createTimeResource(policy) as MutableTimeResource;
+  const fixed = createFixedTimeResource(policy) as MutableFixedTimeResource;
+  const timeView: TimeResource = Object.freeze({
+    get delta() {
+      return time.delta;
+    },
+    get elapsed() {
+      return time.elapsed;
+    },
+    get maxDeltaSeconds() {
+      return time.maxDeltaSeconds;
+    },
+  });
+  const fixedView: FixedTimeResource = Object.freeze({
+    get delta() {
+      return fixed.delta;
+    },
+    get maxStepsPerUpdate() {
+      return fixed.maxStepsPerUpdate;
+    },
+    get tick() {
+      return fixed.tick;
+    },
+    get overstep() {
+      return fixed.overstep;
+    },
+    get droppedSeconds() {
+      return fixed.droppedSeconds;
+    },
+    get droppedUpdates() {
+      return fixed.droppedUpdates;
+    },
+  });
+  return {
+    time: timeView,
+    fixed: fixedView,
+    writer: { time, fixed },
   };
 }

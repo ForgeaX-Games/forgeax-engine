@@ -1,7 +1,6 @@
+import { calculateCatalogDelta } from '@forgeax/engine-pack/build';
 import type { PackIndexEntry } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-
-import { calculateCatalogDelta } from '../catalog-watch.js';
 
 const previous: PackIndexEntry[] = [
   {
@@ -76,5 +75,17 @@ describe('catalog watch revision continuity', () => {
       code: 'catalog-revision-conflict',
       actual: '2 -> 2',
     });
+  });
+
+  it('marks a contiguous changed revision authoritative', () => {
+    const delta = calculateCatalogDelta(previous, next, {
+      baseline: [{ rootId: 'root-a', revision: 1 }],
+      current: [{ rootId: 'root-a', revision: 2 }],
+    });
+
+    expect(delta?.authority).toBe('authoritative');
+    expect(delta?.diagnostics).toEqual([]);
+    expect(delta?.revisions?.current).toEqual([{ rootId: 'root-a', revision: 2 }]);
+    expect(delta?.changed).toEqual(next);
   });
 });

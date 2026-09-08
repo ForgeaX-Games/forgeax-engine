@@ -1,9 +1,5 @@
-import {
-  defineComponent,
-  defineSharedKernel,
-  type KernelDispatchSpan,
-  World,
-} from '@forgeax/engine-ecs';
+import { defineComponent, World } from '@forgeax/engine-ecs';
+import { defineSharedKernel, type KernelDispatchSpan } from '@forgeax/engine-ecs/shared';
 import { describe, expect, it } from 'vitest';
 import { createKernelPool } from '../execution/kernel-pool';
 

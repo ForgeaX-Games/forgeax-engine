@@ -1,250 +1,173 @@
-// @forgeax/engine-rhi-debug/src/errors — DebugError + closed DebugErrorCode union.
-//
-// Shape:
-// - DebugErrorCode = closed union 15 members, independent from RhiErrorCode (per Q&A q8).
-// - DebugError class has readonly .code / .expected / .hint / .detail four-field surface,
-//   same shape as RhiError (AGENTS.md "Errors are structured").
-// - .detail is a discriminated union narrowed on .code via switch exhaustive.
-// - Requirements §7 error model complete list (15 members, closed union).
-//
-// Related: requirements §7 / AC-23 / AC-24; plan-strategy §3.1 errors.ts module.
+// @forgeax/engine-rhi-debug/src/errors -- one closed core error union.
 
 /// <reference types="@webgpu/types" />
 
-import type { RhiCapsRecorded } from './types';
+/** The only error vocabulary crossing the RHI-debug core boundary. */
+export type RhiDebugErrorCode =
+  | 'capture-unavailable'
+  | 'capture-busy'
+  | 'capture-snapshot-failed'
+  | 'capture-timeout'
+  | 'tape-invalid'
+  | 'tape-version-unsupported'
+  | 'replay-capability-mismatch'
+  | 'replay-event-failed'
+  | 'replay-position-invalid'
+  | 'readback-failed'
+  | 'readback-unsupported';
 
-/**
- * RhiCapsRecorded key alias — produced via `keyof` so the closed union
- * stays in lockstep with the recorded caps fields. AI users can pattern
- * `switch (k) { case 'storageBuffer': ... }` exhaustively.
- *
- * Used by `CapsMismatchDetail.missingCaps` to give consumers a typed
- * key set rather than a free-form `string[]` (AC-11).
- */
-export type RhiCapsRecordedKey = keyof RhiCapsRecorded;
+export type CaptureStage = 'capture' | 'snapshot';
 
-/**
- * Closed DebugErrorCode union. 15 members, completely independent from
- * RhiErrorCode (no overlap per Q&A q8). `switch` exhaustive checks need
- * no default fallback — tsc strict mode guards union completeness.
- *
- * | code | trigger |
- * |:--|:--|
- * | `'recorder-not-attached'` | (a) RPC received captureFrame but `wrap` was never called during bootstrap; (b) `arm()` invoked while the recorder is still in the error state — caller must `disposeError()` to clear before re-arming. |
- * | `'recorder-already-armed'` | Duplicate arm() while previous capture is still in progress (recorder in `armed` / `recording` / `finalizing`). |
- * | `'frame-end-hook-missing'` | createRenderer internal onFrameEnd injection point is absent (theoretically unreachable; fail-fast guard). |
- * | `'tape-format-version-mismatch'` | Cross-version tape: integer formatVersion does not match. |
- * | `'tape-handle-graph-broken'` | Event references a handleId that was never declared by any create* call in the tape (deserialize path); or a frame-referenced handleId has no create event in bootstrapCreates — the resource was created before wrap() and the recorder could not capture its create* event. The `.hint` discriminates: deserialize side mentions "referenced but was never declared", finalize side mentions "bootstrap table" and "before wrap()" (finalize closure path). |
- * | `'caps-mismatch'` | target.caps does not contain tape.rhiCapsRecorded; replay blocked. |
- * | `'replay-step-out-of-range'` | stepTo(N) where N > totalEvents or N < currentEventIdx. |
- * | `'replay-deterministic-violation'` | After submit + onSubmittedWorkDone, RT pixels differ from original (test-only). |
- * | `'rt-readback-failed'` | copyTextureToBuffer / mapAsync chain failed. |
- * | `'png-encode-failed'` | PNG encoding **or** disk write of RT readback / tape / report data failed. The `.hint` field discriminates: `'failed to ...'` describes the specific I/O step (PNG encode vs `mkdirSync` vs `writeFileSync`). |
- * | `'snapshot-readback-failed'` | snapshotResource GPU byte readback failed (copy/mapAsync/storeBlob failed). |
- * | `'snapshot-timeout'` | frame-header resource snapshot exceeded its bounded timeout and was cancelled. |
- * | `'seed-initial-data-failed'` | replayInitialData seed failed (handleId missing/dataHash missing/writeBuffer failed). |
- * | `'rpc-target-not-wired'` | wireDefaultInspectors was called without a debugRhi injector. |
- * | `'replay-dispose-busy'` | dispose() called while in-flight inspect is still running. |
- */
-export type DebugErrorCode =
-  | 'recorder-not-attached'
-  | 'recorder-already-armed'
-  | 'frame-end-hook-missing'
-  | 'tape-format-version-mismatch'
-  | 'tape-handle-graph-broken'
-  | 'caps-mismatch'
-  | 'replay-step-out-of-range'
-  | 'replay-deterministic-violation'
-  | 'rt-readback-failed'
-  | 'png-encode-failed'
-  | 'snapshot-readback-failed'
-  | 'snapshot-timeout'
-  | 'seed-initial-data-failed'
-  | 'rpc-target-not-wired'
-  | 'replay-dispose-busy';
-
-/**
- * Detail type exclusive to the 'caps-mismatch' path.
- *
- * `missingCaps` carries the list of RhiCapsRecorded keys that the target
- * device lacked compared to the recording device. The element type is
- * `RhiCapsRecordedKey` (= `keyof RhiCapsRecorded`) — AI users can
- * `switch` exhaustively without parsing free-form strings (AC-11 +
- * charter P3 structured channel).
- *
- * The human-readable label (e.g. `'storage-buffer'` for
- * `'storageBuffer'`) lives on `.hint`, not in this typed slot —
- * structured detail is for narrowing, prose is for messaging.
- */
-export interface CapsMismatchDetail {
-  readonly missingCaps: readonly RhiCapsRecordedKey[];
+export interface CaptureFailureDetail {
+  readonly stage: CaptureStage;
+  readonly cause: string;
+  readonly handleId?: string;
+  readonly resourceKind?: 'buffer' | 'texture';
 }
 
-/**
- * Detail type exclusive to the 'tape-format-version-mismatch' path.
- *
- * `tapeVersion` is the formatVersion found in the tape file.
- * `expectedVersion` is the formatVersion this runtime expects.
- */
-export interface TapeFormatVersionDetail {
-  readonly tapeVersion: number;
+export interface CaptureTimeoutDetail {
+  readonly stage: 'snapshot';
+  readonly cause: string;
+  readonly timeoutMs: number;
+  readonly progress?: {
+    readonly snapshotStage: 'queue-drain' | 'resource-readback';
+    readonly totalResources: number;
+    readonly completedResources: number;
+    readonly skippedResources: number;
+    readonly currentHandleId: string | null;
+    readonly currentKind: 'buffer' | 'texture' | null;
+    readonly currentSizeBytes: number | null;
+    readonly elapsedMs: number;
+  };
+}
+
+export interface TapeFailureDetail {
+  readonly stage: 'decode' | 'validate';
+  readonly cause: string;
+  readonly handleId?: string;
+  readonly eventIndex?: number;
+}
+
+export interface TapeVersionDetail {
+  readonly foundVersion: number;
   readonly expectedVersion: number;
 }
 
-/**
- * Detail type exclusive to the 'replay-step-out-of-range' path.
- *
- * `requestedStep` is the N passed to stepTo(N).
- * `currentStep` is the current event index.
- * `totalEvents` is the total number of events in the tape.
- */
-export interface StepRangeDetail {
-  readonly requestedStep: number;
-  readonly currentStep: number;
-  readonly totalEvents: number;
+export interface ReplayCapabilityFailureDetail {
+  readonly stage: 'replay';
+  readonly cause: string;
 }
 
-/**
- * Detail type exclusive to the 'replay-dispose-busy' path.
- *
- * `inFlightDrawIndices` lists the drawIdx values currently being inspected
- * (in-flight). The caller should await these before retrying dispose.
- */
-export interface DisposeBusyDetail {
-  readonly inFlightDrawIndices: readonly number[];
+export interface ReplayEventFailureDetail {
+  readonly eventIndex: number;
+  readonly kind: string;
+  readonly stage: string;
+  readonly cause: string;
 }
 
-/**
- * Detail type exclusive to the 'tape-handle-graph-broken' path.
- *
- * `danglingHandleId` is the first handleId found to be unreferenced.
- * `referencingEventIndex` is the event index where the dangling reference appears.
- */
-export interface HandleGraphBrokenDetail {
-  readonly danglingHandleId: string;
-  readonly referencingEventIndex: number;
+export interface ReplayPositionDetail {
+  readonly requested: number;
+  readonly available: number;
 }
 
-/**
- * Detail type exclusive to the 'replay-deterministic-violation' path.
- *
- * `actualDelta` is the computed pixelDeltaAbsMean between baseline and replay pixels.
- * `expectedDelta` is the acceptance threshold (0.01 per AC-14).
- * `drawIdx` is the optional draw call index where the violation was detected.
- *
- * Added in round 2 (m5b-2) to give consumers a structured comparison
- * signal rather than free-form string interpolation (charter P3).
- */
-export interface DeterministicViolationDetail {
-  readonly actualDelta: number;
-  readonly expectedDelta: number;
-  readonly drawIdx?: number | undefined;
+export interface ReadbackFailureDetail {
+  readonly stage: 'readback';
+  readonly cause: string;
+  readonly phase?: 'copy' | 'map';
 }
 
-/**
- * Detail type exclusive to the 'snapshot-readback-failed' path.
- *
- * `handleId` is the resource that snapshotResource attempted to read back.
- * `stage` identifies which stage of the readback pipeline failed:
- * 'copy' (copyBufferToBuffer/copyTextureToBuffer), 'map' (mapAsync), or
- * 'store' (storeBlob hash computation / blobPool insertion).
- */
-export interface SnapshotReadbackFailedDetail {
-  readonly handleId: string;
-  readonly stage: 'copy' | 'map' | 'store';
+export interface ReadbackUnsupportedDetail {
+  readonly stage: 'readback';
+  readonly resourceId?: string;
+  readonly format?: string;
+  readonly reason: string;
 }
 
-/**
- * Detail type exclusive to the 'snapshot-timeout' path.
- *
- * The recorder keeps this progress snapshot after entering Error so a host
- * can distinguish queue-drain stalls from a slow resource readback without
- * scraping log text.
- */
-export interface SnapshotTimeoutDetail {
-  readonly timeoutMs: number;
-  readonly stage: 'queue-drain' | 'resource-readback';
-  readonly totalResources: number;
-  readonly completedResources: number;
-  readonly skippedResources: number;
-  readonly currentHandleId: string | null;
-  readonly currentKind: 'buffer' | 'texture' | null;
-  readonly currentSizeBytes: number | null;
-  readonly elapsedMs: number;
-}
+type RhiDebugDetailByCode = {
+  'capture-unavailable': CaptureFailureDetail;
+  'capture-busy': CaptureFailureDetail;
+  'capture-snapshot-failed': CaptureFailureDetail;
+  'capture-timeout': CaptureTimeoutDetail;
+  'tape-invalid': TapeFailureDetail;
+  'tape-version-unsupported': TapeVersionDetail;
+  'replay-capability-mismatch': ReplayCapabilityFailureDetail;
+  'replay-event-failed': ReplayEventFailureDetail;
+  'replay-position-invalid': ReplayPositionDetail;
+  'readback-failed': ReadbackFailureDetail;
+  'readback-unsupported': ReadbackUnsupportedDetail;
+};
 
-/**
- * Detail type exclusive to the 'seed-initial-data-failed' path.
- *
- * `handleId` is the resource replayInitialData attempted to seed.
- * `stage` identifies which stage of the seed pipeline failed:
- * 'lookup' (handleMap miss / blobPool miss / unresolved resource kind) or
- * 'write' (queue.writeBuffer / queue.writeTexture threw).
- *
- * The detail shape is locked by the README contract SSOT (Phase 0, w3) — the
- * seed handler is its first consumer (Phase 1, w15).
- */
-export interface SeedInitialDataFailedDetail {
-  readonly handleId: string;
-  readonly stage: 'lookup' | 'write';
-}
+export type RhiDebugErrorDetail = RhiDebugDetailByCode[RhiDebugErrorCode];
 
-/**
- * Tagged union of `.detail` shapes carried by DebugError.
- *
- * Each variant is exclusively associated with one DebugErrorCode:
- *   - `CapsMismatchDetail` -> 'caps-mismatch'
- *   - `TapeFormatVersionDetail` -> 'tape-format-version-mismatch'
- *   - `StepRangeDetail` -> 'replay-step-out-of-range'
- *   - `DisposeBusyDetail` -> 'replay-dispose-busy'
- *   - `HandleGraphBrokenDetail` -> 'tape-handle-graph-broken'
- *   - `DeterministicViolationDetail` -> 'replay-deterministic-violation'
- *   - `SnapshotReadbackFailedDetail` -> 'snapshot-readback-failed'
- *   - `SnapshotTimeoutDetail` -> 'snapshot-timeout'
- *   - `SeedInitialDataFailedDetail` -> 'seed-initial-data-failed'
- *
- * The other 6 paths leave `.detail = undefined`.
- */
-export type DebugErrorDetail =
-  | CapsMismatchDetail
-  | TapeFormatVersionDetail
-  | StepRangeDetail
-  | DisposeBusyDetail
-  | HandleGraphBrokenDetail
-  | DeterministicViolationDetail
-  | SnapshotReadbackFailedDetail
-  | SnapshotTimeoutDetail
-  | SeedInitialDataFailedDetail;
-
-/**
- * Structured debug error.
- *
- * Four readonly fields aligned with RhiError shape (AGENTS.md):
- * - `.code` — closed union member (L1 key signal).
- * - `.expected` — expected-state description (L2 detail).
- * - `.hint` — actionable recovery guidance (L2 detail; human-readable).
- * - `.detail` — discriminated union narrowed on `.code`.
- */
-export class DebugError extends Error {
-  readonly code: DebugErrorCode;
+export type RhiDebugErrorFor<C extends RhiDebugErrorCode> = {
+  readonly code: C;
   readonly expected: string;
   readonly hint: string;
-  readonly detail: DebugErrorDetail | undefined;
+  readonly detail: RhiDebugDetailByCode[C];
+};
 
-  constructor(args: {
-    code: DebugErrorCode;
-    expected: string;
-    hint: string;
-    detail?: DebugErrorDetail | undefined;
-  }) {
-    super(`[DebugError ${args.code}] expected: ${args.expected}; hint: ${args.hint}`);
-    this.name = 'DebugError';
-    this.code = args.code;
-    this.expected = args.expected;
-    this.hint = args.hint;
-    this.detail = args.detail;
+export type RhiDebugError = {
+  [C in RhiDebugErrorCode]: RhiDebugErrorFor<C>;
+}[RhiDebugErrorCode];
+
+const VERSION_HINT =
+  'use the source revision/tool that produced this tape, or capture again on the current revision';
+
+export function createRhiDebugError<C extends RhiDebugErrorCode>(
+  code: C,
+  detail: RhiDebugDetailByCode[C],
+): RhiDebugErrorFor<C> {
+  return {
+    code,
+    expected: expectedFor(code),
+    hint: recoveryHint(code),
+    detail,
+  };
+}
+
+function expectedFor(code: RhiDebugErrorCode): string {
+  switch (code) {
+    case 'capture-unavailable':
+    case 'capture-busy':
+    case 'capture-snapshot-failed':
+    case 'capture-timeout':
+      return 'a capture capability that can complete one bounded frame';
+    case 'tape-invalid':
+    case 'tape-version-unsupported':
+      return 'a valid v7 RHI debug tape';
+    case 'replay-capability-mismatch':
+    case 'replay-event-failed':
+    case 'replay-position-invalid':
+      return 'a fresh replay session with a valid workIndex';
+    case 'readback-failed':
+    case 'readback-unsupported':
+      return 'a supported readback target';
   }
 }
 
-// Result / ok / err re-exports from @forgeax/engine-types will be added in M-2
-// when the recorder module needs them. For M-1, the errors module is self-contained.
+function recoveryHint(code: RhiDebugErrorCode): string {
+  switch (code) {
+    case 'capture-unavailable':
+      return 'enable the single RHI capture capability and retry';
+    case 'capture-busy':
+      return 'wait for the active capture to finish, then issue one new request';
+    case 'capture-snapshot-failed':
+      return 'inspect the snapshot stage and capture again after fixing the resource';
+    case 'capture-timeout':
+      return 'increase the bounded timeout or capture again after the device becomes idle';
+    case 'tape-invalid':
+      return 'obtain complete bytes and retry strict decoding; do not continue to replay';
+    case 'tape-version-unsupported':
+      return VERSION_HINT;
+    case 'replay-capability-mismatch':
+      return 'use a fresh device satisfying the recorded RHI capabilities';
+    case 'replay-event-failed':
+      return 'inspect eventIndex, kind, stage, and cause; later work is not valid';
+    case 'replay-position-invalid':
+      return 'choose a workIndex present in FrameModel.works';
+    case 'readback-failed':
+      return 'inspect the readback cause and retry on a live fresh replay session';
+    case 'readback-unsupported':
+      return 'inspect the descriptor or use a backend with the requested readback support';
+  }
+}

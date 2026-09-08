@@ -7,13 +7,14 @@ import {
 } from '../gpu-stage';
 
 const ownerSource = readFileSync(new URL('../gpu-stage.ts', import.meta.url), 'utf8');
-const consumerSources = [
+const computeConsumerSources = [
   readFileSync(new URL('../hdrp-buffers.ts', import.meta.url), 'utf8'),
+];
+const fragmentConsumerSources = [
   readFileSync(new URL('../pbr-pipeline.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('../ibl/IblPipelineCache.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('../ibl/skylight-bind-group.ts', import.meta.url), 'utf8'),
-  readFileSync(new URL('../pipeline-spec.ts', import.meta.url), 'utf8'),
-  readFileSync(new URL('../renderer/renderer-factory.ts', import.meta.url), 'utf8'),
+  readFileSync(new URL('../assembly/factory.ts', import.meta.url), 'utf8'),
 ];
 
 describe('shader stage owner', () => {
@@ -25,14 +26,18 @@ describe('shader stage owner', () => {
   });
 
   it('routes render visibility consumers through the owner', () => {
-    for (const source of consumerSources) {
-      expect(source).toContain('GPU_SHADER_STAGE_FRAGMENT');
+    for (const source of [...computeConsumerSources, ...fragmentConsumerSources]) {
+      expect(source).toContain('gpu-stage');
       expect(source).not.toMatch(/const GPU_SHADER_STAGE_(VERTEX|FRAGMENT|COMPUTE)\s*=/);
       expect(source).not.toMatch(/visibility:\s*0x[124]/);
     }
-    expect(consumerSources[0]).toContain('GPU_SHADER_STAGE_COMPUTE');
-    expect(consumerSources[0]).toContain('GPU_SHADER_STAGE_VERTEX');
-    expect(consumerSources[1]).toContain('GPU_SHADER_STAGE_VERTEX');
-    expect(consumerSources[2]).toContain('GPU_SHADER_STAGE_VERTEX');
+    for (const source of fragmentConsumerSources) {
+      expect(source).toContain('GPU_SHADER_STAGE_FRAGMENT');
+    }
+    for (const source of computeConsumerSources) {
+      expect(source).toContain('GPU_SHADER_STAGE_COMPUTE');
+    }
+    expect(fragmentConsumerSources[0]).toContain('GPU_SHADER_STAGE_VERTEX');
+    expect(fragmentConsumerSources[1]).toContain('GPU_SHADER_STAGE_VERTEX');
   });
 });

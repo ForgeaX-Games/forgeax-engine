@@ -128,11 +128,12 @@ export function stateNotRegistered(name: string): StateError {
 }
 
 export function invalidVariant(name: string, got: string, valid: readonly string[]): StateError {
+  const validSnapshot = [...valid];
   return makeError(
     'invalid-variant',
-    `Variant must be one of: ${valid.join(', ')}`,
-    `"${got}" is not a valid variant for state "${name}". Did you mean one of: ${valid.join(', ')}? Check for typos.`,
-    { code: 'invalid-variant', name, got, valid },
+    `Variant must be one of: ${validSnapshot.join(', ')}`,
+    `"${got}" is not a valid variant for state "${name}". Did you mean one of: ${validSnapshot.join(', ')}? Check for typos.`,
+    { code: 'invalid-variant', name, got, valid: validSnapshot },
   );
 }
 

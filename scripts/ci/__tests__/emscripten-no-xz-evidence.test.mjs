@@ -22,6 +22,14 @@ const evidenceWorkflow = readFileSync(
   'utf8',
 );
 const evidenceScript = resolve(repoRoot, 'scripts/ci/evidence/emscripten-no-xz.mjs');
+const fbxBuildScript = readFileSync(
+  resolve(repoRoot, 'packages/fbx/scripts/build-wasm.mjs'),
+  'utf8',
+);
+const codecBuildScript = readFileSync(
+  resolve(repoRoot, 'packages/codec/scripts/build-wasm.mjs'),
+  'utf8',
+);
 const testNodePath = resolve(process.execPath);
 const testNodeSha256 = `sha256:${createHash('sha256').update(readFileSync(testNodePath)).digest('hex')}`;
 const testNodeAliasDir = mkdtempSync(join(tmpdir(), 'forgeax-node-alias-'));
@@ -116,25 +124,24 @@ function localCapabilityAudit() {
   };
 }
 
-function featureChangedFiles() {
-  const base = execFileSync('git', ['merge-base', 'origin/main', 'HEAD'], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-  }).trim();
-  return execFileSync('git', ['diff', '--name-only', `${base}...HEAD`], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-  })
-    .trim()
-    .split('\n')
-    .filter(Boolean);
-}
-
 test('no-xz bootstrap is Linux-only and absent from portability-bun', () => {
   const command = 'python3 scripts/ci/setup-emscripten-no-xz.py';
   assertLinuxOnly(ciWorkflow, command, 'ci no-xz helper');
   assertLinuxOnly(nightlyWorkflow, command, 'nightly no-xz helper');
   assert.doesNotMatch(jobSection(ciWorkflow, 'portability-bun'), /setup-emscripten-no-xz\.py/);
+});
+
+test('Emscripten consumers normalize checkout roots in compiled output', () => {
+  assert.match(fbxBuildScript, /-ffile-prefix-map=\$\{ROOT\}=\/forgeax\/fbx/);
+  assert.match(codecBuildScript, /-ffile-prefix-map=\$\{CODEC_ROOT\}=\/forgeax\/codec/);
+  assert.equal(fbxBuildScript.match(/REPRODUCIBLE_PATH/g)?.length, 2);
+  assert.equal(codecBuildScript.match(/REPRODUCIBLE_PATH/g)?.length, 4);
+});
+
+test('production Emscripten bootstrap activates the compiler for later build steps', () => {
+  const setup = stepSection(ciWorkflow, 'Setup Emscripten without external xz (Linux)');
+  assert.equal(setup.match(/--github-env\s+"\$GITHUB_ENV"/g)?.length, 2);
+  assert.equal(setup.match(/--github-path\s+"\$GITHUB_PATH"/g)?.length, 2);
 });
 
 test('Linux nightly prepares .nvmrc Node before the no-xz helper', () => {
@@ -195,6 +202,40 @@ test('non-Linux nightly keeps upstream Emscripten setup', () => {
   assert.match(setup, /emscripten-core\/setup-emsdk@v16/);
 });
 
+test('Linux custom bootstrap exports the compiler environment before consumers', () => {
+  for (const [label, workflow, consumerNames] of [
+    [
+      'ci',
+      ciWorkflow,
+      ['Build fbx-wasm (compile only if absent)', 'Build basis-wasm (compile only if absent)'],
+    ],
+    ['nightly', nightlyWorkflow, ['Build fbx-wasm', 'Build basis-wasm']],
+  ]) {
+    const setup = stepIndex(workflow, 'Setup Emscripten without external xz (Linux)');
+    const exportIndex = stepIndex(workflow, 'Export Emscripten no-xz environment (Linux)');
+    assert.ok(setup < exportIndex, `${label} custom bootstrap must precede environment export`);
+    const exportStep = stepSection(workflow, 'Export Emscripten no-xz environment (Linux)');
+    assert.match(exportStep, /if:.*runner\.os\s*==\s*['"]Linux['"]/);
+    assert.match(exportStep, /echo "EMSDK=\$emsdk_root"/);
+    assert.match(exportStep, /echo "EM_CONFIG=\$config_path"/);
+    assert.match(exportStep, /\} >> "\$GITHUB_ENV"/);
+    assert.match(exportStep, /echo "\$emscripten_root"/);
+    assert.match(exportStep, /\} >> "\$GITHUB_PATH"/);
+    assert.match(exportStep, /test -x "\$emscripten_root\/emcc"/);
+    assert.match(
+      exportStep,
+      /EM_CONFIG="\$config_path" "\$emscripten_root\/emcc" --version/,
+      `${label} compiler preflight must consume the config in the current shell`,
+    );
+    for (const consumerName of consumerNames) {
+      assert.ok(
+        exportIndex < stepIndex(workflow, consumerName),
+        `${label} environment export must precede ${consumerName}`,
+      );
+    }
+  }
+});
+
 test('macOS and Windows keep the upstream Emscripten, consumer, pnpm, Node order', () => {
   const names = [
     'Setup Emscripten (non-Linux upstream)',
@@ -249,13 +290,7 @@ test('local capability audit never claims remote platform acceptance', () => {
   if (process.platform === 'darwin') assert.equal(process.arch, 'arm64');
 });
 
-test('feature scope excludes consumer surfaces, generated outputs, and generic cache refactors', () => {
-  const changedFiles = featureChangedFiles();
-  const consumerSurface = changedFiles.filter((path) =>
-    /^(?:packages\/(?:fbx|codec)\/)/.test(path),
-  );
-  assert.deepEqual(consumerSurface, []);
-
+test('generated Emscripten consumer outputs remain untracked', () => {
   const generatedOutputs = execFileSync(
     'git',
     ['ls-files', '--', 'packages/fbx/pkg', 'packages/codec/pkg'],
@@ -265,11 +300,6 @@ test('feature scope excludes consumer surfaces, generated outputs, and generic c
     .split('\n')
     .filter(Boolean);
   assert.deepEqual(generatedOutputs, []);
-
-  const genericRefactors = changedFiles.filter((path) =>
-    /^(?:scripts\/(?:cache|release)|scripts\/lib\/ensure-wasm-lib\.mjs)/.test(path),
-  );
-  assert.deepEqual(genericRefactors, []);
 });
 
 test('independent evidence workflow runs from the feature branch or its main PR', () => {
@@ -325,7 +355,34 @@ test('independent evidence workflow invokes exact cold and warm predicates', () 
   assert.doesNotMatch(warm, /e\.cacheStatus/);
   assert.match(cold, /if-no-files-found: error/);
   assert.match(warm, /if-no-files-found: error/);
-  assert.match(warm, /Require exact Emscripten cache hit/);
+  assert.match(cold, /name: emscripten-no-xz-cache-0000/);
+  assert.match(cold, /path: artifacts\/emscripten\/emsdk-cache\.tar\.gz\.part-0000/);
+  assert.match(cold, /tar -czf .*emsdk-cache\.tar\.gz/);
+  assert.match(cold, /split --bytes=256m --numeric-suffixes=0 --suffix-length=4/);
+  assert.match(cold, /test -s .*part-0000/);
+  assert.match(cold, /test -s .*part-0001/);
+  assert.match(cold, /compression-level: 0/);
+  assert.match(cold, /retention-days: 1/);
+  assert.match(cold, /name: emscripten-no-xz-cache-0001/);
+  assert.match(cold, /path: artifacts\/emscripten\/emsdk-cache\.tar\.gz\.part-0001/);
+  assert.match(warm, /name: emscripten-no-xz-cache-0000/);
+  assert.match(warm, /path: artifacts\/emscripten\/cache\/part-0000/);
+  assert.match(warm, /uses: actions\/download-artifact@v8/);
+  assert.doesNotMatch(warm, /actions\/download-artifact@v5/);
+  assert.match(warm, /Restore exact Emscripten cache/);
+  assert.match(warm, /name: emscripten-no-xz-cache-0001/);
+  assert.match(warm, /path: artifacts\/emscripten\/cache\/part-0001/);
+  assert.match(warm, /Verify exact Emscripten cache parts/);
+  assert.match(warm, /cat "\$part0" "\$part1" \| gzip -t/);
+  assert.match(warm, /Retry cold Emscripten cache part 0000/);
+  assert.match(warm, /Retry cold Emscripten cache part 0001/);
+  assert.match(warm, /retry-0000/);
+  assert.match(warm, /retry-0001/);
+  assert.match(warm, /cat "\$part0" "\$part1" \| tar -xzf -/);
+  assert.match(warm, /emsdk-cache\/complete\.json/);
+  assert.match(warm, /emsdk-cache\/install\/emscripten\/emcc/);
+  assert.doesNotMatch(cold, /actions\/cache\/(save|restore)@/);
+  assert.doesNotMatch(warm, /actions\/cache\/(save|restore)@/);
 });
 
 test('independent evidence jobs provision pnpm and frozen workspace dependencies first', () => {

@@ -1,12 +1,15 @@
 // Reproduce Bevy's `play_sound_effect` example.
 
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
 import { AudioSource, audioPlugin } from '@forgeax/engine-audio';
-import { WebAudioEngine } from '@forgeax/engine-audio-webaudio';
+import { WebAudioEngine, webAudioPlugin } from '@forgeax/engine-audio-webaudio';
 import { Update } from '@forgeax/engine-ecs';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { AudioClipAsset, Handle } from '@forgeax/engine-types';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { buildPlaySoundEffectWorld, HANDLE_NONE } from './play-sound-effect';
 
@@ -19,9 +22,9 @@ if (!canvas || !audioStatus || !triggerStatus) {
   throw new Error('bevy-play-sound-effect: missing canvas or overlay elements');
 }
 
-const appResult = await createApp(canvas, { plugins: [audioPlugin()] }, {
+const appResult = await createApp(canvas, { plugins: [webAudioPlugin(), audioPlugin()] }, {
   ...forgeaxBundlerAdapter(),
-  importTransport: createDevImportTransport(),
+  importTransport: createRuntimeAssetImportTransport(runtimeBinding),
 });
 if (!appResult.ok) {
   if (appResult.error instanceof EngineEnvironmentError) {
@@ -34,16 +37,12 @@ if (!appResult.ok) {
 
 const app = appResult.value;
 app.onError((error) => console.error(`[bevy-play-sound-effect] app-error ${error.code}`));
-const ready = await app.renderer.ready;
-if (!ready.ok) {
-  console.error('[bevy-play-sound-effect] renderer.ready failed:', ready.error.code, ready.error.hint);
-  throw new Error('bevy-play-sound-effect: renderer.ready failed');
-}
 
 const world = app.world;
 const scene = buildPlaySoundEffectWorld(world, canvas.width / Math.max(canvas.height, 1));
-const assets = app.renderer.assets;
-assets.configurePackIndex('/pack-index.json');
+const assets = app.assets;
+if (assets === undefined) throw new Error('bevy-play-sound-effect: assets unavailable');
+configureRuntimeAssetCatalog(assets, runtimeBinding);
 const audioEngine = world.getResource<WebAudioEngine>('AudioEngine');
 let clipHandle: Handle<'AudioClipAsset', 'shared'> = HANDLE_NONE;
 let loaded = false;
@@ -76,7 +75,7 @@ world.addSystem(Update, {
   after: ['input-frame-start-scan'],
   queries: [],
   fn: () => {
-    const snapshot = app.renderer.input.snapshot(world);
+    const snapshot = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
     const space = snapshot?.keyboard.down(' ') ?? false;
     lastTriggered = false;
     if (space && !previousSpace && loaded) {

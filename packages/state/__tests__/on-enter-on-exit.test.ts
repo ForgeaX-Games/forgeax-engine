@@ -391,7 +391,8 @@ describe('nested setNextState inside OnEnter', () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Callback error propagation (m4w4): OnEnter/OnExit throw → bubble per req §7
+// Callback error propagation (m4w4): OnEnter/OnExit throw → structured
+// system-failed result with the original callback preserved in detail.cause.
 //
 // Each test uses a dedicated StateToken to avoid callback registry collision
 // (registry is module-scoped singleton shared across tests in the same file).
@@ -402,7 +403,7 @@ const ErrPropB = defineState('ErrPropB', ['idle', 'target'] as const);
 const ErrPropC = defineState('ErrPropC', ['idle', 'target'] as const);
 
 describe('callback error propagation', () => {
-  it('OnExit callback throw bubbles to world.update(1 / 60).unwrap() call stack', () => {
+  it('OnExit callback throw is wrapped as system-failed with the original cause', () => {
     const world = new World();
     registerStatesPlugin(world);
     let enterFired = false;
@@ -414,11 +415,11 @@ describe('callback error propagation', () => {
     });
 
     setNextState(world, ErrPropA, 'target');
-    expect(() => world.update(1 / 60).unwrap()).toThrow('on-exit-fault');
+    expect(() => world.update(1 / 60).unwrap()).toThrow('System Update/transitionStates failed');
     expect(enterFired).toBe(false);
   });
 
-  it('OnEnter callback throw bubbles to world.update(1 / 60).unwrap() call stack', () => {
+  it('OnEnter callback throw is wrapped as system-failed with the original cause', () => {
     const world = new World();
     registerStatesPlugin(world);
     let exitFired = false;
@@ -430,7 +431,7 @@ describe('callback error propagation', () => {
     });
 
     setNextState(world, ErrPropB, 'target');
-    expect(() => world.update(1 / 60).unwrap()).toThrow('on-enter-fault');
+    expect(() => world.update(1 / 60).unwrap()).toThrow('System Update/transitionStates failed');
     expect(exitFired).toBe(true);
   });
 

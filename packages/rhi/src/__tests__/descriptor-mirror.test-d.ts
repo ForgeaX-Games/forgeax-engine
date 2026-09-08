@@ -34,13 +34,17 @@ import type {
   BindGroupLayoutDescriptor,
   BufferDescriptor,
   CommandEncoderDescriptor,
+  PipelineLayout,
   RenderPassColorAttachment,
   RenderPassDepthStencilAttachment,
   RenderPassDescriptor,
   RenderPassTimestampWrites,
   RenderPipelineDescriptor,
+  RenderPipelineFragmentState,
+  RenderPipelineVertexState,
   SamplerDescriptor,
   TextureDescriptor,
+  TextureFormat,
   TextureView,
 } from '../index';
 
@@ -140,15 +144,28 @@ describe('MVP-1.1 - 5 descriptors mirror @webgpu/types', () => {
       | 'multisample'
       | 'fragment';
     expectTypeOf<keyof RenderPipelineDescriptor>().toEqualTypeOf<RppKeys>();
-    expectTypeOf<ValueOf<RenderPipelineDescriptor, 'vertex'>>().toEqualTypeOf<
-      ValueOf<GPURenderPipelineDescriptor, 'vertex'>
-    >();
-    expectTypeOf<ValueOf<RenderPipelineDescriptor, 'fragment'>>().toEqualTypeOf<
-      ValueOf<GPURenderPipelineDescriptor, 'fragment'>
-    >();
+    expectTypeOf<
+      ValueOf<RenderPipelineDescriptor, 'vertex'>
+    >().toEqualTypeOf<RenderPipelineVertexState>();
+    expectTypeOf<
+      ValueOf<RenderPipelineDescriptor, 'fragment'>
+    >().toEqualTypeOf<RenderPipelineFragmentState>();
     expectTypeOf<ValueOf<RenderPipelineDescriptor, 'layout'>>().toEqualTypeOf<
-      ValueOf<GPURenderPipelineDescriptor, 'layout'>
+      'auto' | PipelineLayout
     >();
+  });
+});
+
+describe('M4 RHI descriptor mirror', () => {
+  it('uses the spec TextureFormat union for texture descriptors', () => {
+    expectTypeOf<NonNullable<TextureDescriptor['format']>>().toEqualTypeOf<TextureFormat>();
+    const invalid: TextureDescriptor = {
+      // @ts-expect-error -- RHI descriptors reject arbitrary format strings.
+      format: 'not-a-texture-format',
+      size: { width: 1, height: 1 },
+      usage: 0,
+    };
+    void invalid;
   });
 });
 

@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest';
 import {
   type SourcePackageError,
   type SourcePackageErrorCode,
   sourcePackageError,
-} from '../producer/source-package-errors.js';
+} from '@forgeax/engine-import';
+import { describe, expect, it } from 'vitest';
 
 const context = {
   sourceMeta: 'assets/scene.gltf.meta.json',

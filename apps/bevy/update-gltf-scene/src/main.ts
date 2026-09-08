@@ -1,5 +1,6 @@
 // Reproduce Bevy's `gltf/update_gltf_scene` through a real SceneAsset hierarchy.
 
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
 import { Time, Update } from '@forgeax/engine-ecs';
 import {
@@ -10,9 +11,9 @@ import {
 } from '@forgeax/engine-gltf';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { Camera, DirectionalLight, perspective } from '@forgeax/engine-render';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { Transform } from '@forgeax/engine-scene';
-import type { MaterialAsset, MeshAsset, SceneAsset } from '@forgeax/engine-types';
+import { type MaterialAsset, type MeshAsset, type SceneAsset } from '@forgeax/engine-types';
 import { quat } from '@forgeax/engine-math';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import boxGltfUrl from '../../../hello/gltf/assets/box.gltf?url';
@@ -34,7 +35,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appResult = await createApp(
     target,
     { pointerLockAllowed: () => false },
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appResult.ok) {
     const message = appResult.error instanceof EngineEnvironmentError
@@ -45,8 +46,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   const app = appResult.value;
-  const assets = app.renderer.assets;
-  assets.configurePackIndex('/pack-index.json');
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[bevy-update-gltf-scene] assets unavailable');
+    return;
+  }
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
   const world = app.world;
 
   const source = await fetch(boxGltfUrl);
@@ -69,7 +74,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  const mesh = meshIrToMeshAsset(doc.meshes);
+  const meshResult = meshIrToMeshAsset(doc.meshes);
+  if (!meshResult.ok) {
+    console.error(`[bevy-update-gltf-scene] mesh bridge failed: ${meshResult.error.code}`);
+    return;
+  }
+  const mesh = meshResult.value;
   const materialIr = doc.materials[0];
   if (materialIr === undefined) {
     console.error('[bevy-update-gltf-scene] glTF has no material');
@@ -137,8 +147,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   evidenceWindow.__prepareUpdateGltfSceneCapture = async (): Promise<void> => {
     const updated = world.update(1 / 60);
     if (!updated.ok) throw new Error(`capture preparation update failed: ${updated.error.code}`);
-    const drawn = app.renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    if (!drawn.ok) throw new Error(`capture preparation draw failed: ${drawn.error.code}`);
   };
   evidenceWindow.__bevyUpdateGltfSceneReady = true;
   console.warn('[bevy-update-gltf-scene] instantiated SceneAsset descendants are moving');

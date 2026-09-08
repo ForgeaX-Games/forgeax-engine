@@ -1,0 +1,385 @@
+{
+  "schemaVersion": "format-support-matrix/1",
+  "featureId": "feat-20260812-format-classification-tier1",
+  "currentMainSha": "f36c48e59618cef2d679b91737de337cdcb8b718",
+  "source": {
+    "path": ".forgeax-harness/docs/forgeax-format-classification.csv",
+    "sha256": "a87159400f5de776ce46304540999c2e7f84cec07defceaa661d0a0926a9c2d5",
+    "byteCount": 14749,
+    "headerRowCount": 1,
+    "dataRowCount": 56,
+    "firstTierRows": [
+      8,
+      18,
+      26
+    ],
+    "provenance": {
+      "requestedUrl": "file:///Users/you/Downloads/forgeax-format-classification.csv",
+      "resolvedUrl": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/feat-20260812-format-classification-tier1/.forgeax-harness/docs/forgeax-format-classification.csv"
+    }
+  },
+  "statusPolicy": {
+    "evidenceLayers": [
+      "importer",
+      "runtime",
+      "gpu",
+      "recovery",
+      "visual"
+    ],
+    "completeVerdictRequires": [
+      "importer",
+      "runtime",
+      "gpu",
+      "recovery"
+    ],
+    "visualEvidenceRequiredForRelease": true,
+    "candidateEvidenceStatus": "audit-only"
+  },
+  "formats": [
+    {
+      "csvRow": 8,
+      "formatId": "meshopt",
+      "format": "Meshopt compressed glTF",
+      "extensions": ".glb (EXT_meshopt)",
+      "sourceSha256": "a87159400f5de776ce46304540999c2e7f84cec07defceaa661d0a0926a9c2d5",
+      "sourceCodeSha": "f36c48e59618cef2d679b91737de337cdcb8b718",
+      "fixture": {
+        "status": "ready",
+        "paths": [
+          "packages/gltf/src/__tests__/meshopt-real-matrix.integration.test.ts",
+          "packages/gltf/src/__tests__/meshopt-falsifier.unit.test.ts",
+          "apps/hello/format-tier1/fixtures/meshopt-triangle.gltf"
+        ]
+      },
+      "environment": {
+        "name": "format-tier1-final-gates",
+        "platform": "darwin-arm64",
+        "runtime": "node v26.4.0",
+        "backend": "Dawn standard MeshFilter/MeshRenderer consumer; browser visual carrier remains blocked"
+      },
+      "evidence": [
+        {
+          "layer": "importer",
+          "status": "supported",
+          "observed": "A real EXT_meshopt_compression glTF fixture decoded ATTRIBUTES and TRIANGLES streams and projected through the glTF bridge and importer.",
+          "verdict": "supported",
+          "confidence": "high",
+          "evidenceRefs": [
+            "packages/gltf/src/__tests__/meshopt-real-matrix.integration.test.ts",
+            "apps/hello/format-tier1/evidence/final-gates.json"
+          ],
+          "error": {
+            "code": "format-tier1-evidence-complete",
+            "expected": "The compressed glTF source reaches the importer without a pre-expanded geometry substitute.",
+            "hint": "Use the real Meshopt integration fixture when changing this cell.",
+            "detail": "Current evidence is bound to sourceCodeSha f36c48e59618cef2d679b91737de337cdcb8b718."
+          }
+        },
+        {
+          "layer": "runtime",
+          "status": "supported",
+          "observed": "The real compressed Meshopt source reaches the importer, Pack artifact, Catalog pack index, and AssetRegistry.loadByGuid runtime consumer.",
+          "verdict": "supported",
+          "confidence": "high",
+          "evidenceRefs": [
+            "packages/gltf/src/__tests__/meshopt-real-matrix.integration.test.ts",
+            "apps/hello/format-tier1/evidence/final-gates.json"
+          ],
+          "error": {
+            "code": "format-tier1-evidence-complete",
+            "expected": "The compressed Meshopt asset is consumed through Pack/Catalog and loadByGuid.",
+            "hint": "Keep the real Meshopt runtime integration current when changing the canonical load path.",
+            "detail": "Current evidence is bound to sourceCodeSha f36c48e59618cef2d679b91737de337cdcb8b718."
+          }
+        },
+        {
+          "layer": "gpu",
+          "status": "supported",
+          "observed": "The real EXT_meshopt_compression fixture was decoded, catalogued, loaded by GUID, and consumed by the standard MeshFilter/MeshRenderer path; the dedicated Dawn/reference witness also compares topology, attributes, indices, and malformed-input refusal.",
+          "verdict": "supported",
+          "confidence": "high",
+          "evidenceRefs": [
+            "packages/gltf/src/importer-entry.ts",
+            "apps/hello/format-tier1/src/main.ts",
+            "apps/hello/format-tier1/fixtures/meshopt-triangle.gltf"
+          ],
+          "error": {
+            "code": "format-tier1-evidence-complete",
+            "expected": "The compressed Meshopt source reaches the standard GPU mesh consumer.",
+            "hint": "Keep the compressed fixture and standard consumer path current when changing Meshopt support.",
+            "detail": "Current evidence is bound to sourceCodeSha f36c48e59618cef2d679b91737de337cdcb8b718."
+          }
+        },
+        {
+          "layer": "recovery",
+          "status": "supported",
+          "observed": "Meshopt source contamination entered a failed producer state and recovered through inspect, rebuild/cold-cook, same GUID/sourceKey verification, and LKG preservation.",
+          "verdict": "supported",
+          "confidence": "high",
+          "evidenceRefs": [
+            "scripts/forgeax/run-format-tier1-recovery.mjs",
+            "apps/hello/format-tier1/evidence/__tests__/recovery-scenarios.test.mjs"
+          ],
+          "error": {
+            "code": "format-tier1-evidence-complete",
+            "expected": "A failed Meshopt producer result is recoverable without changing identity or overwriting LKG.",
+            "hint": "Follow the structured failure hint before retrying the same sourceKey.",
+            "detail": "Current evidence is bound to sourceCodeSha f36c48e59618cef2d679b91737de337cdcb8b718."
+          }
+        },
+        {
+          "layer": "visual",
+          "status": "supported",
+          "observed": "The live Chromium dogfood page shows the real EXT_meshopt fixture reaching the standard MeshFilter/MeshRenderer consumer; the current screenshot was captured and read.",
+          "verdict": "supported",
+          "confidence": "high",
+          "evidenceRefs": [
+            "apps/hello/format-tier1/evidence/browser-visual-evidence.json",
+            "apps/hello/format-tier1/evidence/final-gates.json",
+            "requirements.md#AC-13"
+          ],
+          "error": {
+            "code": "format-tier1-evidence-complete",
+            "expected": "The Meshopt dogfood target is captured and read by the visual verifier.",
+            "hint": "Keep the headed Chromium Meshopt consumer capture current when changing this path.",
+            "detail": "Current evidence is bound to sourceCodeSha f36c48e59618cef2d679b91737de337cdcb8b718."
+          }
+        }
+      ],
+      "overallVerdict": "supported"
+    },
+    {
+      "csvRow": 18,
+      "formatId": "ktx2-basis",
+      "format": "KTX2 / Basis Universal",
+      "extensions": ".ktx2 / .basis",
+      "sourceSha256": "a87159400f5de776ce46304540999c2e7f84cec07defceaa661d0a0926a9c2d5",
+      "sourceCodeSha": "f36c48e59618cef2d679b91737de337cdcb8b718",
+      "fixture": {
+        "status": "ready",
+        "paths": [
+          "packages/codec/src/__tests__/ktx2-basis-capability-matrix.unit.test.ts",
+          "packages/image/src/__tests__/ktx2-basis-importer.unit.test.ts",
+          "packages/assets-runtime/src/__tests__/pack-basis-load.integration.test.ts",
+          "packages/render/src/__tests__/ktx2-basis-gpu-consumer.dawn.test.ts"
+        ]
+      },
+      "environment": {
+        "name": "format-tier1-final-gates",
+        "platform": "darwin-arm64",
+        "runtime": "node v26.4.0",
+        "backend": "Dawn GPU residency/readback matrix; browser visual carrier remains blocked"
+      },
+      "evidence": [
+        {
+          "layer": "importer",
+          "status": "supported",
+          "observed": "The KTX2/Basis importer tests passed for KTX2 and raw Basis source inputs while preserving codec identity and authored color-space facts.",
+          "verdict": "supported",
+          "confidence": "high",
+          "evidenceRefs": [
+            "packages/codec/src/__tests__/ktx2-basis-capability-matrix.unit.test.ts",
+            "packages/image/src/__tests__/ktx2-basis-importer.unit.test.ts",
+            "apps/hello/format-tier1/evidence/final-gates.json"
+          ],
+          "error": {
+            "code": "format-tier1-evidence-complete",
+            "expected": "KTX2 and Basis source bytes reach the image importer without an ordinary image decoder substitution.",
+            "hint": "Keep container, profile, and color-space facts in the importer evidence.",
+            "detail": "Current evidence is bound to sourceCodeSha f36c48e59618cef2d679b91737de337cdcb8b718."
+          }
+        },
+        {
+          "layer": "runtime",
+          "status": "supported",
+          "observed": "The four real KTX2/Basis inputs traverse the canonical Pack/Catalog/loadByGuid runtime path with profile, color-space, target, fallback, and structured malformed-input evidence.",
+          "verdict": "supported",
+          "confidence": "high",
+          "evidenceRefs": [
+            "packages/assets-runtime/src/__tests__/pack-basis-load.integration.test.ts",
+            "packages/runtime/src/__tests__/basis-catalog-dispatch.integration.test.ts"
+          ],
+          "error": {
+            "code": "format-tier1-evidence-complete",
+            "expected": "All KTX2/Basis input variants reach the canonical runtime path with a recorded target or fallback.",
+            "hint": "Keep the four-input runtime matrix and malformed KTX2 diagnostics current when changing the loader path.",
+            "detail": "Current evidence is bound to sourceCodeSha f36c48e59618cef2d679b91737de337cdcb8b718."
+          }
+        },
+        {
+          "layer": "gpu",
+          "status": "supported",
+          "observed": "All 20 real input-by-capability cells reached Catalog/loadByGuid, GPU residency, texture sampling, and normalized readback; maxAbsError=0.00784313725490196.",
+          "verdict": "supported",
+          "confidence": "high",
+          "evidenceRefs": [
+            "packages/render/src/__tests__/ktx2-basis-gpu-consumer.dawn.test.ts",
+            "packages/render/src/render-data.ts"
+          ],
+          "error": {
+            "code": "format-tier1-evidence-complete",
+            "expected": "Each KTX2/Basis cell has selection, Catalog/loadByGuid, GPU readback, and normalized source/reference comparison within AC-06 when comparable.",
+            "hint": "Keep the 20-cell Dawn matrix and normalized image comparison current; preserve structured unsupported/error cells when the backend cannot prove the result.",
+            "detail": "Current evidence is bound to sourceCodeSha f36c48e59618cef2d679b91737de337cdcb8b718."
+          }
+        },
+        {
+          "layer": "recovery",
+          "status": "supported",
+          "observed": "KTX2/Basis DDC payload contamination was classified, quarantined, recovered by previewing LKG and cold-cooking the same identity, and verified current.",
+          "verdict": "supported",
+          "confidence": "high",
+          "evidenceRefs": [
+            "scripts/forgeax/run-format-tier1-recovery.mjs",
+            "apps/hello/format-tier1/evidence/__tests__/recovery-scenarios.test.mjs"
+          ],
+          "error": {
+            "code": "format-tier1-evidence-complete",
+            "expected": "A corrupt KTX2/Basis payload is recoverable without changing identity or overwriting LKG.",
+            "hint": "Inspect the receipt, preview LKG, cold-cook, verify, and retry the same sourceKey.",
+            "detail": "Current evidence is bound to sourceCodeSha f36c48e59618cef2d679b91737de337cdcb8b718."
+          }
+        },
+        {
+          "layer": "visual",
+          "status": "supported",
+          "observed": "The current Chromium matrix screenshot presents ETC1S, UASTC LDR, UASTC HDR, and raw Basis results backed by the 20-cell Dawn sampling witness.",
+          "verdict": "supported",
+          "confidence": "high",
+          "evidenceRefs": [
+            "apps/hello/format-tier1/evidence/browser-visual-evidence.json",
+            "apps/hello/format-tier1/evidence/final-gates.json",
+            "requirements.md#AC-13"
+          ],
+          "error": {
+            "code": "format-tier1-evidence-complete",
+            "expected": "The four KTX2/Basis visual inputs are captured and read by the visual verifier.",
+            "hint": "Complete the KTX2/Basis target-selection and GPU consumer before release judgment.",
+            "detail": "Current evidence is bound to sourceCodeSha f36c48e59618cef2d679b91737de337cdcb8b718."
+          }
+        }
+      ],
+      "overallVerdict": "supported"
+    },
+    {
+      "csvRow": 26,
+      "formatId": "morph-target",
+      "format": "Morph Target / BlendShape",
+      "extensions": "embedded in .glb / .fbx",
+      "sourceSha256": "a87159400f5de776ce46304540999c2e7f84cec07defceaa661d0a0926a9c2d5",
+      "sourceCodeSha": "f36c48e59618cef2d679b91737de337cdcb8b718",
+      "fixture": {
+        "status": "ready",
+        "paths": [
+          "apps/hello/format-tier1/fixtures/animated-morph-cube.gltf",
+          "apps/hello/format-tier1/fixtures/multi-target-morph.fbx",
+          "packages/gltf/src/__tests__/morph-import.integration.test.ts",
+          "packages/fbx/src/__tests__/blendshape-import.integration.test.ts",
+          "apps/hello/format-tier1/evidence/morph-visual-evidence.json"
+        ]
+      },
+      "environment": {
+        "name": "format-tier1-final-gates",
+        "platform": "darwin-arm64",
+        "runtime": "node v26.4.0",
+        "backend": "Dawn imported loadByGuid readback passed; browser MorphFeature consumer remains blocked"
+      },
+      "evidence": [
+        {
+          "layer": "importer",
+          "status": "supported",
+          "observed": "Checked-in glTF and FBX fixtures preserve static Morph targets; only the glTF fixture carries two imported weights keyframes. FBX animation is not claimed.",
+          "verdict": "supported",
+          "confidence": "high",
+          "evidenceRefs": [
+            "packages/gltf/src/__tests__/morph-import.integration.test.ts",
+            "packages/fbx/src/__tests__/blendshape-import.integration.test.ts",
+            "apps/hello/format-tier1/evidence/final-gates.json"
+          ],
+          "error": {
+            "code": "format-tier1-evidence-complete",
+            "expected": "Real glTF and FBX multi-target fixtures reach the validated static asset model; imported animation is claimed only for glTF.",
+            "hint": "Keep the checked-in fixtures and integration gates current when changing Morph import.",
+            "detail": "Current evidence is bound to sourceCodeSha f36c48e59618cef2d679b91737de337cdcb8b718."
+          }
+        },
+        {
+          "layer": "runtime",
+          "status": "supported",
+          "observed": "The imported glTF mesh and weights animation reach Pack/Catalog/loadByGuid; the FBX fixture supplies the required static multi-target boundary, while AC-08 animation is satisfied by the real glTF weights channel.",
+          "verdict": "supported",
+          "confidence": "high",
+          "evidenceRefs": [
+            "packages/gltf/src/__tests__/morph-import.integration.test.ts",
+            "packages/fbx/src/__tests__/blendshape-import.integration.test.ts",
+            "packages/assets-runtime/src/__tests__/mesh-bin-morph-v3.test.ts",
+            "apps/hello/format-tier1/evidence/final-gates.json"
+          ],
+          "error": {
+            "code": "format-tier1-evidence-complete",
+            "expected": "Imported glTF Morph weights reach runtime through Pack/Catalog/loadByGuid; FBX remains a static/no-animation importer boundary.",
+            "hint": "Keep the imported Pack/Catalog/loadByGuid producer current when changing Morph runtime.",
+            "detail": "Current evidence is bound to sourceCodeSha f36c48e59618cef2d679b91737de337cdcb8b718."
+          }
+        },
+        {
+          "layer": "gpu",
+          "status": "supported",
+          "observed": "Dawn ran the imported glTF Morph asset for 300 frames with zero-weight, cull/re-entry, stale-state, and MAP_READ maxAbsError=0 evidence; the live standard MeshFilter/MeshRenderer browser canvas is visible.",
+          "verdict": "supported",
+          "confidence": "high",
+          "evidenceRefs": [
+            "apps/hello/format-tier1/scripts/smoke-dawn.mjs",
+            "apps/hello/format-tier1/evidence/morph-visual-evidence.json",
+            "packages/gltf/src/__tests__/morph-import.integration.test.ts",
+            "packages/render/src/__tests__/morph-culling-reentry.dawn.test.ts",
+            "apps/hello/format-tier1/evidence/final-gates.json"
+          ],
+          "error": {
+            "code": "format-tier1-evidence-complete",
+            "expected": "The imported glTF multi-target asset loaded by GUID reaches MorphFeature and produces the 300-frame GPU result; FBX GPU/animation evidence is not claimed.",
+            "hint": "Keep the imported glTF producer and Dawn falsifiers current when changing Morph GPU behavior.",
+            "detail": "Current evidence is bound to sourceCodeSha f36c48e59618cef2d679b91737de337cdcb8b718."
+          }
+        },
+        {
+          "layer": "recovery",
+          "status": "supported",
+          "observed": "Morph source contamination was classified and recovered through producer repair, cold-cook, same GUID/sourceKey verification, and LKG preservation.",
+          "verdict": "supported",
+          "confidence": "high",
+          "evidenceRefs": [
+            "scripts/forgeax/run-format-tier1-recovery.mjs",
+            "apps/hello/format-tier1/evidence/__tests__/recovery-scenarios.test.mjs"
+          ],
+          "error": {
+            "code": "format-tier1-evidence-complete",
+            "expected": "A malformed Morph source is recoverable without changing identity or publishing a failed payload.",
+            "hint": "Repair target/weight cardinality, cold-cook, verify, and retry the same sourceKey.",
+            "detail": "Current evidence is bound to sourceCodeSha f36c48e59618cef2d679b91737de337cdcb8b718."
+          }
+        },
+        {
+          "layer": "visual",
+          "status": "supported",
+          "observed": "The live Chromium canvas visibly renders the imported Morph fixture. The feature is active for static, animated, and zero-weight states; compositor readPixels remains explicitly diagnostic-only and the read screenshot is the visual authority.",
+          "verdict": "supported",
+          "confidence": "high",
+          "evidenceRefs": [
+            "apps/hello/format-tier1/evidence/morph-visual-evidence.json",
+            "apps/hello/format-tier1/evidence/browser-visual-evidence.json",
+            "apps/hello/format-tier1/evidence/final-gates.json",
+            "requirements.md#AC-13"
+          ],
+          "error": {
+            "code": "format-tier1-evidence-complete",
+            "expected": "The Morph browser dogfood output is captured and read by the visual verifier.",
+            "hint": "Keep the headed Chromium MorphFeature capture current when changing the browser consumer.",
+            "detail": "Current evidence is bound to sourceCodeSha f36c48e59618cef2d679b91737de337cdcb8b718."
+          }
+        }
+      ],
+      "overallVerdict": "supported"
+    }
+  ]
+}

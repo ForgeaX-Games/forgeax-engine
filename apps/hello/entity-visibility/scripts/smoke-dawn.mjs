@@ -54,18 +54,16 @@ async function createDawn() {
   return gpu;
 }
 
-function spawnScene(world, render) {
+function spawnScene(world, render, scenePackage) {
   const {
     Camera,
     DirectionalLight,
     Materials,
     MeshFilter,
     MeshRenderer,
-    Visibility,
-    VisibilityStateValue,
     perspective,
-    resolveVisibility,
   } = render;
+  const { resolveVisibility, Visibility, VisibilityStateValue } = render;
   const { ChildOf, Transform } = world.scene;
   const { HANDLE_CUBE } = world.assets;
   const material = (color) =>
@@ -204,16 +202,13 @@ async function readback(device, texture) {
   return { data, bytesPerRow };
 }
 
-async function capturePhase(renderer, scene, device, texture) {
+async function capturePhase(scene, diagnostics, device, texture) {
   const frame = await readback(device, texture);
   return {
     frame,
     scene: scene.evidence(),
-    explicitlyHidden: renderer.visibilityStats.explicitlyHidden,
-    shadowResourceReady:
-      renderer.directionalShadow !== undefined &&
-      renderer.directionalShadow.lightSpaceMatrix !== null,
-    shadowPasses: renderer.perFramePassNames.filter((name) => name.includes('shadow')),
+    explicitlyHidden: diagnostics.visibilityStats.explicitlyHidden,
+    shadowPasses: diagnostics.perFramePassNames.filter((name) => name.includes('shadow')),
   };
 }
 
@@ -234,28 +229,32 @@ export async function runVisibilityDawnSmoke({ frames = 300 } = {}) {
     return adapter;
   };
   const canvas = createMockCanvas(sharedDevice, renderTarget);
-  const [{ World }, render, scenePackage, assets] = await Promise.all([
+  const [{ createWorldContext, World }, render, scenePackage, assets] = await Promise.all([
     import('@forgeax/engine-ecs'),
     import('@forgeax/engine-render'),
     import('@forgeax/engine-scene'),
     import('@forgeax/engine-assets-runtime'),
   ]);
   const world = { value: new World(), scene: scenePackage, assets };
-  const scenePluginResult = await scenePackage.scenePlugin().build(world.value);
-  if (!scenePluginResult.ok) throw new Error(`scenePlugin.build failed: ${scenePluginResult.error.code}`);
-  const scene = spawnScene(world, render);
+  await createWorldContext(world.value, [scenePackage.scenePlugin()]);
+  const scene = spawnScene(world, render, scenePackage);
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
   const engineManifest = await buildEngineShaderManifest();
   const manifestUrl = `data:application/json,${encodeURIComponent(JSON.stringify(engineManifest))}`;
-  const { createRenderer } = await import('@forgeax/engine-runtime');
-  const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: manifestUrl });
+  const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
+  const created = await constructRuntimeRendererHost(canvas, {}, { shaderManifestUrl: manifestUrl });
+  if (!created.ok) throw created.error;
+  const renderer = created.value.renderer;
+  // These are intentionally low-level harness diagnostics; the public
+  // Renderer exposes only POD inspection and receipt-bound observation.
+  const diagnostics = created.value.debugDrawHost;
   gpu.requestAdapter = originalRequestAdapter;
-  const ready = await renderer.ready;
-  if (!ready.ok) throw new Error(`renderer.ready failed: ${ready.error.code}`);
-  const attachment = renderer.attachWorld(world.value);
+  const attachment = renderer.attach(world.value);
   if (!attachment.ok) throw attachment.error;
   const errors = [];
-  renderer.onError((error) => errors.push({ code: error.code, hint: error.hint }));
+  renderer.subscribe((event) => {
+    if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint });
+  });
   const captureFrames = {
     baseline: Math.floor(frames * 0.3),
     hidden: Math.floor(frames * 0.63),
@@ -270,16 +269,20 @@ export async function runVisibilityDawnSmoke({ frames = 300 } = {}) {
     if (frame === Math.floor((frames * 5) / 6)) scene.setAncestorHidden();
     const updateResult = world.value.update(1 / 60);
     if (!updateResult.ok) errors.push({ code: updateResult.error.code, hint: updateResult.error.hint });
-    const drawResult = renderer.draw([world.value], { cameraOwner: 0, resourceOwner: 0 });
-    if (!drawResult.ok) errors.push({ code: drawResult.error.code, hint: drawResult.error.hint });
+    const drawResult = renderer.draw({
+      leases: [attachment.value],
+      camera: { lease: attachment.value },
+      environment: { lease: attachment.value },
+    });
+    if (!drawResult.ok) {
+      errors.push({ code: drawResult.error.code, hint: drawResult.error.hint });
+    } else {
+      const completed = await drawResult.value.completed;
+      if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+    }
     for (const [phase, captureFrame] of Object.entries(captureFrames)) {
       if (frame === captureFrame) {
-        captures[phase] = await capturePhase(
-          renderer,
-          scene,
-          sharedDevice.value,
-          renderTarget.value,
-        );
+        captures[phase] = await capturePhase(scene, diagnostics, sharedDevice.value, renderTarget.value);
       }
     }
   }
@@ -304,7 +307,7 @@ export async function runVisibilityDawnSmoke({ frames = 300 } = {}) {
   const hiddenShadowDelta = roiDelta(baseline.frame, hidden.frame, SHADOW_ROI);
   const restoredShadowDelta = roiDelta(restored.frame, hidden.frame, SHADOW_ROI);
   const result = {
-    backend: renderer.backend,
+    backend: renderer.inspect().capabilities.backendKind,
     frames,
     targetRed,
     childColors,
@@ -315,7 +318,6 @@ export async function runVisibilityDawnSmoke({ frames = 300 } = {}) {
     visibleChildEffective: child.scene.visibleChild,
     inheritedDescendantEffective: child.scene.inheritedDescendant,
     hiddenVisibilityStats: hidden.explicitlyHidden,
-    restoredShadowResourceReady: restored.shadowResourceReady,
     restoredShadowPasses: restored.shadowPasses,
     errors,
   };
@@ -347,10 +349,10 @@ export async function runVisibilityDawnSmoke({ frames = 300 } = {}) {
     result.inheritedDescendantEffective !== 'visible'
   )
     failures.push('visible child override did not resolve visible');
-  if (!result.restoredShadowResourceReady || result.restoredShadowPasses.length < 1)
-    failures.push('renderer shadow resource or pass is absent');
+  if (result.restoredShadowPasses.length < 1)
+    failures.push('renderer shadow pass is absent');
   if (result.errors.length > 0) failures.push(`renderer errors: ${JSON.stringify(result.errors)}`);
-  renderer.dispose();
+  await renderer.dispose();
   renderTarget.value?.destroy?.();
   sharedDevice.value?.destroy?.();
   delete globalThis.navigator.gpu;

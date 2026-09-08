@@ -2,6 +2,11 @@
 
 > **Frame-start scanned, frozen `InputSnapshot` Resource for forgeax-engine.** Multi-device surface frozen before user systems run each frame: keyboard (logical key + physical code held/press/release edges) + mouse (position / movementDelta / button held/press/release edges / wheelDelta) + gamepad (7 readpoints: button / buttonValue / justPressed / justReleased / axis / standardMapping / connected) + pointer (per-pointerId position / pressure / delta / phase event queue) + virtualAxis (named joystick readpoint). Higher-level abstractions: **action indirection** (declare once, forget device — `snap.action(name)` / `snap.getAxis` / `snap.getVector`) + **gesture recognizer** (pinch / rotate / swipe / long-press / double-tap — `snap.gesture` + `snap.gestureEvents`). Capability probe (`snap.capabilities`) available at attach time.
 
+`inputBackendPlugin(backend)` provides a host-owned backend without taking its
+lifetime. `ownedInputBackendPlugin(backend, dispose)` is the canvas-App form:
+DOM listener release is an effect of the same provider Fiber. World snapshot
+resources and scan systems remain a separate consumer capability.
+
 ## 4 步 recipe
 
 ```ts
@@ -292,6 +297,15 @@ The input package freezes the snapshot. ECS owns `record`, `restore`, `trace`,
 participant registration, comparison tolerance, and closed simulation errors.
 Use the same snapshot source for source and fresh target Worlds. Do not add a
 second input recorder, a replay action, or a browser event queue to Remote.
+
+The simulation connector accepts package-produced snapshots from the public
+`snapshotFromSample` / `createInputSnapshot` path. If an `InputSnapshot`
+Resource is replaced by a structurally similar value without package-owned
+provenance, the World update does not throw or publish a partial sample;
+`finish()` returns the existing `simulation-trace-invalid` error with
+`detail.path === 'InputSnapshot.provenance'`. Consumers do not author or copy
+private provenance fields. Dispose the failed controller, provide a corrected
+snapshot source, and install the connector on a fresh target World.
 
 If a trace fails, inspect `code`, `expected`, `hint`, and `detail`, repair the
 named input boundary, then create a fresh target. RHI tape replay and game

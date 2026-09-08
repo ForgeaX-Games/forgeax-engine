@@ -69,13 +69,13 @@ import { defineComponent } from '@forgeax/engine-ecs';
 export const AnimationPlayer = defineComponent('AnimationPlayer', {
   // The render/animation owner re-resolves clip assets in the target World;
   // playback clocks and weights remain portable simulation state.
-  clips: { type: 'array<shared<AnimationClip>>', simulationTransient: true },
+  clips: { type: 'array<shared<AnimationClip>>' },
   times: { type: 'array<f32>' },
   weights: { type: 'array<f32>' },
   speeds: { type: 'array<f32>' },
   // The graph evaluator owns this compiled runtime binding; portable playback
   // controls and derived slots remain available to the simulation record.
-  graph: { type: 'shared<AnimationGraph>', simulationTransient: true },
+  graph: { type: 'shared<AnimationGraph>' },
   nodeWeights: { type: 'array<f32>' },
   nodeTimes: { type: 'array<f32>' },
   nodeSpeeds: { type: 'array<f32>' },

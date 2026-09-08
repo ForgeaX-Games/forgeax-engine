@@ -26,10 +26,11 @@
 import { World } from '@forgeax/engine-ecs';
 import { createBoxGeometry, PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
 import { mat4 } from '@forgeax/engine-math';
-import { GpuResourceStore } from '@forgeax/engine-render/internal';
 import { ok } from '@forgeax/engine-rhi';
+import { rhi } from '@forgeax/engine-rhi-webgpu';
 import type { EquirectAsset, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { GpuResidencyCache } from '../../../../render/src/device/gpu-residency';
 
 const mockCaps = {
   backendKind: 'webgpu' as const,
@@ -53,7 +54,7 @@ const mockCaps = {
   maxColorAttachments: 8,
 };
 
-// feat-20260601-gpu-resource-store-extraction M1: mesh GPU residency moved to
+// feat-20260601-device/gpu-residency-extraction M1: mesh GPU residency moved to
 // the store; register no longer auto-uploads (push severed). The pull-model
 // premise: register the POD, then explicit `store.ensureResident(handle, pod)`
 // uploads the GPU buffers. The deferred-replay path is removed (no global
@@ -74,16 +75,18 @@ describe('w22.5 user-registered mesh GPU upload (AC-13, dawn)', () => {
       if (!meshRes.ok) return;
       const asset: MeshAsset = meshRes.value;
 
-      const adapter = await navigator.gpu.requestAdapter();
-      expect(adapter).not.toBeNull();
-      if (adapter === null) return;
-      const device = await adapter.requestDevice();
+      const adapterResult = await rhi.requestAdapter();
+      expect(adapterResult.ok).toBe(true);
+      if (!adapterResult.ok) return;
+      const deviceResult = await adapterResult.value.requestDevice();
+      expect(deviceResult.ok).toBe(true);
+      if (!deviceResult.ok) return;
+      const device = deviceResult.value;
 
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
       const world = new World();
       store.configureGpuDevice(
-        // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
-        device as any,
+        device,
         undefined,
         (w: World, pod: EquirectAsset) => ok(w.allocSharedRef('EquirectAsset', pod)),
         mockCaps,
@@ -120,7 +123,7 @@ describe('w22.5 user-registered mesh GPU upload (AC-13, dawn)', () => {
   it.skipIf(!dawnReady)(
     '(b) pull-model: register then ensureResident surfaces the GPU buffers (no global replay)',
     async () => {
-      // feat-20260601-gpu-resource-store-extraction M1: the pre-extraction
+      // feat-20260601-device/gpu-residency-extraction M1: the pre-extraction
       // deferred-replay path is removed (no global replay). register only
       // catalogues the CPU POD; getMeshGpuHandles is undefined until an
       // explicit ensureResident pulls the GPU buffers (charter P9 graceful
@@ -130,19 +133,20 @@ describe('w22.5 user-registered mesh GPU upload (AC-13, dawn)', () => {
       if (!meshRes.ok) return;
       const asset: MeshAsset = meshRes.value;
 
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
       const world = new World();
       const handle = world.allocSharedRef('MeshAsset', asset);
       // Before any ensureResident the store has no GPU residency for the handle.
       const before = store.getMeshGpuHandles(handle);
       expect(before).toBeUndefined();
 
-      const adapter = await navigator.gpu.requestAdapter();
-      if (adapter === null) return;
-      const device = await adapter.requestDevice();
+      const adapterResult = await rhi.requestAdapter();
+      if (!adapterResult.ok) return;
+      const deviceResult = await adapterResult.value.requestDevice();
+      if (!deviceResult.ok) return;
+      const device = deviceResult.value;
       store.configureGpuDevice(
-        // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
-        device as any,
+        device,
         undefined,
         (w: World, pod: EquirectAsset) => ok(w.allocSharedRef('EquirectAsset', pod)),
         mockCaps,
@@ -159,15 +163,16 @@ describe('w22.5 user-registered mesh GPU upload (AC-13, dawn)', () => {
   it.skipIf(!dawnReady)(
     '(c) batch register 16 user meshes -> all 16 carry distinct GPU buffer handles (lifecycle does not re-allocate)',
     async () => {
-      const adapter = await navigator.gpu.requestAdapter();
-      if (adapter === null) return;
-      const device = await adapter.requestDevice();
+      const adapterResult = await rhi.requestAdapter();
+      if (!adapterResult.ok) return;
+      const deviceResult = await adapterResult.value.requestDevice();
+      if (!deviceResult.ok) return;
+      const device = deviceResult.value;
 
-      const store = new GpuResourceStore();
+      const store = new GpuResidencyCache();
       const world = new World();
       store.configureGpuDevice(
-        // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
-        device as any,
+        device,
         undefined,
         (w: World, pod: EquirectAsset) => ok(w.allocSharedRef('EquirectAsset', pod)),
         mockCaps,

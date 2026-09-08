@@ -754,30 +754,58 @@ test('accepts an archive with release metadata and an explicit digest', () => {
     ],
     (paths) => {
       const metadataPath = join(paths.root, 'release.json');
+      const githubEnv = join(paths.root, 'github.env');
+      const githubPath = join(paths.root, 'github.path');
       writeFileSync(metadataPath, JSON.stringify({ releaseIdentity: expectedReleaseIdentity }));
       const result = runBootstrap(
-        metadataArgs(paths, metadataPath, archiveDigest(paths.archivePath)),
+        [
+          ...metadataArgs(paths, metadataPath, archiveDigest(paths.archivePath)),
+          '--github-env',
+          githubEnv,
+          '--github-path',
+          githubPath,
+        ],
         { env: paths.env },
       );
-      assert.equal(result.status, 0, result.stderr);
-      assert.equal(result.json.status, 'ready');
-      assert.equal(result.json.cacheStatus, 'cold-created');
-      assert.equal(result.json.noXz.pythonLzma, 'stdlib');
-      assert.deepEqual(result.json.toolchainLayout, expectedToolchainLayout);
-      assert.equal(
-        readFileSync(join(paths.cacheDir, expectedToolchainLayout.installRoot, 'emcc'), 'utf8'),
-        'compiler',
-      );
-      assert.deepEqual(JSON.parse(readFileSync(paths.releaseMarker, 'utf8')), {
-        schemaVersion: 1,
-        releaseIdentity: expectedReleaseIdentity,
-        installRoot: expectedToolchainLayout.installRoot,
-        toolBinRelativePath: expectedToolchainLayout.toolBinRelativePath,
-        binaryenRootRelativePath: expectedToolchainLayout.binaryenRootRelativePath,
-        emscriptenCacheRelativePath: expectedToolchainLayout.emscriptenCacheRelativePath,
-        compilerRelativePath: expectedToolchainLayout.compilerRelativePath,
-      });
-      rmSync(paths.completeMarker, { force: true });
+      try {
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.json.status, 'ready');
+        assert.equal(result.json.cacheStatus, 'cold-created');
+        assert.equal(result.json.noXz.pythonLzma, 'stdlib');
+        assert.deepEqual(result.json.toolchainLayout, expectedToolchainLayout);
+        assert.equal(
+          readFileSync(join(paths.cacheDir, expectedToolchainLayout.installRoot, 'emcc'), 'utf8'),
+          'compiler',
+        );
+        assert.deepEqual(JSON.parse(readFileSync(paths.releaseMarker, 'utf8')), {
+          schemaVersion: 1,
+          releaseIdentity: expectedReleaseIdentity,
+          installRoot: expectedToolchainLayout.installRoot,
+          toolBinRelativePath: expectedToolchainLayout.toolBinRelativePath,
+          binaryenRootRelativePath: expectedToolchainLayout.binaryenRootRelativePath,
+          emscriptenCacheRelativePath: expectedToolchainLayout.emscriptenCacheRelativePath,
+          compilerRelativePath: expectedToolchainLayout.compilerRelativePath,
+        });
+        const activatedCache = realpathSync(paths.cacheDir);
+        const configPath = join(activatedCache, 'forgeax-emscripten-config.py');
+        const environment = readFileSync(githubEnv, 'utf8');
+        assert.match(environment, new RegExp(`^EM_CONFIG=${configPath}$`, 'm'));
+        assert.match(
+          environment,
+          new RegExp(`^EMSCRIPTEN=${join(activatedCache, 'install/emscripten')}$`, 'm'),
+        );
+        assert.match(
+          environment,
+          new RegExp(`^EMSDK_NODE=${result.json.nodeAuthority.emsdkNode}$`, 'm'),
+        );
+        assert.equal(
+          readFileSync(githubPath, 'utf8'),
+          `${join(activatedCache, 'install/emscripten')}\n${join(activatedCache, 'install/bin')}\n`,
+        );
+        assert.match(readFileSync(configPath, 'utf8'), /^LLVM_ROOT = /m);
+      } finally {
+        rmSync(paths.completeMarker, { force: true });
+      }
     },
   );
 });

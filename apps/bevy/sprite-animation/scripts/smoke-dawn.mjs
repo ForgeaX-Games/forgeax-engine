@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // Dawn smoke for Bevy `sprite_animation`: Time.delta advances atlas regions.
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -33,22 +34,18 @@ const manifestPath = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const manifestUrl = `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}`;
 const originalRequestAdapter = gpu.requestAdapter.bind(gpu);
 gpu.requestAdapter = async (options) => { const adapter = await originalRequestAdapter(options); if (!adapter) return adapter; const original = adapter.requestDevice.bind(adapter); adapter.requestDevice = async (descriptor) => { device = await original(descriptor); return device; }; return adapter; };
-const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: manifestUrl });
+const renderer = await createSmokeRenderer(createRenderer, canvas, {}, { shaderManifestUrl: manifestUrl });
 gpu.requestAdapter = originalRequestAdapter;
-console.log(`[bevy-sprite-animation] backend=${renderer.backend}`);
+console.log(`[bevy-sprite-animation] backend=${rendererBackend(renderer)}`);
 const errors = [];
-renderer.onError((error) => errors.push(error));
-const ready = await renderer.ready;
-if (!ready.ok) throw new Error(`${ready.error.code}: ${ready.error.hint}`);
+subscribeSmokeErrors(renderer, (error) => errors.push(error));
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const pixels = makeAtlasPixels();
 const texture = { kind: 'texture', width: ATLAS_WIDTH, height: ATLAS_HEIGHT, format: 'rgba8unorm-srgb', data: pixels, colorSpace: 'srgb', mipmap: false };
 const textureHandle = world.allocSharedRef('TextureAsset', texture);
-const upload = await renderer.store.uploadTexture(textureHandle, texture, { bytes: pixels, width: ATLAS_WIDTH, height: ATLAS_HEIGHT, mime: 'image/png', colorSpace: 'srgb', mipmap: false });
-if (!upload.ok) throw new Error(`${upload.error.code}: ${upload.error.hint}`);
 buildSpriteAnimationWorld(world, unwrapHandle(textureHandle));
 
 async function capture() {
@@ -72,14 +69,14 @@ let previous = readAnimationFrames(world);
 let earlyFrame;
 let lateFrame;
 for (let i = 0; i < FRAMES; i++) {
-  tickSpriteAnimation(world, DT);
+  world.update(DT).unwrap();
+  tickSpriteAnimation(world);
   const frames = readAnimationFrames(world);
   frames.forEach((frame, index) => seen[index]?.add(frame));
   if (frames.some((frame, index) => frame !== previous[index])) changes++;
   previous = frames;
   propagateTransforms(world);
-  world.update().unwrap();
-  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const draw = drawSmokeFrame(renderer, world);
   if (!draw.ok) throw new Error(`${draw.error.code}: ${draw.error.hint}`);
   if (i === 5) earlyFrame = await capture();
   if (i === FRAMES - 1) lateFrame = await capture();
@@ -92,7 +89,7 @@ mkdirSync(dirname(pngPath), { recursive: true });
 writeFileSync(pngPath, writeReferencePng(lateFrame, WIDTH, HEIGHT));
 const visible = lateFrame.some((value, index) => index % 4 === 3 && value > 0) || earlyFrame.some((value, index) => index % 4 === 3 && value > 0);
 console.log(`[smoke] frames=${FRAMES} frameSets=${seen.map((set) => set.size).join(',')} changes=${changes} motionMeanDelta=${motionDelta.toFixed(5)} errors=${errors.length} png=${pngPath}`);
-if (renderer.backend !== 'webgpu' || FRAMES < 100 || seen.some((set) => set.size < 3) || changes < 10 || motionDelta <= 0.0005 || !visible || errors.length > 0) {
+if (rendererBackend(renderer) !== 'webgpu' || FRAMES < 100 || seen.some((set) => set.size < 3) || changes < 10 || motionDelta <= 0.0005 || !visible || errors.length > 0) {
   console.error('[smoke] FAIL - backend/frames/atlas-animation/motion/visibility/error criterion failed');
   process.exit(1);
 }

@@ -3,11 +3,13 @@
 //
 // Shape (D-4/D-6.1):
 // - string key -> ResourceDescriptor + bufferRole + lifetime
-// - duplicate-resource fail-fast at registration time
+// - duplicate-resource fail-fast across every declaration form
 // - unknown-resource fail-fast at pass binding time
 // - addColorTarget: color target registration with format/size/sample/usage
 
+import type { TextureFormat } from '@forgeax/engine-rhi';
 import {
+  type AliasSourceDetail,
   type CapMissingDetail,
   type DanglingReadDetail,
   type DuplicateResourceDetail,
@@ -31,7 +33,7 @@ import type { ColorValueDomain } from './pipeline/color-value-domain.js';
  * addResource it is undefined.
  */
 export interface ColorTargetResourceMeta {
-  readonly format: string;
+  readonly format: TextureFormat;
   readonly size: ColorTargetSize;
   readonly sample: number;
   readonly usage: number;
@@ -43,7 +45,7 @@ export interface ColorTargetResourceMeta {
    * `bgra8unorm` storage texture plus a `bgra8unorm-srgb` view of the same
    * texture for hardware sRGB encoding on store.
    */
-  readonly viewFormats?: readonly string[] | undefined;
+  readonly viewFormats?: readonly TextureFormat[] | undefined;
   /**
    * When set, this resource is an alias of the given source resource.
    * The compile allocation phase folds the alias into the source's
@@ -64,31 +66,24 @@ export class ResourceRegistry {
   private readonly resources = new Map<string, ResourceEntry>();
 
   add(key: string, descriptor: ResourceDescriptor): Result<ResourceEntry, RenderGraphError> {
-    if (this.resources.has(key)) {
-      return err(
-        new RenderGraphError({
-          code: 'duplicate-resource',
-          expected: `resource key '${key}' registered exactly once`,
-          hint: `remove the duplicate addResource('${key}', ...) call or use a different key`,
-          detail: { resourceKey: key } satisfies DuplicateResourceDetail,
-        }),
-      );
-    }
     const entry: ResourceEntry = {
       key,
       descriptor,
       lifetime: descriptor.lifetime,
     };
-    this.resources.set(key, entry);
-    return ok(entry);
+    return this.register(entry);
   }
 
   /**
    * Register a color target resource (D-8).
-   * Same semantics as addResource with kind:'texture' + lifetime:'transient'
-   * plus GPU texture allocation metadata.
+   * Same semantics as addResource with kind:'texture' plus GPU texture
+   * allocation metadata. Existing callers default to a transient target.
    */
-  addColorTarget(name: string, desc: ColorTargetDescriptor): ResourceEntry {
+  addColorTarget(
+    name: string,
+    desc: ColorTargetDescriptor,
+  ): Result<ResourceEntry, RenderGraphError> {
+    const lifetime = desc.lifetime ?? 'transient';
     const colorTargetMeta: ColorTargetResourceMeta = {
       format: desc.format,
       size: desc.size,
@@ -99,12 +94,11 @@ export class ResourceRegistry {
     };
     const entry: ResourceEntry = {
       key: name,
-      descriptor: { kind: 'texture', lifetime: 'transient' },
-      lifetime: 'transient',
+      descriptor: { kind: 'texture', lifetime },
+      lifetime,
       colorTarget: colorTargetMeta,
     };
-    this.resources.set(name, entry);
-    return entry;
+    return this.register(entry);
   }
 
   /**
@@ -112,32 +106,51 @@ export class ResourceRegistry {
    * texture at compile time (KB-1 MoveNode pattern, D-2).
    * The source must already be registered via addColorTarget.
    */
-  addColorTargetAlias(name: string, source: string): ResourceEntry {
-    const sourceEntry = this.resources.get(source);
-    const sourceMeta = sourceEntry?.colorTarget;
+  addColorTargetAlias(name: string, source: string): Result<ResourceEntry, RenderGraphError> {
+    if (this.resources.has(name)) return this.duplicateResource(name);
+    const sourceMeta = this.resources.get(source)?.colorTarget;
+    if (sourceMeta === undefined) {
+      return err(
+        new RenderGraphError({
+          code: 'alias-source-missing',
+          expected: `alias '${name}' source '${source}' must be a registered color target`,
+          hint: `call addColorTarget('${source}', ...) before retrying alias '${name}'`,
+          detail: { aliasKey: name, sourceKey: source } satisfies AliasSourceDetail,
+        }),
+      );
+    }
     const entry: ResourceEntry = {
       key: name,
       descriptor: { kind: 'texture', lifetime: 'transient' },
       lifetime: 'transient',
-      colorTarget: sourceMeta
-        ? {
-            format: sourceMeta.format,
-            size: sourceMeta.size,
-            sample: sourceMeta.sample,
-            usage: sourceMeta.usage,
-            ...(sourceMeta.domain !== undefined ? { domain: sourceMeta.domain } : {}),
-            aliasedFrom: source,
-          }
-        : {
-            format: 'rgba16float',
-            size: 'swapchain',
-            sample: 1,
-            usage: 0x10 | 0x04,
-            aliasedFrom: source,
-          },
+      colorTarget: {
+        format: sourceMeta.format,
+        size: sourceMeta.size,
+        sample: sourceMeta.sample,
+        usage: sourceMeta.usage,
+        ...(sourceMeta.domain !== undefined ? { domain: sourceMeta.domain } : {}),
+        ...(sourceMeta.viewFormats !== undefined ? { viewFormats: sourceMeta.viewFormats } : {}),
+        aliasedFrom: source,
+      },
     };
-    this.resources.set(name, entry);
-    return entry;
+    return this.register(entry);
+  }
+
+  private duplicateResource(key: string): Result<ResourceEntry, RenderGraphError> {
+    return err(
+      new RenderGraphError({
+        code: 'duplicate-resource',
+        expected: `resource key '${key}' registered exactly once`,
+        hint: `remove the duplicate resource declaration for '${key}' or use a different key`,
+        detail: { resourceKey: key } satisfies DuplicateResourceDetail,
+      }),
+    );
+  }
+
+  private register(entry: ResourceEntry): Result<ResourceEntry, RenderGraphError> {
+    if (this.resources.has(entry.key)) return this.duplicateResource(entry.key);
+    this.resources.set(entry.key, entry);
+    return ok(entry);
   }
 
   get(key: string): ResourceEntry | undefined {

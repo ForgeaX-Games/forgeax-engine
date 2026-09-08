@@ -9,19 +9,15 @@
 // Structural-only smoke: no committed baseline.png yet. AC-33 v1 lock
 // permissive meshed-site gate.
 
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
-const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 
 const WIDTH = 800;
 const HEIGHT = 600;
-
-const here = dirname(fileURLToPath(import.meta.url));
 
 // Dawn-node binding setup.
 let create;
@@ -108,50 +104,66 @@ const mockCanvas = {
 };
 
 // Import engine.
-const { ok: okResult, err: errResult, World } = await import('@forgeax/engine-ecs');
-const enginePkg = await import('@forgeax/engine-runtime');
-const { createRenderer } = enginePkg;
-const { Materials, SceneInstance } = await import('@forgeax/engine-render');
-const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
-const { ChildOf, Transform } = await import('@forgeax/engine-scene');
-const { AnimationPlayer } = await import('@forgeax/engine-animation');
+const { createWorldContext, World } = await import('@forgeax/engine-ecs');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
+const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+const { Materials, renderComponentsPlugin, SceneInstance } = await import('@forgeax/engine-render');
+const { Camera, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { Name, Transform, scenePlugin } = await import('@forgeax/engine-scene');
+const { worldDespawnScene, worldInstantiateScene, worldSetSceneAssetResolver } = await import(
+  '@forgeax/engine-scene',
+);
+const { err: errResult, ok: okResult } = await import('@forgeax/engine-types');
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
 
 let renderer;
+let assets;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const host = await constructRuntimeRendererHost(
+    mockCanvas,
+    {},
+    { shaderManifestUrl: MANIFEST_URL },
+  );
+  if (!host.ok) throw host.error;
+  ({ renderer, assets } = host.value);
 } catch (err) {
   console.error(
-    `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
+    `[smoke] FAIL - constructRuntimeRendererHost failed: ${err instanceof Error ? err.message : String(err)}`,
   );
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[hello-scene-nesting] backend=${renderer.backend}`);
-
-const assets = renderer.assets;
 if (!assets) {
-  console.error('[smoke] FAIL - AssetRegistry is null');
+  console.error('[smoke] FAIL - AssetRegistry unavailable');
   process.exit(1);
 }
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 // Mint a user-tier column handle for the unlit material so the inline
 // SceneAsset materials array references a real shared-ref id.
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldContext = await createWorldContext(world, [
+  renderComponentsPlugin(),
+  scenePlugin(),
+]);
+void worldContext;
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const lease = worldAttachment1.value;
 const unlitMatHandle = world.allocSharedRef('MaterialAsset', Materials.unlit([0.8, 0.4, 0.2, 1]));
+const cubeGuid = AssetGuid.parse('cbe42beb-8975-5096-b3a1-3dda4cb4c077');
+if (!cubeGuid.ok) throw new Error('cube GUID parse failed');
+const cubeResult = await assets.loadByGuid(cubeGuid.value);
+if (!cubeResult.ok) {
+  console.error(`[smoke] FAIL - builtin cube loadByGuid: ${cubeResult.error.code}`);
+  process.exit(1);
+}
+const meshHandle = world.allocSharedRef('MeshAsset', cubeResult.value);
 
 // R2/B-5: bind a real material to the cube so the smoke produces a
 // non-black frame when the engine is healthy. Empty materials [] (the
@@ -164,7 +176,7 @@ const innerScene = {
     localId: 0,
     components: {
       Transform: { pos: [0, 0.5, 0], quat: [0, 0, 0, 1], scale: [0.5, 0.5, 0.5]},
-      MeshFilter: { assetHandle: 1 },
+      MeshFilter: { assetHandle: Number(meshHandle) },
       MeshRenderer: { materials: [Number(unlitMatHandle)] },
     },
   }],
@@ -176,6 +188,8 @@ const outerScene = {
     localId: 0,
     components: {
       Transform: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
+      MeshFilter: { assetHandle: Number(meshHandle) },
+      MeshRenderer: { materials: [Number(unlitMatHandle)] },
     },
   }],
   mounts: [{
@@ -185,7 +199,7 @@ const outerScene = {
     memberCount: 1,
     overrides: [
       { localId: 2, comp: 'Transform', field: 'pos', value: [1.0, 0, 0] },
-      { localId: 2, comp: 'DirectionalLight', value: { direction: [0, -1, 0], color: [1, 0.5, 0.2], intensity: 1.0 } },
+      { localId: 2, comp: 'Name', value: { value: 'm30-mounted-member' } },
     ],
   }],
 };
@@ -193,47 +207,40 @@ const outerScene = {
 const innerHandle = world.allocSharedRef('SceneAsset', innerScene);
 
 const outerHandle = world.allocSharedRef('SceneAsset', outerScene);
-const outerHandleRaw = Number(outerHandle);
+const sceneChildren = new Map([[Number(outerHandle), innerHandle]]);
 
-world._setSceneAssetResolver?.((sourceIdx, parentHandle) => {
+worldSetSceneAssetResolver(world, (sourceIdx, parentHandle) => {
   void sourceIdx;
-  if (Number(parentHandle) === outerHandleRaw) return okResult(innerHandle);
-  return errResult({ code: 'asset-not-found' });
+  const child = sceneChildren.get(Number(parentHandle));
+  return child === undefined ? errResult({ code: 'asset-not-found' }) : okResult(child);
 });
 
-// Camera + light.
+// A single world camera keeps the pixel proof self-contained. The mounted
+// scene's add override supplies a non-rendering Name component.
 world.spawn(
   { component: Transform, data: { pos: [0, 1, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
   { component: Camera, data: { fov: 60, aspect: WIDTH / HEIGHT, near: 0.1, far: 100 } },
 );
-world.spawn({
-  component: DirectionalLight,
-  data: { direction: [-0.3, -1.0, -0.5], color: [1.0, 0.95, 0.9], intensity: 1.0 },
-});
 
-const instRes = world.instantiateScene(outerHandle);
+const instRes = worldInstantiateScene(world, outerHandle);
 if (!instRes.ok) {
   console.error(`[smoke] FAIL - instantiateScene: ${instRes.error.code}`);
   process.exit(1);
 }
 
-// feat-20260713 M6 / w23: verify the component-add override (DirectionalLight without
-// `field`) took effect on the member entity. The member (localId=2) should now carry
-// DirectionalLight with the override values.
+// feat-20260713 M6 / w23: verify the component-add override (Name without
+// `field`) took effect on the member entity.
 const rootEntity = instRes.value.root;
+const baselineEntityCount = world.inspect().entityCount;
 const sceneInst = world.get(rootEntity, SceneInstance);
 let addOverrideVerified = false;
 if (sceneInst.ok) {
   const mapping = sceneInst.value.mapping;
   const memberEntity = mapping[2];
   if (memberEntity !== undefined && memberEntity !== 0) {
-    const dl = world.get(memberEntity, DirectionalLight);
-    if (dl.ok) {
-      const dlVal = dl.value;
-      const dirOk = Math.abs(dlVal.direction[0]) < 0.001 && Math.abs(dlVal.direction[1] + 1) < 0.001 && Math.abs(dlVal.direction[2]) < 0.001;
-      const colorOk = Math.abs(dlVal.color[0] - 1) < 0.001 && Math.abs(dlVal.color[1] - 0.5) < 0.001 && Math.abs(dlVal.color[2] - 0.2) < 0.001;
-      const intensityOk = Math.abs(dlVal.intensity - 1.0) < 0.001;
-      if (dirOk && colorOk && intensityOk) {
+    const name = world.get(memberEntity, Name);
+    if (name.ok) {
+      if (name.value.value === 'm30-mounted-member') {
         addOverrideVerified = true;
       }
     }
@@ -245,11 +252,13 @@ if (addOverrideVerified) {
 }
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint });
+});
 
 // R2/B-5: hook console.error so RhiError(hierarchy-broken) lines emitted
 // by propagateTransforms (which write through console.error rather than
-// the renderer.onError callback) are counted into the failure gate. The
+// Renderer error event stream) are counted into the failure gate. The
 // previous gate counted only renderer-propagated errors, so a flood of
 // per-frame hierarchy-broken errors masked the true demo state (PASS
 // while pixelSamples were [0,0,0] all-black).
@@ -270,8 +279,9 @@ const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  else void renderer.observe(r.value, { include: ['draws'] });
   framesObserved++;
 }
 const device = sharedDevice;
@@ -291,8 +301,8 @@ if (!renderTarget) {
 const bytesPerPixel = 4;
 const unpaddedBytesPerRow = WIDTH * bytesPerPixel;
 const bytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
-const readbackBuffer = device.createBuffer({ size: bytesPerRow * HEIGHT, usage: 0x01 | 0x08 });
-{
+const readback = async () => {
+  const readbackBuffer = device.createBuffer({ size: bytesPerRow * HEIGHT, usage: 0x01 | 0x08 });
   const enc = device.createCommandEncoder();
   enc.copyTextureToBuffer(
     { texture: renderTarget },
@@ -300,17 +310,19 @@ const readbackBuffer = device.createBuffer({ size: bytesPerRow * HEIGHT, usage: 
     { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
   );
   device.queue.submit([enc.finish()]);
-}
-try {
-  await readbackBuffer.mapAsync(0x01);
-} catch (err) {
-  console.error(`[smoke] FAIL - mapAsync rejected: ${err instanceof Error ? err.message : String(err)}`);
-  process.exit(1);
-}
-const mapped = readbackBuffer.getMappedRange();
-const bytes = new Uint8Array(mapped.slice(0));
-readbackBuffer.unmap();
-readbackBuffer.destroy();
+  try {
+    await readbackBuffer.mapAsync(0x01);
+  } catch (err) {
+    console.error(`[smoke] FAIL - mapAsync rejected: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+  const mapped = readbackBuffer.getMappedRange();
+  const output = new Uint8Array(mapped.slice(0));
+  readbackBuffer.unmap();
+  readbackBuffer.destroy();
+  return output;
+};
+let bytes = await readback();
 
 const srgbToLinear = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
 
@@ -335,40 +347,207 @@ const pixelSamples = {};
 for (const s of sites) pixelSamples[s.name] = readRgba(s.x, s.y);
 console.log(`[smoke] pixelSamples=${JSON.stringify(pixelSamples)}`);
 
-// R2/B-5: tighten the meshed-site criterion. The previous "linear distance
-// from CLEAR_COLOR > threshold" wording also accepts all-black [0,0,0]
-// samples (distance from [0.05,0.05,0.08] is ~0.107 > 0.05), so a black
-// frame passed silently. A meshed site must show actual lit colour: at
-// least one channel > clear+threshold (rejects all-black masquerading
-// as "differs from clear").
-//
-// The fixture is structural-only (empty materials -> defaultMaterial
-// mid-grey fallback), so meshed-site count is reported but not the
-// failure gate. The hard gates that catch real engine breakage are
-// (b) frames-observed, (d) Renderer.onError count, and (e) console.error
-// RhiError count. (e) is the new gate that catches B-1's
-// hierarchy-broken spam — the previous regime missed it because
-// propagateTransforms writes through console.error.
-let meshedRenderCount = 0;
-for (const s of sites) {
-  const sample = pixelSamples[s.name];
-  const dist = distance(sample, CLEAR_COLOR);
-  const maxChannel = Math.max(sample[0], sample[1], sample[2]);
-  const aboveClear = maxChannel > CLEAR_COLOR[0] + SMOKE_PIXEL_THRESHOLD;
-  if (dist > SMOKE_PIXEL_THRESHOLD && aboveClear) meshedRenderCount++;
+const region = (x0, x1) => {
+  let count = 0;
+  let sum = 0;
+  let sumSquared = 0;
+  let maxLuma = 0;
+  for (let y = 0; y < HEIGHT; y += 4) {
+    for (let x = x0; x < x1; x += 4) {
+      const off = y * bytesPerRow + x * bytesPerPixel;
+      const r = bytes[off] ?? 0;
+      const g = bytes[off + 1] ?? 0;
+      const b = bytes[off + 2] ?? 0;
+      const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+      count += 1;
+      sum += luma;
+      sumSquared += luma * luma;
+      maxLuma = Math.max(maxLuma, luma);
+    }
+  }
+  const meanLuma = sum / count;
+  return {
+    meanLuma,
+    stddevLuma: Math.sqrt(Math.max(0, sumSquared / count - meanLuma * meanLuma)),
+    maxLuma,
+  };
+};
+const pixelRegions = {
+  left: region(0, Math.floor(WIDTH / 2)),
+  right: region(Math.floor(WIDTH / 2), WIDTH),
+};
+const meshedRenderCount = Object.values(pixelRegions)
+  .filter((stats) => stats.stddevLuma > 2 && stats.maxLuma > 20).length;
+
+// M30 same-World recovery: clone the loader-shaped scene POD, inject one stale
+// field, observe the exact diagnostic, then despawn and repair it without
+// disturbing the healthy baseline instance.
+const m30Failures = [];
+const faultyInner = structuredClone(innerScene);
+faultyInner.entities[0].components.Transform.unknownField = 'M30-unknown-field';
+const faultyOuter = structuredClone(outerScene);
+const faultyInputSnapshot = JSON.stringify(faultyInner);
+const faultyInnerHandle = world.allocSharedRef('SceneAsset', faultyInner);
+const faultyOuterHandle = world.allocSharedRef('SceneAsset', faultyOuter);
+sceneChildren.set(Number(faultyOuterHandle), faultyInnerHandle);
+const faultyResult = worldInstantiateScene(world, faultyOuterHandle);
+if (!faultyResult.ok) {
+  m30Failures.push(`faulty instantiate failed: ${faultyResult.error.code}`);
+} else {
+  const faultyRoot = faultyResult.value.root;
+  const faultyState = world.get(faultyRoot, SceneInstance);
+  const faultyMember = faultyState.ok ? faultyState.value.mapping[2] : undefined;
+  const faultyDiagnostic = faultyResult.value.diagnostics[0];
+  const exactDiagnostic = JSON.stringify(faultyResult.value.diagnostics) === JSON.stringify([
+    { component: 'Transform', field: 'unknownField', localId: 0 },
+  ]);
+  const knownFieldValue = faultyMember === undefined
+    ? undefined
+    : Array.from(world.get(faultyMember, Transform).unwrap().pos);
+  const faultyEntityCount = world.inspect().entityCount;
+  const inputUnchanged = JSON.stringify(faultyInner) === faultyInputSnapshot;
+  const faultyCleanupCount = worldDespawnScene(world, faultyRoot).unwrap();
+  const noOrphanAfterFault = world.inspect().entityCount === baselineEntityCount;
+  const healthyRetainedAfterFault = world.get(rootEntity, SceneInstance).ok;
+  sceneChildren.delete(Number(faultyOuterHandle));
+  world.sharedRefs.release(faultyInnerHandle);
+  world.sharedRefs.release(faultyOuterHandle);
+
+  if (!exactDiagnostic || faultyDiagnostic === undefined) {
+    m30Failures.push(`wrong diagnostic: ${JSON.stringify(faultyResult.value.diagnostics)}`);
+  }
+  if (JSON.stringify(knownFieldValue) !== JSON.stringify([1, 0, 0])) {
+    m30Failures.push(`known mount field was not preserved: ${JSON.stringify(knownFieldValue)}`);
+  }
+  if (faultyEntityCount !== baselineEntityCount + 5) {
+    m30Failures.push(`faulty entity count=${faultyEntityCount}, baseline=${baselineEntityCount}`);
+  }
+  if (!inputUnchanged || !noOrphanAfterFault || !healthyRetainedAfterFault || faultyCleanupCount !== 5) {
+    m30Failures.push(
+      `fault cleanup invariant failed: ${JSON.stringify({ inputUnchanged, noOrphanAfterFault, healthyRetainedAfterFault, faultyCleanupCount })}`,
+    );
+  }
+
+  const correctedInner = structuredClone(faultyInner);
+  delete correctedInner.entities[0].components.Transform.unknownField;
+  const correctedOuter = structuredClone(faultyOuter);
+  const correctedInputSnapshot = JSON.stringify(correctedInner);
+  const correctedInnerHandle = world.allocSharedRef('SceneAsset', correctedInner);
+  const correctedOuterHandle = world.allocSharedRef('SceneAsset', correctedOuter);
+  sceneChildren.set(Number(correctedOuterHandle), correctedInnerHandle);
+  const correctedResult = worldInstantiateScene(world, correctedOuterHandle);
+  if (!correctedResult.ok) {
+    m30Failures.push(`corrected instantiate failed: ${correctedResult.error.code}`);
+  } else {
+    const correctedRoot = correctedResult.value.root;
+    const correctedState = world.get(correctedRoot, SceneInstance);
+    const correctedMember = correctedState.ok ? correctedState.value.mapping[2] : undefined;
+    const correctedEmpty = correctedResult.value.diagnostics.length === 0;
+    const correctionInputUnchanged = JSON.stringify(correctedInner) === correctedInputSnapshot;
+    const freshIdentity = faultyResult.ok
+      && Number(correctedRoot) !== Number(faultyRoot)
+      && correctedMember !== undefined
+      && faultyMember !== undefined
+      && Number(correctedMember) !== Number(faultyMember);
+    const healthyRetained = world.get(rootEntity, SceneInstance).ok;
+    for (let i = 0; i < 60; i += 1) {
+      world.update().unwrap();
+      const draw = renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } });
+      if (!draw.ok) m30Failures.push(`corrected draw failed: ${draw.error.code}`);
+      else void renderer.observe(draw.value, { include: ['draws'] });
+    }
+    await device.queue.onSubmittedWorkDone();
+    bytes = await readback();
+    const repairedPixelSamples = {};
+    for (const site of sites) repairedPixelSamples[site.name] = readRgba(site.x, site.y);
+    const repairedPixelRegions = {
+      left: region(0, Math.floor(WIDTH / 2)),
+      right: region(Math.floor(WIDTH / 2), WIDTH),
+    };
+    const repairedMeshedRenderCount = Object.values(repairedPixelRegions)
+      .filter((stats) => stats.stddevLuma > 2 && stats.maxLuma > 20).length;
+    const firstCleanupCount = worldDespawnScene(world, correctedRoot).unwrap();
+    const secondCleanup = world.get(correctedRoot, SceneInstance).ok
+      ? { changed: true, count: worldDespawnScene(world, correctedRoot).unwrap() }
+      : { changed: false, count: 0 };
+    const healthyRetainedBeforeFinalTeardown = world.get(rootEntity, SceneInstance).ok;
+    sceneChildren.delete(Number(correctedOuterHandle));
+    world.sharedRefs.release(correctedInnerHandle);
+    world.sharedRefs.release(correctedOuterHandle);
+    if (!correctedEmpty || !correctionInputUnchanged || !freshIdentity || !healthyRetained) {
+      m30Failures.push(
+        `corrected recovery invariant failed: ${JSON.stringify({ correctedEmpty, correctionInputUnchanged, freshIdentity, healthyRetained })}`,
+      );
+    }
+    if (repairedMeshedRenderCount === 0) {
+      m30Failures.push(`corrected pixels blank: ${JSON.stringify(repairedPixelRegions)}`);
+    }
+    if (firstCleanupCount !== 5 || secondCleanup.changed || !healthyRetainedBeforeFinalTeardown) {
+      m30Failures.push(
+        `corrected cleanup invariant failed: ${JSON.stringify({ firstCleanupCount, secondCleanup, healthyRetainedBeforeFinalTeardown })}`,
+      );
+    }
+    globalThis.__m30DawnRecovery = {
+      diagnostics: faultyResult.value.diagnostics,
+      exactDiagnostic,
+      knownFieldValue,
+      faultyEntityCount,
+      baselineEntityCount,
+      faultyCleanupCount,
+      noOrphanAfterFault,
+      healthyRetainedAfterFault,
+      correctedDiagnostics: correctedResult.value.diagnostics,
+      correctedEmpty,
+      correctionInputUnchanged,
+      freshIdentity,
+      healthyRetained,
+      firstCleanupCount,
+      secondCleanup,
+      healthyRetainedBeforeFinalTeardown,
+      repairedPixelSamples,
+      repairedPixelRegions,
+    };
+  }
 }
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (errors.length > 0) {
   failures.push(`(d) Renderer.onError fired ${errors.length} times: [${errors.map((e) => e.code).join(', ')}]`);
 }
 if (consoleErrorRhiCount > 0) {
   // R2/B-5: console.error path RhiErrors (propagateTransforms hierarchy-broken etc.)
-  // are routed through console.error rather than renderer.onError, so the
+  // are routed through console.error rather than Renderer error events, so the
   // (d) gate alone does not see them; this (e) gate catches them.
   failures.push(`(e) console.error emitted ${consoleErrorRhiCount} RhiError-shaped lines (propagateTransforms / hierarchy-broken signals)`);
+}
+if (meshedRenderCount === 0) {
+  failures.push(`(f) expected a nonblank lit scene in at least one half, regions=${JSON.stringify(pixelRegions)}`);
+}
+for (const failure of m30Failures) failures.push(`(m30) ${failure}`);
+if (!addOverrideVerified) {
+  failures.push('(g) component-add override (Name, no field) not verified on member entity');
+}
+
+const evidenceDir = process.env.FORGEAX_GAUNTLET_ARTIFACT_DIR;
+const dawnEvidence = {
+  status: failures.length === 0 ? 'pass' : 'fail',
+  framesObserved,
+  baselineEntityCount,
+  pixelSamples,
+  pixelRegions,
+  addOverrideVerified,
+  rendererErrors: errors,
+  consoleErrorRhiCount,
+  recovery: globalThis.__m30DawnRecovery ?? null,
+  failures,
+};
+if (evidenceDir !== undefined) {
+  mkdirSync(evidenceDir, { recursive: true });
+  writeFileSync(
+    resolve(evidenceDir, 'scene-nesting-dawn-evidence.json'),
+    `${JSON.stringify(dawnEvidence, null, 2)}\n`,
+  );
 }
 
 if (failures.length > 0) {
@@ -378,14 +557,14 @@ if (failures.length > 0) {
   device.destroy?.();
   process.exit(1);
 }
-if (!addOverrideVerified) {
-  consoleErrorOriginal(`[smoke] FAIL - (f) component-add override (DirectionalLight, no field) not verified on member entity`);
-  await delay(0);
-  device.destroy?.();
-  process.exit(1);
-}
 
-console.log(`[smoke] PASS - structural gates GREEN: backend=webgpu, frames=${framesObserved}, Renderer.onError count=0, console.error RhiError count=0; meshed sites above clear+threshold=${meshedRenderCount}/${sites.length} (informational, structural-only)`);
+console.log(`[smoke] PASS - frames=${framesObserved}, Renderer.onError count=0, console.error RhiError count=0; lit regions=${meshedRenderCount}/2, pixelRegions=${JSON.stringify(pixelRegions)}, M30 recovery green`);
+
+worldDespawnScene(world, rootEntity).unwrap();
+world.sharedRefs.release(innerHandle);
+world.sharedRefs.release(outerHandle);
+world.sharedRefs.release(meshHandle);
+world.sharedRefs.release(unlitMatHandle);
 
 device.destroy?.();
 delete globalThis.navigator.gpu;

@@ -26,14 +26,14 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@dimforge/rapier2d-compat": "0.19.3",
+    "@dimforge/rapier2d-compat": "0.20.0",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-physics": "workspace:*",
     "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {
-    "@dimforge/rapier2d": "0.19.3",
+    "@dimforge/rapier2d": "0.20.0",
     "@forgeax/engine-runtime": "workspace:*"
   },
   "forgeax": {

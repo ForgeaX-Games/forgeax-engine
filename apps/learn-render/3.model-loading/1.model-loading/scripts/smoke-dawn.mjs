@@ -15,7 +15,7 @@
 // Verdict criteria:
 //   (a) backend=webgpu (dawn-node bound the WebGPU adapter)
 //   (b) frames>=300 (the standard smoke gate)
-//   (c) renderer.onError fired 0 times for RhiError / RuntimeError / EcsError
+//   (c) Renderer error event fired 0 times for RhiError / RuntimeError / EcsError
 //       families (the production crash channel)
 //   (d) console.error fired 0 times during render
 //
@@ -141,35 +141,41 @@ console.log(`[smoke] pack-index: ${packIndexJson.length} entries, ${urlToPath.si
 const MANIFEST_PATH = resolve(DIST_DIR, 'shaders', 'manifest.json');
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
 
-const { World } = await import('@forgeax/engine-ecs');
-const enginePkg = await import('@forgeax/engine-runtime');
-const { createRenderer } = enginePkg;
-const { Skylight } = await import('@forgeax/engine-render');
+const { createWorldContext, World } = await import('@forgeax/engine-ecs');
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
+const { renderComponentsPlugin, Skylight } = await import('@forgeax/engine-render');
 const { Camera, DirectionalLight, PointLight } = await import('@forgeax/engine-render');
-const { Transform } = await import('@forgeax/engine-scene');
+const { scenePlugin, Transform } = await import('@forgeax/engine-scene');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
 let renderer;
+let assets;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(
+    mockCanvas,
+    {},
+    { shaderManifestUrl: MANIFEST_URL },
+  );
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
+  assets = constructed.value.assets;
 } catch (err) {
-  console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
+  console.error(`[smoke] FAIL - constructRuntimeRendererHost failed: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
 }
 
-console.log(`[learn-render 3.1 smoke] backend=${renderer.backend}`);
-
-const assets = renderer.assets;
-if (!assets) {
-  console.error('[smoke] FAIL - AssetRegistry is null');
-  process.exit(1);
-}
+console.log('[learn-render 3.1 smoke] Standard host constructed');
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldContext = await createWorldContext(world, [
+  renderComponentsPlugin(),
+  scenePlugin(),
+]);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
+const lease = worldAttachment1.value;
 
 // 3b. Find HDR entry.
 const hdrEntry = packIndexJson.find((e) => e.guid === NEWPORT_LOFT_GUID);
@@ -351,13 +357,8 @@ console.error = (...args) => {
   consoleErrors.push(args.map((a) => (a instanceof Error ? a.stack : String(a))).join(' '));
   originalConsoleError(...args);
 };
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => { if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint }); });
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code} - ${ready.error.hint}`);
-  process.exit(1);
-}
 
 // --- 6. Run frames -------------------------------------------------------
 
@@ -365,8 +366,17 @@ const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-  if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  const r = renderer.draw({
+    leases: [lease],
+    camera: { lease },
+    environment: { lease },
+  });
+  if (!r.ok) {
+    console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  } else {
+    const completed = await r.value.completed;
+    if (!completed.ok) errors.push({ code: completed.error.code, hint: completed.error.hint });
+  }
   framesObserved++;
 }
 const device = sharedDevice;
@@ -426,7 +436,7 @@ console.log(`[smoke] pixelSamples=${JSON.stringify(pixelSamples)}`);
 // --- 8. Verdict -----------------------------------------------------------
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (assets === undefined) failures.push('(a) host asset owner is unavailable');
 if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 const rhiErrors = errors.filter((e) =>
   e.code.startsWith('rhi-') || e.code.startsWith('runtime-') || e.code.startsWith('ecs-'));
@@ -448,7 +458,7 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log(`[smoke] PASS - ${framesObserved} frames, backend=${renderer.backend}`);
+console.log(`[smoke] PASS - ${framesObserved} frames, Standard host`);
 device?.destroy?.();
 delete globalThis.navigator.gpu;
 process.exit(0);

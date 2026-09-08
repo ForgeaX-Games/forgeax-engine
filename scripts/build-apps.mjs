@@ -189,11 +189,11 @@ function processTreeRss(pid) {
   return rssKB * 1024;
 }
 
-function runApp(app, className, appFactsDir, viteCliPath) {
+function runApp(app, className, appFactsDir, viteCliPath, baseEnv = process.env) {
   return new Promise((resolveRun) => {
     const startedAt = performance.now();
     let peakRssBytes = 0;
-    const prebuild = createPrebuildInvocation({ app });
+    const prebuild = createPrebuildInvocation({ app, baseEnv });
     if (prebuild !== null) {
       const result = spawnSync(prebuild.command, prebuild.args, prebuild.options);
       if (result.status !== 0) {
@@ -211,8 +211,8 @@ function runApp(app, className, appFactsDir, viteCliPath) {
     const invocation = createViteBuildInvocation({
       app,
       viteCliPath,
-      sharedInputManifest,
       appFactsDir,
+      baseEnv,
     });
     const child = spawn(invocation.command, invocation.args, invocation.options);
     const sample = () => {
@@ -313,6 +313,14 @@ async function main() {
     .filter((task) => !task.cacheHit)
     .sort((a, b) => a.app.relativeDirectory.localeCompare(b.app.relativeDirectory));
   const viteCliPath = pending.length === 0 ? undefined : resolveViteCli(root);
+  // The producer has already compiled the engine shader manifest. Forward its
+  // absolute manifest path to every child Vite process so app builds project
+  // the trusted shared payload instead of silently recompiling engine shaders
+  // from source (or relying on an undeclared packaged-input residue).
+  const appBuildEnv = {
+    ...process.env,
+    FORGEAX_SHARED_APP_INPUTS_MANIFEST: sharedInputManifest,
+  };
   const running = new Map();
 
   while (pending.length > 0 || running.size > 0) {
@@ -323,11 +331,9 @@ async function main() {
           ? undefined
           : resolve(metricsRoot, packageId(task.app.manifest.name));
       if (factsDir !== undefined) mkdirSync(factsDir, { recursive: true });
-      const promise = runApp(task.app, task.className, factsDir, viteCliPath).then((run) => ({
-        task,
-        run,
-        factsDir,
-      }));
+      const promise = runApp(task.app, task.className, factsDir, viteCliPath, appBuildEnv).then(
+        (run) => ({ task, run, factsDir }),
+      );
       running.set(task.app.manifest.name, promise);
       console.error(
         `[build-apps] build ${task.app.manifest.name} class=${task.className} memory=${task.memoryGB}GB`,

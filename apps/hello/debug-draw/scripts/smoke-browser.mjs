@@ -2,7 +2,10 @@
 // hello-debug-draw browser smoke: real createApp(canvas) auto-attach path.
 // The normal case proves the runtime overlay reaches a live WebGPU canvas and
 // survives a backing/CSS resize; the falsifier runs the same page with shape
-// calls disabled and must read zero foreground pixels at both sizes.
+// calls disabled and must read zero foreground pixels at both sizes. The
+// cap-recovery case keeps one page/device alive while it renders a valid
+// prefix, truncates an overflowing frame, and renders a semantically distinct
+// next frame.
 
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -15,16 +18,20 @@ import { PNG } from 'pngjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..', '..', '..');
-const ARTIFACT_DIR = resolve(HERE, '..', '.forgeax-debug', 'runtime-auto-attach');
+const ARTIFACT_DIR = process.env.FORGEAX_M31_ARTIFACT_DIR
+  ? resolve(process.env.FORGEAX_M31_ARTIFACT_DIR)
+  : resolve(HERE, '..', '.forgeax-debug', 'runtime-auto-attach');
 const CANVAS_CLIP = { x: 0, y: 64, width: 256, height: 192 };
 const RESIZED_CANVAS_CLIP = { x: 0, y: 64, width: 384, height: 192 };
 const FOREGROUND_CHANNEL_MIN = 24;
+const APP_ROOT = resolve(HERE, '..');
 
 mkdirSync(ARTIFACT_DIR, { recursive: true });
 
-const viteProc = spawn('pnpm', ['-F', '@forgeax/hello-debug-draw', 'dev'], {
-  cwd: REPO_ROOT,
+const viteProc = spawn(process.execPath, [resolve(REPO_ROOT, 'node_modules/vite/bin/vite.js')], {
+  cwd: APP_ROOT,
   stdio: ['ignore', 'pipe', 'pipe'],
+  detached: true,
 });
 let portUrl;
 viteProc.stdout.on('data', (chunk) => {
@@ -33,6 +40,40 @@ viteProc.stdout.on('data', (chunk) => {
   portUrl ??= text.match(/Local:\s+(http:\/\/[^\s]+)/)?.[1];
 });
 viteProc.stderr.on('data', (chunk) => process.stderr.write(`[vite-err] ${chunk}`));
+
+let viteStopStarted = false;
+async function stopVite() {
+  if (viteStopStarted) return;
+  viteStopStarted = true;
+  if (viteProc.exitCode === null && viteProc.pid !== undefined) {
+    try {
+      process.kill(-viteProc.pid, 'SIGTERM');
+    } catch (error) {
+      if (error?.code !== 'ESRCH') throw error;
+    }
+    await sleep(300);
+    if (viteProc.exitCode === null) {
+      try {
+        process.kill(-viteProc.pid, 'SIGKILL');
+      } catch (error) {
+        if (error?.code !== 'ESRCH') throw error;
+      }
+    }
+  }
+  await sleep(300);
+}
+
+async function closeBrowser(browser) {
+  let closed = false;
+  const closePromise = browser.close().then(() => {
+    closed = true;
+  });
+  await Promise.race([closePromise, sleep(5_000)]);
+  if (!closed) {
+    browser._connection?.close();
+    await sleep(300);
+  }
+}
 
 function foregroundStats(path) {
   const image = PNG.sync.read(readFileSync(path));
@@ -44,6 +85,38 @@ function foregroundStats(path) {
     maxChannel = Math.max(maxChannel, channel);
   }
   return { foreground, maxChannel, width: image.width, height: image.height };
+}
+
+function colorStats(path) {
+  const image = PNG.sync.read(readFileSync(path));
+  const counts = { red: 0, green: 0, blue: 0, yellow: 0 };
+  for (let i = 0; i < image.data.length; i += 4) {
+    const r = image.data[i] ?? 0;
+    const g = image.data[i + 1] ?? 0;
+    const b = image.data[i + 2] ?? 0;
+    if (r >= 128 && g < 96 && b < 96) counts.red++;
+    if (g >= 128 && r < 96 && b < 96) counts.green++;
+    if (b >= 128 && r < 96 && g < 96) counts.blue++;
+    if (r >= 128 && g >= 128 && b < 96) counts.yellow++;
+  }
+  return counts;
+}
+
+function parseCapHud(text) {
+  const match = text.match(
+    /phase=(\w+) cap=(\d+) queued=(\d+) staged=(\d+) draw=(\d+) deviceErrors=(\d+) sameDevice=(\d+) cleanup=(\w+)/,
+  );
+  if (!match) throw new Error(`cap-recovery HUD did not match contract: ${text}`);
+  return {
+    phase: match[1],
+    cap: Number(match[2]),
+    queued: Number(match[3]),
+    staged: Number(match[4]),
+    draw: Number(match[5]),
+    deviceErrors: Number(match[6]),
+    sameDevice: Number(match[7]),
+    cleanup: match[8],
+  };
 }
 
 function sha256File(path) {
@@ -238,6 +311,116 @@ async function runCase(browser, query, label) {
   };
 }
 
+async function runCapRecoveryCase(browser) {
+  const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+  const pageErrors = [];
+  const consoleErrors = [];
+  const capWarnings = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error' && !message.text().includes('404')) {
+      consoleErrors.push(message.text());
+    }
+    if (message.type() === 'warning' && message.text().includes('MAX_VERTEX_CAPACITY')) {
+      capWarnings.push(message.text());
+    }
+  });
+
+  try {
+    await page.goto(`${portUrl}/?mode=cap-recovery`, {
+      waitUntil: 'networkidle',
+      timeout: 30_000,
+    });
+
+    async function waitForPhase(expected) {
+      await page.waitForFunction(
+        (phase) => document.querySelector('#debug-draw-hud')?.textContent?.includes(`phase=${phase}`),
+        expected,
+        { timeout: 10_000 },
+      );
+      await page.waitForTimeout(100);
+      const hud = await page.locator('#debug-draw-hud').textContent();
+      if (!hud) throw new Error(`cap-recovery ${expected} HUD is empty`);
+      return parseCapHud(hud);
+    }
+
+    async function capture(label, hud) {
+      const path = resolve(ARTIFACT_DIR, `cap-recovery-${label}.png`);
+      await page.screenshot({ path, clip: CANVAS_CLIP });
+      return {
+        path,
+        hud,
+        foreground: foregroundStats(path),
+        colors: colorStats(path),
+        sha256: sha256File(path),
+      };
+    }
+
+    const baselineHud = await waitForPhase('baseline');
+    const baseline = await capture('baseline', baselineHud);
+    await page.evaluate(() => {
+      const controller = globalThis.__forgeax_debug_draw__;
+      if (!controller || typeof controller.advance !== 'function') {
+        throw new Error('cap-recovery controller not found');
+      }
+      return controller.advance();
+    });
+    const overflowHud = await waitForPhase('overflow');
+    const overflow = await capture('overflow', overflowHud);
+    await page.evaluate(() => {
+      const controller = globalThis.__forgeax_debug_draw__;
+      if (!controller || typeof controller.advance !== 'function') {
+        throw new Error('cap-recovery controller not found');
+      }
+      return controller.advance();
+    });
+    const recoveryHud = await waitForPhase('recovery');
+    const recovery = await capture('recovery', recoveryHud);
+
+    for (const [label, stage, expectedQueued, expectedDraw] of [
+      ['baseline', baseline, 4, 4],
+      ['overflow', overflow, 10, 10],
+      ['recovery', recovery, 2, 2],
+    ]) {
+      if (
+        stage.hud.cap !== 10 ||
+        stage.hud.queued !== expectedQueued ||
+        stage.hud.staged !== 0 ||
+        stage.hud.draw !== expectedDraw ||
+        stage.hud.draw > stage.hud.cap ||
+        stage.hud.deviceErrors !== 0 ||
+        stage.hud.sameDevice !== 1
+      ) {
+        throw new Error(`${label} cap-recovery HUD invariant failed: ${JSON.stringify(stage.hud)}`);
+      }
+      if (stage.foreground.foreground === 0) {
+        throw new Error(`${label} cap-recovery stage rendered no foreground pixels`);
+      }
+    }
+    if (baseline.colors.red === 0 || baseline.colors.green === 0 || baseline.colors.blue !== 0) {
+      throw new Error(`baseline did not render the intended red/green prefix: ${JSON.stringify(baseline)}`);
+    }
+    if (overflow.colors.red === 0 || overflow.colors.green !== 0 || overflow.colors.yellow !== 0) {
+      throw new Error(`overflow rendered discarded geometry: ${JSON.stringify(overflow)}`);
+    }
+    if (recovery.colors.blue === 0 || recovery.colors.red !== 0 || recovery.colors.green !== 0 || recovery.colors.yellow !== 0) {
+      throw new Error(`recovery contains stale or discarded geometry: ${JSON.stringify(recovery)}`);
+    }
+    if (capWarnings.length !== 1) {
+      throw new Error(`expected one bounded cap warning, got ${capWarnings.length}: ${capWarnings.join(' | ')}`);
+    }
+    if (pageErrors.length > 0) throw new Error(`cap-recovery page errors: ${pageErrors.join(' | ')}`);
+    if (consoleErrors.length > 0) throw new Error(`cap-recovery console errors: ${consoleErrors.join(' | ')}`);
+
+    console.log(
+      `[smoke-browser] cap-recovery PASS - same page/device baseline=${JSON.stringify(baseline.hud)} overflow=${JSON.stringify(overflow.hud)} recovery=${JSON.stringify(recovery.hud)} warnings=${capWarnings.length} baselineForeground=${baseline.foreground.foreground} overflowForeground=${overflow.foreground.foreground} recoveryForeground=${recovery.foreground.foreground} baselineSha256=${baseline.sha256} overflowSha256=${overflow.sha256} recoverySha256=${recovery.sha256}`,
+    );
+    return { baseline, overflow, recovery, capWarnings: [...capWarnings] };
+  } finally {
+    await page.close();
+  }
+}
+
 function repeatabilitySnapshot(result) {
   return {
     stats: result.stats,
@@ -285,6 +468,7 @@ try {
     ],
   });
   try {
+    const capRecovery = await runCapRecoveryCase(browser);
     const normal = await runCase(browser, '', 'runtime-1');
     const normalRepeat = await runCase(browser, '', 'runtime-2');
     for (const [label, result] of [
@@ -356,18 +540,18 @@ try {
     assertEqualSnapshots('falsifier', falsified, falsifiedRepeat);
 
     console.log(
-      `[smoke-browser] artifacts: normal=${normal.path} normalRoll=${normal.rollPath} normalClipNear=${normal.clipNearPath} normalClipFar=${normal.clipFarPath} normalZoom=${normal.zoomPath} normalViewport=${normal.viewportPath} normalPan=${normal.panPath} normalPanResized=${normal.panResizedPath} normalResized=${normal.resizedPath} falsified=${falsified.path} falsifiedRoll=${falsified.rollPath} falsifiedClipNear=${falsified.clipNearPath} falsifiedClipFar=${falsified.clipFarPath} falsifiedZoom=${falsified.zoomPath} falsifiedViewport=${falsified.viewportPath} falsifiedPan=${falsified.panPath} falsifiedPanResized=${falsified.panResizedPath} falsifiedResized=${falsified.resizedPath}`,
+      `[smoke-browser] artifacts: capBaseline=${capRecovery.baseline.path} capOverflow=${capRecovery.overflow.path} capRecovery=${capRecovery.recovery.path} normal=${normal.path} normalRoll=${normal.rollPath} normalClipNear=${normal.clipNearPath} normalClipFar=${normal.clipFarPath} normalZoom=${normal.zoomPath} normalViewport=${normal.viewportPath} normalPan=${normal.panPath} normalPanResized=${normal.panResizedPath} normalResized=${normal.resizedPath} falsified=${falsified.path} falsifiedRoll=${falsified.rollPath} falsifiedClipNear=${falsified.clipNearPath} falsifiedClipFar=${falsified.clipFarPath} falsifiedZoom=${falsified.zoomPath} falsifiedViewport=${falsified.viewportPath} falsifiedPan=${falsified.panPath} falsifiedPanResized=${falsified.panResizedPath} falsifiedResized=${falsified.resizedPath}`,
     );
     console.log(
-      `[smoke-browser] PASS - createApp(canvas) auto-attached app.debugDraw and survived repeatable camera roll, near/far clipping, zoom, viewport/aspect change, pan + live resize; normalForeground=${normal.stats.foreground}, normalRollForeground=${normal.rollStats.foreground}, normalClipNearForeground=${normal.clipNearStats.foreground}, normalClipFarForeground=${normal.clipFarStats.foreground}, normalZoomForeground=${normal.zoomStats.foreground}, normalViewportForeground=${normal.viewportStats.foreground}, normalPanForeground=${normal.panStats.foreground}, normalPanResizedForeground=${normal.panResizedStats.foreground}, normalResizedForeground=${normal.resizedStats.foreground}, falsifiedForeground=${falsified.stats.foreground}, falsifiedRollForeground=${falsified.rollStats.foreground}, falsifiedClipNearForeground=${falsified.clipNearStats.foreground}, falsifiedClipFarForeground=${falsified.clipFarStats.foreground}, falsifiedZoomForeground=${falsified.zoomStats.foreground}, falsifiedViewportForeground=${falsified.viewportStats.foreground}, falsifiedPanForeground=${falsified.panStats.foreground}, falsifiedPanResizedForeground=${falsified.panResizedStats.foreground}, falsifiedResizedForeground=${falsified.resizedStats.foreground}, normalSha256=${normal.sha256}, normalRollSha256=${normal.rollSha256}, normalClipNearSha256=${normal.clipNearSha256}, normalClipFarSha256=${normal.clipFarSha256}, normalZoomSha256=${normal.zoomSha256}, normalViewportSha256=${normal.viewportSha256}, normalPanSha256=${normal.panSha256}, normalPanResizedSha256=${normal.panResizedSha256}, normalResizedSha256=${normal.resizedSha256}, falsifiedSha256=${falsified.sha256}, falsifiedRollSha256=${falsified.rollSha256}, falsifiedClipNearSha256=${falsified.clipNearSha256}, falsifiedClipFarSha256=${falsified.clipFarSha256}, falsifiedZoomSha256=${falsified.zoomSha256}, falsifiedViewportSha256=${falsified.viewportSha256}, falsifiedPanSha256=${falsified.panSha256}, falsifiedPanResizedSha256=${falsified.panResizedSha256}, falsifiedResizedSha256=${falsified.resizedSha256}.`,
+      `[smoke-browser] PASS - cap-recovery kept one page/device alive through bounded truncation and cleanup; createApp(canvas) auto-attached app.debugDraw and survived repeatable camera roll, near/far clipping, zoom, viewport/aspect change, pan + live resize; capWarnings=${capRecovery.capWarnings.length}, capBaselineForeground=${capRecovery.baseline.foreground.foreground}, capOverflowForeground=${capRecovery.overflow.foreground.foreground}, capRecoveryForeground=${capRecovery.recovery.foreground.foreground}, normalForeground=${normal.stats.foreground}, normalRollForeground=${normal.rollStats.foreground}, normalClipNearForeground=${normal.clipNearStats.foreground}, normalClipFarForeground=${normal.clipFarStats.foreground}, normalZoomForeground=${normal.zoomStats.foreground}, normalViewportForeground=${normal.viewportStats.foreground}, normalPanForeground=${normal.panStats.foreground}, normalPanResizedForeground=${normal.panResizedStats.foreground}, normalResizedForeground=${normal.resizedStats.foreground}, falsifiedForeground=${falsified.stats.foreground}, falsifiedRollForeground=${falsified.rollStats.foreground}, falsifiedClipNearForeground=${falsified.clipNearStats.foreground}, falsifiedClipFarForeground=${falsified.clipFarStats.foreground}, falsifiedZoomForeground=${falsified.zoomStats.foreground}, falsifiedViewportForeground=${falsified.viewportStats.foreground}, falsifiedPanForeground=${falsified.panStats.foreground}, falsifiedPanResizedForeground=${falsified.panResizedStats.foreground}, falsifiedResizedForeground=${falsified.resizedStats.foreground}, normalSha256=${normal.sha256}, normalRollSha256=${normal.rollSha256}, normalClipNearSha256=${normal.clipNearSha256}, normalClipFarSha256=${normal.clipFarSha256}, normalZoomSha256=${normal.zoomSha256}, normalViewportSha256=${normal.viewportSha256}, normalPanSha256=${normal.panSha256}, normalPanResizedSha256=${normal.panResizedSha256}, normalResizedSha256=${normal.resizedSha256}, falsifiedSha256=${falsified.sha256}, falsifiedRollSha256=${falsified.rollSha256}, falsifiedClipNearSha256=${falsified.clipNearSha256}, falsifiedClipFarSha256=${falsified.clipFarSha256}, falsifiedZoomSha256=${falsified.zoomSha256}, falsifiedViewportSha256=${falsified.viewportSha256}, falsifiedPanSha256=${falsified.panSha256}, falsifiedPanResizedSha256=${falsified.panResizedSha256}, falsifiedResizedSha256=${falsified.resizedSha256}.`,
     );
   } finally {
-    await browser.close();
+    await stopVite();
+    await closeBrowser(browser);
   }
 } catch (error) {
   console.error(`[smoke-browser] FAIL - ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
 } finally {
-  viteProc.kill('SIGTERM');
-  await sleep(300);
+  await stopVite();
 }

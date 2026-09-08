@@ -47,7 +47,6 @@ describe('prepared graphics resolver', () => {
       pipeline: pipeline.unwrap(),
       values: {
         sceneDepth: createRenderFeatureTarget({
-          resource: 'scene-depth',
           kind: 'scene-depth',
           format: 'depth24plus-stencil8',
           sampleCount: 1,
@@ -142,9 +141,7 @@ describe('prepared graphics resolver', () => {
 
     const items = store.snapshot('resolver.feature').items;
     const lookup = resultMap(items);
-    const shader = (
-      await rhi.createShaderModule(currentDevice, { code: 'synthetic' })
-    ).unwrap() as unknown as GPUShaderModule;
+    const shader = (await rhi.createShaderModule(currentDevice, { code: 'synthetic' })).unwrap();
     const input: PreparedGraphicsResolverInput = {
       device: currentDevice,
       generation: 7,
@@ -160,7 +157,10 @@ describe('prepared graphics resolver', () => {
         const layout = currentDevice.createBindGroupLayout({ entries: [] }).unwrap();
         return currentDevice.createBindGroup({ layout, entries: [] }) as Result<BindGroup, never>;
       },
-      resolveGpuBuffer: (reference) => (reference === externalRef ? externalBuffer : undefined),
+      resolveGpuBuffer: (reference) =>
+        reference === externalRef
+          ? { buffer: externalBuffer, size: 64, physicalUsage: 0x0020 }
+          : undefined,
     };
     const resolver = createPreparedGraphicsResolver(input);
     const pipelineRef = pipeline.unwrap();

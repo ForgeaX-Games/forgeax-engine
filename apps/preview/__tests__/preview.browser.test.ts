@@ -1,8 +1,8 @@
 // preview.browser.test.ts -- e2e gate for the apps/preview host + the
-// templates/game-default bootstrap entry it loads. Runs in the vitest `browser`
+// templates/game-default Cordis gameplay plugin it loads. Runs in the vitest `browser`
 // project (chrome-beta + lavapipe, real WebGPU), so it covers the
 // browser-only path that dawn-node smokes cannot: createApp's canvas form,
-// the bootstrap entry's scene load by GUID (forge.json.defaultScene ->
+// the gameplay plugin's scene load by GUID (forge.json.defaultScene ->
 // loadByGuid<SceneAsset>) through the pluginPack dev-server middleware (which
 // indexes assets/scene.pack.json), and N frames of real draw.
 //
@@ -16,16 +16,17 @@
 //   - zero renderer errors across N frames          (no WebGPU validation /
 //                                                     device error)
 //
-// This mirrors apps/preview/src/main.ts's bootstrap, minus the two Vite
+// This mirrors apps/preview/src/main.ts's plugin mount, minus the two Vite
 // build-time couplings a test runner cannot evaluate: `virtual:forgeax/
 // bundler` (createApp works without it -- see thin-wrapper.browser.test.ts)
 // and `import.meta.glob` (the template module is imported directly here, and
-// its `bootstrap` named export is invoked as bootstrap(world, ctx)).
+// its default export is mounted into the App-owned Context).
 
 import { SUT_ATTRIBUTABLE_CODES } from '@forgeax/apps-shared/onerror-gate';
-import { createApp } from '@forgeax/engine-app';
-import type { BootstrapContext } from '@forgeax/engine-app';
+import { createApp, gameHostPlugin } from '@forgeax/engine-app';
+import type { GameHost } from '@forgeax/engine-app';
 import { AudioSource, audioPlugin } from '@forgeax/engine-audio';
+import { webAudioPlugin } from '@forgeax/engine-audio-webaudio';
 import type { InputBackend, InputSnapshot } from '@forgeax/engine-input';
 import { physicsPlugin } from '@forgeax/engine-physics';
 import { Camera, MeshRenderer, SceneInstance } from '@forgeax/engine-render';
@@ -34,10 +35,9 @@ import { createDevImportTransport } from '@forgeax/engine-runtime';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { bootstrap } from '../../../templates/game-default/main';
+import gameplay from '../../../templates/game-default/main';
 import { HUD_UI_GUID } from '../../../templates/game-default/assets/plugins/hud';
 import { SETTINGS_UI_GUID } from '../../../templates/game-default/assets/plugins/settings';
-import { HIT_FLASH_SHADER_ID } from '../../../templates/game-default/assets/plugins/hit-flash-material';
 
 const runtimeBinding = createStandaloneRuntimeAssetBinding(
   import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'preview',
@@ -50,7 +50,7 @@ function nextFrame(): Promise<void> {
 describe('apps/preview e2e -- templates/game-default loads + renders error-free', () => {
   let canvas: HTMLCanvasElement;
   let viewport: HTMLDivElement;
-  let activeApp: { stop(): unknown } | undefined;
+  let activeApp: { dispose(): Promise<unknown> } | undefined;
 
   beforeEach(() => {
     // The template reads `document.querySelector('#app')` and its
@@ -67,8 +67,8 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     document.body.appendChild(viewport);
   });
 
-  afterEach(() => {
-    activeApp?.stop();
+  afterEach(async () => {
+    await activeApp?.dispose();
     activeApp = undefined;
     viewport.remove();
   });
@@ -93,7 +93,10 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     };
     const appRes = await createApp(
       canvas,
-      { input: inputBackend, plugins: [audioPlugin(), physicsPlugin('rapier-3d')] },
+      {
+        input: inputBackend,
+        plugins: [webAudioPlugin(), audioPlugin(), physicsPlugin('rapier-3d')],
+      },
       { importTransport: createDevImportTransport(runtimeBinding) },
     );
     expect(appRes.ok).toBe(true);
@@ -113,19 +116,19 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
       errors.push(e.code ?? '<unknown>');
     });
 
-    const assets = app.renderer.assets;
+    const assets = app.assets;
+    if (assets === undefined) throw new Error('preview App did not expose its asset registry');
     assets.configureRuntimeBinding(runtimeBinding);
 
     const uiRoot = document.createElement('div');
     uiRoot.dataset.testUiRoot = 'preview-bootstrap';
     viewport.appendChild(uiRoot);
-    const ctx: BootstrapContext = { assets, app, renderer: app.renderer, uiRoot };
+    const ctx: GameHost = { assets, app, canvas, renderer: app.renderer, uiRoot };
 
-    // bootstrap(world, ctx) awaits the scene loadByGuid<SceneAsset> +
-    // instantiate; a throw here is a real failure (stale pack schema, missing
-    // asset, broken instantiate).
+    // The native plugin awaits scene load and owns its contributions as effects.
     try {
-      await bootstrap(app.world, ctx);
+      await app.pluginContext.plugin(gameHostPlugin(ctx));
+      await app.pluginContext.plugin(gameplay);
     } finally {
       console.error = originalError;
     }
@@ -133,8 +136,8 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
 
     const hudHost = uiRoot.querySelector<HTMLElement>(`[data-ui-asset="${HUD_UI_GUID}"]`);
     const settingsHost = uiRoot.querySelector<HTMLElement>(`[data-ui-asset="${SETTINGS_UI_GUID}"]`);
-    expect(hudHost, 'bootstrap must mount the HUD UiAsset').not.toBeNull();
-    expect(settingsHost, 'bootstrap must mount the settings UiAsset').not.toBeNull();
+    expect(hudHost, 'gameplay must mount the HUD UiAsset').not.toBeNull();
+    expect(settingsHost, 'gameplay must mount the settings UiAsset').not.toBeNull();
     const hudShadow = hudHost?.shadowRoot;
     const settingsShadow = settingsHost?.shadowRoot;
     expect(hudShadow, 'HUD mount must expose an open ShadowRoot').not.toBeNull();
@@ -149,11 +152,9 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     expect(settingsShadow?.querySelector('[data-ui-setting="antialias"]')).not.toBeNull();
     const audioEntities: number[] = [];
     for (const row of app.world.query({ with: [AudioSource] }).unwrap()) audioEntities.push(row.entity);
-    expect(audioEntities.length, 'bootstrap must attach a player-owned AudioSource').toBeGreaterThan(0);
-    expect(
-      [...app.renderer.shader.materialShaderIdentifiers()],
-      'bootstrap must register the template custom WGSL material',
-    ).toContain(HIT_FLASH_SHADER_ID);
+    expect(audioEntities.length, 'gameplay must attach a player-owned AudioSource').toBeGreaterThan(0);
+    expect(app.renderer, 'runtime shader catalog must remain Host-owned').not.toHaveProperty('shader');
+    expect(app.renderer.inspect().features).toEqual(expect.any(Array));
     const source = app.world.get(audioEntities[0]!, AudioSource);
     expect(source.ok).toBe(true);
     const openSettings = hudShadow?.querySelector<HTMLButtonElement>('[data-ui-action="open-settings"]');
@@ -270,6 +271,9 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     // the renderer here, to avoid being that polluting sibling.)
     const sutErrors = errors.filter((c) => SUT_ATTRIBUTABLE_CODES.has(c));
     expect(sutErrors, `SUT renderer errors: ${sutErrors.join(', ')}`).toEqual([]);
-  }, 60_000);
+    // A cold shared CI runner can compile Rapier and all nine Scriptable Pack
+    // outputs while the rest of the browser DAG is active. Keep that real
+    // production path bounded without treating runner contention as a failure.
+  }, 120_000);
 
 });

@@ -1,4 +1,5 @@
 import { World } from '@forgeax/engine-ecs';
+import { componentDefinition, componentSchema } from '@forgeax/engine-ecs/internal';
 import type { Handle, ParticleEffectAsset } from '@forgeax/engine-types';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { ParticleEffectPlayer, type ParticleEffectPlayerData } from '../index.js';
@@ -8,29 +9,29 @@ const asset: ParticleEffectAsset = {
   schemaVersion: 2,
   programFingerprint: 'sha256:test',
   emitters: [],
+  program: { format: 'forgeax-vfx-program-2', fingerprint: 'sha256:test', emitters: [] },
 };
 
 describe('ParticleEffectPlayer ECS contract', () => {
   it('exposes exactly the four author-intent fields with stable defaults', () => {
-    expect(Object.keys(ParticleEffectPlayer.schema)).toEqual([
+    expect(Object.keys(componentSchema(ParticleEffectPlayer))).toEqual([
       'effect',
       'playing',
       'seed',
       'timeScale',
     ]);
-    expect(ParticleEffectPlayer.schema).toEqual({
+    expect(componentSchema(ParticleEffectPlayer)).toEqual({
       effect: 'shared<ParticleEffectAsset>',
       playing: 'bool',
       seed: 'u32',
       timeScale: 'f32',
     });
-    expect(ParticleEffectPlayer.defaults).toEqual({
+    expect(componentDefinition(ParticleEffectPlayer).defaults).toEqual({
       playing: true,
       seed: 0,
       timeScale: 1,
     });
     expect(ParticleEffectPlayer.fields.effect.type).toBe('shared<ParticleEffectAsset>');
-    expect(ParticleEffectPlayer.fields.effect.simulationTransient).toBe(true);
     expect(ParticleEffectPlayer.fields.playing.default).toBe(true);
     expect(ParticleEffectPlayer.fields.seed.default).toBe(0);
     expect(ParticleEffectPlayer.fields.timeScale.default).toBe(1);

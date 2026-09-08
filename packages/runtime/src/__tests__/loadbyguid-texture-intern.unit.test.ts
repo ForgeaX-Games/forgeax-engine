@@ -6,7 +6,7 @@
 // (render-system-extract.ts) re-resolved each GUID to a column handle EVERY
 // frame by calling `world.allocSharedRef`, which mints a NEW monotonically-
 // increasing slot id per call. The GPU residency cache
-// (GpuResourceStore.textureGpuHandles) is keyed on handleSlot(handle), so a
+// (GpuResidencyCache.textureGpuHandles) is keyed on handleSlot(handle), so a
 // fresh slot every frame meant the residency check ALWAYS missed -> all
 // textures re-uploaded to the GPU every frame, GPU memory unbounded, per-frame
 // draw time grew linearly until SIGKILL.
@@ -21,17 +21,11 @@
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  extractFrame,
-  GpuResourceStore,
-  MeshFilter,
-  MeshRenderer,
-  prepareExtractContext,
-} from '@forgeax/engine-render/internal';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import type { Handle, MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
+import { extractFrame, prepareExtractContext } from '../../../render/src/render-system-extract';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function identityTx() {
@@ -53,7 +47,17 @@ function registerQuadMesh(world: World): Handle<'MeshAsset', 'shared'> {
     indices: new Uint16Array([0, 1, 2]),
     attributes: { position: positions },
     aabb: new Float32Array([0, 0, 0, 1, 1, 1]),
-    submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 36, topology: 'triangle-list' }],
+    submeshes: [
+      {
+        indexOffset: 0,
+        indexCount: 3,
+        vertexCount: 36,
+        topology: 'triangle-list',
+        materialSlot: 0,
+      },
+    ],
+
+    materialSlots: [{ slotName: 'Default' }],
   });
 }
 
@@ -126,11 +130,7 @@ function spawnTexturedRenderable(world: World, assets: AssetRegistry): { texture
 }
 
 function baseColorHandleFromFrame(world: World, assets: AssetRegistry): number | undefined {
-  const gpuStore = new GpuResourceStore();
-  const frame = extractFrame(
-    world,
-    prepareExtractContext(world, { assets, pipelineState: null, gpuStore }),
-  );
+  const frame = extractFrame(world, prepareExtractContext(world, { assets, pipelineState: null }));
   const renderable = frame.renderables.find(
     (r) => r.material.materialShaderId === 'forgeax::default-unlit',
   );

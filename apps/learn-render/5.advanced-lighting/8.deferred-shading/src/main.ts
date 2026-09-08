@@ -1,9 +1,8 @@
 // apps/learn-render/5.advanced-lighting/8.deferred-shading/src/main.ts
 // LearnOpenGL section 5.8 — Deferred Shading.
 //
-// HDRP deferred opaque + forward transparent with 32 point lights and a
-// 9-cube 3x3 grid. This demo REQUIRES the HDRP pipeline (engine default
-// deferred opaque post feat-20260612-hdrp-deferred-shading M2).
+// Standard clustered deferred-capable opaque + forward transparent with 32
+// point lights and a 9-cube 3x3 grid.
 //
 // LO 5.8.1 numerical set (research F-1):
 //   - NUM_LIGHTS = 32
@@ -14,10 +13,9 @@
 //   - 32 light-box cubes at each light position (scale=0.125, color=lightColor)
 //
 // Charter mapping:
-//   - P1 progressive disclosure: 5-step recipe (createApp -> register material
-//     -> install HDRP -> spawn scene -> app.start)
-//   - P3 explicit failure: HDRP install-time caps check fails on <4 color-attachments
-//     with structured error
+//   - P1 progressive disclosure: createApp -> register material -> select the
+//     Standard profile -> spawn scene -> app.start
+//   - P3 explicit failure: profile capability refusal remains structured
 //
 // GREP anchors for AI users:
 //   - "// 1. engine usage"    public engine API consumed
@@ -33,17 +31,19 @@ import {
   Camera,
   MeshFilter,
   MeshRenderer,
-  type MembershipTimingOptions,
 } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { Materials } from '@forgeax/engine-render';
-import { HDRP_PIPELINE_ID } from '@forgeax/engine-render/internal';
-import { PointLight } from '@forgeax/engine-render';
-import { createProfileClock, createProfiler } from '@forgeax/engine-profiler';
+import { DEFAULT_STANDARD_PROFILE, PointLight } from '@forgeax/engine-render';
 
 import type { Handle, MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
+import { captureCanvasPixels } from '@forgeax/apps-shared/canvas-capture';
+import {
+  exposeLearnRenderTestApp,
+  trackLearnRenderTestBootstrap,
+} from '../../../../shared/src/learn-render-test-lifecycle';
 
 // 2. scene constants
 
@@ -57,7 +57,7 @@ const NUM_LIGHTS = (() => {
   }
   return DEFAULT_NUM_LIGHTS;
 })();
-const CLUSTER_GRID = { x: 16, y: 9, z: 64 } as const;
+const STANDARD_LIGHT_COUNT = NUM_LIGHTS === 1 ? 1 : NUM_LIGHTS === 256 ? 256 : 32;
 const CUBE_SCALE = 0.5;
 const CUBE_SPACING = 3.0;
 const CUBE_Y = -0.5;
@@ -123,22 +123,6 @@ const FALSIFY = (() => {
 })();
 const VISUAL_FALSIFY = FALSIFY === 'blank';
 
-const MEMBERSHIP_TIMING: MembershipTimingOptions | undefined = (() => {
-  if (typeof window === 'undefined') return undefined;
-  const mode = new URL(window.location.href).searchParams.get('membershipTiming');
-  if (mode === 'gpu') return { mode: 'gpu', maxPendingCaptures: 2 };
-  if (mode === 'cpu-control') return { mode: 'cpu-control' };
-  return undefined;
-})();
-
-const MEMBERSHIP_PROFILE = (() => {
-  if (typeof window === 'undefined') return false;
-  return new URL(window.location.href).searchParams.get('membershipProfile') === '1';
-})();
-const PROFILER = MEMBERSHIP_PROFILE
-  ? createProfiler({ clock: createProfileClock(() => performance.now()) })
-  : undefined;
-
 // 3. bootstrap
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
@@ -146,7 +130,8 @@ if (!canvas) {
   throw new Error("[learn-render 5.8 deferred-shading] missing <canvas id='app'> in index.html");
 }
 
-bootstrap(canvas).catch((err: unknown) => {
+const bootstrapPromise = bootstrap(canvas);
+void bootstrapPromise.catch((err: unknown) => {
   if (err instanceof EngineEnvironmentError) {
     const inner = err.detail.webgpuError;
     const code = inner !== undefined && 'code' in inner ? inner.code : '<none>';
@@ -155,13 +140,17 @@ bootstrap(canvas).catch((err: unknown) => {
   }
   console.error('[learn-render 5.8 deferred] bootstrap error:', err);
 });
+trackLearnRenderTestBootstrap(bootstrapPromise, canvas);
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const appRes = await createApp(
     target,
     {
-      ...(MEMBERSHIP_TIMING === undefined ? {} : { membershipTiming: MEMBERSHIP_TIMING }),
-      ...(PROFILER === undefined ? {} : { profiler: PROFILER }),
+      standardProfile: {
+        ...DEFAULT_STANDARD_PROFILE,
+        lightCount: STANDARD_LIGHT_COUNT,
+        lighting: 'clustered',
+      },
     },
     forgeaxBundlerAdapter(),
   );
@@ -170,33 +159,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = appRes.value;
+  exposeLearnRenderTestApp(app, target);
   const world = app.world;
-  console.warn(`[learn-render 5.8 deferred] backend=${app.renderer.backend}`);
+  const inspection = app.renderer.inspect();
+  console.warn(`[learn-render 5.8 deferred] backend=${inspection.capabilities.backendKind}`);
 
-  const ready = await app.renderer.ready;
-  if (!ready.ok) {
-    console.error('[learn-render 5.8 deferred] renderer.ready failed:', ready.error.code, ready.error.hint);
-    return;
-  }
-
-  const evidenceWindow = window as unknown as {
-    __forgeaxDeferredMembershipEvidence?: Record<string, unknown>;
-  };
-  evidenceWindow.__forgeaxDeferredMembershipEvidence = {
-    backendKind: app.renderer.device.caps.backendKind,
-    compute: app.renderer.device.caps.compute,
-    timestampQuery: app.renderer.device.caps.timestampQuery,
-    timestampPeriodNanoseconds: app.renderer.device.caps.timestampPeriodNanoseconds ?? null,
-    adapter: app.renderer.device.caps.backendKind,
-    clusterGrid: CLUSTER_GRID,
-    environment: typeof navigator === 'undefined' ? 'browser-unknown' : navigator.userAgent,
-    actualProducer:
-      MEMBERSHIP_TIMING?.mode === 'gpu' && app.renderer.device.caps.compute
-        ? 'gpu'
-        : 'cpu',
-    mode: MEMBERSHIP_TIMING?.mode ?? 'omitted',
-    frames: 0,
-  };
 
   // Wire the __learnRenderErrors bus for onerror-gate coverage.
   const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;
@@ -204,26 +171,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     app.onError((error) => {
       bus.push({ code: error.code, hint: error.hint });
     });
-  }
-
-  // Install the HDRP pipeline (D-19: installPipeline takes the POD directly --
-  // RenderPipelineAsset is not a user-tier shared ref).
-  if (FALSIFY === 'force-urp') {
-    console.warn('[learn-render 5.8 deferred] FALSIFY=force-urp -- skipping installPipeline(hdrpAsset)');
-  } else {
-    const installRes = app.renderer.installPipeline({
-      kind: 'render-pipeline',
-      pipelineId: HDRP_PIPELINE_ID,
-      config: { clusterGrid: CLUSTER_GRID },
-    });
-    if (!installRes.ok) {
-      console.error(
-        '[learn-render 5.8 deferred] installPipeline failed:',
-        installRes.error.code,
-        installRes.error.hint,
-      );
-      return;
-    }
   }
 
   // CUbe base color variants: 9 distinct colors for the 3x3 grid.
@@ -295,7 +242,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     );
   }
 
-  // Camera at (0, 1.5, 6) looking -Z, similar to hello-hdrp-lighting.
+  // Camera at (0, 1.5, 6) looking -Z, matching the Standard lighting scene.
   // Eye height 1.5 gives a good view of the 3x3 grid at y=-0.5 from z=6.
   world.spawn(
     {
@@ -311,21 +258,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
   ).unwrap();
 
-  if (PROFILER !== undefined) {
-    // The membership contract profiles the first 90 nested-attribution frames
-    // while the browser workload continues through its required 300 frames.
-    const profileBudget = new URL(window.location.href).searchParams.get('membershipProfileBudget');
-    const profileEventLimit = profileBudget === 'falsifier' ? 40_000 : 65_536;
-    const profileStart = PROFILER.startCapture({ frameLimit: 90, eventLimit: profileEventLimit, detail: 'nested' });
-    if (!profileStart.ok) console.error(`[learn-render 5.8 deferred] profiler start failed: ${profileStart.error.code}`);
-  }
   const startRes = app.start();
   if (!startRes.ok) {
     reportAppError(startRes.error);
     return;
   }
   console.warn(
-    `[learn-render 5.8 deferred] running. HDRP=${FALSIFY === 'force-urp' ? 'SKIPPED' : 'installed'}. ${NUM_LIGHTS} point lights + 9 cubes 3x3 grid.`,
+    `[learn-render 5.8 deferred] running. Standard ${FALSIFY === 'force-direct' ? 'direct' : 'clustered'} lane selected. ${NUM_LIGHTS} point lights + 9 cubes 3x3 grid.`,
   );
 
   installCaptureHook(app, world);
@@ -333,63 +272,32 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 }
 
 // RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives
-// one update + draw + readPixels so the live canvas read is anchored to the same
+// one update + receipt-bound observation so the live canvas read is anchored to the same
 // frame the capture records. Only meaningful when the page is served with
 // FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
 function installCaptureHook(app: App, world: App['world']): void {
   type CaptureHook = () => Promise<Uint8Array>;
   const win = window as unknown as { __captureDeferred?: CaptureHook };
-  const profileWindow = window as unknown as {
-    __forgeaxDeferredMembershipProfile?: unknown;
-    __forgeaxDeferredProfileReady?: () => boolean;
-  };
-  profileWindow.__forgeaxDeferredProfileReady = () => {
-    const capture = PROFILER?.latestCapture();
-    return (
-      capture?.completeness.status === 'complete' && capture.completeness.droppedEventCount === 0
-    );
-  };
   const renderer = app.renderer;
+  const attached = renderer.attach(world);
+  if (!attached.ok) throw attached.error;
+  const lease = attached.value;
   win.__captureDeferred = async (): Promise<Uint8Array> => {
-    const timing = renderer.membershipTiming;
-    let timingStarted = false;
-    let timingEvidence: unknown = null;
-    try {
-      const started = timing?.start();
-      if (started?.ok === true) {
-        timingStarted = true;
-      } else if (started !== undefined) {
-        timingEvidence = { code: started.error.code, detail: started.error.hint };
-      }
-    } catch (error) {
-      timingEvidence = {
-        code: 'terminal-record-incomplete',
-        detail: error instanceof Error ? error.message : String(error),
-      };
-    }
     world.update(1 / 60).unwrap();
-    renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
-    if (timing !== undefined && timingStarted) {
-      const finished = await timing.finish();
-      timingEvidence = finished.ok ? finished.value : { code: finished.error.code, detail: finished.error.hint };
-    } else if (timing !== undefined) {
-      // A refused request still traverses the terminal finish seam so the
-      // consumer exercises the same frame lifecycle as the control route.
-      try {
-        await timing.finish();
-      } catch {
-        // Preserve the start refusal as the authoritative terminal reason.
-      }
-    }
-    const evidenceWindow = window as unknown as { __forgeaxDeferredMembershipTiming?: unknown };
-    evidenceWindow.__forgeaxDeferredMembershipTiming = timingEvidence;
-    const r = await renderer.readPixels();
+    const frame = renderer.draw({
+      leases: [lease],
+      camera: { lease },
+      environment: { lease },
+    });
+    if (!frame.ok) throw frame.error;
+    const observed = await renderer.observe(frame.value, { include: ['draws'] });
+    if (!observed.ok) throw observed.error;
+    const r = await captureCanvasPixels(document.querySelector<HTMLCanvasElement>('#app')!);
     if (!r.ok) {
       throw new Error(
-        `[learn-render 5.8 deferred] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
+        `[learn-render 5.8 deferred] canvas capture failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
       );
     }
-    profileWindow.__forgeaxDeferredMembershipProfile = PROFILER?.latestCapture() ?? null;
     return r.value;
   };
 }
@@ -408,9 +316,5 @@ declare global {
   interface Window {
     __learnRenderErrors?: Array<{ code: string; hint?: string }>;
     __captureDeferred?: () => Promise<Uint8Array>;
-    __forgeaxDeferredMembershipEvidence?: Record<string, unknown>;
-    __forgeaxDeferredMembershipTiming?: unknown;
-    __forgeaxDeferredMembershipProfile?: unknown;
-    __forgeaxDeferredProfileReady?: () => boolean;
   }
 }

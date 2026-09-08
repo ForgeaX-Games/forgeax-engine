@@ -54,6 +54,98 @@ describe('catalog source v2', () => {
     expect(fetchArtifact).not.toHaveBeenCalled();
   });
 
+  it('preserves producer-owned source override authoring facts', () => {
+    const sourceOverrides = {
+      'mesh/main': {
+        materialSlots: [
+          {
+            slotName: 'Body',
+            sourceKey: 'material/body',
+          },
+        ],
+        materialSlotDefaultOverrides: {
+          'material/body': '22222222-2222-4222-8222-222222222222',
+        },
+      },
+    } as const;
+    const sourceOverrideDescriptors = [
+      { sourceKey: 'mesh/main', payloadSchema: { type: 'object' } },
+    ] as const;
+    const result = parseCatalog([
+      { ...packageRow, sourceKey: 'mesh/main', sourceOverrides, sourceOverrideDescriptors },
+    ]);
+
+    expect(result).toEqual({
+      ok: true,
+      value: new Map([
+        [
+          packageRow.guid,
+          {
+            packageUrl: packageRow.packageUrl,
+            kind: packageRow.kind,
+            sourcePath: packageRow.sourcePath,
+            sourceKey: 'mesh/main',
+            sourceOverrides,
+            sourceOverrideDescriptors,
+          },
+        ],
+      ]),
+    });
+  });
+
+  it('preserves the complete source publication tuple for runtime fence consumers', () => {
+    const publication = {
+      schemaVersion: 'asset-publication/1' as const,
+      sourcePath: 'assets/showcase.pack.ts',
+      sourceRevision: 'sha256:source',
+      generation: 3,
+      digest: 'sha256:output',
+      outputSetDigest: 'sha256:output-set',
+      outputs: [
+        {
+          guid: packageRow.guid,
+          sourceKey: 'mesh/main',
+          kind: 'mesh',
+          digest: 'sha256:mesh',
+          refs: [],
+        },
+      ],
+      receipt: {
+        schemaVersion: 'asset-publication-receipt/1' as const,
+        sourcePath: 'assets/showcase.pack.ts',
+        sourceRevision: 'sha256:source',
+        inputFingerprint: 'sha256:source',
+        outputDigest: 'sha256:output',
+        outputSetDigest: 'sha256:output-set',
+        externalEvidence: [],
+      },
+      externalEvidence: [],
+      current: {
+        generation: 3,
+        digest: 'sha256:output',
+        outputSetDigest: 'sha256:output-set',
+        packageUrl: packageRow.packageUrl,
+        receiptKey: 'sha256:source',
+      },
+    };
+    const result = parseCatalog([{ ...packageRow, publication }]);
+
+    expect(result).toEqual({
+      ok: true,
+      value: new Map([
+        [
+          packageRow.guid,
+          {
+            kind: packageRow.kind,
+            packageUrl: packageRow.packageUrl,
+            sourcePath: packageRow.sourcePath,
+            publication,
+          },
+        ],
+      ]),
+    });
+  });
+
   it('fetches only the catalog source and preserves package navigation', async () => {
     const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => [packageRow] });
     const source = createCatalogSource({ url: '/preview/pack-index.json', fetch });

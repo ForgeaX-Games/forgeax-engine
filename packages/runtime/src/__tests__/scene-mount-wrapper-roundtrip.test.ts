@@ -25,6 +25,7 @@ import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '../collect-scene-asset';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+import { registerSceneComponents } from './helpers/register-scene-components';
 
 const G_CHILD = '11111111-1111-4111-8111-111111111111';
 const G_TOP = '22222222-2222-4222-8222-222222222222';
@@ -41,6 +42,7 @@ function cat(reg: AssetRegistry, g: string, p: SceneAsset): void {
   reg.catalog(pg(g), p as Asset);
 }
 function rs(w: World, a: SceneAsset): Handle<'SceneAsset', 'shared'> {
+  registerSceneComponents(w, [Name]);
   return w.allocSharedRef('SceneAsset', a);
 }
 function accessParse(reg: AssetRegistry) {
@@ -161,7 +163,7 @@ describe('editor Add-to-Scene wrapper+mount round-trip (ghost accretion regressi
     const c1 = runCycle([...groundRoots, wrapperRes.value as unknown as number]);
 
     // Cycle 2: serialize → parse → reload → collect.
-    const s1 = serializeSceneAssetToPack(c1.pack, G_TOP);
+    const s1 = serializeSceneAssetToPack(c1.pack, w.components.entries(), G_TOP);
     expect(s1.ok).toBe(true);
     if (!s1.ok) return;
     const u1 = unpack(s1.value);
@@ -173,7 +175,7 @@ describe('editor Add-to-Scene wrapper+mount round-trip (ghost accretion regressi
     const c2 = runCycle(namedTopEntities(i1.value as unknown as number));
 
     // Cycle 3: reload + collect once more (the ghost-accretion point).
-    const s2 = serializeSceneAssetToPack(c2.pack, G_TOP);
+    const s2 = serializeSceneAssetToPack(c2.pack, w.components.entries(), G_TOP);
     expect(s2.ok).toBe(true);
     if (!s2.ok) return;
     const u2 = unpack(s2.value);

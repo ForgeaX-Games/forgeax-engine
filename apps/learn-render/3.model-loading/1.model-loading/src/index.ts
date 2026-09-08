@@ -5,8 +5,8 @@
 // vite-plugin-pack pipeline; the demo body stays at the 4-step idiom
 // (charter P4 / requirements AC-17 / plan section 9.1):
 //
-//   (1) createApp({ canvas, ... }, { importTransport: createDevImportTransport(runtimeBinding) })
-//   (2) assets.configureRuntimeBinding(runtimeBinding) + configurePackIndex('/pack-index.json')
+//   (1) createApp({ canvas, ... }, { importTransport: createRuntimeAssetImportTransport(runtimeBinding) })
+//   (2) configureRuntimeAssetCatalog(assets, runtimeBinding)
 //   (3) const scene = await assets.loadByGuid<SceneAsset>(SPONZA_SCENE_GUID);
 //       assets.instantiate<SceneAsset>(scene.value, world)
 //   (4) app.start()
@@ -16,13 +16,14 @@
 // transparently: it parses the .gltf, extracts the texture bytes from the
 // three image-source paths, decodes them via the ImportContext seam, and
 // emits one ImportedAsset per declared sub-asset (103 meshes + 25 materials +
-// 69 textures + 1 scene for Sponza). The dev path uses createDevImportTransport
-// so a DDC miss for an unimported sub-asset GUID triggers an on-demand
+// 69 textures + 1 scene for Sponza). The dev path uses the shared runtime
+// import transport, so a DDC miss for an unimported sub-asset GUID triggers an on-demand
 // POST /__import import against the dev server.
 //
 // Lights / Skylight / camera / first-person controls remain example-specific
 // glue: they are part of the LearnOpenGL teaching surface, not gltf wiring.
 
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { createApp } from '@forgeax/engine-app';
 import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { World } from '@forgeax/engine-ecs';
@@ -30,21 +31,18 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { Transform } from '@forgeax/engine-scene';
 
 import { Camera, DirectionalLight } from '@forgeax/engine-render';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { Skylight } from '@forgeax/engine-render';
 import { PointLight } from '@forgeax/engine-render';
 
 import type { EquirectAsset, SceneAsset } from '@forgeax/engine-types';
-import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
+
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
 const SPONZA_SCENE_GUID = '019e4fe2-523b-7506-99e5-ccd39795ecda';
 const NEWPORT_LOFT_GUID = '019e4a26-3c29-7420-af5d-20f2724a16b0';
-const PACK_INDEX_URL = '/pack-index.json';
-const runtimeBinding = createStandaloneRuntimeAssetBinding(
-  import.meta.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'learn-render-3-1-model-loading',
-);
+
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (canvas === null) {
@@ -60,7 +58,7 @@ resizeCanvas(canvas);
 void bootstrap(canvas);
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
-  // Step (1): createApp - explicitly inject createDevImportTransport so a
+  // Step (1): createApp - explicitly inject the shared runtime transport so a
   // DDC miss on an unimported sub-asset GUID falls through to a dev-server
   // POST /__import (vite-plugin-pack's per-meta lock dedupes 122-way
   // concurrent loads down to a single gltfImporter pass per meta sidecar).
@@ -69,7 +67,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {},
     // Host-explicit dev transport (OOS-1): a DDC miss for an unimported Sponza
     // texture triggers an on-demand POST /__import import against the dev server.
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport(runtimeBinding) },
+    { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) },
   );
   if (!appRes.ok) {
     reportBootstrapError(appRes.error);
@@ -87,11 +85,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     if (bus !== undefined) bus.push({ code: e.code, hint: e.hint });
   });
 
-  const assets = renderer.assets;
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[learn-render 3.1] asset owner unavailable');
+    return;
+  }
 
-  // Step (2): configurePackIndex.
-  assets.configureRuntimeBinding(runtimeBinding);
-  assets.configurePackIndex(PACK_INDEX_URL);
+  // Step (2): configure the scoped dev or static build catalog.
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   // Step (3): loadByGuid<SceneAsset> + instantiate.
   // The gltfImporter has already produced the SceneAsset + every referenced
@@ -139,7 +140,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const cameraEntity = spawnCamera(world);
   if (cameraEntity === undefined) return;
 
-  addFirstPersonSystem(app.world, app.renderer, {
+  addFirstPersonSystem(app.world, {
     name: 'sponza-first-person',
     overrideBackend: undefined,
     moveSpeed: 4.8,
@@ -157,13 +158,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     world.set(cameraEntity, Camera, { aspect: window.innerWidth / window.innerHeight });
   });
 
-  console.warn(`[learn-render 3.1] backend=${renderer.backend} scene loaded via loadByGuid<SceneAsset>`);
+  console.warn(`[learn-render 3.1] backend=${renderer.inspect().capabilities.backendKind} scene loaded via loadByGuid<SceneAsset>`);
 
   // Expose scene-ready hook for visual tests (M4 playwright visual sentinel).
   (window as unknown as Record<string, unknown>).__sponzaSceneReady = true;
 
   // createApp now auto-wires app.remote in dev mode (feat-20260629-inspector-two-layer-model M4).
-  // The remote eval server exposes world/renderer/assets/debugAdapter (when
+  // The remote eval server exposes world/renderer/assets/rhiCapture (when
   // FORGEAX_ENGINE_RHI_DEBUG=1) as eval-scope roots — client.eval(script) replaces
   // the old Registry/wireDefaultInspectors/startConsoleServer manual assembly.
   // Per M5 w23: the manual console wiring block is deleted; the eval channel
@@ -237,7 +238,11 @@ function spawnLights(world: World): void {
 }
 
 async function spawnSkylight(app: App): Promise<void> {
-  const assets = app.renderer.assets;
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[learn-render 3.1] skylight asset owner unavailable');
+    return;
+  }
 
   const guidRes = AssetGuid.parse(NEWPORT_LOFT_GUID);
   if (!guidRes.ok) {

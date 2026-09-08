@@ -76,7 +76,7 @@ describe('auxiliary CaseReport authority', () => {
         status: 'pass',
         observations: [{
           caseId: 'transparent-ldr-urp',
-          pipelineId: 'forgeax::urp',
+          pipelineId: 'forgeax::standard',
           backendId: 'dawn',
           frameId: 0,
           bytes: [1, 2, 3, 4],

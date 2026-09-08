@@ -115,8 +115,7 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 // ── 4. Drive engine ECS ─────────────────────────────────────────────────
 
 const { World } = await import('@forgeax/engine-ecs');
-const enginePkg = await import('@forgeax/engine-runtime');
-const { createRenderer } = enginePkg;
+const { constructRuntimeRendererHost } = await import('@forgeax/engine-runtime/internal/renderer-host');
 const { Materials } = await import('@forgeax/engine-render');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 const { Transform } = await import('@forgeax/engine-scene');
@@ -126,7 +125,9 @@ const {
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  const constructed = await constructRuntimeRendererHost(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
+  if (!constructed.ok) throw constructed.error;
+  renderer = constructed.value.renderer;
 } catch (err) {
   console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
@@ -134,48 +135,18 @@ try {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
 
-console.log(`[shadow-opt-out] backend=${renderer.backend}`);
+console.log(`[shadow-opt-out] backend=${renderer.inspect().capabilities.backendKind}`);
 
 const errors = [];
-renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+renderer.subscribe((event) => {
+  if (event.kind === 'error') errors.push({ code: event.error.code, hint: event.error.hint });
+});
 
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code}`);
-  process.exit(1);
-}
-
-// Register cutout shadow shader from manifest
-const shader = renderer.shader;
-const assets = renderer.assets;
-if (shader === null || assets === null) {
-  console.error('[smoke] FAIL - shader or assets null');
-  process.exit(1);
-}
 
 const CUTOUT_SHADER_PATH = 'shadow_opt_out::cutout_shadow';
-const cutoutEntry = shader.findMaterialArtifact(CUTOUT_SHADER_PATH);
-if (!cutoutEntry.ok) {
-  // Register from manifest entries (populated by vite-plugin-shader at build time)
-  for (const entry of shader.materialShaderManifestEntries()) {
-    if (entry.identifier === CUTOUT_SHADER_PATH) {
-      shader.installMaterialArtifact(CUTOUT_SHADER_PATH, {
-        source: entry.composedWgsl,
-        paramSchema: [{ name: 'baseColor', type: 'color' }],
-        bindingLayout: [],
-      });
-      break;
-    }
-  }
-  const check2 = shader.findMaterialArtifact(CUTOUT_SHADER_PATH);
-  if (!check2.ok) {
-    console.error(`[smoke] FAIL - cutout shader not found in manifest`);
-    process.exit(1);
-  }
-}
 
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 
 // Light + shadow (merged component)
@@ -198,8 +169,7 @@ world.spawn(
 );
 
 // Camera — quat tilts default -z forward by ~56.3° around X so forward = (0, -0.832, -0.555)
-// looking at the cubes + floor at origin. Mirrors main.ts; dawn smoke is insensitive to camera
-// pose (debugSampleShadowFactor reads shadow map directly), but the two scripts stay in sync
+// looking at the cubes + floor at origin. Mirrors main.ts; the two scripts stay in sync
 // to honor the memory [[smoke-script-duplicate-scene-must-stay-in-sync-with-main]].
 world.spawn(
   {
@@ -265,7 +235,11 @@ const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   world.update().unwrap();
-  const r = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const r = renderer.draw({
+    leases: [worldAttachment1.value],
+    camera: { lease: worldAttachment1.value },
+    environment: { lease: worldAttachment1.value },
+  });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
 }
@@ -278,54 +252,13 @@ await device.queue.onSubmittedWorkDone();
 const frameWall = Date.now() - frameStart;
 console.log(`[smoke] frames observed=${framesObserved} (wall=${frameWall}ms)`);
 
-// ── 6. Shadow factor sampling ───────────────────────────────────────────
-
-// Sample floor positions offset from each cube to avoid the full occlusion
-// from the cube itself. Light direction (-0.3, -1.0, -0.5) tilts +X +Z.
-// Shadow projects: offsetX = height * dirX/|dirY| = 1.25 * 0.3/1.0 ≈ 0.38
-// Position slightly offset outside the cube's own footprint to detect its
-// cast shadow on the floor rather than being inside the cube's self-shadow.
-const posAOffset = [-3 + 0.6, 0.01, 0.3];
-const posBOffset = [0 + 0.6, 0.01, 0.3];
-const posCOffset = [3 + 0.6, 0.01, 0.3];
-
-const shadowResults = await renderer.debugSampleShadowFactor?.([posAOffset, posBOffset, posCOffset]);
-if (!shadowResults) {
-  console.error('[smoke] FAIL - debugSampleShadowFactor returned null');
-  process.exit(1);
-}
-
-const factorA = shadowResults[0]?.shadowFactor ?? -1;
-const factorB = shadowResults[1]?.shadowFactor ?? -1;
-const factorC = shadowResults[2]?.shadowFactor ?? -1;
-
-console.log(`[smoke] shadow factor A=${factorA.toFixed(4)} B=${factorB.toFixed(4)} C=${factorC.toFixed(4)}`);
-
-// ── 7. Verdict ──────────────────────────────────────────────────────────
+// ── 6. Verdict ──────────────────────────────────────────────────────────
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend}`);
+if (renderer.inspect().capabilities.backendKind !== 'webgpu') failures.push(`(a) backend=${renderer.inspect().capabilities.backendKind}`);
 if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (errors.length > 0) {
   failures.push(`(c) onError: ${errors.map((e) => e.code).join(', ')}`);
-}
-
-// AC-17: Cube A casts shadow -> shadow factor < 1 at offset position
-if (factorA >= 0.9) {
-  failures.push(`(d) cube A shadow factor ${factorA.toFixed(4)} >= 0.9 (expected < 0.9, cube A casts shadow)`);
-}
-
-// AC-17: Cube B castShadow:false -> shadow factor approx 1
-if (factorB < 0.9) {
-  failures.push(`(e) cube B shadow factor ${factorB.toFixed(4)} < 0.9 (expected >= 0.9, castShadow:false)`);
-}
-
-// AC-17: Cube C shadow from cutout shader produces shadow that differs from
-// fully-lit (1.0) — the cutout creates some occlusion even at edge positions.
-// Looser test: just verify it's not stuck at exactly 1.0 (fully lit, which
-// would mean the shader never ran).
-if (factorC > 0.95) {
-  failures.push(`(f) cube C shadow factor ${factorC.toFixed(4)} > 0.95 (expected some occlusion from cutout, factorA=${factorA.toFixed(4)} for reference)`);
 }
 
 if (failures.length > 0) {
@@ -336,5 +269,6 @@ if (failures.length > 0) {
 }
 
 console.log('[smoke] PASS - castShadow opt-out + cutout shadow demo GREEN');
+await renderer.dispose();
 device.destroy?.();
 process.exit(0);

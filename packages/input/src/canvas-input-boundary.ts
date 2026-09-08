@@ -23,8 +23,10 @@ export interface CanvasInputBoundary {
   detach(): void;
 }
 
+type CanvasInputOwner = ReturnType<CanvasInputBoundary['owner']>;
+
 export function createCanvasInputBoundary(source: InputBackend): CanvasInputBoundary {
-  let active: 'editor' | 'game' = 'editor';
+  let active: CanvasInputOwner = 'editor';
   let gamePointerLockAllowed = false;
   source.setPointerLockAllowed?.(false);
 
@@ -35,7 +37,7 @@ export function createCanvasInputBoundary(source: InputBackend): CanvasInputBoun
     source.setPointerLockAllowed?.(false);
   };
 
-  const routed = (consumer: 'editor' | 'game'): InputBackend => ({
+  const routed = (consumer: CanvasInputOwner): InputBackend => ({
     sample: () => (consumer === active ? source.sample() : empty()),
     setPointerLockAllowed: (allowed) => {
       if (consumer === 'game') {

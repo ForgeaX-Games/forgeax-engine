@@ -1,5 +1,5 @@
 // point-light-shadow.dawn.test.ts
-// feat-20260612-point-light-shadows-urp-hdrp M0 / T-M0-1.
+// feat-20260612-point-light-shadows M0 / T-M0-1.
 //
 // Minimal dawn-node fixture: create texture_depth_cube_array (512x512 depth32float,
 // layers=1), execute textureSampleCompareLevel via a compute shader, read back
@@ -217,24 +217,23 @@ describe('M0 cube_array comparison sampler (dawn)', () => {
   });
 });
 
-// feat-20260612-point-light-shadows-urp-hdrp M4 / T-M4-8 (AC-10 dawn smoke).
+// feat-20260612-point-light-shadows M4 / T-M4-8 (AC-10 dawn smoke).
 //
-// Structural-only HDRP point-shadow smoke: validates that the shared
-// addPointShadowPass primitive (used by both URP and HDRP buildGraph
-// closures) produces an identical 6 x N pass-count topology when N
+// Structural-only Standard point-shadow smoke: validates that the shared
+// The typed point-shadow primitive produces an identical 6 x N pass-count topology when N
 // snapshots are queued. The actual dawn-node device path is exercised by
 // T-M0-1 above (cube_array comparison sampler); this smoke focuses on the
 // `recordPointShadowPass` 6-face inner loop invariant from the host side
 // — exactly what dawn-node would observe at the GPU layer were the BGL
 // hookup landed.
 //
-// Pixel readback of HDRP point-light shadow lands in M5 / T-M5-1 (AC-15
+// Pixel readback of the point-light shadow lands in M5 / T-M5-1 (AC-15
 // dawn-e2e).
-describe('M4 HDRP point shadow smoke (dawn structural)', () => {
-  it("'HDRP point shadow smoke' -- 6 x N pass-count topology preserved (AC-10)", async () => {
+describe('M4 Standard point shadow smoke (dawn structural)', () => {
+  it("'Standard point shadow smoke' -- 6 x N pass-count topology preserved (AC-10)", async () => {
     // recordPointShadowPass walks `frameState.pointShadowSnapshots` and emits
     // 6 face passes per non-undefined snapshot. The structural assertion is
-    // unit-testable without a GPU (mirrors the URP T-M3-5 topology test);
+    // unit-testable without a GPU and owned by the Standard point-shadow path;
     // the dawn-node project simply re-verifies the contract from the dawn
     // test harness so a future BGL hookup change cannot regress the topology
     // count without tripping at least one project.
@@ -248,36 +247,30 @@ describe('M4 HDRP point shadow smoke (dawn structural)', () => {
       expect(count).toBe(6 * n);
     }
   });
-
-  it("'HDRP point shadow smoke' -- hdrpPipeline.buildGraph imports addPointShadowPass (T-M4-1 wiring)", async () => {
-    const hdrpModule = await import('@forgeax/engine-render/internal');
-    expect(hdrpModule.hdrpPipeline).toBeDefined();
-    expect(typeof hdrpModule.hdrpPipeline.buildGraph).toBe('function');
-  });
 });
 
-// feat-20260612-point-light-shadows-urp-hdrp M5 / T-M5-1 (AC-15 e2e dawn pixel readback).
+// feat-20260612-point-light-shadows M5 / T-M5-1 (AC-15 e2e dawn pixel readback).
 //
 // End-to-end fixture proving the cube_array depth atlas + comparison sampler
 // primitive that point-light shadows ride on can distinguish "occluded"
 // (closer occluder depth) from "non-occluded" (open horizon depth) when both
 // fragments query the same cube atlas with different reference depths.
 //
-// Pipeline budget posture (scope-amended): the URP / HDRP shared
-// `pbr-view-bgl` extension to declare bindings 5 + 6 was deferred from M5
+// Pipeline budget posture (scope-amended): the shared `pbr-view-bgl`
+// extension to declare bindings 5 + 6 was deferred from M5
 // (T-M3-6 + T-M4-6 carry-over concern) because the cascade through
 // vite-plugin-shader define maps + createRenderer fallback resources +
 // render-system-record viewBindGroup builder + shadowParams per-frame fill
 // exceeds the M5 milestone budget. T-M5-1 is therefore implemented against
-// the same raw RHI primitive that the URP / HDRP shaders WILL sample once
+// the same raw RHI primitive that the Standard shaders sample through the
 // the BGL hookup lands: a `texture_depth_cube_array` cleared per-face to
 // distinct depth values, sampled via `textureSampleCompareLevel` with two
 // refs that simulate the occluded vs non-occluded fragments. The depth
 // values + ref values are chosen so the comparison passes for the open
 // fragment (returns 1.0) and fails for the occluded fragment (returns 0.0).
 //
-// This validates the dawn-node end-to-end chain that the production URP /
-// HDRP forward pass relies on (cube_array creation -> face attachments ->
+// This validates the dawn-node end-to-end chain that the production Standard
+// forward pass relies on (cube_array creation -> face attachments ->
 // sampling via comparison sampler -> pixel-distinct results), so when the
 // follow-on BGL hookup lands the AC-15 bar shifts from "raw RHI primitive
 // works" to "createRenderer path works" without re-discovering the dawn
@@ -476,7 +469,7 @@ describe('M5 point shadow e2e readback (dawn, T-M5-1 / AC-15)', () => {
     // Per requirements §5.4 falsification proof contract.
     expect(result[0]).toBe(0.0);
     expect(result[1]).toBe(1.0);
-    // The closed-form contract the URP / HDRP forward path will rely on:
+    // The closed-form contract the Standard forward path relies on:
     // shadowFactor for occluded fragment is strictly less than for the
     // non-occluded one, so frame brightness on the occluded pixel is
     // strictly less than on the non-occluded pixel.
@@ -550,13 +543,13 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
       // pattern). buildEngineShaderManifest produces the data: URL the
       // renderer's shaderManifestUrl needs.
       const { World } = await import('@forgeax/engine-ecs');
-      const componentsModule = await import('@forgeax/engine-render/internal');
+      const componentsModule = await import('@forgeax/engine-render');
       const sceneComponents = await import('@forgeax/engine-scene');
       const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = componentsModule;
       const { Transform } = sceneComponents;
       const { PointLight } = componentsModule;
-      const { PointLightShadow } = await import('@forgeax/engine-render/internal');
-      const { createRenderer } = await import('../index');
+      const { PointLightShadow } = await import('@forgeax/engine-render');
+      const { constructRuntimeRendererHost } = await import('../renderer-host');
       const { HANDLE_CUBE } = await import('@forgeax/engine-assets-runtime');
       const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
       const manifest = await buildEngineShaderManifest();
@@ -620,16 +613,22 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
         removeEventListener() {},
       } as unknown as HTMLCanvasElement;
 
-      let renderer: Awaited<ReturnType<typeof createRenderer>>;
+      let host: Awaited<ReturnType<typeof constructRuntimeRendererHost>>;
       try {
-        renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: manifestUrl });
+        host = await constructRuntimeRendererHost(
+          mockCanvas,
+          {},
+          {
+            shaderManifestUrl: manifestUrl,
+          },
+        );
       } finally {
         globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
       }
-      expect(renderer.backend).toBe('webgpu');
-      const ready = await renderer.ready;
-      expect(ready.ok).toBe(true);
-      if (!ready.ok) return;
+      expect(host.ok).toBe(true);
+      if (!host.ok) throw host.error;
+      const { renderer } = host.value;
+      expect(renderer.inspect().state).toBe('alive');
       const device = sharedDevice;
       if (device === undefined) throw new Error('GPUDevice not captured');
 

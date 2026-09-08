@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -9,6 +9,12 @@ import jiti from 'jiti';
 import { chromium } from 'playwright';
 import UPNG from 'upng-js';
 import waitOn from 'wait-on';
+import {
+  aggregateVertexColorReportStatus,
+  readVertexColorVisualEvidenceInputs,
+  runVertexColorProducerSchedule,
+  vertexColorReportStatus,
+} from './color-lighting-vertex-producers.mjs';
 
 const root = resolve(new URL('..', import.meta.url).pathname, '..');
 const packageName = '@forgeax/parity-color-lighting';
@@ -51,6 +57,16 @@ const requiredWebkitCaseIds = [
   'direct-directional-urp',
   'transparent-ldr-urp',
 ];
+const vertexColorRequiredCaseIds = [
+  'vertex-color-vec3',
+  'vertex-color-vec4',
+  'vertex-color-normalized',
+  'vertex-color-skinning',
+  'vertex-color-mixed-primitives',
+  'vertex-color-mask-taa',
+  'vertex-color-no-color-baseline',
+];
+const vertexColorReportRoot = resolve(root, 'report/color-lighting-parity/vertex-color');
 const auxiliaryCaseIds = new Set([
   'ibl-constant-environment',
   'transparent-ldr-urp',
@@ -96,6 +112,70 @@ function producerArtifactPath(basePath, caseId) {
   return basePath.endsWith('.json')
     ? `${basePath.slice(0, -'.json'.length)}-${caseId}.json`
     : `${basePath}-${caseId}.json`;
+}
+
+function projectVertexColorReportStatuses() {
+  for (const caseId of vertexColorRequiredCaseIds) {
+    const statuses = [];
+    for (const backend of ['browser-webgpu', 'dawn']) {
+      const path = resolve(vertexColorReportRoot, backend, `${caseId}.json`);
+      let status = 'not-executed';
+      if (existsSync(path)) {
+        try {
+          status = vertexColorReportStatus(JSON.parse(readFileSync(path, 'utf8')));
+        } catch {
+          status = 'failed';
+        }
+      }
+      statuses.push(status);
+      caseBackendStatuses[caseId] = {
+        ...(caseBackendStatuses[caseId] ?? {}),
+        [backend]: status,
+      };
+    }
+    caseStatuses[caseId] = aggregateVertexColorReportStatus(statuses);
+  }
+}
+
+function requireVertexColorReports() {
+  projectVertexColorReportStatuses();
+  const missing = [];
+  const invalid = [];
+  for (const backend of ['browser-webgpu', 'dawn']) {
+    for (const caseId of vertexColorRequiredCaseIds) {
+      const path = resolve(vertexColorReportRoot, backend, `${caseId}.json`);
+      if (!existsSync(path)) {
+        missing.push(`${backend}/${caseId}`);
+        continue;
+      }
+      try {
+        const report = JSON.parse(readFileSync(path, 'utf8'));
+        if (
+          !validateCaseReportSchema(report) ||
+          report.kind !== 'vertex-color' ||
+          report.frameCount !== 300 ||
+          report.status !== 'complete' ||
+          report.verdict !== 'passed'
+        ) {
+          invalid.push(`${backend}/${caseId}`);
+        }
+      } catch {
+        invalid.push(`${backend}/${caseId}`);
+      }
+    }
+  }
+  if (missing.length > 0 || invalid.length > 0) {
+    throw new Error(
+      `vertex-color parity is fail-closed: missing=${missing.join(',') || 'none'} invalid=${invalid.join(',') || 'none'}`,
+    );
+  }
+}
+
+function currentSourceSha() {
+  return (
+    process.env.GITHUB_SHA ??
+    execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()
+  );
 }
 
 function run(command, args, env = process.env) {
@@ -559,6 +639,23 @@ let browser;
 try {
   applyWebkitStatus();
   await writeStatusIndex();
+  const vertexColorSchedule = await runVertexColorProducerSchedule({
+    root,
+    reportRoot: vertexColorReportRoot,
+    invocationId,
+    sourceSha: currentSourceSha(),
+  });
+  projectVertexColorReportStatuses();
+  if (!vertexColorSchedule.ok) {
+    throw new Error(
+      `vertex-color producer schedule is fail-closed: blocked=${vertexColorSchedule.blocked.length}/14; inspect ${resolve(vertexColorReportRoot, 'dispatch-receipt.json')}`,
+    );
+  }
+  const vertexColorVisualEvidenceInputs = readVertexColorVisualEvidenceInputs({
+    reportRoot: vertexColorReportRoot,
+    sourceSha: currentSourceSha(),
+    invocationId,
+  });
   server = await preview();
   await waitOn({ resources: [`http://127.0.0.1:${port}`], timeout: 30_000 });
   browser = await chromium.launch({
@@ -593,7 +690,10 @@ try {
   for (const caseId of auxiliaryCaseIds) {
     rmSync(resolve(reportDirectory, `${caseId}.json`), { force: true });
   }
-  const result = await page.evaluate((id) => window.__colorLightingParity?.(id), invocationId);
+  const result = await page.evaluate(
+    ({ id, vertexInputs }) => window.__colorLightingParity?.(id, vertexInputs),
+    { id: invocationId, vertexInputs: vertexColorVisualEvidenceInputs },
+  );
   mkdirSync(resolve(root, 'report'), { recursive: true });
   writeFileSync(browserReportPath, `${JSON.stringify(result, null, 2)}\n`);
   applyBrowserResult(result);
@@ -699,6 +799,7 @@ try {
       FORGEAX_PARITY_INVOCATION_ID: invocationId,
     },
   );
+  requireVertexColorReports();
   const finalStatusIndex = await writeStatusIndex();
   const exitCode = publicStatusModule.parityCommandExitCode({
     browserStageOk: result?.browserStageOk === true,

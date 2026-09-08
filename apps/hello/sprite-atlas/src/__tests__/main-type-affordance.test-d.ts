@@ -8,7 +8,7 @@
 // verifies the 6-field SpriteAnimation data shape and the 4-float
 // SpriteRegionOverride shape via vitest typecheck (expectTypeOf).
 
-import type { ShapeOf } from '@forgeax/engine-ecs';
+import type { SchemaOf, ShapeOf } from '@forgeax/engine-ecs';
 import { SpriteAnimation, SpriteRegionOverride } from '@forgeax/engine-render/authoring';
 import { describe, expectTypeOf, it } from 'vitest';
 
@@ -22,7 +22,7 @@ describe('SpriteAnimation — AC-08 type affordance', () => {
   });
 
   it('schema derives 6 fields 1:1 with requirements section 2.3', () => {
-    type AnimData = ShapeOf<typeof SpriteAnimation.schema>;
+    type AnimData = ShapeOf<SchemaOf<typeof SpriteAnimation>>;
     expectTypeOf<AnimData>().toHaveProperty('frameCount');
     expectTypeOf<AnimData>().toHaveProperty('frameDuration');
     expectTypeOf<AnimData>().toHaveProperty('currentFrame');
@@ -39,7 +39,7 @@ describe('SpriteRegionOverride — AC-08 type affordance', () => {
   });
 
   it('schema derives 1 field: region', () => {
-    type SroData = ShapeOf<typeof SpriteRegionOverride.schema>;
+    type SroData = ShapeOf<SchemaOf<typeof SpriteRegionOverride>>;
     expectTypeOf<SroData>().toHaveProperty('region');
   });
 });

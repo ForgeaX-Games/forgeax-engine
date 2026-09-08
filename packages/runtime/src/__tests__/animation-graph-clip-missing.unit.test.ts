@@ -18,7 +18,6 @@ import {
 } from '@forgeax/engine-animation';
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
-import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
 interface StructuredError {
@@ -30,11 +29,10 @@ describe('evaluateAnimationGraph — clip-missing structured error (M3 / w22)', 
   it('throws animation-asset-not-found and writes no dirty pose', () => {
     const world = new World();
 
-    // A clip handle that was never registered (slot >= BUILTIN_BASE, so it
-    // routes through the SharedRefStore and resolves stale). Construction only
-    // validates topology, so a single-clip graph with a dangling handle is a
+    // A durable clip GUID that was never loaded. Construction only validates
+    // topology, so a single-clip graph with a dangling GUID is a
     // well-formed DAG that fails at evaluation, not at build.
-    const danglingClip = toShared<'AnimationClip'>(50000);
+    const danglingClip = 'test/dangling-animation-clip';
     const built = defineAnimationGraph((b) => b.clip(danglingClip));
     expect(built.ok).toBe(true);
     if (!built.ok) return;

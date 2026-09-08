@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // bevy-run-conditions headless Dawn smoke.
 // Proves the set-level gate stays closed before the time threshold, then opens;
 // the system-level pulse condition fires exactly once after the gate opens.
@@ -87,28 +88,23 @@ const manifestUrl = `data:application/json,${encodeURIComponent(readFileSync(man
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: manifestUrl });
+  renderer = await createSmokeRenderer(createRenderer, mockCanvas, {}, { shaderManifestUrl: manifestUrl });
 } catch (error) {
   console.error(`[smoke] FAIL - createRenderer threw: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
 } finally {
   globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 }
-console.log(`[bevy-run-conditions] backend=${renderer.backend}`);
+console.log(`[bevy-run-conditions] backend=${rendererBackend(renderer)}`);
 
 const errors = [];
-renderer.onError((error) => errors.push({ code: error.code, hint: error.hint }));
-const ready = await renderer.ready;
-if (!ready.ok) {
-  console.error(`[smoke] FAIL - renderer.ready: ${ready.error.code}`);
-  process.exit(1);
-}
+subscribeSmokeErrors(renderer, (error) => errors.push({ code: error.code, hint: error.hint }));
 
 const { buildRunConditionsWorld, readRunConditionState, UNLOCK_SECONDS } = await import(
   resolve(here, '..', 'src', 'run-conditions.ts'),
 );
 const world = new World();
-const worldAttachment1 = renderer.attachWorld(world);
+const worldAttachment1 = renderer.attach(world);
 if (!worldAttachment1.ok) throw worldAttachment1.error;
 const state = buildRunConditionsWorld(world);
 let earlyFrame;
@@ -139,7 +135,7 @@ async function capture() {
 
 for (let frame = 0; frame < FRAMES; frame++) {
   world.update(0.016).unwrap();
-  const draw = renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  const draw = drawSmokeFrame(renderer, world);
   if (!draw.ok) console.error(`[smoke] draw frame ${frame} error: ${draw.error.code}`);
   if (frame === 60) {
     beforeUnlock = readRunConditionState(world, state);
@@ -182,7 +178,7 @@ try {
 }
 
 const failures = [];
-if (renderer.backend !== 'webgpu') failures.push(`backend=${renderer.backend}`);
+if (rendererBackend(renderer) !== 'webgpu') failures.push(`backend=${rendererBackend(renderer)}`);
 if (!beforeUnlock || beforeUnlock.unlocked || beforeUnlock.gatedRuns !== 0 || beforeUnlock.skippedFrames === 0) {
   failures.push(`gate-opened-too-early=${JSON.stringify(beforeUnlock)}`);
 }

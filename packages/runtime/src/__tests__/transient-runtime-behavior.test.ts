@@ -22,7 +22,7 @@ import type { Asset } from '@forgeax/engine-assets-runtime';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { SceneInstance } from '@forgeax/engine-render/internal';
+import { SceneInstance } from '@forgeax/engine-render';
 import { ChildOf, Children, Transform } from '@forgeax/engine-scene';
 import type { Handle, LocalEntityId, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
@@ -31,6 +31,14 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function makeRegistry(): AssetRegistry {
   return new AssetRegistry(makeMockShaderRegistry());
+}
+
+function makeWorld(): World {
+  const world = new World();
+  for (const component of [Transform, ChildOf, Children, SceneInstance]) {
+    world.components.register(component).unwrap();
+  }
+  return world;
 }
 
 function localId(n: number): LocalEntityId {
@@ -49,7 +57,7 @@ function rs(w: World, a: SceneAsset): Handle<'SceneAsset', 'shared'> {
 
 describe('m3t2 — transient runtime behavior (AC-07)', () => {
   it('(a) world.get Children ok after rootsToSceneAsset', () => {
-    const world = new World();
+    const world = makeWorld();
     const reg = makeRegistry();
 
     // Build a hierarchy: parent -> child via ChildOf. Mirror hook populates Children.
@@ -87,7 +95,7 @@ describe('m3t2 — transient runtime behavior (AC-07)', () => {
   });
 
   it('(b) query with Children still matches entity after collect', () => {
-    const world = new World();
+    const world = makeWorld();
     const reg = makeRegistry();
 
     const parent = world.spawn({ component: Transform, data: {} }).unwrap();
@@ -121,7 +129,7 @@ describe('m3t2 — transient runtime behavior (AC-07)', () => {
   });
 
   it('(c) world.get SceneInstance ok after collect', () => {
-    const world = new World();
+    const world = makeWorld();
     const reg = makeRegistry();
 
     const child: SceneAsset = {
@@ -147,7 +155,7 @@ describe('m3t2 — transient runtime behavior (AC-07)', () => {
   });
 
   it('(d) collect is non-mutating: Children pre/post equals', () => {
-    const world = new World();
+    const world = makeWorld();
     const reg = makeRegistry();
 
     const parent = world.spawn({ component: Transform, data: {} }).unwrap();
@@ -179,7 +187,7 @@ describe('m3t2 — transient runtime behavior (AC-07)', () => {
   });
 
   it('(e) instantiateScene of Children-absent SceneAsset → mirror hook populates Children', () => {
-    const world = new World();
+    const world = makeWorld();
     const reg = makeRegistry();
 
     // Build a minimal SceneAsset: parent entity at localId 0 + child entity at

@@ -30,11 +30,3 @@ export const materialReflectionFixture = {
     vertexInputs: [{ location: 0, type: 'vec3<f32>' }],
   },
 } as const;
-
-export const materialReflectionMismatchFixture = {
-  ...materialReflectionFixture,
-  reflection: {
-    ...materialReflectionFixture.reflection,
-    uniformFields: [{ name: 'roughness', type: 'vec4<f32>', offset: 0 }],
-  },
-} as const;

@@ -1,4 +1,6 @@
+import { configureRuntimeAssetCatalog, createRuntimeAssetImportTransport, runtimeBinding } from '@forgeax/apps-shared/asset-runtime-config';
 import { Update } from '@forgeax/engine-ecs';
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 // hello-skin -- Fox.glb + AnimationPlayer demo. Three clips (Survey / Walk /
 // Run) are sub-assets of the same gltf. Five keystroke paths exercise the
 // variable N-way SoA schema (clips/times/weights/speeds variable arrays +
@@ -33,25 +35,25 @@ import { Update } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
 import { ENTITY_NULL_RAW, type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { Skin } from '@forgeax/engine-skinning';
+import { Skin, skinningPlugin } from '@forgeax/engine-skinning';
 
 import {
   AnimationPlayer,
   AnimationTargetId,
   bindAnimationTargets,
+  subscribeAnimationDiagnostics,
 } from '@forgeax/engine-animation';
 
 import { ChildOf, Transform } from '@forgeax/engine-scene';
 
 import { Camera, DirectionalLight } from '@forgeax/engine-render';
 import { perspective } from '@forgeax/engine-render';
-import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { SceneInstance } from '@forgeax/engine-render';
 
-import type { AnimationClip, Handle, SceneAsset } from '@forgeax/engine-types';
+import { type AnimationClip, type Handle, type SceneAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
-const PACK_INDEX_URL = '/pack-index.json';
 const FOX_SCENE_GUID = '019eb2ce-6232-74a0-8da7-00be6d2f8774';
 
 // Three clips authored in Fox.glb; emitted as separate animation-clip
@@ -80,10 +82,13 @@ bootstrap(canvas).catch((err: unknown) => {
 });
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
+  const bundler = import.meta.env.DEV
+    ? { ...forgeaxBundlerAdapter(), importTransport: createRuntimeAssetImportTransport(runtimeBinding) }
+    : forgeaxBundlerAdapter();
   const appRes = await createApp(
     target,
-    {},
-    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+    { plugins: [skinningPlugin()] },
+    bundler,
   );
   if (!appRes.ok) {
     console.error('[skin] createApp failed:', appRes.error);
@@ -91,15 +96,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
   const app = appRes.value;
   const world: World = app.world;
-  const renderer = app.renderer;
-  console.warn(`[skin] backend=${renderer.backend}`);
+  console.warn('[skin] Standard pipeline active');
 
-  const assets = renderer.assets;
+  const assets = app.assets;
+  if (assets === undefined) {
+    console.error('[hello-skin] asset owner unavailable');
+    return;
+  }
   if (assets === null) {
     console.error('[skin] AssetRegistry is null');
     return;
   }
-  assets.configurePackIndex(PACK_INDEX_URL);
+  configureRuntimeAssetCatalog(assets, runtimeBinding);
 
   // Resolve scene + every clip GUID up front so swapping is just a Handle
   // assignment in the toggle system (no async in the per-frame path).
@@ -300,7 +308,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     after: ['input-frame-start-scan'],
     queries: [],
     fn: () => {
-      const snap = app.renderer.input.snapshot(world);
+      const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (snap === undefined) return;
 
       // Digit press-edges 1..3: hard-cut to the picked clip + reset phase.
@@ -368,7 +376,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     after: ['input-frame-start-scan'],
     queries: [],
     fn: () => {
-      const snap = app.renderer.input.snapshot(world);
+      const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (snap === undefined) return;
 
       // Press-edge 4: arm a Walk -> Run linear crossfade. Slot 0 = Walk,
@@ -443,6 +451,86 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
 
   refreshHud();
+
+  // M22 browser front door: opt-in same-page invalid-binding recovery probe.
+  // The package integration gate proves sibling continuation; this hook keeps
+  // the real App/World/page repair journey executable from Chrome without
+  // making the normal demo depend on a test-only global.
+  if (new URLSearchParams(window.location.search).has('m22-recovery')) {
+    const probeTarget = animationTargets.find((entity) => {
+      const id = world.get(entity, AnimationTargetId);
+      return id.ok;
+    });
+    const probeId = probeTarget === undefined
+      ? undefined
+      : world.get(probeTarget, AnimationTargetId).unwrap().value;
+    const probe = async (): Promise<Record<string, unknown>> => {
+      if (probeTarget === undefined || probeId === undefined) {
+        return { ok: false, error: 'no animation target available' };
+      }
+      const diagnostics: unknown[] = [];
+      const unsubscribe = subscribeAnimationDiagnostics((source, diagnostic) => {
+        if (source === world) diagnostics.push(diagnostic);
+      });
+      const waitFrames = async (count: number): Promise<void> => {
+        for (let i = 0; i < count; i++) {
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        }
+      };
+      const pose = (): Record<string, unknown> => {
+        const transform = world.get(probeTarget, Transform);
+        if (!transform.ok) return { state: 'missing' };
+        return {
+          pos: [...transform.value.pos],
+          quat: [...transform.value.quat],
+          scale: [...transform.value.scale],
+        };
+      };
+      await waitFrames(3);
+      const baseline = pose();
+      world.set(probeTarget, AnimationTargetId, { value: 'f'.repeat(32) });
+      await waitFrames(3);
+      const fault = pose();
+      const diagnosticsBeforeRepair = diagnostics.length;
+      world.set(probeTarget, AnimationTargetId, { value: probeId });
+      await waitFrames(3);
+      const repaired = pose();
+      const diagnosticsAfterRepair = diagnostics.length;
+      const faultDiagnostic = diagnostics.find(
+        (diagnostic) =>
+          typeof diagnostic === 'object' &&
+          diagnostic !== null &&
+          (diagnostic as { code?: string }).code === 'animation-target-missing',
+      );
+      const unchangedDuringFault = JSON.stringify(baseline) === JSON.stringify(fault);
+      const advancedAfterRepair = JSON.stringify(fault) !== JSON.stringify(repaired);
+      unsubscribe();
+      unsubscribe();
+      return {
+        ok:
+          faultDiagnostic !== undefined &&
+          unchangedDuringFault &&
+          advancedAfterRepair &&
+          diagnosticsAfterRepair === diagnosticsBeforeRepair,
+        target: Number(probeTarget),
+        authoredTargetId: probeId,
+        diagnostic: faultDiagnostic ?? null,
+        baseline,
+        fault,
+        repaired,
+        unchangedDuringFault,
+        advancedAfterRepair,
+        diagnosticsBeforeRepair,
+        diagnosticsAfterRepair,
+      };
+    };
+    const globals = globalThis as typeof globalThis & {
+      __forgeaxM22Recovery?: () => Promise<Record<string, unknown>>;
+      __forgeaxM22RecoveryReady?: boolean;
+    };
+    globals.__forgeaxM22Recovery = probe;
+    globals.__forgeaxM22RecoveryReady = true;
+  }
   app.start();
 }
 

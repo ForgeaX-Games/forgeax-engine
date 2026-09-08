@@ -34,14 +34,14 @@
 //     skin animator integration is OOS-3 of feat-20260611. This test
 //     cares only about BGL shape + buffer-binding contract.
 
+import type { BindGroupLayout, PipelineLayout, RhiError } from '@forgeax/engine-rhi';
+import { ok, type Result } from '@forgeax/engine-rhi';
+import { describe, expect, it } from 'vitest';
 import {
   buildPbrPipelineLayouts,
   buildPbrSkinLayouts,
   type PbrPipelineDevice,
-} from '@forgeax/engine-render/internal';
-import type { BindGroupLayout, PipelineLayout, RhiError } from '@forgeax/engine-rhi';
-import { ok, type Result } from '@forgeax/engine-rhi';
-import { describe, expect, it } from 'vitest';
+} from '../../../render/src/pbr-pipeline';
 
 interface CapturedBglDesc {
   readonly label: string | undefined;
@@ -65,7 +65,7 @@ function makeMockDevice(): { device: PbrPipelineDevice; capture: MockDeviceCaptu
   const bglByHandle = new Map<BindGroupLayout, CapturedBglDesc>();
   const device: PbrPipelineDevice = {
     createBindGroupLayout(desc): Result<BindGroupLayout, RhiError> {
-      const captured: CapturedBglDesc = { label: desc.label, entries: desc.entries };
+      const captured: CapturedBglDesc = { label: desc.label, entries: desc.entries ?? [] };
       bgls.push(captured);
       // Each call returns a fresh opaque handle; using a plain object lets us
       // reference-compare layouts later (the assertion at (2) needs handle
@@ -75,7 +75,7 @@ function makeMockDevice(): { device: PbrPipelineDevice; capture: MockDeviceCaptu
       return ok(handle);
     },
     createPipelineLayout(desc): Result<PipelineLayout, RhiError> {
-      pipelineLayouts.push({ label: desc.label, bindGroupLayouts: desc.bindGroupLayouts });
+      pipelineLayouts.push({ label: desc.label, bindGroupLayouts: [...desc.bindGroupLayouts] });
       return ok({} as PipelineLayout);
     },
   };

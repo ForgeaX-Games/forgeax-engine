@@ -1,23 +1,68 @@
-import type {
-  HealthChangeListener,
-  HealthReason,
-  HealthSnapshot,
-  RendererError,
-  RendererErrorListener,
-  RendererLostInfo,
-  RendererLostListener,
-} from './renderer';
+import type { AssetRuntimeError } from '@forgeax/engine-assets-runtime';
+import type { RenderGraphError } from '@forgeax/engine-render-graph';
+import type { RhiError } from '@forgeax/engine-rhi';
+import type { SkinError } from '@forgeax/engine-skinning';
+import type { ImageError } from '@forgeax/engine-types';
+import type { RenderError } from './errors/render';
+import type { PostProcessError } from './post-process-errors';
 
-export function deriveRecoverable(reason: HealthReason): boolean {
-  switch (reason) {
-    case 'alive':
-      return false;
-    case 'device-lost':
-      return true;
-    case 'internal-fault':
-      return false;
-  }
+export interface RendererLostInfo {
+  readonly reason: string;
+  readonly message: string;
 }
+
+export type RendererLostListener = (info: RendererLostInfo) => void;
+
+export type RendererError =
+  | RhiError
+  | RenderGraphError
+  | ImageError
+  | RenderError
+  | AssetRuntimeError
+  | SkinError
+  | PostProcessError;
+
+export type RendererErrorListener = (error: RendererError) => void;
+
+export type HealthReason = 'alive' | 'device-lost' | 'internal-fault';
+
+export interface HealthDetailDeviceLost {
+  readonly lostReason: 'unknown' | 'destroyed';
+  readonly message: string;
+}
+
+export interface HealthDetailInternalFault {
+  readonly message: string;
+}
+
+export type HealthSnapshot =
+  | { readonly reason: 'alive'; readonly recoverable: boolean }
+  | {
+      readonly reason: 'device-lost';
+      readonly detail: HealthDetailDeviceLost;
+      readonly recoverable: boolean;
+    }
+  | {
+      readonly reason: 'internal-fault';
+      readonly detail: HealthDetailInternalFault;
+      readonly recoverable: boolean;
+    };
+
+export type HealthChangeListener = (snapshot: HealthSnapshot) => void;
+
+export {
+  DEVICE_RESOURCE_KINDS,
+  type DeviceResourceKind,
+  DeviceResourceRef,
+  DeviceScope,
+  type DeviceScopeReceipt,
+  type DeviceScopeState,
+  type LifecycleFailure,
+  type LifecycleResourceSpec,
+  type LifecycleResult,
+  LifecycleTransaction,
+  type ResourceRef,
+} from './device/device-scope';
 
 export class LostListenerRegistry {
   private readonly listeners = new Set<RendererLostListener>();

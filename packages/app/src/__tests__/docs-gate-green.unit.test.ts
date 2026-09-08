@@ -1,3 +1,5 @@
+// @perf-budget-skip: intentional documentation subprocess gate.
+
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';

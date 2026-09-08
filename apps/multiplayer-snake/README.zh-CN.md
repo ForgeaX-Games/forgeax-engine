@@ -65,12 +65,103 @@ http://localhost:5173/?server=ws://localhost:8787
 pnpm --filter @forgeax/multiplayer-snake e2e:browser
 ```
 
+运行真实 socket 进程证明，覆盖同一 session 重连和新 epoch resync：
+
+```bash
+pnpm --filter @forgeax/multiplayer-snake test:process-e2e
+```
+
 运行单元测试和集成测试：
 
 ```bash
 pnpm --filter @forgeax/multiplayer-snake test
 pnpm --filter @forgeax/multiplayer-snake typecheck
 ```
+
+### M17 真实 WebSocket chaos gauntlet
+
+`gauntlet` 命令是重连 chaos 的验收 driver。它让公开的 Node 和浏览器 WebSocket client
+通过有界 TCP `ws` proxy 运行；不会注入 `MemoryEndpoint`，也不会在 app 中添加 retry policy。
+正向矩阵完整重复三次，并覆盖以下控制：
+
+| 控制 | 必须证明 |
+|:--|:--|
+| `disconnect` | 同一个逻辑 session 通过 replacement peer 恢复。 |
+| `duplicate` | 重复 baseline 不会复制已接受的 replica identity。 |
+| `out-of-order` | fresh baseline 后到达的旧 epoch baseline 会被安全忽略。 |
+| `delayed-delivery` | 第一个 delta 固定延迟 40 ms，仍然可以收敛。 |
+| `late-join` | 新 peer 在接收 delta 前先接受 sequence-one baseline。 |
+
+运行：
+
+```bash
+pnpm --filter @forgeax/multiplayer-snake gauntlet
+```
+
+每个控制都有一个具名 sabotage。gauntlet 要求每个 sabotage 只让自己的 invariant 失败，
+并把子进程输出写入 artifact 目录：
+
+```text
+m17-disconnect-recovery
+m17-duplicate-exactly-once
+m17-out-of-order-baseline
+m17-delayed-delivery
+m17-late-join-baseline
+```
+
+进程证明会记录 fresh epoch 的 packet 顺序、重复 wire identity、收敛、ACK/retry 上限与排空，
+以及 authority/client/proxy 资源清理。浏览器证明还要求恢复后的交互和由 authority 派生的
+可见 roster。`M17_CHAOS_MODE=all` 是正向模式；`M17_SABOTAGE=<name>` 只用于具名负向案例。
+
+## 恢复所有者与浏览器证据
+
+`@forgeax/engine-net` 是 application session recovery 的唯一 owner。`NetSession` 负责逻辑
+session、endpoint 替换、有界 ACK/retry 记账、epoch/sequence 门控和终态清理。
+`@forgeax/engine-net-websocket` 只提供浏览器/Node endpoint 与 connector 机制。本 app 负责
+Snake 命令和表现层；它不负责重连 socket、保留 ACK ledger，也不会把 socket-open 当作 authority。
+
+| 身份或状态 | 本 demo 中的含义 |
+|:--|:--|
+| `SessionId` | 替换 socket 后仍保持不变的逻辑 application identity。 |
+| `PeerId` | transport attachment identity；socket 替换后可以变化，不能用来标识玩家。 |
+| `recovering` / `resyncing` | 旧 projection 被冻结；只有接受新的 authority baseline 后才允许继续发送命令。 |
+| `active` | 当前 epoch 和有序 projection 已接受，可以发送命令。 |
+| `baseline` | `sequence: 1` 的完整 authority projection；每个新 epoch 的第一个 data packet。 |
+| `delta` | 只有该 epoch 的 baseline 接受后才能发布的有序 projection。 |
+
+公开的恢复旅程是 `recover()` → `recovering` → replacement endpoint → `resyncing` →
+新的 protocol-v2 baseline → `active`。`getRecoverySnapshot()` 是观测面。客户端只在
+`active` 时调用 `sendToAuthority(sessionId, bytes)`；恢复期间的结构化失败是预期行为，不能
+另造 app-local queue 或 retry loop。`dispose()` 会让 session 进入 retired，并清理 endpoint、
+timer、pending connect、ledger 和 callback。
+
+```ts
+const beforeLoss = session.getRecoverySnapshot();
+if (beforeLoss.state.kind === 'active')
+  session.sendToAuthority(beforeLoss.sessionId, directionCommand);
+
+const outcome = session.recover();
+// 持续观察 getRecoverySnapshot()，直到同一个 SessionId 再次 active。
+```
+
+浏览器证明会把结构化 trace、visual report 和 PNG 产物写入
+`.forgeax-harness/forgeax-loop/feat-20260826-m16-network-reconnect-resync-protocol/artifacts/browser-reconnect/`。
+视觉 target 是 `multiplayer-snake-reconnect`，包含两个 expectation：
+
+- `authority-derived-convergence`：resync 后画布显示 authority 派生的 roster，没有陈旧或重复的复制 entity；
+- `continued-browser-operation`：fresh baseline 后渲染和输入仍然继续，不会冻结或变成空白。
+
+两个刻意制造的视觉 falsifier 也属于必须保留的证据：
+
+```bash
+SNAKE_SABOTAGE=visual-hide-body pnpm --filter @forgeax/multiplayer-snake e2e:browser
+SNAKE_SABOTAGE=freeze-after-recover pnpm --filter @forgeax/multiplayer-snake e2e:browser
+```
+
+第一个必须让 `authority-derived-convergence` 失败，第二个必须让
+`continued-browser-operation` 失败。结构化 recovery trace 仍必须显示
+`recovering` → `resyncing` → `active`、sequence 1 的新 epoch baseline、baseline 前被拒绝的
+输入、恢复后的交互，以及 dispose 后为零的资源。
 
 ## 引擎和游戏：边界在哪里
 
@@ -115,8 +206,8 @@ flowchart TB
 |:--|:--|:--|
 | `engine-app` | 创建 app，并驱动 `Update` / `FixedUpdate` 和渲染 | 帧循环、delta 处理、renderer 生命周期和结构化 app 错误 |
 | `engine-ecs` | 在 `World` 中存储 `Snake`、`GridPosition`、`SnakeBody`、`SnakeSession` | schema 定义的 entity、system、resource、调度、spawn/despawn 和类型化 component 访问 |
-| `engine-net` | 服务端挂载 authority，浏览器挂载 replica | peer 身份、命令/消息队列、复制 profile、baseline、delta、snapshot 和 entity 引用重映射 |
-| `engine-net-websocket` | 连接浏览器和 Node authority | WebSocket 生命周期、二进制帧、浏览器 client endpoint 和 Node listener |
+| `engine-net` | 服务端挂载 authority，浏览器挂载 replica | `NetSession` 恢复所有权、稳定的 `SessionId`、transport `PeerId` 映射、有界 ACK/retry 记账、protocol-v2 baseline/delta、snapshot 和 entity 引用重映射 |
+| `engine-net-websocket` | 连接浏览器和 Node authority | WebSocket endpoint/connector 机制、二进制帧、浏览器 client endpoint 和 Node listener；不拥有 application recovery policy |
 | `engine-runtime` | 渲染 cube、material、camera 和 transform | 相机/渲染提取、mesh/material 资源、render graph 执行和 WebGPU backend 集成 |
 | `engine-types` | 提供共享的 `Result` 风格契约和类型化失败 | 跨 package 的 POD 类型和显式成功/失败处理 |
 
@@ -130,13 +221,14 @@ flowchart TB
 | 复制数据选择 | [`src/shared/components.ts`](src/shared/components.ts) | 引擎可以复制一个 profile，但由游戏决定哪些 component 描述一局 Snake |
 | Authority 到 ECS 的投影 | [`src/server.ts`](src/server.ts) | 把普通 `SnakeState` 映射为蛇头、segment、食物和 session entity 是游戏逻辑 |
 | 表现层 | [`src/client.ts`](src/client.ts)、[`index.html`](index.html) | 玩家颜色、边界、HUD 文案、键盘映射和网格坐标转换都是产品决策 |
-| 证明场景 | [`src/__tests__/`](src/__tests__/) 和 [`scripts/`](scripts/) | join、增长、死亡、迟加入和断线是本游戏的验收场景 |
+| 证明场景 | [`src/__tests__/`](src/__tests__/) 和 [`scripts/`](scripts/) | join、增长、死亡、迟加入、断线、重连/resync 和视觉 falsifier 是本游戏的验收场景 |
 
 ### 如何判断修改属于哪一边
 
 可以问一句：**另一种完全不同的游戏能否复用这段代码，同时完全不知道 Snake 的存在？**
 
 - 如果可以，它应该属于引擎 package 或引擎 adapter。例如 `createReplicaCoordinator()` 可以复制任意 profile，`connectWebSocketClientEndpoint()` 也不知道 payload 代表“向左转”。
+- 恢复状态、ACK/retry 边界、epoch/baseline 接纳以及 `SessionId`/`PeerId` 映射属于 `@forgeax/engine-net`；WebSocket adapter 只提供 endpoint 机制。
 - 如果不可以，它就属于这个 demo。例如 `isOpposite()`、`spawnFood()`、`initialSnakeCells()`、`playerNetworkId % 2` 和 `gridToWorldPosition()` 都编码了 Snake 或本 demo 的表现选择。
 
 边界也可以从数据流看出来：
@@ -306,6 +398,11 @@ $$
 
 游戏开始后新 peer 加入时，authority 会发送包含当前已接纳 roster 的 full baseline。新 replica 先重建同一批蛇和重映射后的身体引用，再继续接收后续 delta。断线清理会同时删除 authority 侧的蛇，以及复制到客户端的蛇头和身体 segment entity。
 
+已有客户端丢失 socket 时，同一个逻辑 `SessionId` 会保留，而替换后的 attachment 会得到新的
+`PeerId`。replica 保持冻结且非权威，直到 authority 为新 epoch 发送 `sequence: 1` 的完整
+baseline；之后的 publication cycle 才能发送 delta。baseline 之前的命令由 `NetSession` 拒绝，
+Snake client 不需要再维护第二套恢复生命周期。
+
 ## 源码索引
 
 | 关注点 | SSOT |
@@ -328,8 +425,9 @@ $$
 | `server-integration.test.ts` | authority 生命周期、fixed tick、接纳、投影和断线行为 |
 | `convergence.test.ts` | 身体引用重映射、full baseline 和 replica 收敛 |
 | `write-contract.test.ts` | replica 只读写入和本地渲染实体派生 |
-| `process-e2e.test.ts` | 真实 WebSocket 客户端覆盖 join、增长、死亡、重生、迟加入和断线 |
-| `e2e:browser` | Vite + Chrome/WebGPU 生命周期及渲染实体数量证据 |
+| `process-e2e.test.ts` | 真实 WebSocket 客户端覆盖 join、增长、死亡、重生、迟加入、断线、同 session 重连、新 epoch baseline、chaos 控制、ACK drain 和清理 |
+| `gauntlet` | 三次重复的 Node/浏览器真实 WebSocket chaos 矩阵，以及五个具名控制 sabotage |
+| `e2e:browser` | Vite + Chrome/WebGPU 重连旅程、结构化生命周期 trace、`multiplayer-snake-reconnect` 视觉 target 和恢复后的实体数量证据 |
 
 > [!NOTE]
 > 浏览器 e2e 支持用 `SNAKE_SABOTAGE=visual-hide-body` 做视觉反证。如果禁用身体渲染，网络 replica 仍可能正确，但渲染实体数量断言会失败。这样网络正确性和表现正确性就保持为两个独立、可测试的契约。

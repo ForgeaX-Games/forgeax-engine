@@ -11,6 +11,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs"
     },
+    "./internal": {
+      "types": "./dist/internal.d.ts",
+      "import": "./dist/internal.mjs"
+    },
     "./package.json": "./package.json"
   },
   "main": "./dist/index.mjs",
@@ -32,7 +36,9 @@
     "@forgeax/engine-graphics-extras": "workspace:*",
     "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
+    "@forgeax/engine-plugin": "workspace:*",
     "@forgeax/engine-rhi": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-ui": "workspace:*",

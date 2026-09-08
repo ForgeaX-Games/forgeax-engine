@@ -8,8 +8,7 @@ function noWorkFeature(identity: string): RenderFeature<{ readonly empty: true }
   return {
     identity,
     extract: () => ok({ empty: true }),
-    prepare: () => ok(undefined),
-    contribute: () => ok(undefined),
+    plan: () => ok({ resources: [], passes: [] }),
   };
 }
 
@@ -17,8 +16,7 @@ function failedFeature(identity: string): RenderFeature<{ readonly empty: true }
   return {
     identity,
     extract: () => err(new RenderFeatureStageFailedError(identity, 0, 'extract', 'next-frame')),
-    prepare: () => ok(undefined),
-    contribute: () => ok(undefined),
+    plan: () => ok({ resources: [], passes: [] }),
   };
 }
 
@@ -32,12 +30,12 @@ describe('render feature zero-work boundaries', () => {
       caps: {} as never,
     });
 
-    expect(result.events).toEqual([]);
+    expect(result.stageEvents).toEqual([]);
     expect(result.errors).toEqual([]);
-    expect(result.contributions).toEqual([]);
+    expect(result.plans).toEqual([]);
   });
 
-  it('keeps empty data and zero-pass features out of the contribution list', () => {
+  it('keeps empty data and zero-pass features as an empty plan', () => {
     const host = createRenderFeatureHost([noWorkFeature('synthetic.empty')]).unwrap();
     const result = runRenderFeatureFrame(host, {
       worlds: [],
@@ -47,12 +45,11 @@ describe('render feature zero-work boundaries', () => {
     });
 
     expect(result.errors).toEqual([]);
-    expect(result.contributions).toEqual([]);
-    expect(result.events).toEqual([
-      'synthetic.empty:extract',
-      'synthetic.empty:prepare',
-      'synthetic.empty:contribute',
-    ]);
+    expect(result.plans).toHaveLength(1);
+    expect(result.plans[0]?.plan).toEqual({ resources: [], passes: [] });
+    expect(
+      result.stageEvents.map(({ featureIdentity, stage }) => `${featureIdentity}:${stage}`),
+    ).toEqual(['synthetic.empty:extract', 'synthetic.empty:plan']);
   });
 
   it('does not remove healthy work when one feature fails or is disabled', () => {
@@ -71,12 +68,9 @@ describe('render feature zero-work boundaries', () => {
     });
 
     expect(result.errors).toHaveLength(1);
-    expect(result.events).toEqual([
-      'synthetic.failed:extract',
-      'synthetic.healthy:extract',
-      'synthetic.healthy:prepare',
-      'synthetic.healthy:contribute',
-    ]);
-    expect(result.contributions).toEqual([]);
+    expect(
+      result.stageEvents.map(({ featureIdentity, stage }) => `${featureIdentity}:${stage}`),
+    ).toEqual(['synthetic.failed:extract', 'synthetic.healthy:extract', 'synthetic.healthy:plan']);
+    expect(result.plans).toHaveLength(1);
   });
 });

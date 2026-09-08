@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Bevy window/screenshot example: plane + cube + PointLight + camera, Space saves a screenshot via renderer.readPixels().",
+  "description": "Bevy window/screenshot example: plane + cube + PointLight + camera, Space captures the host canvas.",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
