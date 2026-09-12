@@ -5,7 +5,12 @@ import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { BUILTIN_MESH_ASSETS } from '@forgeax/engine-pack/builtin';
 import { describe, expect, it } from 'vitest';
-import { createViteConfig, devKitDdcRoots, ignoreDevKitCatalogPath } from '../host.js';
+import {
+  createViteConfig,
+  devKitDdcRoots,
+  findInstalledEnginePackageRoot,
+  ignoreDevKitCatalogPath,
+} from '../host.js';
 import { readProjectFacts } from '../project.js';
 
 type PackContext = {
@@ -38,6 +43,19 @@ describe('standalone host', () => {
       buildCacheRoot: resolve('/workspace/game', '.forgeax/ddc/build-cache'),
       projectDdcRoot: resolve('/workspace/game', '.forgeax/ddc/v2'),
     });
+  });
+
+  it('finds the packaged desktop Engine dependency closure', () => {
+    const packageRoot = resolve(
+      tmpdir(),
+      'forgeax-studio',
+      'resources',
+      'engine',
+      'node_modules',
+      '@forgeax',
+    );
+    expect(findInstalledEnginePackageRoot(resolve(packageRoot, 'engine-devkit', 'dist'))).toBe(packageRoot);
+    expect(findInstalledEnginePackageRoot(resolve(tmpdir(), 'forgeax-studio', 'resources', 'engine'))).toBeUndefined();
   });
 
   it('resolves Engine workspace packages for external projects without installed links', async () => {

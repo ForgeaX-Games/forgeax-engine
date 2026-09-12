@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import {
   buildCatalogResult,
@@ -6,7 +7,6 @@ import {
 } from '@forgeax/engine-import';
 import {
   type CatalogProducerVisibility,
-  metaPathForGuid,
   STANDARD_SCRIPTABLE_PACK_SCAN_OPTIONS,
 } from '@forgeax/engine-pack/build';
 import type { PackIndexEntry, RuntimeAssetBinding } from '@forgeax/engine-types';
@@ -23,6 +23,7 @@ import type {
   PluginServerProjectionState,
   PluginServerRouteCallbacks,
   PluginServerState,
+  RebuildAssetOptions,
 } from './plugin-server.js';
 
 type CatalogInventory = Awaited<ReturnType<typeof buildCatalogResult>>;
@@ -41,6 +42,27 @@ function projectAcceptedEntries(
     accepted.map((entry) => [entry.guid.toLowerCase(), entry] as const),
   );
   return raw.map((entry) => acceptedByGuid.get(entry.guid.toLowerCase()) ?? entry);
+}
+
+/** Map a browser/catalog source key (host-games/...) to an on-disk scan path. */
+function resolveCatalogSourceKeyForScan(
+  catalogSourceKey: string,
+  scanRoots: readonly string[],
+): string {
+  const normalized = catalogSourceKey.replace(/\\/g, '/');
+  for (const root of scanRoots) {
+    const rootNorm = root.replace(/\\/g, '/');
+    const hostGamesMarker = '/host-games/';
+    const idx = rootNorm.indexOf(hostGamesMarker);
+    if (idx >= 0) {
+      const viteRoot = rootNorm.slice(0, idx);
+      const candidate = resolve(viteRoot, normalized);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  const cwdCandidate = resolve(process.cwd(), normalized);
+  if (existsSync(cwdCandidate)) return cwdCandidate;
+  return cwdCandidate;
 }
 
 function declarationsForInventory(inventory: CatalogInventory): readonly ProductionDeclaration[] {
@@ -318,25 +340,30 @@ export function createProductionRouteBridge(
         signal,
       );
     },
-    rebuildAsset: (guid, signal) => {
-      const task = (async (): Promise<readonly PackIndexEntry[]> => {
-        let result = await activeDevSession.rebuildProduction(
-          roots.map((sourceKey) => ({ sourceKey })),
-        );
-        if (result.status === 'stale') {
-          result = await activeDevSession.rebuildProduction(
-            roots.map((sourceKey) => ({ sourceKey })),
-          );
+    rebuildAsset: (guid, signal, options?: RebuildAssetOptions) => {
+      const rebuildChanges = (opts?: RebuildAssetOptions) => {
+        const keys = opts?.sourceKeys?.filter((key) => key.length > 0);
+        if (keys !== undefined && keys.length > 0) {
+          return keys.map((sourceKey) => ({
+            sourceKey: resolveCatalogSourceKeyForScan(sourceKey, roots),
+          }));
         }
-        let entries = entriesAfter(guid, result);
+        return roots.map((sourceKey) => ({ sourceKey }));
+      };
+      const task = (async (): Promise<readonly PackIndexEntry[]> => {
+        let result = await activeDevSession.rebuildProduction(rebuildChanges(options));
+        if (result.status === 'stale') {
+          result = await activeDevSession.rebuildProduction(rebuildChanges(options));
+        }
         const readiness = parseProducerReadiness(producerReadiness);
         if (readiness.ok && readiness.value === 'on-demand') {
-          const metaPath = metaPathForGuid(state.catalogProjection.declarations, guid);
-          if (metaPath !== undefined) {
-            entries = entriesAfter(guid, await activeDevSession.materializeProduction(guid));
+          let matResult = await activeDevSession.materializeProduction(guid);
+          if (matResult.status === 'stale') {
+            matResult = await activeDevSession.materializeProduction(guid);
           }
+          return entriesAfter(guid, matResult);
         }
-        return entries;
+        return entriesAfter(guid, result);
       })();
       return trackRoute(task, signal);
     },

@@ -4,6 +4,7 @@ import type { CatalogDiagnostic, PackIndexEntry, RuntimeAssetBinding } from '@fo
 import type { DevSession } from './dev-session.js';
 import type { DispatcherHandler, DispatcherResponse } from './dispatcher.js';
 import type { PluginServerRouteCallbacks, PluginServerState } from './plugin-server.js';
+import { readRequestHeader } from './request-header.js';
 
 export interface TransportRouteContext {
   readonly startupReady: Promise<void>;
@@ -235,12 +236,17 @@ async function handleGenericImport(
   rebuildRequested: boolean,
   scopedBinding: RuntimeAssetBinding | undefined,
   res: DispatcherResponse,
+  catalogSourceKey?: string,
 ): Promise<boolean> {
   let resultEntries: readonly PackIndexEntry[];
   try {
     resultEntries =
       (await (rebuildRequested
-        ? context.callbacks.rebuildAsset?.(guid)
+        ? context.callbacks.rebuildAsset?.(
+          guid,
+          undefined,
+          catalogSourceKey === undefined ? undefined : { sourceKeys: [catalogSourceKey] },
+        )
         : context.callbacks.materializeAsset?.(guid))) ?? [];
     if (!gateSession(context, res)) return true;
   } catch (error) {
@@ -314,19 +320,29 @@ async function handleImportRoute(
     sendJson(res, { error: 'method-not-allowed', hint: 'use POST to trigger lazy import' }, 405);
     return true;
   }
-  const guid = url.slice(importPrefix.length);
+  const guidWithQuery = url.slice(importPrefix.length);
+  const queryIndex = guidWithQuery.indexOf('?');
+  const guid = queryIndex >= 0 ? guidWithQuery.slice(0, queryIndex) : guidWithQuery;
   const guidLower = guid.toLowerCase();
-  const importModeHeader = (
+  const reqHeaders = (
     req as {
       headers?: Readonly<Record<string, string | readonly string[] | undefined>>;
     }
-  ).headers?.['x-forgeax-import-mode'];
-  const rebuildRequested = importModeHeader === 'rebuild';
-  if (
-    metaPathForGuid(context.state.catalogProjection.declarations, guidLower) === undefined &&
-    !context.state.importedGuids.has(guidLower) &&
-    !context.state.catalogProjection.entries.some((entry) => entry.guid.toLowerCase() === guidLower)
-  ) {
+  ).headers;
+  const headerMode = readRequestHeader(reqHeaders, 'x-forgeax-import-mode');
+  const queryMode = queryIndex >= 0
+    ? new URLSearchParams(guidWithQuery.slice(queryIndex)).get('import-mode') ?? undefined
+    : undefined;
+  const importMode = headerMode ?? queryMode;
+  // Fresh sidecar writes are not yet indexed — POST import rebuilds by default.
+  const rebuildRequested = importMode !== 'cold-cook';
+  const guidDeclared =
+    metaPathForGuid(context.state.catalogProjection.declarations, guidLower) !== undefined
+    || context.state.importedGuids.has(guidLower)
+    || context.state.catalogProjection.entries.some((entry) => entry.guid.toLowerCase() === guidLower);
+  // Fresh sidecar writes land on disk before the watcher/index projects the GUID.
+  // Rebuild mode rescans roots and materializes the meta package — do not 404 early.
+  if (!rebuildRequested && !guidDeclared) {
     sendJson(res, { error: 'meta-not-found', guid, hint: 'no source declares this GUID' }, 404);
     return true;
   }
@@ -339,7 +355,11 @@ async function handleImportRoute(
     sendJson(res, [scopedEntry(context, scopedBinding, alreadyImported)]);
     return true;
   }
-  return handleGenericImport(context, guidLower, rebuildRequested, scopedBinding, res);
+  const catalogSourceKeyRaw = readRequestHeader(reqHeaders, 'x-forgeax-import-source-key');
+  const catalogSourceKey = catalogSourceKeyRaw !== undefined && catalogSourceKeyRaw.length > 0
+    ? catalogSourceKeyRaw
+    : undefined;
+  return handleGenericImport(context, guidLower, rebuildRequested, scopedBinding, res, catalogSourceKey);
 }
 
 function handleScopedLookupRoute(

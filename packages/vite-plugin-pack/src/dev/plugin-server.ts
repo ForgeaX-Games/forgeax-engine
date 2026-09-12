@@ -61,9 +61,18 @@ export interface PluginServerCallbacks {
   setCatalogDeltaPublisher(publisher: (delta: CatalogDelta) => void): void;
 }
 
+export interface RebuildAssetOptions {
+  /** Catalog-space source keys; when set, only these paths are rescanned instead of every pack root. */
+  readonly sourceKeys?: readonly string[];
+}
+
 export interface PluginServerRouteCallbacks {
   materializeAsset(guid: string, signal?: AbortSignal): Promise<readonly PackIndexEntry[]>;
-  rebuildAsset(guid: string, signal?: AbortSignal): Promise<readonly PackIndexEntry[]>;
+  rebuildAsset(
+    guid: string,
+    signal?: AbortSignal,
+    options?: RebuildAssetOptions,
+  ): Promise<readonly PackIndexEntry[]>;
   ensureMetaPackBody(url: string): Promise<string | undefined>;
 }
 

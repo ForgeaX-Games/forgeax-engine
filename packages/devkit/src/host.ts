@@ -124,14 +124,34 @@ function findEngineWorkspaceRoot(): string | undefined {
   }
 }
 
+export function findInstalledEnginePackageRoot(start: string): string | undefined {
+  let cursor = resolve(start);
+  for (;;) {
+    if (dirname(cursor) !== cursor && cursor.endsWith(`${sep}node_modules${sep}@forgeax`)) {
+      return cursor;
+    }
+    const parent = dirname(cursor);
+    if (parent === cursor) return undefined;
+    cursor = parent;
+  }
+}
+
 async function engineWorkspacePackages(
-  workspaceRoot = findEngineWorkspaceRoot(),
+  workspaceRoot?: string,
 ): Promise<ReadonlyMap<string, EngineWorkspacePackage>> {
-  if (workspaceRoot === undefined) return new Map<string, EngineWorkspacePackage>();
-  const packageRoot = resolve(workspaceRoot, 'packages');
+  const injectedPackageRoot = process.env.FORGEAX_ENGINE_PACKAGE_ROOT?.trim();
+  const sourceWorkspaceRoot = workspaceRoot ?? (injectedPackageRoot ? undefined : findEngineWorkspaceRoot());
+  const packageRoot = sourceWorkspaceRoot !== undefined
+    ? resolve(sourceWorkspaceRoot, 'packages')
+    : injectedPackageRoot
+      ? resolve(injectedPackageRoot)
+      : findInstalledEnginePackageRoot(dirname(fileURLToPath(import.meta.url)));
+  if (packageRoot === undefined) return new Map<string, EngineWorkspacePackage>();
   // A generated game is a pnpm workspace too, but it does not own a local
   // `packages/` tree. Its installed Engine packages are resolved by Node;
-  // the workspace resolver is only an SDK/source-checkout fallback.
+  // the workspace resolver is only an SDK/source-checkout fallback. A packaged
+  // desktop DevKit has no pnpm workspace, so its staged node_modules/@forgeax
+  // dependency closure is the equivalent immutable package root.
   if (!existsSync(packageRoot)) return new Map<string, EngineWorkspacePackage>();
   const packages = new Map<string, EngineWorkspacePackage>();
   for (const entry of await readdir(packageRoot, { withFileTypes: true })) {
