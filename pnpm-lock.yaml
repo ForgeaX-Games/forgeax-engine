@@ -11371,6 +11371,9 @@ importers:
       '@forgeax/engine-plugin':
         specifier: workspace:*
         version: link:../plugin
+      '@forgeax/engine-types':
+        specifier: workspace:*
+        version: link:../types
 
   packages/state:
     dependencies:

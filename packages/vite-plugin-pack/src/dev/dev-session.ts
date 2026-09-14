@@ -217,6 +217,17 @@ export function createDevSession<TState = undefined>(
   };
 
   const publish = (next: DevSessionState): void => {
+    if (next.status === 'failed') {
+      publishRuntime('degraded', 'degraded', [diagnosticForFailure(next.error)]);
+    }
+    const accepted = currentSnapshot(next);
+    if (accepted !== undefined) {
+      publishRuntime(
+        next.status === 'degraded' || accepted.authority === 'degraded' ? 'degraded' : 'ready',
+        accepted.authority,
+        next.status === 'degraded' ? next.diagnostics : accepted.diagnostics,
+      );
+    }
     state = next;
     options.onStateChange?.(next);
   };
@@ -289,17 +300,21 @@ export function createDevSession<TState = undefined>(
     operation: (context: DevSessionContext) => Promise<DevSessionSnapshot>,
   ): Promise<DevSessionState> => {
     const previous = currentSnapshot(state);
-    if (!intakeOpen || previous === undefined) return Promise.resolve(state);
-    const candidateGeneration = previous.generation + 1;
+    if (!intakeOpen || (previous === undefined && state.status !== 'failed')) {
+      return Promise.resolve(state);
+    }
+    const candidateGeneration = (previous?.generation ?? options.generation) + 1;
     const token = ++operationToken;
-    publish({ status: 'rebuilding', snapshot: previous, candidateGeneration });
+    if (previous !== undefined) {
+      publish({ status: 'rebuilding', snapshot: previous, candidateGeneration });
+    }
     const task = (async (): Promise<DevSessionState> => {
       try {
         const snapshot = await settleGenerationOrAbort(
           operation({
             generation: candidateGeneration,
             signal: controller.signal,
-            previous,
+            ...(previous === undefined ? {} : { previous }),
           }),
           controller.signal,
           drain,
@@ -316,18 +331,14 @@ export function createDevSession<TState = undefined>(
         }
         publishSnapshot(snapshot);
       } catch (error) {
-        if (!intakeOpen || controller.signal.aborted) return state;
+        if (!intakeOpen || controller.signal.aborted || token !== operationToken) return state;
         const failure = asFailure(error, `generation:${candidateGeneration}`);
+        if (previous === undefined) {
+          publish({ status: 'failed', error: failure });
+          return state;
+        }
         const diagnostics = [...previous.diagnostics, diagnosticForFailure(failure)];
-        publish({
-          status: 'degraded',
-          snapshot: {
-            ...previous,
-            authority: 'degraded',
-            diagnostics,
-          },
-          diagnostics,
-        });
+        publish({ status: 'degraded', snapshot: previous, diagnostics });
       }
       return state;
     })();

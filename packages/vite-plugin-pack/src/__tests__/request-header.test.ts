@@ -12,6 +12,12 @@ describe('readRequestHeader', () => {
     );
   });
 
+  it('accepts immutable and empty header arrays', () => {
+    const values: readonly string[] = Object.freeze(['rebuild', 'cold-cook']);
+    expect(readRequestHeader({ 'x-mode': values }, 'x-mode')).toBe('rebuild');
+    expect(readRequestHeader({ 'x-mode': [] as readonly string[] }, 'x-mode')).toBeUndefined();
+  });
+
   it('returns undefined for missing headers', () => {
     expect(readRequestHeader({}, 'x-forgeax-import-mode')).toBeUndefined();
     expect(readRequestHeader(undefined, 'x-forgeax-import-mode')).toBeUndefined();

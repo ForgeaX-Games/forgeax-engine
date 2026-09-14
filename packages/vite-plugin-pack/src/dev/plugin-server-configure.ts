@@ -1,11 +1,9 @@
 import { resolve } from 'node:path';
-import { parseProducerReadiness } from '@forgeax/engine-import';
 import { type CatalogBuildError, calculateCatalogDelta } from '@forgeax/engine-pack/build';
 import type { CatalogDelta, CatalogDiagnostic, RuntimeAssetBinding } from '@forgeax/engine-types';
 import { resolvePackBuildInputs } from '../build-inputs.js';
 import { CATALOG_DELTA_EVENT } from '../catalog-transport.js';
 import { createPluginPackFailure } from '../errors.js';
-import type { projectRuntimeDiagnostics } from '../runtime-diagnostics.js';
 import { createDevSession, type DevSession } from './dev-session.js';
 import type { MiddlewareDispatcher } from './dispatcher.js';
 import type { PluginServerContext, PluginServerLike, PluginServerState } from './plugin-server.js';
@@ -29,7 +27,6 @@ interface ConfigureServerInput {
   readonly lifecycle: PluginServerLifecycleState;
   readonly configuredServers: Set<PluginServerLike>;
   readonly dispatcher: MiddlewareDispatcher;
-  readonly runtimeDiagnostics: typeof projectRuntimeDiagnostics;
 }
 
 interface WatchBatchInput {
@@ -63,6 +60,18 @@ function projectCatalogDiagnostics(
   }));
 }
 
+function assertInitialCatalog(inventory: PluginServerState['catalogProjection']): void {
+  if (inventory.authority !== 'authoritative' && inventory.entries.length === 0) {
+    throw createPluginPackFailure({
+      code: 'scan-failed',
+      expected: 'an authoritative Catalog projection',
+      hint: 'inspect catalog diagnostics, repair the root, rebuild, and retry',
+      detail: { stage: 'scan', subject: 'catalog' },
+      cause: inventory.diagnostics,
+    });
+  }
+}
+
 function createWatchBatchApplier(input: WatchBatchInput) {
   return async ({ sidecars, sources }: WatchBatch): Promise<void> => {
     if (!input.generationActive()) return;
@@ -93,6 +102,7 @@ function createWatchBatchApplier(input: WatchBatchInput) {
         try {
           const inventory = await input.productionBridge.inventoryForRequest(false, input.session);
           if (!input.generationActive()) return previousSnapshot;
+          if (previous === undefined) assertInitialCatalog(inventory);
           const affectedSourceRows = previousSnapshot.catalog.filter((row) =>
             [...changedSourcePaths].includes(resolve(process.cwd(), row.sourcePath)),
           );
@@ -141,6 +151,7 @@ function createWatchBatchApplier(input: WatchBatchInput) {
           };
         } catch (error: unknown) {
           if (!input.generationActive()) return previousSnapshot;
+          if (previous === undefined) throw error;
           operationFailed = true;
           const diagnostic =
             error !== null &&
@@ -178,11 +189,7 @@ function createWatchBatchApplier(input: WatchBatchInput) {
             authority: 'degraded',
             diagnostics: [watchDiagnostic],
           });
-          return {
-            ...previousSnapshot,
-            authority: 'degraded' as const,
-            diagnostics: [...previousSnapshot.diagnostics, watchDiagnostic],
-          };
+          throw error;
         }
       });
       catalogRebuildFailed = operationFailed || next.status === 'failed';
@@ -227,49 +234,8 @@ export function createConfigureServer(input: ConfigureServerInput) {
       productionSession: session,
       startup: async () => {
         const inventory = await productionBridge.inventoryForRequest(true, session);
-        const readiness = parseProducerReadiness(opts.producerReadiness);
-        if (!readiness.ok) {
-          const diagnostic: CatalogBuildError = {
-            code: 'catalog-scan-failed',
-            path: 'pluginPack.producerReadiness',
-            message: readiness.error.hint,
-            expected: readiness.error.expected,
-            actual: String(readiness.error.detail.value),
-            hint: readiness.error.hint,
-          };
-          state.catalogProjection = {
-            ...state.catalogProjection,
-            schemaVersion: 'catalog-legacy-v1',
-            entries: [],
-            authority: 'degraded',
-            diagnostics: [diagnostic],
-          };
-          throw createPluginPackFailure({
-            code: 'config-failed',
-            expected: readiness.error.expected,
-            hint: readiness.error.hint,
-            detail: { stage: 'config', subject: diagnostic.path },
-            cause: readiness.error,
-          });
-        }
         const diagnostics = projectCatalogDiagnostics(inventory.diagnostics);
-        if (inventory.authority !== 'authoritative' && inventory.entries.length === 0) {
-          throw createPluginPackFailure({
-            code: 'scan-failed',
-            expected: 'an authoritative Catalog projection',
-            hint: 'inspect catalog diagnostics, repair the root, rebuild, and retry',
-            detail: { stage: 'scan', subject: 'catalog' },
-            cause: inventory.diagnostics,
-          });
-        }
-        const binding = activeDevSession.runtimeScope();
-        if (binding?.status === 'transitioning') {
-          activeDevSession.publishRuntime(
-            inventory.authority === 'authoritative' ? 'ready' : 'degraded',
-            inventory.authority,
-            input.runtimeDiagnostics(inventory.diagnostics),
-          );
-        }
+        assertInitialCatalog(inventory);
         return {
           generation: session.runtimeGeneration,
           catalog: [...state.catalogProjection.entries],
@@ -350,7 +316,7 @@ export function createConfigureServer(input: ConfigureServerInput) {
       },
       onError: (error, watchContext) => {
         if (activeDevSession.state().status === 'starting') return;
-        void activeDevSession.rebuild(async ({ previous }) => {
+        void activeDevSession.rebuild(async () => {
           const failure = createPluginPackFailure({
             code: 'watch-failed',
             expected: 'the watcher and batch intake to remain available',
@@ -361,21 +327,7 @@ export function createConfigureServer(input: ConfigureServerInput) {
             },
             cause: error,
           });
-          return {
-            ...(previous ?? degradedSnapshot(session, state)),
-            authority: 'degraded' as const,
-            diagnostics: [
-              ...(previous?.diagnostics ?? []),
-              {
-                code: failure.code,
-                severity: 'blocking' as const,
-                authority: 'producer' as const,
-                expected: failure.expected,
-                actual: failure.detail.stage,
-                hint: failure.hint,
-              },
-            ],
-          };
+          throw failure;
         });
       },
     });

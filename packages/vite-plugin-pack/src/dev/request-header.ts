@@ -5,5 +5,5 @@ export function readRequestHeader(
 ): string | undefined {
   const value = headers?.[name.toLowerCase()];
   if (value === undefined) return undefined;
-  return Array.isArray(value) ? value[0] : value;
+  return typeof value === 'string' ? value : value[0];
 }

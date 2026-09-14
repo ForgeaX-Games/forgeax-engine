@@ -1,6 +1,7 @@
 import { normalizeSourcePackageError, type SourcePackageError } from '@forgeax/engine-import';
 import { catalogProjectionFor, metaPathForGuid } from '@forgeax/engine-pack/build';
 import type { CatalogDiagnostic, PackIndexEntry, RuntimeAssetBinding } from '@forgeax/engine-types';
+import { projectFailureCause } from '../errors.js';
 import type { DevSession } from './dev-session.js';
 import type { DispatcherHandler, DispatcherResponse } from './dispatcher.js';
 import type { PluginServerRouteCallbacks, PluginServerState } from './plugin-server.js';
@@ -140,7 +141,9 @@ function gateSession(context: TransportRouteContext, res: DispatcherResponse): b
         error: sessionFailure?.code ?? 'scan-failed',
         expected: sessionFailure?.expected ?? 'an accepted ForgeaX pack snapshot',
         hint: sessionFailure?.hint ?? 'repair the producer, rebuild, verify, and retry',
-        ...(sessionFailure === undefined ? {} : { detail: sessionFailure.detail }),
+        ...(sessionFailure === undefined
+          ? {}
+          : { detail: sessionFailure.detail, cause: projectFailureCause(sessionFailure.cause) }),
       },
       503,
     );
@@ -196,7 +199,8 @@ async function resolveScopedRoute(
     res.end(JSON.stringify(context.scopedCatalogResponse(latest)));
     return { handled: true, url };
   }
-  if (latest.status === 'degraded' || latest.authority === 'degraded') {
+  // A failed rebuild retains the accepted publication; its authority gates consumption.
+  if (latest.authority === 'degraded') {
     sendJson(
       res,
       { error: 'runtime-scope-catalog-degraded', diagnostics: latest.diagnostics ?? [] },

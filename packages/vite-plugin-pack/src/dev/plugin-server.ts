@@ -122,7 +122,6 @@ export function createPluginServer(context: PluginServerContext) {
     lifecycle,
     configuredServers,
     dispatcher,
-    runtimeDiagnostics: projectRuntimeDiagnostics,
   });
 
   const rebind = async (

@@ -247,6 +247,16 @@ export function createProductionBridge(context: ProductionBridgeContext): Produc
       return session;
     },
     inventoryForRequest: async (initial, requestedSession = session) => {
+      const readiness = parseProducerReadiness(producerReadiness);
+      if (!readiness.ok) {
+        throw createPluginPackFailure({
+          code: 'config-failed',
+          expected: readiness.error.expected,
+          hint: readiness.error.hint,
+          detail: { stage: 'config', subject: 'pluginPack.producerReadiness' },
+          cause: readiness.error,
+        });
+      }
       const result = initial
         ? await requestedSession.start()
         : await requestedSession.rebuild(roots().map((sourceKey) => ({ sourceKey })));
