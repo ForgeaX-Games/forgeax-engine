@@ -351,6 +351,7 @@ function outputError(
 }
 
 function externalClosureError(
+  sourcePath: string,
   declared: ReadonlySet<string>,
   referenced: ReadonlySet<string>,
   read: ReadonlySet<string>,
@@ -371,6 +372,7 @@ function externalClosureError(
     expected: 'externalAssets GUIDs to equal output external refs union AssetReader reads',
     hint: 'inspect refs and AssetReader reads, repair GUID declarations, then rebuild or cold-cook',
     detail: {
+      sourcePath,
       undeclaredReferencedGuids: undeclaredReferencedGuids.sort(),
       undeclaredReadGuids: undeclaredReadGuids.sort(),
       unusedDeclaredGuids: unusedDeclaredGuids.sort(),
@@ -546,7 +548,7 @@ export async function buildScriptablePack(
       AssetGuid.format(guid).toLowerCase(),
     ),
   );
-  const closureError = externalClosureError(declared, referenced, read);
+  const closureError = externalClosureError(options.sourcePath, declared, referenced, read);
   if (closureError !== undefined) return err(closureError);
 
   const externalEvidence = [...declared].sort().map((guid): ScriptablePackExternalEvidence => {

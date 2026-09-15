@@ -222,12 +222,14 @@ async function readValidatedJson(
 function makePackError(
   code: PackErrorCode,
   detail: ConstructorParameters<typeof PackError>[0]['detail'],
+  cause?: ConstructorParameters<typeof PackError>[0]['cause'],
 ): PackError {
   return new PackError({
     code,
     expected: `pack error: ${code}`,
     hint: PACK_ERROR_HINTS[code],
     detail,
+    ...(cause === undefined ? {} : { cause }),
   });
 }
 
@@ -577,18 +579,22 @@ async function scanValidated(
       const diagnostic =
         'diagnostic' in loaded.error.detail ? loaded.error.detail.diagnostic : undefined;
       return packErr(
-        makePackError('pack-malformed-meta', {
-          path: sourcePath,
-          ajvErrors: [
-            {
-              instancePath: '',
-              message:
-                diagnostic === undefined
-                  ? loaded.error.code
-                  : `${loaded.error.code}: ${diagnostic}`,
-            },
-          ],
-        }),
+        makePackError(
+          'pack-malformed-meta',
+          {
+            path: sourcePath,
+            ajvErrors: [
+              {
+                instancePath: '',
+                message:
+                  diagnostic === undefined
+                    ? loaded.error.code
+                    : `${loaded.error.code}: ${diagnostic}`,
+              },
+            ],
+          },
+          loaded.error,
+        ),
       );
     }
     let sourceClosure: readonly ScriptablePackSourceClosureEntry[];

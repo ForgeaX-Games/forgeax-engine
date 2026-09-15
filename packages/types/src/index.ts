@@ -4479,6 +4479,7 @@ export type {
   AssetSubjectRef,
   AssetSubjectType,
   CatalogDiagnostic,
+  CatalogDiagnosticCause,
   CatalogDiagnosticSeverity,
   CatalogLifecycle,
   CatalogOperationDescriptor,

@@ -7,6 +7,7 @@ import {
 } from './catalog-projection.js';
 import { loadAssetConfig } from './config.js';
 import { deriveAssetName } from './deriveAssetName.js';
+import type { PackError } from './errors.js';
 import { resolveAssetSource } from './resolve-asset-source.js';
 import {
   type MetaInventoryDocument,
@@ -46,6 +47,7 @@ export interface CatalogBuildError {
   readonly actual?: string;
   readonly hint?: string;
   readonly subjects?: readonly string[];
+  readonly cause?: PackError;
 }
 
 export type CatalogAuthority = 'authoritative' | 'degraded';
@@ -276,6 +278,7 @@ export async function buildCatalogProjection(
       actual: message,
       hint: 'repair the roots before treating any Catalog rows as authoritative',
       subjects: [...roots],
+      cause: scanned.error,
     };
     warnErrors([error]);
     return empty('degraded', [error]);

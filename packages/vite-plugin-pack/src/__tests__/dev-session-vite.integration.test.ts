@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { loadScriptablePack } from '@forgeax/engine-pack/source-node';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { createServer } from 'vite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -16,6 +17,65 @@ describe('DevSession through a real Vite server', () => {
     await server?.close();
     if (root !== undefined) await rm(root, { recursive: true, force: true });
   });
+
+  it('retains the actual ScriptablePack definition failure in public runtime diagnostics', async () => {
+    root = await mkdtemp(join(tmpdir(), 'forgeax-definition-diagnostic-'));
+    const source = join(root, 'scene.pack.ts');
+    await writeFile(
+      source,
+      `
+      const guid = (n) => { const value = new Uint8Array(16); value[15] = n; return value; };
+      export default {
+        schemaVersion: '1.0.0', packageId: guid(1),
+        assets: { scene: { guid: guid(2), kind: 'scene' } },
+        externalAssets: { harborTreeMesh: undefined },
+        build: () => ({ ok: true, value: {} }),
+      };
+    `,
+    );
+    const failure = {
+      code: 'pack-source-definition-invalid',
+      expected: 'a 16-byte AssetGuid',
+      hint: 'repair the default exported ScriptablePack definition, then inspect Meta again',
+      detail: {
+        sourcePath: source,
+        propertyPath: '$.externalAssets["harborTreeMesh"]',
+        actual: 'undefined',
+      },
+    };
+    expect(await loadScriptablePack(source, { metadataOnly: true })).toMatchObject({
+      ok: false,
+      error: failure,
+    });
+    const binding = createStandaloneRuntimeAssetBinding('vite-definition-diagnostic');
+    const plugin = pluginPack({ roots: [root], runtimeBinding: binding });
+    server = await createServer({
+      root,
+      configFile: false,
+      logLevel: 'silent',
+      plugins: [plugin],
+      server: { host: '127.0.0.1', port: 0 },
+    });
+    await server.listen();
+    const catalogUrl = new URL(binding.catalogUrl, server.resolvedUrls?.local[0]).href;
+    const response = await fetch(catalogUrl);
+    expect(response.status).toBe(503);
+    const publicFailure = await response.json();
+    expect(publicFailure.cause).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'catalog-scan-failed',
+          cause: expect.objectContaining({ code: 'pack-malformed-meta', cause: failure }),
+        }),
+      ]),
+    );
+    const runtime = JSON.parse(JSON.stringify(plugin.runtimeBinding()));
+    expect(JSON.stringify(runtime.diagnostics)).toContain(
+      JSON.stringify(failure.detail.propertyPath),
+    );
+    expect(JSON.stringify(publicFailure)).not.toContain('"stack"');
+    expect(runtime).toMatchObject({ status: 'degraded', authority: 'degraded' });
+  }, 15_000);
 
   it('does not bypass invalid producer configuration on a source change', async () => {
     root = await mkdtemp(join(tmpdir(), 'forgeax-dev-session-config-'));

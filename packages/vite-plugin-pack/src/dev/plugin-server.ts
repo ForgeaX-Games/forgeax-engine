@@ -152,6 +152,7 @@ export function createPluginServer(context: PluginServerContext) {
       const rebindDiagnostics = projectRuntimeDiagnostics([
         {
           code: failedRebindFailure.code,
+          cause: failedRebindFailure,
           message: failedRebindFailure.expected,
           hint: failedRebindFailure.hint,
         },

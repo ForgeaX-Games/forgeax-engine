@@ -8,6 +8,7 @@ import {
   createPluginPackFailure,
   type PluginPackFailure,
   type PluginPackFailureStage,
+  projectFailureCause,
 } from '../errors.js';
 import type {
   ProductionRunResult,
@@ -127,8 +128,10 @@ function asFailure(error: unknown, subject: string): PluginPackFailure {
 }
 
 function diagnosticForFailure(failure: PluginPackFailure): CatalogDiagnostic {
+  const cause = projectFailureCause(failure);
   return {
     code: failure.code,
+    ...(cause === undefined ? {} : { cause }),
     severity: 'blocking',
     authority: 'catalog',
     ...(failure.detail.subject === undefined

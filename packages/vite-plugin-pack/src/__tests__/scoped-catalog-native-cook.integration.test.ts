@@ -18,6 +18,67 @@ describe('roots-scoped native catalog publication', () => {
     if (root !== undefined) await rm(root, { recursive: true, force: true });
   });
 
+  it('preserves real unused external closure failure through a cold binding JSON response', async () => {
+    root = await mkdtemp(join(tmpdir(), 'forgeax-binding-cause-'));
+    const assets = join(root, 'assets');
+    await mkdir(assets);
+    const sourcePath = join(assets, 'unused.pack.ts');
+    const invalidSource = [
+      'const guid = (last: number) => new Uint8Array([1,159,250,151,0,0,112,0,128,0,0,0,0,0,0,last]);',
+      'export default {',
+      "schemaVersion: '1.0.0', packageId: guid(40),",
+      "assets: { scene: { guid: guid(41), kind: 'scene' } }, externalAssets: { unused: guid(42) },",
+      "build: () => ({ ok: true, value: { scene: { kind: 'scene', entities: [] } } }),",
+      '};',
+    ].join('\n');
+    await writeFile(sourcePath, invalidSource);
+    const plugin = pluginPack({ roots: [assets], ddc: { projectDdcRoot: join(root, 'ddc') } });
+    const middlewares: Middleware[] = [];
+    plugin.configureServer({
+      middlewares: { use: (middleware) => middlewares.push(middleware as never) },
+      ws: { send: () => {} },
+    });
+    try {
+      const binding = await plugin.rebind(runtimeBinding('broken', 1), [assets]);
+      const catalog = await request(middlewares, binding.catalogUrl);
+      expect(catalog.body).toContain('pack-source-external-closure-mismatch');
+      const wire = JSON.parse(JSON.stringify(binding));
+      expect(wire.status).toBe('degraded');
+      expect(JSON.stringify(wire.diagnostics)).toContain('pack-source-external-closure-mismatch');
+      expect(JSON.stringify(wire.diagnostics)).toContain('unused.pack.ts');
+      const expectedCause = {
+        code: 'pack-source-external-closure-mismatch',
+        detail: {
+          sourcePath: 'assets/unused.pack.ts',
+          undeclaredReferencedGuids: [],
+          undeclaredReadGuids: [],
+          unusedDeclaredGuids: ['019ffa97-0000-7000-8000-00000000002a'],
+        },
+      };
+      const findClosure = (value: unknown): unknown => {
+        if (value === null || typeof value !== 'object') return undefined;
+        const record = value as Record<string, unknown>;
+        if (record.code === expectedCause.code) return record;
+        return Object.values(record)
+          .map(findClosure)
+          .find((item) => item !== undefined);
+      };
+      expect(findClosure(wire.diagnostics)).toMatchObject(expectedCause);
+      expect(findClosure(JSON.parse(catalog.body))).toMatchObject(expectedCause);
+      await writeFile(sourcePath, invalidSource.replace('unused: guid(42)', ''));
+      expect((await plugin.rebind(runtimeBinding('broken', 2), [assets])).status).toBe('ready');
+      await writeFile(sourcePath, invalidSource);
+      await expect(plugin.rebind(runtimeBinding('broken', 3), [assets])).rejects.toMatchObject({
+        code: 'produce-failed',
+      });
+      expect(findClosure(JSON.parse(JSON.stringify(plugin.runtimeBinding())))).toMatchObject(
+        expectedCause,
+      );
+    } finally {
+      await plugin.closeBundle();
+    }
+  });
+
   it('uses the plugin native cooker and DDC while isolating malformed sibling roots', async () => {
     root = await mkdtemp(join(tmpdir(), 'forgeax-scoped-pack-'));
     const active = join(root, 'active');

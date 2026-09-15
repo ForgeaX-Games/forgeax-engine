@@ -3,7 +3,7 @@ import { type CatalogBuildError, calculateCatalogDelta } from '@forgeax/engine-p
 import type { CatalogDelta, CatalogDiagnostic, RuntimeAssetBinding } from '@forgeax/engine-types';
 import { resolvePackBuildInputs } from '../build-inputs.js';
 import { CATALOG_DELTA_EVENT } from '../catalog-transport.js';
-import { createPluginPackFailure } from '../errors.js';
+import { createPluginPackFailure, projectFailureCause } from '../errors.js';
 import { createDevSession, type DevSession } from './dev-session.js';
 import type { MiddlewareDispatcher } from './dispatcher.js';
 import type { PluginServerContext, PluginServerLike, PluginServerState } from './plugin-server.js';
@@ -53,11 +53,15 @@ function degradedSnapshot(session: ProductionBridge['session'], state: PluginSer
 function projectCatalogDiagnostics(
   diagnostics: readonly CatalogBuildError[],
 ): readonly CatalogDiagnostic[] {
-  return diagnostics.map((diagnostic) => ({
-    ...diagnostic,
-    severity: 'blocking' as const,
-    authority: 'catalog' as const,
-  }));
+  return diagnostics.map(({ cause, ...diagnostic }) => {
+    const projectedCause = projectFailureCause(cause);
+    return {
+      ...diagnostic,
+      ...(projectedCause === undefined ? {} : { cause: projectedCause }),
+      severity: 'blocking' as const,
+      authority: 'catalog' as const,
+    };
+  });
 }
 
 function assertInitialCatalog(inventory: PluginServerState['catalogProjection']): void {

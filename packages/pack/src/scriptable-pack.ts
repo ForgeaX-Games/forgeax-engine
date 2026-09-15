@@ -706,6 +706,7 @@ export type ScriptablePackError =
       readonly expected: string;
       readonly hint: string;
       readonly detail: {
+        readonly sourcePath: string;
         readonly undeclaredReferencedGuids: readonly string[];
         readonly undeclaredReadGuids: readonly string[];
         readonly unusedDeclaredGuids: readonly string[];

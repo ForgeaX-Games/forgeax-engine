@@ -657,8 +657,23 @@ export interface AssetRelation {
 
 export type CatalogDiagnosticSeverity = 'info' | 'warning' | 'blocking';
 
+/** Bounded, JSON-safe producer failure evidence retained by the catalog transport. */
+export type CatalogDiagnosticCause =
+  | {
+      readonly code?: string;
+      readonly message?: string;
+      readonly expected?: string;
+      readonly actual?: string;
+      readonly hint?: string;
+      readonly path?: string;
+      readonly detail?: Readonly<Record<string, string | readonly string[]>>;
+      readonly cause?: CatalogDiagnosticCause;
+    }
+  | readonly CatalogDiagnosticCause[];
+
 /** Machine-readable catalog problem; consumers branch on fields, never message text. */
 export interface CatalogDiagnostic {
+  readonly cause?: CatalogDiagnosticCause;
   readonly code: string;
   readonly severity: CatalogDiagnosticSeverity;
   readonly message?: string;

@@ -38,6 +38,12 @@ export function watchDevRoots(options: DevWatcherOptions): () => void {
   const watchers: FSWatcher[] = [];
   const debounceMs = options.debounceMs ?? 150;
   let flushTimer: ReturnType<typeof setTimeout> | undefined;
+  // A second filesystem batch can arrive while the previous Catalog rebuild is
+  // still committing. Running both flushes concurrently makes the production
+  // generation candidates invalidate each other and can leave the runtime scope
+  // permanently degraded with `stale-generation`. Keep intake debounced, but
+  // serialize the resulting rebuild batches.
+  let flushSerial = Promise.resolve();
   let disposed = false;
 
   const report = (
@@ -75,7 +81,9 @@ export function watchDevRoots(options: DevWatcherOptions): () => void {
     if (flushTimer !== undefined) clearTimeout(flushTimer);
     flushTimer = setTimeout(() => {
       flushTimer = undefined;
-      flush().catch((error: unknown) => report(error, { phase: 'flush' }));
+      flushSerial = flushSerial
+        .then(() => flush())
+        .catch((error: unknown) => report(error, { phase: 'flush' }));
     }, debounceMs);
     flushTimer.unref();
   };

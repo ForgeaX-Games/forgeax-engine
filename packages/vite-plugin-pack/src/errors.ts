@@ -1,3 +1,5 @@
+import type { CatalogDiagnosticCause } from '@forgeax/engine-types';
+
 export type PluginPackFailureStage =
   | 'config'
   | 'scan'
@@ -58,14 +60,9 @@ export function appendPluginPackCleanup(
 }
 
 /** Bounded public diagnostic projection; never serialize arbitrary cause objects. */
-export function projectFailureCause(
-  value: unknown,
-): Record<string, unknown> | unknown[] | undefined {
+export function projectFailureCause(value: unknown): CatalogDiagnosticCause | undefined {
   const seen = new Set<object>();
-  const project = (
-    value: unknown,
-    depth: number,
-  ): Record<string, unknown> | unknown[] | undefined => {
+  const project = (value: unknown, depth: number): CatalogDiagnosticCause | undefined => {
     if (value === undefined || value === null || depth >= 6 || seen.size >= 40) return undefined;
     if (typeof value === 'string') return { message: value.slice(0, 2000) };
     if (typeof value !== 'object' || seen.has(value)) return undefined;
@@ -77,12 +74,17 @@ export function projectFailureCause(
         .filter((entry) => entry !== undefined);
     }
     const input = value as Record<string, unknown>;
-    const result: Record<string, unknown> = {};
+    const result: {
+      -readonly [K in keyof Exclude<CatalogDiagnosticCause, readonly unknown[]>]?: Exclude<
+        CatalogDiagnosticCause,
+        readonly unknown[]
+      >[K];
+    } = {};
     for (const key of ['code', 'message', 'expected', 'actual', 'hint', 'path'] as const) {
       if (typeof input[key] === 'string') result[key] = input[key].slice(0, 2000);
     }
     if (input.detail && typeof input.detail === 'object') {
-      const detail: Record<string, unknown> = {};
+      const detail: Record<string, string | readonly string[]> = {};
       const source = input.detail as Record<string, unknown>;
       for (const key of [
         'stage',
@@ -104,6 +106,9 @@ export function projectFailureCause(
             .slice(0, 40)
             .filter((entry): entry is string => typeof entry === 'string')
             .map((entry) => entry.slice(0, 2000));
+      }
+      for (const key of ['propertyPath', 'actual']) {
+        if (typeof source[key] === 'string') detail[key] = source[key].slice(0, 2000);
       }
       if (Object.keys(detail).length) result.detail = detail;
     }

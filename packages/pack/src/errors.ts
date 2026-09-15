@@ -1,6 +1,6 @@
 // errors.ts — PackError class (feat-20260513-guid-asset-package-system w15)
 //
-// Four-field surface: .code / .expected / .hint / .detail
+// Structured surface: .code / .expected / .hint / .detail, plus optional typed .cause
 // Structurally parallel to AssetError / RhiError / RemoteError
 // (charter proposition 5 consistent abstraction).
 //
@@ -8,6 +8,7 @@
 // (requirements §6.2 AC-07; plan-strategy §D-5).
 
 import type { PackErrorCode, PackErrorDetail } from '@forgeax/engine-types';
+import type { ScriptablePackError } from './scriptable-pack.js';
 
 /**
  * Structured error for the engine-pack disk scanner fail-fast chain.
@@ -30,12 +31,14 @@ export class PackError extends Error {
   readonly expected: string;
   readonly hint: string;
   readonly detail: PackErrorDetail;
+  override readonly cause?: ScriptablePackError;
 
   constructor(args: {
     code: PackErrorCode;
     expected: string;
     hint: string;
     detail: PackErrorDetail;
+    cause?: ScriptablePackError;
   }) {
     super(`[PackError ${args.code}] expected: ${args.expected}; hint: ${args.hint}`);
     this.name = 'PackError';
@@ -43,5 +46,6 @@ export class PackError extends Error {
     this.expected = args.expected;
     this.hint = args.hint;
     this.detail = args.detail;
+    if (args.cause !== undefined) this.cause = args.cause;
   }
 }
