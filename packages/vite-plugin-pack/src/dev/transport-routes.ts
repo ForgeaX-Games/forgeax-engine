@@ -247,10 +247,10 @@ async function handleGenericImport(
     resultEntries =
       (await (rebuildRequested
         ? context.callbacks.rebuildAsset?.(
-          guid,
-          undefined,
-          catalogSourceKey === undefined ? undefined : { sourceKeys: [catalogSourceKey] },
-        )
+            guid,
+            undefined,
+            catalogSourceKey === undefined ? undefined : { sourceKeys: [catalogSourceKey] },
+          )
         : context.callbacks.materializeAsset?.(guid))) ?? [];
     if (!gateSession(context, res)) return true;
   } catch (error) {
@@ -334,16 +334,61 @@ async function handleImportRoute(
     }
   ).headers;
   const headerMode = readRequestHeader(reqHeaders, 'x-forgeax-import-mode');
-  const queryMode = queryIndex >= 0
-    ? new URLSearchParams(guidWithQuery.slice(queryIndex)).get('import-mode') ?? undefined
-    : undefined;
+  if (guid === 'source') {
+    const sourceKey = readRequestHeader(reqHeaders, 'x-forgeax-import-source-key');
+    if (!sourceKey || !context.callbacks.rebuildSource) {
+      sendJson(
+        res,
+        {
+          error: 'source-import-unavailable',
+          hint: 'a source key and source import capability are required',
+        },
+        400,
+      );
+      return true;
+    }
+    try {
+      const entries = await context.callbacks.rebuildSource(sourceKey);
+      if (!gateSession(context, res)) return true;
+      if (entries.length === 0) throw new Error('source-import-empty');
+      sendJson(
+        res,
+        entries.map((entry) => scopedEntry(context, scopedBinding, entry)),
+      );
+    } catch (error) {
+      if (!gateSession(context, res)) return true;
+      const projected = projectFailureCause(error);
+      const diagnostic =
+        projected && !Array.isArray(projected)
+          ? (projected as Exclude<typeof projected, readonly unknown[]>)
+          : undefined;
+      sendJson(
+        res,
+        {
+          error: 'source-import-failed',
+          ...diagnostic,
+          code: diagnostic?.code ?? 'source-import-failed',
+          hint:
+            diagnostic?.hint ??
+            diagnostic?.message ??
+            'Unknown source import failure; inspect producer diagnostics before retrying',
+        },
+        422,
+      );
+    }
+    return true;
+  }
+  const queryMode =
+    queryIndex >= 0
+      ? (new URLSearchParams(guidWithQuery.slice(queryIndex)).get('import-mode') ?? undefined)
+      : undefined;
   const importMode = headerMode ?? queryMode;
   // Fresh sidecar writes are not yet indexed — POST import rebuilds by default.
   const rebuildRequested = importMode !== 'cold-cook';
   const guidDeclared =
-    metaPathForGuid(context.state.catalogProjection.declarations, guidLower) !== undefined
-    || context.state.importedGuids.has(guidLower)
-    || context.state.catalogProjection.entries.some((entry) => entry.guid.toLowerCase() === guidLower);
+    metaPathForGuid(context.state.catalogProjection.declarations, guidLower) !== undefined ||
+    context.state.importedGuids.has(guidLower) ||
+    context.state.catalogProjection.entries.some((entry) => entry.guid.toLowerCase() === guidLower);
   // Fresh sidecar writes land on disk before the watcher/index projects the GUID.
   // Rebuild mode rescans roots and materializes the meta package — do not 404 early.
   if (!rebuildRequested && !guidDeclared) {
@@ -360,10 +405,18 @@ async function handleImportRoute(
     return true;
   }
   const catalogSourceKeyRaw = readRequestHeader(reqHeaders, 'x-forgeax-import-source-key');
-  const catalogSourceKey = catalogSourceKeyRaw !== undefined && catalogSourceKeyRaw.length > 0
-    ? catalogSourceKeyRaw
-    : undefined;
-  return handleGenericImport(context, guidLower, rebuildRequested, scopedBinding, res, catalogSourceKey);
+  const catalogSourceKey =
+    catalogSourceKeyRaw !== undefined && catalogSourceKeyRaw.length > 0
+      ? catalogSourceKeyRaw
+      : undefined;
+  return handleGenericImport(
+    context,
+    guidLower,
+    rebuildRequested,
+    scopedBinding,
+    res,
+    catalogSourceKey,
+  );
 }
 
 function handleScopedLookupRoute(

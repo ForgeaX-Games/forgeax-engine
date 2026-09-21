@@ -180,6 +180,35 @@ describe('ScriptablePack build bridge', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('changes the publication revision when SDK-authored output changes with identical source bytes', async () => {
+    const original = fixture();
+    const build = original.build;
+    const options = {
+      sourcePath: 'house.pack.ts',
+      assetSource: source(),
+      outputs: outputs(),
+      sourceClosure: [{ path: 'house.pack.ts', digest: 'sha256:unchanged' }],
+      authoringContractVersion: 'geometry/1',
+    } as const;
+    const first = await buildScriptablePack({ ...options, definition: original });
+    const changed = {
+      ...original,
+      build: async (...args: Parameters<typeof build>) => {
+        const result = await build(...args);
+        if (!result.ok) return result;
+        return ok({
+          ...result.value,
+          material: { ...result.value.material, values: { normalScale: 0.7 } },
+        });
+      },
+    };
+    const second = await buildScriptablePack({ ...options, definition: changed });
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    if (first.ok && second.ok)
+      expect(second.value.inputFingerprint).not.toBe(first.value.inputFingerprint);
+  });
+
   it('derives reference/content/both, protects input snapshots, and is deterministic', async () => {
     const assetSource = source();
     const options = {

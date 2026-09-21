@@ -90,3 +90,88 @@ describe('catalog failure cause', () => {
     expect(JSON.stringify(result.body).length).toBeLessThan(2000);
   });
 });
+
+async function importFailureFor(error: unknown) {
+  const handler = createTransportRouteHandler({
+    startupReady: Promise.resolve(),
+    state: {},
+    devSession: {
+      runtimeScope: () => ({ scopeId: 'game', generation: 1, status: 'ready' }),
+      state: () => ({ status: 'ready' }),
+    },
+    callbacks: {
+      rebuildSource: async () => {
+        throw error;
+      },
+    },
+  } as unknown as TransportRouteContext);
+  let body = '';
+  const response = {
+    statusCode: 200,
+    setHeader() {},
+    end(value: string | Uint8Array) {
+      body = String(value);
+    },
+  };
+  const request = {
+    url: '/__pack/scopes/game/1/import/source',
+    method: 'POST',
+    headers: { 'x-forgeax-import-source-key': 'assets/counter.pack.ts' },
+  };
+  await handler(request, response, () => {
+    throw new Error('unhandled');
+  });
+  return { status: response.statusCode, body: JSON.parse(body) };
+}
+
+describe('source import diagnostics', () => {
+  it('preserves the actionable module-load cause on import and failed watcher catalog routes', async () => {
+    const error = {
+      code: 'pack-source-load-failed',
+      expected: 'a valid module',
+      hint: 'repair module initialization',
+      detail: {
+        sourcePath: 'assets/scene.pack.ts',
+        reason: 'module-load',
+        phase: 'module-load',
+        diagnostic: 'AssetGuidParser is not defined',
+      },
+    };
+    const imported = await importFailureFor(error);
+    expect(imported.status).toBe(422);
+    expect(imported.body.detail).toEqual(error.detail);
+    const watched = await responseFor({ code: 'watch-failed', cause: error });
+    expect(watched.status).toBe(503);
+    expect(watched.body.cause.cause.detail).toEqual(error.detail);
+  });
+
+  it('reports the failing project source, not just the requested asset', async () => {
+    const error = {
+      code: 'pack-source-external-closure-mismatch',
+      hint: 'repair GUID declarations',
+      detail: { sourcePath: 'assets/scene.pack.ts', unusedDeclaredGuids: ['old-guid'] },
+      token: 'private',
+    };
+    const result = await importFailureFor(error);
+    expect(result.status).toBe(422);
+    expect(result.body).toMatchObject({
+      error: 'source-import-failed',
+      code: error.code,
+      hint: error.hint,
+      detail: error.detail,
+    });
+    expect(JSON.stringify(result.body)).not.toContain('private');
+  });
+  it.each([
+    new Error('compiler unavailable'),
+    'compiler unavailable',
+  ])('preserves ordinary failures', async (error) => {
+    expect((await importFailureFor(error)).body.hint).toBe('compiler unavailable');
+  });
+  it('makes unknown errors explicit and bounds cyclic causes', async () => {
+    expect((await importFailureFor({ token: 'private' })).body.hint).toContain('Unknown');
+    const error: Record<string, unknown> = { code: 'failed', hint: 'repair source' };
+    error.cause = error;
+    expect(JSON.stringify((await importFailureFor(error)).body)).not.toContain('[object Object]');
+  });
+});

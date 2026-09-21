@@ -1,5 +1,5 @@
-import { existsSync } from 'node:fs';
-import { relative, resolve } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
+import { isAbsolute, relative, resolve } from 'node:path';
 import {
   buildCatalogResult,
   type ProducerReadiness,
@@ -25,6 +25,7 @@ import type {
   PluginServerState,
   RebuildAssetOptions,
 } from './plugin-server.js';
+import { serialProductionSession } from './serial-production-session.js';
 
 type CatalogInventory = Awaited<ReturnType<typeof buildCatalogResult>>;
 
@@ -137,109 +138,111 @@ export function createProductionBridge(context: ProductionBridgeContext): Produc
   };
 
   const createSession = (): ProductionSession<ProductionGenerationState> =>
-    createProductionSession<ProductionGenerationState>({
-      sourceKeys: () => [...roots()],
-      createState: ({ acceptedState }) => ({
-        inventory: acceptedState?.inventory,
-        authoredPublished: false,
-        candidate:
-          acceptedState?.inventory === undefined
-            ? undefined
-            : createCandidateState(acceptedState.inventory, acceptedState.candidate),
+    serialProductionSession(
+      createProductionSession<ProductionGenerationState>({
+        sourceKeys: () => [...roots()],
+        createState: ({ acceptedState }) => ({
+          inventory: acceptedState?.inventory,
+          authoredPublished: false,
+          candidate:
+            acceptedState?.inventory === undefined
+              ? undefined
+              : createCandidateState(acceptedState.inventory, acceptedState.candidate),
+        }),
+        inventory: async ({ sourceKeys, state: generationState }) => {
+          const scanOptions = {
+            scriptablePack: STANDARD_SCRIPTABLE_PACK_SCAN_OPTIONS,
+            ...(ignorePath === undefined ? {} : { ignorePath }),
+          };
+          const inventory = await buildCatalogResult(
+            sourceKeys,
+            transportBase(),
+            registeredImporterKeys,
+            scanOptions,
+            catalogVisibility,
+          );
+          generationState.inventory = inventory;
+          generationState.candidate = createCandidateState(inventory, generationState.candidate);
+          return declarationsForInventory(inventory);
+        },
+        produce: async ({ generation, declaration, intent, signal, state: generationState }) => {
+          const inventory = generationState.inventory;
+          const candidate = generationState.candidate;
+          if (inventory === undefined || candidate === undefined) {
+            throw createPluginPackFailure({
+              code: 'produce-failed',
+              expected: 'the production generation to retain its inventory declaration',
+              hint: 'repair the generation candidate lifetime and retry the rebuild',
+              detail: { stage: 'produce', subject: `generation:${generation}` },
+            });
+          }
+          let producedEntries: readonly PackIndexEntry[] = [];
+          if (declaration.format === 'meta.json') {
+            const readiness = parseProducerReadiness(producerReadiness);
+            if (!readiness.ok) throw readiness.error;
+            if (intent === 'attempt' && readiness.value === 'on-demand') return;
+            const metaPath = resolve(process.cwd(), declaration.sourceKey);
+            producedEntries = await callbacks.ensureMetaImport(
+              metaPath,
+              inventory.declarations.get(metaPath),
+              signal,
+              candidate,
+              runtimeBinding(),
+            );
+          } else if (
+            (declaration.format === 'pack.json' || declaration.format === 'pack.ts') &&
+            !generationState.authoredPublished
+          ) {
+            generationState.authoredPublished = true;
+            producedEntries = await callbacks.publishAuthoredDevPacks(
+              inventory.entries.filter(
+                (entry) =>
+                  entry.sourcePath.endsWith('.pack.json') || entry.sourcePath.endsWith('.pack.ts'),
+              ),
+              candidate,
+              inventory.sourceDeclarations,
+              signal,
+              runtimeBinding(),
+            );
+          }
+          const candidateEntries = projectAcceptedEntries(
+            candidate.catalogProjection.entries,
+            producedEntries,
+          );
+          candidate.catalogProjection = { ...inventory, entries: candidateEntries };
+        },
+        publish: async ({ generation, signal, state: generationState }) => {
+          if (signal.aborted) return;
+          const inventory = generationState.inventory;
+          const candidate = generationState.candidate;
+          if (inventory === undefined || candidate === undefined) {
+            throw createPluginPackFailure({
+              code: 'commit-failed',
+              expected: 'the accepted production candidate to retain its Catalog projection',
+              hint: 'repair the generation candidate lifetime and retry the rebuild',
+              detail: { stage: 'commit', subject: `generation:${generation}` },
+            });
+          }
+          await callbacks.commitGeneration(candidate, signal);
+          if (signal.aborted) return;
+          Object.assign(state, candidate);
+          state.catalogProjection = {
+            ...candidate.catalogProjection,
+            entries:
+              candidate.catalogProjection.authority === 'authoritative'
+                ? [...candidate.catalogProjection.entries]
+                : [],
+          };
+        },
+        discard: async ({ state: generationState }) => {
+          const candidate = generationState.candidate;
+          if (candidate !== undefined) {
+            callbacks.discardPublications(candidate.publicationCandidates);
+            await callbacks.discardImportPublications(candidate.pendingImportPublications);
+          }
+        },
       }),
-      inventory: async ({ sourceKeys, state: generationState }) => {
-        const scanOptions = {
-          scriptablePack: STANDARD_SCRIPTABLE_PACK_SCAN_OPTIONS,
-          ...(ignorePath === undefined ? {} : { ignorePath }),
-        };
-        const inventory = await buildCatalogResult(
-          sourceKeys,
-          transportBase(),
-          registeredImporterKeys,
-          scanOptions,
-          catalogVisibility,
-        );
-        generationState.inventory = inventory;
-        generationState.candidate = createCandidateState(inventory, generationState.candidate);
-        return declarationsForInventory(inventory);
-      },
-      produce: async ({ generation, declaration, intent, signal, state: generationState }) => {
-        const inventory = generationState.inventory;
-        const candidate = generationState.candidate;
-        if (inventory === undefined || candidate === undefined) {
-          throw createPluginPackFailure({
-            code: 'produce-failed',
-            expected: 'the production generation to retain its inventory declaration',
-            hint: 'repair the generation candidate lifetime and retry the rebuild',
-            detail: { stage: 'produce', subject: `generation:${generation}` },
-          });
-        }
-        let producedEntries: readonly PackIndexEntry[] = [];
-        if (declaration.format === 'meta.json') {
-          const readiness = parseProducerReadiness(producerReadiness);
-          if (!readiness.ok) throw readiness.error;
-          if (intent === 'attempt' && readiness.value === 'on-demand') return;
-          const metaPath = resolve(process.cwd(), declaration.sourceKey);
-          producedEntries = await callbacks.ensureMetaImport(
-            metaPath,
-            inventory.declarations.get(metaPath),
-            signal,
-            candidate,
-            runtimeBinding(),
-          );
-        } else if (
-          (declaration.format === 'pack.json' || declaration.format === 'pack.ts') &&
-          !generationState.authoredPublished
-        ) {
-          generationState.authoredPublished = true;
-          producedEntries = await callbacks.publishAuthoredDevPacks(
-            inventory.entries.filter(
-              (entry) =>
-                entry.sourcePath.endsWith('.pack.json') || entry.sourcePath.endsWith('.pack.ts'),
-            ),
-            candidate,
-            inventory.sourceDeclarations,
-            signal,
-            runtimeBinding(),
-          );
-        }
-        const candidateEntries = projectAcceptedEntries(
-          candidate.catalogProjection.entries,
-          producedEntries,
-        );
-        candidate.catalogProjection = { ...inventory, entries: candidateEntries };
-      },
-      publish: async ({ generation, signal, state: generationState }) => {
-        if (signal.aborted) return;
-        const inventory = generationState.inventory;
-        const candidate = generationState.candidate;
-        if (inventory === undefined || candidate === undefined) {
-          throw createPluginPackFailure({
-            code: 'commit-failed',
-            expected: 'the accepted production candidate to retain its Catalog projection',
-            hint: 'repair the generation candidate lifetime and retry the rebuild',
-            detail: { stage: 'commit', subject: `generation:${generation}` },
-          });
-        }
-        await callbacks.commitGeneration(candidate, signal);
-        if (signal.aborted) return;
-        Object.assign(state, candidate);
-        state.catalogProjection = {
-          ...candidate.catalogProjection,
-          entries:
-            candidate.catalogProjection.authority === 'authoritative'
-              ? [...candidate.catalogProjection.entries]
-              : [],
-        };
-      },
-      discard: async ({ state: generationState }) => {
-        const candidate = generationState.candidate;
-        if (candidate !== undefined) {
-          callbacks.discardPublications(candidate.publicationCandidates);
-          await callbacks.discardImportPublications(candidate.pendingImportPublications);
-        }
-      },
-    });
+    );
 
   let session = createSession();
   return {
@@ -344,6 +347,48 @@ export function createProductionRouteBridge(
       signal === undefined ? task : task.then((entries) => (signal.aborted ? ([] as T) : entries)),
     );
   return {
+    rebuildSource: (sourceKey, signal) => {
+      const task = (async (): Promise<readonly PackIndexEntry[]> => {
+        const sourcePath = resolveCatalogSourceKeyForScan(sourceKey, roots);
+        const realSource = realpathSync(sourcePath);
+        const allowed = roots.some((root) => {
+          const within = relative(realpathSync(root), realSource);
+          return (
+            within !== '' &&
+            within !== '..' &&
+            !within.startsWith('../') &&
+            !within.startsWith('..\\') &&
+            !isAbsolute(within)
+          );
+        });
+        if (!allowed || !sourcePath.endsWith('.pack.ts')) {
+          throw new Error(
+            'source-import-outside-roots: expected a .pack.ts source inside the active scan roots',
+          );
+        }
+        // Inventory replaces the accepted Catalog; retain every root so companion
+        // metadata and collisions with existing assets remain in the same closure.
+        const result = await activeDevSession.rebuildProduction(
+          roots.map((sourceKey) => ({ sourceKey })),
+        );
+        if (result.status === 'failed') throw result.error;
+        if (result.status === 'stale')
+          throw new Error('source-import-stale: the active generation changed; retry the import');
+        const catalogPath = relative(process.cwd(), sourcePath).replace(/\\/g, '/');
+        const sourceEntries = () =>
+          state.catalogProjection.entries.filter((entry) => entry.sourcePath === catalogPath);
+        const anchor = sourceEntries()[0];
+        if (anchor === undefined)
+          throw new Error('source-import-empty: the source produced no Catalog assets');
+        const readiness = parseProducerReadiness(producerReadiness);
+        if (readiness.ok && readiness.value === 'on-demand') {
+          const materialized = await activeDevSession.materializeProduction(anchor.guid);
+          entriesAfter(anchor.guid, materialized);
+        }
+        return sourceEntries();
+      })();
+      return trackRoute(task, signal);
+    },
     materializeAsset: (guid, signal) => {
       return trackRoute(
         activeDevSession.materializeProduction(guid).then((result) => entriesAfter(guid, result)),

@@ -1,3 +1,4 @@
+import { materialNormalScale } from './material-normal-scale.js';
 // @forgeax/engine-runtime - RenderSystem Extract stage (D-S2 + plan-strategy R-15
 // fallback split). Pure ECS query phase: walks Camera / DirectionalLight /
 // the merged-MeshRenderer renderable archetype and produces SoA-free snapshot
@@ -1294,15 +1295,6 @@ function assetReferenceText(value: unknown): string | undefined {
 
 function isAssetGuidBytes(value: Uint8Array): value is AssetGuidBytes {
   return value.byteLength === 16;
-}
-
-function materialNormalScale(values: Readonly<Record<string, unknown>>): number {
-  for (const [field, value] of Object.entries(values)) {
-    if (field !== 'normalTexture') continue;
-    const scale = materialTextureValue(value)?.normalScale;
-    return typeof scale === 'number' && Number.isFinite(scale) ? scale : 1;
-  }
-  return 1;
 }
 
 function materialTextureRef(value: unknown): unknown {

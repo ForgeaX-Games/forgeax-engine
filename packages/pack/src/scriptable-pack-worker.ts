@@ -23,6 +23,7 @@ type LoadedDefinition = {
   readonly assets?: unknown;
   readonly sceneComponents?: unknown;
   readonly externalAssets?: unknown;
+  readonly parameters?: unknown;
   readonly build?: unknown;
 };
 let definition: LoadedDefinition | undefined;
@@ -252,6 +253,7 @@ async function loadDefinition(task: {
             assets: definition.assets,
             sceneComponents: definition.sceneComponents,
             externalAssets: definition.externalAssets,
+            ...(definition.parameters === undefined ? {} : { parameters: definition.parameters }),
           },
   });
 }
@@ -293,6 +295,7 @@ async function handleMessage(message: unknown): Promise<void> {
   }
   try {
     const result = await definition.build({
+      ...(definition.schemaVersion === '2.0.0' ? { packageId: definition.packageId } : {}),
       readByGuid(guid: Uint8Array): Promise<unknown> {
         const readId = nextReadId++;
         port.postMessage({ kind: 'asset-read', buildId: value.buildId, readId, guid });

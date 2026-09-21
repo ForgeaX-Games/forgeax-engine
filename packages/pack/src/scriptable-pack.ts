@@ -2,6 +2,9 @@ import type { Asset, AssetGuid, AssetPublicationEnvelope, Result } from '@forgea
 import { err, ok } from '@forgeax/engine-types';
 import { AssetGuid as AssetGuidCodec } from './guid.js';
 
+export { AssetGuid, PackageId } from './guid.js';
+export { definePack, definePackageId, type NativePackDefinition } from './native-pack.js';
+
 /** Closed ordinary kind vocabulary shared by authoring, producers, and loaders. */
 export type ScriptablePackAssetKind = Asset['kind'];
 
@@ -139,6 +142,8 @@ export interface ScriptablePackDefinition<
   TError = ScriptablePackReadError,
 > {
   readonly schemaVersion: '1.0.0';
+  /** In-memory discovered consumer declaration; the original v2 source is retained. */
+  readonly authoringVersion?: '2.0.0';
   readonly packageId: AssetGuid;
   readonly name?: string;
   readonly assets: TAssets;

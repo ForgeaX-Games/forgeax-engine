@@ -140,12 +140,14 @@ async function engineWorkspacePackages(
   workspaceRoot?: string,
 ): Promise<ReadonlyMap<string, EngineWorkspacePackage>> {
   const injectedPackageRoot = process.env.FORGEAX_ENGINE_PACKAGE_ROOT?.trim();
-  const sourceWorkspaceRoot = workspaceRoot ?? (injectedPackageRoot ? undefined : findEngineWorkspaceRoot());
-  const packageRoot = sourceWorkspaceRoot !== undefined
-    ? resolve(sourceWorkspaceRoot, 'packages')
-    : injectedPackageRoot
-      ? resolve(injectedPackageRoot)
-      : findInstalledEnginePackageRoot(dirname(fileURLToPath(import.meta.url)));
+  const sourceWorkspaceRoot =
+    workspaceRoot ?? (injectedPackageRoot ? undefined : findEngineWorkspaceRoot());
+  const packageRoot =
+    sourceWorkspaceRoot !== undefined
+      ? resolve(sourceWorkspaceRoot, 'packages')
+      : injectedPackageRoot
+        ? resolve(injectedPackageRoot)
+        : findInstalledEnginePackageRoot(dirname(fileURLToPath(import.meta.url)));
   if (packageRoot === undefined) return new Map<string, EngineWorkspacePackage>();
   // A generated game is a pnpm workspace too, but it does not own a local
   // `packages/` tree. Its installed Engine packages are resolved by Node;

@@ -54,8 +54,12 @@ describe('standalone host', () => {
       'node_modules',
       '@forgeax',
     );
-    expect(findInstalledEnginePackageRoot(resolve(packageRoot, 'engine-devkit', 'dist'))).toBe(packageRoot);
-    expect(findInstalledEnginePackageRoot(resolve(tmpdir(), 'forgeax-studio', 'resources', 'engine'))).toBeUndefined();
+    expect(findInstalledEnginePackageRoot(resolve(packageRoot, 'engine-devkit', 'dist'))).toBe(
+      packageRoot,
+    );
+    expect(
+      findInstalledEnginePackageRoot(resolve(tmpdir(), 'forgeax-studio', 'resources', 'engine')),
+    ).toBeUndefined();
   });
 
   it('resolves Engine workspace packages for external projects without installed links', async () => {

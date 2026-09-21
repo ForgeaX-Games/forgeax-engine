@@ -49,6 +49,7 @@ function standardParameters(colorSpace: MaterialColorSpace): readonly MaterialPa
     { name: 'baseColorTexture', type: 'texture', optional: true },
     { name: 'metallicRoughnessTexture', type: 'texture', optional: true },
     { name: 'normalTexture', type: 'texture', optional: true },
+    { name: 'normalScale', type: 'f32', optional: true },
     { name: 'specularTintTexture', type: 'texture', optional: true },
     { name: 'emissiveTexture', type: 'texture', optional: true },
     { name: 'occlusionTexture', type: 'texture', optional: true },
@@ -140,6 +141,7 @@ interface StandardOpts {
   readonly baseColorTexture?: MaterialValue;
   readonly metallicRoughnessTexture?: MaterialValue;
   readonly normalTexture?: MaterialValue;
+  readonly normalScale?: number;
   readonly occlusionTexture?: MaterialValue;
   readonly occlusionStrength?: number;
   readonly alphaCutoff?: number;
@@ -167,6 +169,9 @@ function standard(opts: StandardOpts): MaterialAsset {
   if (opts.alphaCutoff !== undefined && (opts.alphaCutoff < 0 || opts.alphaCutoff > 1)) {
     throw new Error(`Materials.standard: alphaCutoff must be in [0, 1], got ${opts.alphaCutoff}`);
   }
+  if (opts.normalScale !== undefined && !Number.isFinite(opts.normalScale)) {
+    throw new Error('Materials.standard: normalScale must be finite');
+  }
   validateChannel('metallicChannel', opts.metallicChannel);
   validateChannel('roughnessChannel', opts.roughnessChannel);
   const values: Record<string, MaterialValue> = {
@@ -188,6 +193,7 @@ function standard(opts: StandardOpts): MaterialAsset {
     values.metallicRoughnessTexture = opts.metallicRoughnessTexture;
   }
   if (opts.normalTexture !== undefined) values.normalTexture = opts.normalTexture;
+  if (opts.normalScale !== undefined) values.normalScale = opts.normalScale;
   if (opts.occlusionTexture !== undefined) values.occlusionTexture = opts.occlusionTexture;
   if (opts.specularTintTexture !== undefined) {
     values.specularTintTexture = opts.specularTintTexture;

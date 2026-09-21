@@ -67,6 +67,7 @@ export interface RebuildAssetOptions {
 }
 
 export interface PluginServerRouteCallbacks {
+  rebuildSource?(sourceKey: string, signal?: AbortSignal): Promise<readonly PackIndexEntry[]>;
   materializeAsset(guid: string, signal?: AbortSignal): Promise<readonly PackIndexEntry[]>;
   rebuildAsset(
     guid: string,

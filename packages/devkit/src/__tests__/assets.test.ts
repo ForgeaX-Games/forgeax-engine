@@ -42,3 +42,69 @@ describe('asset commands', () => {
     await expect(readFile(resolve(root, 'assets', 'hero.png.meta.json'))).rejects.toThrow();
   });
 });
+
+describe('authored Pack asset add', () => {
+  async function packFixture() {
+    const root = await fixture();
+    const pack = JSON.parse(
+      await readFile(
+        new URL(
+          '../../../../templates/game-default/assets/multi-material-target.pack.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    );
+    await writeFile(resolve(root, 'assets/world.pack.json'), JSON.stringify(pack));
+    return { root, pack };
+  }
+  it('imports the authored identities without generating a sidecar', async () => {
+    const { root, pack } = await packFixture();
+    const result = await assetAddCommand({ root, path: 'assets/world.pack.json' });
+    expect(result, JSON.stringify(result)).toMatchObject({
+      ok: true,
+      value: {
+        assets: [
+          {
+            subAssets: pack.assets.map((a: { guid: string; kind: string }) => ({
+              guid: a.guid,
+              kind: a.kind,
+            })),
+          },
+        ],
+      },
+    });
+    await expect(readFile(resolve(root, 'assets/world.pack.json.meta.json'))).rejects.toThrow();
+    expect((await assetListCommand({ root })).ok).toBe(true);
+  });
+  it('rejects catalog GUID collisions instead of silently remapping', async () => {
+    const { root, pack } = await packFixture();
+    await writeFile(resolve(root, 'assets/duplicate.pack.json'), JSON.stringify(pack));
+    expect((await assetAddCommand({ root, path: 'assets/world.pack.json' })).ok).toBe(false);
+  });
+  it('rejects missing external artifacts', async () => {
+    const { root, pack } = await packFixture();
+    pack.assets[0].artifacts = {
+      geometry: { path: 'absent.bin', mediaType: 'application/octet-stream' },
+    };
+    await writeFile(resolve(root, 'assets/world.pack.json'), JSON.stringify(pack));
+    expect((await assetAddCommand({ root, path: 'assets/world.pack.json' })).ok).toBe(false);
+  });
+  it('rejects corrupted artifact bytes even when the path exists', async () => {
+    const { root, pack } = await packFixture();
+    pack.assets[0].artifacts = {
+      geometry: {
+        path: 'data.bin',
+        mediaType: 'application/octet-stream',
+        byteLength: 3,
+        integrity: { algorithm: 'sha256', digest: '0'.repeat(64) },
+      },
+    };
+    await writeFile(resolve(root, 'assets/data.bin'), 'abc');
+    await writeFile(resolve(root, 'assets/world.pack.json'), JSON.stringify(pack));
+    expect(await assetAddCommand({ root, path: 'assets/world.pack.json' })).toMatchObject({
+      ok: false,
+      error: { code: 'pack-import-artifact-integrity' },
+    });
+  });
+});

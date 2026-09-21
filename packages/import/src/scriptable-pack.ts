@@ -543,11 +543,17 @@ export async function buildScriptablePack(
       .filter((guid) => !local.has(guid)),
   );
   const read = new Set([...observed.reads.keys()].map((guid) => guid.toLowerCase()));
-  const declared = new Set(
-    Object.values(options.definition.externalAssets).map((guid) =>
-      AssetGuid.format(guid).toLowerCase(),
-    ),
-  );
+  // Native v2 defines outputs in build, not in an externalAssets declaration.
+  // Domain producers remain the authority for references; the legacy contract
+  // still requires its exact declared closure.
+  const declared =
+    options.definition.authoringVersion === '2.0.0'
+      ? new Set([...referenced, ...read])
+      : new Set(
+          Object.values(options.definition.externalAssets).map((guid) =>
+            AssetGuid.format(guid).toLowerCase(),
+          ),
+        );
   const closureError = externalClosureError(options.sourcePath, declared, referenced, read);
   if (closureError !== undefined) return err(closureError);
 
@@ -573,7 +579,18 @@ export async function buildScriptablePack(
     usage,
     ...(digest === undefined ? {} : { digest }),
   }));
+  // Imported SDK helpers can change authored payloads without changing local source bytes.
+  // Include build output identity so publication never reuses an older material contract.
+  const authoredOutputDigests = await Promise.all(
+    Object.keys(output)
+      .sort()
+      .map(async (key) => ({ key, digest: await fingerprint(output[key]) })),
+  );
   const inputFingerprint = await fingerprint({
+    authoredOutputDigests,
+    ...(options.definition.authoringVersion === undefined
+      ? {}
+      : { authoringVersion: options.definition.authoringVersion }),
     meta: projectScriptablePackMeta(options.definition, options.sourcePath),
     sceneComponents: projectScriptablePackSceneComponents(options.definition.sceneComponents),
     sourceClosure: stableSourceClosure(options.sourceClosure),

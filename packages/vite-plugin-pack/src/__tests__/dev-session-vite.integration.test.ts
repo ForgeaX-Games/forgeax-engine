@@ -77,6 +77,98 @@ describe('DevSession through a real Vite server', () => {
     expect(runtime).toMatchObject({ status: 'degraded', authority: 'degraded' });
   }, 15_000);
 
+  it.each([
+    'module-load',
+    'closure',
+  ] as const)('publishes the real %s watcher cause and recovers after source repair', async (mode) => {
+    root = await mkdtemp(join(tmpdir(), 'forgeax-module-recovery-'));
+    const assets = join(root, 'assets');
+    await mkdir(assets);
+    const source = join(assets, 'scene.pack.ts');
+    const valid = `
+      const guid = (last) => new Uint8Array([1,159,250,151,0,0,112,0,128,0,0,0,0,0,0,last]);
+      export default { schemaVersion: '1.0.0', packageId: guid(40),
+        assets: { scene: { guid: guid(41), kind: 'scene' } }, externalAssets: {},
+        build: () => ({ ok: true, value: { scene: { kind: 'scene', entities: [] } } }) };
+    `;
+    await writeFile(source, valid);
+    const binding = createStandaloneRuntimeAssetBinding('vite-module-recovery');
+    const plugin = pluginPack({
+      roots: [assets],
+      runtimeBinding: binding,
+      ...(mode === 'module-load' ? { refresh: () => {} } : {}),
+      ddc: { projectDdcRoot: join(root, 'ddc') },
+    });
+    server = await createServer({
+      root,
+      configFile: false,
+      logLevel: 'silent',
+      plugins: [plugin],
+      server: { host: '127.0.0.1', port: 0 },
+    });
+    await server.listen();
+    const catalogUrl = new URL(binding.catalogUrl, server.resolvedUrls?.local[0]).href;
+    const initial = await fetch(catalogUrl);
+    expect(initial.status, JSON.stringify(await initial.json())).toBe(200);
+    const send = vi.spyOn(server.ws, 'send');
+    const otherConsumer = vi.fn();
+    plugin.configureServer({ middlewares: { use: () => {} }, ws: { send: otherConsumer } });
+    const reason =
+      mode === 'module-load'
+        ? 'AssetGuidParser is not defined'
+        : 'pack-source-external-closure-mismatch';
+    const invalid =
+      mode === 'module-load'
+        ? `AssetGuidParser.parse('invalid');\n${valid}`
+        : valid.replace('externalAssets: {}', 'externalAssets: { unused: guid(42) }');
+    await writeFile(source, invalid);
+    await expect.poll(() => plugin.runtimeBinding()?.status, { timeout: 5000 }).toBe('degraded');
+    const failure = JSON.stringify(send.mock.calls);
+    expect(failure).not.toContain('full-reload');
+    expect(otherConsumer.mock.calls.some(([message]) => message.type === 'full-reload')).toBe(
+      false,
+    );
+    expect(failure).toContain(reason);
+    expect(failure).toContain(
+      mode === 'module-load' ? 'module-load' : '019ffa97-0000-7000-8000-00000000002a',
+    );
+    expect(failure).toContain('scene.pack.ts');
+    const rejected = await fetch(catalogUrl);
+    expect(rejected.status).toBe(200);
+    const degraded = await rejected.json();
+    // A thrown rebuild retains the accepted old publication, but its runtime stays degraded.
+    expect(degraded.authority).toBe(mode === 'module-load' ? 'degraded' : 'authoritative');
+    expect(plugin.runtimeBinding()?.status).toBe('degraded');
+    expect(JSON.stringify(degraded)).toContain(reason);
+    if (mode === 'module-load') {
+      const consumption = await fetch(
+        new URL(`${binding.importUrlBase}/source`, server.resolvedUrls?.local[0]),
+      );
+      expect(consumption.status).toBe(409);
+    }
+    send.mockClear();
+    await writeFile(source, valid);
+    await expect.poll(() => plugin.runtimeBinding()?.status, { timeout: 5000 }).toBe('ready');
+    expect((await fetch(catalogUrl)).status).toBe(200);
+    expect(plugin.runtimeBinding()?.diagnostics).toEqual([]);
+    await expect
+      .poll(
+        () =>
+          send.mock.calls.some(([value]) => {
+            const message: unknown = value;
+            return (
+              typeof message === 'object' &&
+              message !== null &&
+              'type' in message &&
+              message.type === 'full-reload'
+            );
+          }),
+        { timeout: 5000 },
+      )
+      .toBe(true);
+    expect(otherConsumer).toHaveBeenCalledWith({ type: 'full-reload' });
+  }, 15_000);
+
   it('does not bypass invalid producer configuration on a source change', async () => {
     root = await mkdtemp(join(tmpdir(), 'forgeax-dev-session-config-'));
     const source = join(root, 'effect.pack.json');

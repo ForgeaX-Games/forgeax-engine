@@ -73,12 +73,20 @@ function value(name) {
 
 async function run(file, commandArgs, options = {}) {
   const { env, ...rest } = options;
-  return execFileAsync(file, commandArgs, {
-    cwd: root,
-    maxBuffer: 64 * 1024 * 1024,
-    ...rest,
-    env: { ...process.env, CI: process.env.CI ?? 'true', ...env },
-  });
+  try {
+    return await execFileAsync(file, commandArgs, {
+      cwd: root,
+      maxBuffer: 64 * 1024 * 1024,
+      ...rest,
+      env: { ...process.env, CI: process.env.CI ?? 'true', ...env },
+    });
+  } catch (error) {
+    // Node truncates large captured strings when inspecting an uncaught error.
+    // Emit the original compiler diagnostics before preserving the failed command.
+    if (typeof error.stdout === 'string') process.stdout.write(error.stdout);
+    if (typeof error.stderr === 'string') process.stderr.write(error.stderr);
+    throw error;
+  }
 }
 
 async function git(commandArgs) {

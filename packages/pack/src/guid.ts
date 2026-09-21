@@ -1,3 +1,4 @@
+import { sha1 } from '@noble/hashes/legacy.js';
 import { uuidv7obj } from 'uuidv7';
 import { PackError } from './errors.js';
 
@@ -7,6 +8,9 @@ import { PackError } from './errors.js';
  * structural compatibility (both use __guidBrand: 'AssetGuid').
  */
 export type AssetGuid = Uint8Array & { readonly __guidBrand: 'AssetGuid' };
+
+/** Pack-level identity. It is intentionally not assignable to AssetGuid. */
+export type PackageId = Uint8Array & { readonly __packageIdBrand: 'PackageId' };
 
 /** Minimal Result alias for this module (structurally compatible with ScanResult). */
 export type GuidResult<T, E> =
@@ -27,6 +31,13 @@ function bytesToDashForm(bytes: Uint8Array): string {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Stable author-owned output identity. Paths and payloads are not identity inputs. */
+export const PACK_SOURCE_KEY_RE = /^[a-z0-9][a-z0-9._-]*(\/[a-z0-9][a-z0-9._-]*)*$/;
+
+export function isValidPackSourceKey(value: unknown): value is string {
+  return typeof value === 'string' && PACK_SOURCE_KEY_RE.test(value);
+}
+
 export function isValidAssetGuidString(value: unknown): value is string {
   return typeof value === 'string' && UUID_RE.test(value);
 }
@@ -38,6 +49,54 @@ function dashFormToBytes(dashForm: string): Uint8Array {
     bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
   }
   return bytes;
+}
+
+function randomUuidBytes(): Uint8Array {
+  const uuid = uuidv7obj();
+  const bytes = new Uint8Array(16);
+  bytes.set(uuid.bytes);
+  return bytes;
+}
+
+function packageId(value: Uint8Array): PackageId {
+  return value as PackageId;
+}
+
+/** Utilities for the pack-level UUID identity. */
+export const PackageId = {
+  parse(dashForm: string): GuidResult<PackageId, PackError> {
+    const parsed = AssetGuid.parse(dashForm);
+    return parsed.ok ? { ok: true, value: packageId(parsed.value) } : parsed;
+  },
+  format(value: PackageId): string {
+    return bytesToDashForm(value);
+  },
+  random(): PackageId {
+    return packageId(randomUuidBytes());
+  },
+} as const;
+
+function derivedGuid(namespace: PackageId, sourceKey: string): AssetGuid {
+  if (!(namespace instanceof Uint8Array) || namespace.byteLength !== 16) {
+    throw new TypeError('AssetGuid.derive requires a 16-byte PackageId');
+  }
+  if (!isValidPackSourceKey(sourceKey)) {
+    const error = new TypeError(
+      `AssetGuid.derive received invalid sourceKey ${JSON.stringify(sourceKey)}`,
+    ) as TypeError & { readonly code?: string };
+    Object.defineProperty(error, 'code', { value: 'pack-source-key-invalid' });
+    throw error;
+  }
+  const name = new TextEncoder().encode(sourceKey);
+  const input = new Uint8Array(namespace.byteLength + name.byteLength);
+  input.set(namespace, 0);
+  input.set(name, namespace.byteLength);
+  const digest = sha1(input);
+  const result = digest.slice(0, 16);
+  // RFC 4122 §4.1.1 / §4.1.3: UUID version 5, RFC variant.
+  result[6] = ((result[6] ?? 0) & 0x0f) | 0x50;
+  result[8] = ((result[8] ?? 0) & 0x3f) | 0x80;
+  return brand(result);
 }
 
 /**
@@ -91,9 +150,11 @@ export const AssetGuid = {
    * Works in both Node.js and browser environments.
    */
   random(): AssetGuid {
-    const uuid = uuidv7obj();
-    const bytes = new Uint8Array(16);
-    bytes.set(uuid.bytes);
-    return brand(bytes);
+    return brand(randomUuidBytes());
+  },
+
+  /** Derive the stable UUIDv5 projection for one Pack subject and sourceKey. */
+  derive(namespace: PackageId, sourceKey: string): AssetGuid {
+    return derivedGuid(namespace, sourceKey);
   },
 } as const;

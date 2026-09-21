@@ -1,6 +1,8 @@
-import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { basename, extname, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { lstat, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, extname, isAbsolute, relative, resolve } from 'node:path';
 import { runCliGltf } from '@forgeax/engine-gltf/cli-gltf';
+import { validateAuthoredImport } from '@forgeax/engine-pack';
 import { scanEntries } from '@forgeax/engine-pack/cli-asset';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { commandError, readProjectFacts } from './project.js';
@@ -129,6 +131,115 @@ async function addGltf(sourcePath: string, dryRun: boolean): Promise<CommandResu
   return { ok: true, value: { source: sourcePath, metaPath: `${sourcePath}.meta.json` } };
 }
 
+async function addAuthoredPacks(
+  root: string,
+  assetRoots: readonly string[],
+  sources: readonly string[],
+) {
+  if (sources.length === 0) return { ok: true as const, value: [] as unknown[] };
+  const scanned = await scanEntries(
+    assetRoots.map((path) => resolve(root, path)),
+    {
+      stdoutWrite() {},
+      stderrWrite() {},
+    },
+  );
+  if (!scanned.ok)
+    return failure({
+      code: 'pack-import-catalog-invalid',
+      detail: { sources },
+      expected: 'a collision-free project catalog',
+      hint: 'Repair the Pack scanner error before importing.',
+    });
+  const available = new Set(scanned.value.map((entry) => entry.guid.toLowerCase()));
+  const canonicalRoots = await Promise.all(
+    assetRoots.map((path) => realpath(resolve(root, path)).catch(() => null)),
+  );
+  const contained = (base: string, path: string) => {
+    const rel = relative(base, path);
+    return rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..\\') && !isAbsolute(rel);
+  };
+  const assets: unknown[] = [];
+  for (const source of sources) {
+    const canonical = await realpath(source);
+    if (
+      (await lstat(source)).isSymbolicLink() ||
+      !canonicalRoots.some((path) => path !== null && contained(path, canonical))
+    )
+      return failure({
+        code: 'pack-import-source-escape',
+        detail: { source },
+        expected: 'Pack source in a configured asset root',
+        hint: 'Stage the complete source package inside the game asset roots.',
+      });
+    const parsed = JSON.parse(await readFile(source, 'utf8'));
+    const checked = validateAuthoredImport(parsed, available);
+    if (!checked.ok)
+      return failure({
+        code: checked.code,
+        detail: { source },
+        expected: 'a complete authored Pack',
+        hint: checked.hint,
+      });
+    const base = await realpath(dirname(source));
+    for (const artifact of checked.artifacts) {
+      const target = resolve(base, artifact);
+      let canonicalArtifact: string;
+      try {
+        canonicalArtifact = await realpath(target);
+      } catch {
+        return failure({
+          code: 'pack-import-artifact-missing',
+          expected: 'all declared artifact files',
+          hint: 'Include the complete relative dependency tree.',
+          detail: { artifact },
+        });
+      }
+      if (
+        !contained(base, canonicalArtifact) ||
+        canonicalArtifact !== target ||
+        !(await stat(target)).isFile()
+      ) {
+        return failure({
+          code: 'pack-import-artifact-path-invalid',
+          detail: { source, artifact },
+          expected: 'regular files confined to the source package',
+          hint: 'Remove unsafe artifact paths.',
+        });
+      }
+      const bytes = await readFile(target);
+      const descriptors = checked.assets
+        .flatMap((asset) => Object.values(asset.artifacts ?? {}))
+        .filter((entry) => entry.path === artifact);
+      if (
+        descriptors.some(
+          (entry) =>
+            (entry.byteLength !== undefined && entry.byteLength !== bytes.byteLength) ||
+            (entry.integrity !== undefined &&
+              entry.integrity.digest !== createHash('sha256').update(bytes).digest('hex')),
+        )
+      ) {
+        return failure({
+          code: 'pack-import-artifact-integrity',
+          detail: { source, artifact },
+          expected: 'artifact bytes matching their declared size and digest',
+          hint: 'Restore the declared source artifact; do not rewrite the Pack identity.',
+        });
+      }
+    }
+    assets.push({
+      source,
+      subAssets: checked.assets.map((asset) => ({
+        guid: asset.guid,
+        kind: asset.kind,
+        ...(asset.name ? { name: asset.name } : {}),
+      })),
+      reused: true,
+    });
+  }
+  return { ok: true as const, value: assets };
+}
+
 export async function assetAddCommand(options: AssetAddOptions): Promise<CommandResult<unknown>> {
   const facts = await readProjectFacts(options.root);
   if (!facts.ok) return facts;
@@ -137,18 +248,25 @@ export async function assetAddCommand(options: AssetAddOptions): Promise<Command
     const sources = await sourcesAt(target);
     const supported = sources.filter((source) => {
       const extension = extname(source).toLowerCase();
-      return imageExtensions.has(extension) || gltfExtensions.has(extension);
+      return (
+        imageExtensions.has(extension) ||
+        gltfExtensions.has(extension) ||
+        source.toLowerCase().endsWith('.pack.json')
+      );
     });
     if (supported.length === 0) {
       return failure({
         code: 'source-package-importer-missing',
-        expected: 'a .png, .jpg, .jpeg, .hdr, .gltf, or .glb source',
+        expected: 'an authored .pack.json, .png, .jpg, .jpeg, .hdr, .gltf, or .glb source',
         hint: 'Use a supported built-in importer or add an explicit producer before adding this source.',
         detail: { target },
       });
     }
-    const assets: unknown[] = [];
-    for (const source of supported) {
+    const packSources = supported.filter((source) => source.toLowerCase().endsWith('.pack.json'));
+    const packs = await addAuthoredPacks(facts.value.root, facts.value.assetRoots, packSources);
+    if (!packs.ok) return packs;
+    const assets: unknown[] = [...packs.value];
+    for (const source of supported.filter((source) => !packSources.includes(source))) {
       const result = imageExtensions.has(extname(source).toLowerCase())
         ? await addImage(source, options.dryRun === true)
         : await addGltf(source, options.dryRun === true);

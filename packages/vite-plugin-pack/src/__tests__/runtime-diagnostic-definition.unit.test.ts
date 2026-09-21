@@ -2,6 +2,33 @@ import { describe, expect, it } from 'vitest';
 import { projectFailureCause } from '../errors.js';
 
 describe('definition diagnostic projection', () => {
+  it('preserves bounded module-load diagnostics and rejects arbitrary diagnostic objects', () => {
+    expect(
+      projectFailureCause({
+        detail: {
+          sourcePath: 'assets/scene.pack.ts',
+          phase: 'module-load',
+          diagnostic: 'AssetGuidParser is not defined'.repeat(100),
+          token: 'private',
+        },
+      }),
+    ).toEqual({
+      detail: {
+        sourcePath: 'assets/scene.pack.ts',
+        phase: 'module-load',
+        diagnostic: 'AssetGuidParser is not defined'.repeat(100).slice(0, 2000),
+      },
+    });
+    expect(
+      projectFailureCause({
+        code: 'failed',
+        detail: {
+          diagnostic: { secret: 'private' },
+          phase: ['private'],
+        },
+      }),
+    ).toEqual({ code: 'failed' });
+  });
   it('preserves bounded definition fields without arbitrary values or stack', () => {
     const detail = {
       propertyPath: 'x'.repeat(2100),

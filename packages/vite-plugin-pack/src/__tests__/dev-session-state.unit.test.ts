@@ -45,6 +45,70 @@ function runtimeBinding(scopeId: string, generation: number): RuntimeAssetBindin
 }
 
 describe('DevSession state machine', () => {
+  it.each([
+    {
+      code: 'pack-source-load-failed',
+      detail: {
+        sourcePath: 'assets/scene.pack.ts',
+        phase: 'module-load',
+        diagnostic: 'AssetGuidParser is not defined',
+      },
+    },
+    {
+      code: 'pack-source-external-closure-mismatch',
+      detail: {
+        sourcePath: 'assets/scene.pack.ts',
+        unusedDeclaredGuids: ['019fb7ce-3300-7000-8000-000000000003'],
+      },
+    },
+  ])('keeps concrete source failure blocking until a corrected snapshot is accepted: $code', async (cause) => {
+    const session = createDevSession({
+      generation: 1,
+      productionSession: productionSession(),
+      startup: async () => snapshot(1),
+    });
+    session.bindRuntime(runtimeBinding('repair-source', 1));
+    await session.start();
+    try {
+      await session.rebuild(async () => {
+        throw {
+          code: 'produce-failed',
+          expected: 'accepted source',
+          hint: 'repair source',
+          detail: { stage: 'produce' },
+          cause,
+        };
+      });
+      expect(session.state().status).toBe('degraded');
+      expect(session.runtimeScope()).toMatchObject({
+        status: 'degraded',
+        diagnostics: [
+          expect.objectContaining({
+            severity: 'blocking',
+            cause: expect.objectContaining({ cause }),
+          }),
+        ],
+      });
+      await session.rebuild(async () => {
+        throw new Error('still broken');
+      });
+      expect(session.runtimeScope()?.status).toBe('degraded');
+      await session.rebuild(async () => ({
+        ...snapshot(1),
+        catalog: [{ ...entry, packageUrl: '/preview/corrected.pack.json' }],
+      }));
+      expect(session.state()).toMatchObject({
+        status: 'serving',
+        snapshot: {
+          catalog: [expect.objectContaining({ packageUrl: '/preview/corrected.pack.json' })],
+        },
+      });
+      expect(session.runtimeScope()).toMatchObject({ status: 'ready', diagnostics: [] });
+    } finally {
+      await session.close();
+    }
+  });
+
   it('owns and clears the runtime scope with its generation session', async () => {
     const session = createDevSession({
       generation: 1,

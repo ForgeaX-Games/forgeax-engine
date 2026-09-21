@@ -5,16 +5,19 @@ import { tmpdir } from 'node:os';
 import { dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
-import type { AssetGuid, Result } from '@forgeax/engine-types';
+import type { Asset, AssetGuid, Result } from '@forgeax/engine-types';
 import { AssetError, err, ImportError, ok } from '@forgeax/engine-types';
 import ts from 'typescript';
 import {
   type ProducerSemanticIdentityInput,
   producerRelativeDdcKey,
 } from './evidence/source-inventory.js';
-import { AssetGuid as AssetGuidCodec } from './guid.js';
+import { AssetGuid as AssetGuidCodec, isValidPackSourceKey, PackageId } from './guid.js';
+import { definePack, type NativePackDefinition } from './native-pack.js';
 import {
   type AssetReader,
+  isRecord,
+  isScriptablePackAssetKind,
   projectScriptablePackMeta,
   type ScriptablePackAssetKind,
   type ScriptablePackAuthoringMutation,
@@ -666,6 +669,87 @@ function buildTimeoutFailure(sourcePath: string, timeoutMs: number): ScriptableP
   };
 }
 
+/** Discover v2 outputs once, inside the normal bounded worker, before catalog projection.
+ * Only the consumer declaration is normalized; no replacement source or sidecar is written.
+ * Reads need a generation-aware discovery reader, so reject them rather than cache stale data.
+ */
+async function discoverNativePack(
+  value: Record<string, unknown>,
+  sourcePath: string,
+  timeoutMs: number,
+): Promise<Result<Readonly<ScriptablePackDefinition>, ScriptablePackError>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  try {
+    const native = definePack(value as unknown as NativePackDefinition);
+    let attemptedRead = false;
+    const result: unknown = await Promise.race([
+      native.build({
+        packageId: native.packageId,
+        readByGuid: async () => {
+          attemptedRead = true;
+          throw new Error(
+            'pack-source-discovery-read-unsupported: native output discovery cannot read another asset generation',
+          );
+        },
+      }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          reject(new Error(`Native Pack output discovery exceeded ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+    if (attemptedRead)
+      throw new Error(
+        'pack-source-discovery-read-unsupported: native output discovery requested an external asset',
+      );
+    if (!isRecord(result) || result.ok !== true || !isRecord(result.value))
+      throw new Error(
+        `pack-source-output-invalid: native build must return ok(outputMap); ${isRecord(result) ? JSON.stringify(result.error) : 'invalid result'}`,
+      );
+    const assets: Record<string, { guid: AssetGuid; kind: ScriptablePackAssetKind }> = {};
+    for (const [key, asset] of Object.entries(result.value)) {
+      if (
+        !isValidPackSourceKey(key) ||
+        !isRecord(asset) ||
+        typeof asset.kind !== 'string' ||
+        !isScriptablePackAssetKind(asset.kind)
+      )
+        throw new Error(
+          `pack-source-output-invalid: invalid source key or asset kind at ${JSON.stringify(key)}`,
+        );
+      assets[key] = { guid: AssetGuidCodec.derive(native.packageId, key), kind: asset.kind };
+    }
+    const packageGuid = AssetGuidCodec.parse(PackageId.format(native.packageId));
+    if (!packageGuid.ok) throw new Error('pack-package-id-invalid');
+    const output = structuredClone(result.value) as Readonly<Record<string, Asset>>;
+    return validateScriptablePackDefinition(
+      {
+        schemaVersion: '1.0.0',
+        authoringVersion: '2.0.0',
+        packageId: packageGuid.value,
+        name: native.name,
+        sceneComponents: native.sceneComponents,
+        assets,
+        externalAssets: {},
+        build: async () => ok(structuredClone(output)),
+      },
+      sourcePath,
+    );
+  } catch (cause) {
+    return loadFailure(
+      sourcePath,
+      timedOut ? 'timeout' : 'module-load',
+      'build',
+      cause instanceof Error ? cause.message : String(cause),
+      timedOut ? timeoutMs : undefined,
+    );
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export async function loadScriptablePack(
   sourcePath: string,
   options: LoadScriptablePackOptions = {},
@@ -697,6 +781,11 @@ export async function loadScriptablePack(
       loaded !== null && typeof loaded === 'object' && 'default' in loaded
         ? (loaded as { readonly default: unknown }).default
         : undefined;
+    if (isRecord(moduleValue) && moduleValue.schemaVersion === '2.0.0') {
+      const discovered = await discoverNativePack(moduleValue, sourcePath, buildTimeoutMs);
+      disposeReason = discovered.ok ? 'complete' : 'failure';
+      return discovered;
+    }
     const validated = validateScriptablePackDefinition(moduleValue, sourcePath);
     if (!validated.ok) {
       disposeReason = 'failure';

@@ -200,7 +200,10 @@ export function createPluginPackInternal(
         ...projectScopedEntry(entry),
         packageUrl: scopedPackageUrl(binding, entry.packageUrl),
       })),
-      diagnostics: projectRuntimeDiagnostics(projection.diagnostics),
+      diagnostics:
+        binding.status === 'degraded' && binding.diagnostics !== undefined
+          ? binding.diagnostics
+          : projectRuntimeDiagnostics(projection.diagnostics),
     };
   }
   async function ensureVersionedMetaImport(

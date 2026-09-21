@@ -39,6 +39,7 @@ interface WatchBatchInput {
   readonly activeDevSession: DevSession;
   readonly generationActive: () => boolean;
   readonly sendCatalogDelta: (delta: CatalogDelta) => void;
+  readonly sendFullReload: () => void;
 }
 
 function degradedSnapshot(session: ProductionBridge['session'], state: PluginServerState) {
@@ -98,9 +99,11 @@ function createWatchBatchApplier(input: WatchBatchInput) {
     const importedRowsInvalidated = invalidatedPackUrls.size > 0;
     let catalogChanged = false;
     let catalogRebuildFailed = false;
+    let recovered = false;
 
     if (sidecars.length > 0 || sources.length > 0 || importedRowsInvalidated) {
       let operationFailed = false;
+      const recovering = input.activeDevSession.state().status === 'degraded';
       const next = await input.activeDevSession.rebuild(async ({ previous }) => {
         const previousSnapshot = previous ?? degradedSnapshot(input.session, input.state);
         try {
@@ -115,7 +118,10 @@ function createWatchBatchApplier(input: WatchBatchInput) {
             input.state.catalogProjection.entries,
           );
           const sourceRevisionDiagnostic: CatalogDiagnostic | undefined =
-            sources.length > 0 && affectedSourceRows.length > 0 && catalogDelta === undefined
+            !recovering &&
+            sources.length > 0 &&
+            affectedSourceRows.length > 0 &&
+            catalogDelta === undefined
               ? {
                   code: 'catalog-revision-conflict',
                   severity: 'blocking',
@@ -135,7 +141,13 @@ function createWatchBatchApplier(input: WatchBatchInput) {
           ];
           const delta: CatalogDelta | undefined =
             sourceRevisionDiagnostic === undefined
-              ? catalogDelta
+              ? inventory.authority === 'degraded'
+                ? {
+                    ...(catalogDelta ?? { added: [], changed: [], removed: [] }),
+                    authority: 'degraded',
+                    diagnostics,
+                  }
+                : catalogDelta
               : {
                   added: [],
                   changed: [],
@@ -167,7 +179,9 @@ function createWatchBatchApplier(input: WatchBatchInput) {
           console.warn('[forgeax-pack] rebuild state.catalog error:', diagnostic);
           const failure =
             diagnostic !== null && typeof diagnostic === 'object' ? diagnostic : undefined;
+          const projectedCause = projectFailureCause(error);
           const watchDiagnostic: CatalogDiagnostic = {
+            ...(projectedCause === undefined ? {} : { cause: projectedCause }),
             code:
               failure !== undefined && 'code' in failure && typeof failure.code === 'string'
                 ? failure.code
@@ -197,14 +211,22 @@ function createWatchBatchApplier(input: WatchBatchInput) {
         }
       });
       catalogRebuildFailed = operationFailed || next.status === 'failed';
+      recovered =
+        recovering &&
+        !operationFailed &&
+        next.status === 'serving' &&
+        next.snapshot.authority === 'authoritative';
     }
     if (!input.generationActive()) return;
+    // Incremental deltas intentionally cannot clear a consumer's stale latch.
+    // A verified recovery needs a fresh snapshot in every connected consumer.
+    if (recovered) input.sendFullReload();
     if (input.refresh !== undefined) input.refresh(input.server);
     else {
       const hasCatalogSidecar = sidecars.some(
         (info) => info.filename.endsWith('.meta.json') || info.filename.endsWith('.pack.json'),
       );
-      if (!catalogChanged && !catalogRebuildFailed && !hasCatalogSidecar) {
+      if (!recovered && !catalogChanged && !catalogRebuildFailed && !hasCatalogSidecar) {
         input.server.ws?.send({ type: 'full-reload' });
       }
     }
@@ -307,6 +329,9 @@ export function createConfigureServer(input: ConfigureServerInput) {
       activeDevSession,
       generationActive,
       sendCatalogDelta,
+      sendFullReload: () => {
+        for (const target of configuredServers) target.ws?.send({ type: 'full-reload' });
+      },
     });
     lifecycle.stopWatcher = watchDevRoots({
       roots: lifecycle.roots,

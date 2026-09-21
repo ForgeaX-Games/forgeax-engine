@@ -106,3 +106,5 @@ export function parsePackV2(value: unknown): Result<PackV2, PackV2Error> {
 
   return ok(value);
 }
+
+export { type AuthoredImportAsset, validateAuthoredImport } from './authored-import.js';
